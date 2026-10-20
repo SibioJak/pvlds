@@ -24,8 +24,10 @@ var _store: StateStore
 var _xr_enabled: bool = false
 
 var _filter: String = "vr" ## VR-suitable by default (design section 4).
+var _filter_note: String = "" ## set when the empty-filter guard falls back to ALL
 var _sort: String = "name"
 var _page: int = 0
+var wall_ready: bool = false ## true once the current wall's textures have all landed
 var _visible_games: Array[GameEntry] = []
 var _gen: int = 0
 var _mode: String = "wall" ## "wall" | "detail"
@@ -164,6 +166,23 @@ func _build_environment() -> void:
 # -------------------------------------------------------------- library
 
 func _recompute_visible() -> void:
+	_filter_note = ""
+	_collect_visible()
+	# Empty-filter guard: a filter that matches nothing in a non-empty
+	# library must never present as an empty room (that is exactly how
+	# the sample-database trap showed up in the field - a black wall
+	# and "1/1"). Fall back to ALL and let the banner say why. VR
+	# stays the default only when VR-tagged games actually exist.
+	if _filter != "all" and _visible_games.is_empty() and _scanner != null and not _scanner.games.is_empty():
+		_filter_note = "%s filter found none - showing ALL" % str(FILTER_LABELS[_filter])
+		_filter = "all"
+		_collect_visible()
+	var pages: int = page_count()
+	if _page >= pages:
+		_page = maxi(0, pages - 1)
+
+
+func _collect_visible() -> void:
 	_visible_games.clear()
 	if _scanner == null:
 		return
@@ -187,9 +206,6 @@ func _recompute_visible() -> void:
 	_visible_games = source
 	if _filter != "recents":
 		_sort_visible()
-	var pages: int = page_count()
-	if _page >= pages:
-		_page = maxi(0, pages - 1)
 
 
 func page_count() -> int:
@@ -229,6 +245,7 @@ func _sort_visible() -> void:
 func _rebuild_wall() -> void:
 	_gen += 1
 	var gen: int = _gen
+	wall_ready = false
 	for child: Node in _wall.get_children():
 		_wall.remove_child(child)
 		child.queue_free()
@@ -240,12 +257,16 @@ func _rebuild_wall() -> void:
 	_set_focused(null)
 
 	var placeholder: Texture2D = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
-	# Banner.
-	_banner_quad = _make_quad(_wall, "banner", "", placeholder, Vector2(1.8, 0.46), Vector3(0.0, 2.66, -2.9))
+	# Banner: above the eye line (~+23 degrees) with clear air between
+	# its lower edge and the top row of panels - it sits closer than
+	# the wall, so any angular overlap hides the middle panels' tops.
+	_banner_quad = _make_quad(_wall, "banner", "", placeholder, Vector2(1.8, 0.46), Vector3(0.0, 2.48, -2.9))
 	_banner_quad.pick_enabled = false
-	# Panels for this page.
+	# Panels for this page: rows hugging the eye line (+12 / 0 / -12
+	# degrees). Panel height (0.64) stays under the row pitch (0.65) -
+	# a taller panel than the pitch makes rows overlap in projection.
 	var start: int = _page * PAGE_SIZE
-	var row_ys: Array[float] = [1.98, 1.24, 0.5]
+	var row_ys: Array[float] = [1.90, 1.25, 0.60]
 	for i: int in range(PAGE_SIZE):
 		var idx: int = start + i
 		if idx >= _visible_games.size():
@@ -255,7 +276,7 @@ func _rebuild_wall() -> void:
 		var row: int = i / PAGE_COLS
 		var angle: float = deg_to_rad(float(col - 1) - 0.5) * 14.0
 		var pos: Vector3 = Vector3(sin(angle) * WALL_RADIUS, row_ys[row], -cos(angle) * WALL_RADIUS)
-		var q: ClickableQuad = _make_quad(_wall, "panel", game.game_id, placeholder, Vector2(0.58, 0.72), pos)
+		var q: ClickableQuad = _make_quad(_wall, "panel", game.game_id, placeholder, Vector2(0.54, 0.64), pos)
 		_panels.append(q)
 	# Rail.
 	_build_rail(placeholder)
@@ -264,8 +285,11 @@ func _rebuild_wall() -> void:
 
 
 func _build_rail(placeholder: Texture2D) -> void:
-	var y: float = 0.34
-	var z: float = -1.04
+	# ~22 degrees below the eye line and far enough out that the full
+	# rail width sits inside a 16:9 frustum (it was clipped at the
+	# bottom edge of the flat view when it hugged the player).
+	var y: float = 0.55
+	var z: float = -1.75
 	var defs: Array = [
 		["filter:all", 0.32], ["filter:vr", 0.26], ["filter:favorites", 0.46], ["filter:recents", 0.42],
 		["sort", 0.56], ["page_prev", 0.2], ["page_label", 0.3], ["page_next", 0.2], ["desk", 0.34],
@@ -299,6 +323,8 @@ func _fill_wall_textures(gen: int) -> void:
 	var line: String = "%d files - %d games - filter %s - sort %s" % [
 		_scanner.total_files, _scanner.games.size(),
 		str(FILTER_LABELS[_filter]), str(SORT_LABELS[_sort])]
+	if _filter_note != "":
+		line += " - " + _filter_note
 	var banner_tex: Texture2D = await _factory.render_texture(RoomSpecs.banner_spec(line), Vector2i(1024, 262))
 	if gen != _gen or _banner_quad == null:
 		return
@@ -343,6 +369,8 @@ func _fill_wall_textures(gen: int) -> void:
 		if gen != _gen:
 			return
 		quad.set_texture(btex)
+	if gen == _gen:
+		wall_ready = true
 
 
 # ------------------------------------------------------------ interaction
@@ -478,15 +506,10 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
-	# Desk camera: subtle mouse parallax so the room can be judged flat.
-	if not _xr_enabled and _desk_camera != null:
-		var mp: Vector2 = get_viewport().get_mouse_position()
-		var vp: Vector2 = get_viewport().get_visible_rect().size
-		if vp.x > 0.0 and vp.y > 0.0:
-			var nx: float = (mp.x / vp.x - 0.5) * 2.0
-			var ny: float = (mp.y / vp.y - 0.5) * 2.0
-			var target: Vector3 = Vector3(deg_to_rad(-ny * 3.5), deg_to_rad(-nx * 6.0), 0.0)
-			_desk_camera.rotation = _desk_camera.rotation.lerp(target, clampf(delta * 6.0, 0.0, 1.0))
+	# The flat (non-XR) camera is STATIC at the seated viewpoint - the
+	# mouse is a pure pointer there, never a look control. A view that
+	# drifts with the cursor makes every click target swim (field
+	# finding, round 2). XR head tracking owns the view in XR only.
 	# Gamepad: left stick / d-pad moves focus, A selects, B goes back.
 	_joy_cooldown = maxf(0.0, _joy_cooldown - delta)
 	var ax: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)

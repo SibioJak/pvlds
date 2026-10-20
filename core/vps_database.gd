@@ -9,11 +9,28 @@ extends RefCounted
 ## with a "games" array/object) and about dates (epoch seconds, epoch
 ## milliseconds, or ISO strings all occur in the wild).
 
+const DOWNLOAD_URL: String = "https://virtualpinballspreadsheet.github.io/vps-db/db/vpsdb.json"
+const CACHE_PATH: String = "user://vpsdb_download.json" ## downloaded real db (desk pass)
+const SAMPLE_PATH: String = "res://data/vpsdb.json" ## bundled sample: 10 invented games
+
 var games_by_id: Dictionary = {}
 var _games_by_norm_name: Dictionary = {} ## normalized title -> Array of game ids
 var _by_table_filename: Dictionary = {} ## lowercased table fileName -> first {game_id, table_file} claiming it
 var loaded: bool = false
 var source_path: String = ""
+
+
+## Which database a scan should use, in order: the path the user
+## picked themselves, then the downloaded VPS cache, then - last
+## resort only - the bundled sample (10 invented games that exist to
+## exercise PVLDS itself, NOT to identify real tables).
+## Returns [path, kind] with kind "user" | "download" | "sample".
+static func resolve_path(user_path: String) -> Array:
+	if user_path != "" and FileAccess.file_exists(user_path):
+		return [user_path, "user"]
+	if FileAccess.file_exists(CACHE_PATH):
+		return [CACHE_PATH, "download"]
+	return [SAMPLE_PATH, "sample"]
 
 
 static func normalize_name(s: String) -> String:
@@ -117,6 +134,30 @@ func load_db(path: String) -> bool:
 
 func game_count() -> int:
 	return games_by_id.size()
+
+
+## Total VPX table files across every known game (dev/sanity stats).
+func vpx_table_file_count() -> int:
+	var n: int = 0
+	for gid: Variant in games_by_id.keys():
+		n += vpx_table_files_of(str(gid)).size()
+	return n
+
+
+## VPX table files carrying a VR feature tag (same rule TableBuild
+## applies to a local build: "VR", "Mixed Reality", or "MR").
+func vr_tagged_vpx_file_count() -> int:
+	var n: int = 0
+	for gid: Variant in games_by_id.keys():
+		for item: Variant in vpx_table_files_of(str(gid)):
+			if item is Dictionary:
+				var tf: Dictionary = item
+				var feats: PackedStringArray = VpsDatabase.str_array(tf.get("features", []))
+				for f: String in feats:
+					if f == "VR" or f == "Mixed Reality" or f == "MR":
+						n += 1
+						break
+	return n
 
 
 func game_dict(game_id: String) -> Dictionary:

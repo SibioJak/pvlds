@@ -21,8 +21,13 @@ var _enter_button: Button
 var _dialog: FileDialog
 var _dialog_target: String = "" ## "exe" | "db" | "folder:<index>"
 var _scanned: bool = false
+var _dl_button: Button
+var _dl_label: Label
+var _http: HTTPRequest
+var _downloading: bool = false
 
 const MAX_FOLDER_ROWS: int = 6
+const DOWNLOAD_PARTIAL_PATH: String = "user://vpsdb_download.partial"
 
 
 func setup(config: PvldsConfig) -> void:
@@ -62,6 +67,22 @@ func _build_ui() -> void:
 
 	_exe_edit = _add_path_row(vbox, "VPX executable", "Browse...", "exe")
 	_db_edit = _add_path_row(vbox, "VPS database (vpsdb.json, optional)", "Browse...", "db")
+	var dl_row: HBoxContainer = HBoxContainer.new()
+	dl_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(dl_row)
+	_dl_button = Button.new()
+	_dl_button.text = "Download VPS database"
+	_dl_button.pressed.connect(_on_download_pressed)
+	dl_row.add_child(_dl_button)
+	_dl_label = Label.new()
+	_dl_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_dl_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	dl_row.add_child(_dl_label)
+	_http = HTTPRequest.new()
+	_http.use_threads = true
+	_http.timeout = 180.0
+	_http.request_completed.connect(_on_download_completed)
+	add_child(_http)
 	_args_edit = _add_field(vbox, "Launch arguments template (used by M2; {table} is the file)")
 	_folder_rows = VBoxContainer.new()
 	_folder_rows.add_theme_constant_override("separation", 8)
@@ -216,6 +237,68 @@ func _collect_into_config() -> void:
 		var f: String = edit.text.strip_edges()
 		if f != "":
 			_config.table_folders.append(f)
+
+
+func _process(_delta: float) -> void:
+	if _downloading and _http != null:
+		var total: int = _http.get_body_size()
+		var got: int = _http.get_downloaded_bytes()
+		if total > 0:
+			_dl_label.text = "Downloading VPS database... %d%% (%.1f of %.1f MB)" % [
+				int(100.0 * float(got) / float(total)), float(got) / 1048576.0, float(total) / 1048576.0]
+		else:
+			_dl_label.text = "Downloading VPS database... %.1f MB so far" % (float(got) / 1048576.0)
+
+
+func _on_download_pressed() -> void:
+	if _downloading:
+		return
+	_downloading = true
+	_dl_button.disabled = true
+	_dl_label.text = "Downloading VPS database..."
+	_http.download_file = DOWNLOAD_PARTIAL_PATH
+	var err: Error = _http.request(VpsDatabase.DOWNLOAD_URL)
+	if err != OK:
+		_download_failed("Could not start the download (error %d)." % err)
+
+
+func _on_download_completed(result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
+		_download_failed("Download failed (result %d, HTTP %d). Check the connection and try again." % [result, response_code])
+		return
+	# Sanity-check the payload before it becomes the cached database:
+	# the real vpsdb.json is a multi-MB top-level JSON array.
+	var f: FileAccess = FileAccess.open(DOWNLOAD_PARTIAL_PATH, FileAccess.READ)
+	if f == null:
+		_download_failed("Download finished but the file could not be read back.")
+		return
+	var size: int = int(f.get_length())
+	var head: PackedByteArray = f.get_buffer(mini(256, size))
+	f.close()
+	var head_text: String = head.get_string_from_utf8().strip_edges()
+	if size < 1000000 or not head_text.begins_with("["):
+		_download_failed("What arrived does not look like the VPS database - cache not updated.")
+		return
+	var cache_abs: String = ProjectSettings.globalize_path(VpsDatabase.CACHE_PATH)
+	if FileAccess.file_exists(VpsDatabase.CACHE_PATH):
+		DirAccess.remove_absolute(cache_abs)
+	var err: Error = DirAccess.rename_absolute(ProjectSettings.globalize_path(DOWNLOAD_PARTIAL_PATH), cache_abs)
+	if err != OK:
+		_download_failed("Could not store the downloaded database (error %d)." % err)
+		return
+	_downloading = false
+	_dl_button.disabled = false
+	_dl_label.text = "VPS database downloaded (%.1f MB). It will be used by the next Save & Scan." % (float(size) / 1048576.0)
+	if _db_edit.text.strip_edges() == "":
+		_db_edit.text = cache_abs
+
+
+func _download_failed(message: String) -> void:
+	_downloading = false
+	_dl_button.disabled = false
+	_dl_label.text = message
+	if FileAccess.file_exists(DOWNLOAD_PARTIAL_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(DOWNLOAD_PARTIAL_PATH))
 
 
 func _on_save_and_scan() -> void:

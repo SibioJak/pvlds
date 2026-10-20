@@ -49,13 +49,25 @@ VPX, the watchdog, and the OpenXR hand-off are M2. Design of record:
   designer.
 - **One input model.** VR controller laser, mouse ray, and
   gamepad/keyboard focus all pick from the same surfaces. Mouse can
-  drive the whole UI flat at the desk (with a subtle parallax camera),
-  which is how the room is judged without a headset.
+  drive the whole UI flat at the desk — the flat camera is static at
+  the seated viewpoint and the mouse is a pure pointer (round-2 field
+  fix: a view that drifts with the cursor makes click targets swim).
 - **First-run desk pass.** A flat 2D setup (never in-headset): point
   at the VPX executable (`VPinball_GL64.exe` expected) and the table
-  folder(s), optionally a cached `vpsdb.json`. It writes a plain JSON
-  config, runs the scan, and reports what the scan measured —
-  duplicates, match rate, art coverage, unidentified titles.
+  folder(s), optionally a cached `vpsdb.json`. Its **Download VPS
+  database** button fetches the real `vpsdb.json` from the Virtual
+  Pinball Spreadsheet project and caches it in `user://`. Database
+  selection order for a scan: your chosen path, then the downloaded
+  cache, then — last resort — the bundled sample; if the sample is
+  what a scan used, the summary says so in plain language, because
+  the sample cannot identify real tables. The desk pass writes a
+  plain JSON config, runs the scan, and reports what the scan
+  measured — duplicates, match rate, art coverage, unidentified
+  titles.
+- **No empty rooms.** If the active filter matches nothing in a
+  non-empty library, the wall falls back to ALL and the banner says
+  why. VR remains the default filter only when VR-tagged games
+  exist.
 - **State** (favorites, default builds, recents) persists as plain
   JSON in `user://pvlds_state.json`, ready for the M2 exit/relaunch
   cycle.
@@ -88,6 +100,12 @@ cached `vpsdb.json` and the same code runs your actual library.
   ok/FAIL lines and exits 0/1.
 - `--pvlds-seed-dummy` — boot straight into the room on the dummy
   library (pair with `--quit-after N` for headless smoke runs).
+- `--pvlds-shot <path.png>` — with `--pvlds-seed-dummy`: once the
+  room's textures settle, save a viewport screenshot to the path and
+  quit. The layout QA loop (needs a real rendering driver, e.g.
+  `--rendering-driver opengl3`, not the dummy one).
+- `--pvlds-db-stats <path>` — load a `vpsdb.json`, print game /
+  VPX-file / VR-tagged-file counts, quit.
 - `--setup` — force the desk pass even when a config exists.
 
 ## Layout

@@ -8,6 +8,9 @@ extends Node
 ##   --pvlds-core-test   run the UI-free library test suite, print, quit
 ##   --pvlds-seed-dummy  boot straight into the room on the dummy library
 ##   --setup             force the desk pass even when configured
+##   --pvlds-db-stats P  load the database at P, print counts, quit
+##   --pvlds-shot P      boot (with --pvlds-seed-dummy), save a room
+##                       screenshot to P once textures settle, quit
 
 var _config: PvldsConfig
 var _state: StateStore
@@ -34,9 +37,15 @@ var _enter_room_after_scan: bool = false
 var _worker_db: VpsDatabase = null
 var _worker_db_ok: bool = false
 var _worker_db_path: String = ""
+var _worker_db_kind: String = ""
 var _worker_scanner: LibraryScanner = null
 var _last_db_ok: bool = false
 var _last_db_path: String = ""
+var _last_db_kind: String = ""
+var _scan_db_path: String = "" ## resolved on the main thread in start_scan()
+var _scan_db_kind: String = "" ## "user" | "download" | "sample"
+var _shot_path: String = ""
+var _shot_frames: int = 0
 
 
 func _ready() -> void:
@@ -44,6 +53,13 @@ func _ready() -> void:
 	if user_args.has("--pvlds-core-test"):
 		_run_core_test()
 		return
+	var stats_idx: int = user_args.find("--pvlds-db-stats")
+	if stats_idx >= 0 and stats_idx + 1 < user_args.size():
+		_run_db_stats(user_args[stats_idx + 1])
+		return
+	var shot_idx: int = user_args.find("--pvlds-shot")
+	if shot_idx >= 0 and shot_idx + 1 < user_args.size():
+		_shot_path = user_args[shot_idx + 1]
 	_init_xr()
 	_factory = TextureFactory.new()
 	add_child(_factory)
@@ -95,6 +111,11 @@ func start_scan() -> bool:
 	_scan_folders.clear()
 	for f: String in _config.table_folders:
 		_scan_folders.append(f)
+	# Database selection happens here, on the main thread: the user's
+	# own path, else the downloaded VPS cache, else the bundled sample.
+	var resolved: Array = VpsDatabase.resolve_path(_config.vpsdb_path)
+	_scan_db_path = str(resolved[0])
+	_scan_db_kind = str(resolved[1])
 	_scan_progress = ScanProgress.new()
 	_scan_progress.begin("loading_db", _scan_folders.size())
 	_scan_active = true
@@ -105,20 +126,28 @@ func start_scan() -> bool:
 ## Worker-thread body: db load + scan. Touches only _worker_* members,
 ## the snapshotted _scan_folders, and the thread-safe _scan_progress.
 func _scan_worker() -> void:
-	var db_path: String = _config.vpsdb_path
-	if db_path == "" or not FileAccess.file_exists(db_path):
-		db_path = "res://data/vpsdb.json"
 	var db: VpsDatabase = VpsDatabase.new()
-	var db_ok: bool = db.load_db(db_path)
+	var db_ok: bool = db.load_db(_scan_db_path)
 	var scanner: LibraryScanner = LibraryScanner.new()
 	scanner.scan(_scan_folders, db, _scan_progress)
 	_worker_db = db
 	_worker_db_ok = db_ok
-	_worker_db_path = db_path
+	_worker_db_path = _scan_db_path
+	_worker_db_kind = _scan_db_kind
 	_worker_scanner = scanner
 
 
 func _process(_delta: float) -> void:
+	if _shot_path != "" and _room != null and _room.visible and _room.wall_ready:
+		_shot_frames += 1
+		if _shot_frames >= 8:
+			var shot_path: String = _shot_path
+			_shot_path = ""
+			var img: Image = get_viewport().get_texture().get_image()
+			var err: Error = img.save_png(shot_path)
+			print("PVLDS SHOT: ", shot_path, " err=", err, " size=", img.get_size())
+			get_tree().quit(0 if err == OK else 1)
+			return
 	if not _scan_active:
 		return
 	if _desk != null and _desk.visible:
@@ -153,6 +182,7 @@ func _finish_scan() -> void:
 	_scanner = _worker_scanner
 	_last_db_ok = _worker_db_ok
 	_last_db_path = _worker_db_path
+	_last_db_kind = _worker_db_kind
 	var summary: String = build_scan_summary()
 	if _desk != null:
 		_desk.apply_scan_summary(summary)
@@ -167,6 +197,9 @@ func build_scan_summary() -> String:
 		return ""
 	var s: LibraryScanner = _scanner
 	var lines: Array[String] = []
+	if _last_db_kind == "sample":
+		lines.append("!! SAMPLE DATABASE ACTIVE !!")
+		lines.append("The bundled database is 10 invented games that exist to test PVLDS itself - it cannot identify real tables. Use 'Download VPS database' above to fetch the real VPS database; until then tables are identified from file names only (no VR tags, designers, or known builds).")
 	lines.append("Scanned %d table files in %d folder(s): %d games (%d with multiple builds)." % [
 		s.total_files, _config.table_folders.size(), s.games.size(), s.duplicate_group_count()])
 	if _last_db_ok:
@@ -215,6 +248,23 @@ func _show_desk() -> void:
 		_desk.setup(_config)
 		_desk.enter_room_requested.connect(_enter_room)
 	_desk.visible = true
+
+
+# ------------------------------------------------------------ dev hooks
+
+## --pvlds-db-stats <path>: load a vpsdb.json and print headline
+## counts. Used to sanity-proof the real VPS database in tests.
+func _run_db_stats(path: String) -> void:
+	var db: VpsDatabase = VpsDatabase.new()
+	if not db.load_db(path):
+		printerr("PVLDS DB STATS: failed to load ", path)
+		get_tree().quit(1)
+		return
+	print("PVLDS DB STATS: ", path)
+	print("  games: ", db.game_count())
+	print("  VPX table files: ", db.vpx_table_file_count())
+	print("  VR-tagged VPX table files: ", db.vr_tagged_vpx_file_count())
+	get_tree().quit(0)
 
 
 # ------------------------------------------------------------ core test
