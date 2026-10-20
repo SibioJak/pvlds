@@ -187,8 +187,9 @@ func _update_action_visibility() -> void:
 func _fill_textures(gen: int, game: GameEntry) -> void:
 	# Big art or title card (card also covers undecodable art).
 	var art_done: bool = false
-	if game.art_path != "":
-		var art_tex: Texture2D = TextureFactory.load_art_texture(game.art_path)
+	var art_file: String = game.ensure_art()
+	if art_file != "":
+		var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
 		if art_tex != null:
 			var full_tex: Texture2D = await _factory.render_texture(
 				RoomSpecs.art_spec(game, art_tex), Vector2i(640, 800))

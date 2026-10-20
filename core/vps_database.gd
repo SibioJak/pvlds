@@ -11,6 +11,7 @@ extends RefCounted
 
 var games_by_id: Dictionary = {}
 var _games_by_norm_name: Dictionary = {} ## normalized title -> Array of game ids
+var _by_table_filename: Dictionary = {} ## lowercased table fileName -> first {game_id, table_file} claiming it
 var loaded: bool = false
 var source_path: String = ""
 
@@ -61,6 +62,7 @@ func load_db(path: String) -> bool:
 	loaded = false
 	games_by_id.clear()
 	_games_by_norm_name.clear()
+	_by_table_filename.clear()
 	if path == "" or not FileAccess.file_exists(path):
 		return false
 	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
@@ -96,6 +98,18 @@ func load_db(path: String) -> bool:
 				ids = existing
 			ids.append(gid)
 			_games_by_norm_name[norm] = ids
+	# Filename index, built once here: the scanner asks once per local
+	# file, and a linear walk of every game x every table file per ask
+	# cost ~12 s at real db scale. First claimant wins, exactly like
+	# the old linear walk's early return (same iteration order).
+	for gid: Variant in games_by_id.keys():
+		var game_id: String = str(gid)
+		for item: Variant in vpx_table_files_of(game_id):
+			if item is Dictionary:
+				var tf: Dictionary = item
+				var named: String = str(tf.get("fileName", tf.get("filename", ""))).to_lower()
+				if named != "" and not _by_table_filename.has(named):
+					_by_table_filename[named] = {"game_id": game_id, "table_file": tf}
 	source_path = path
 	loaded = not games_by_id.is_empty()
 	return loaded
@@ -144,13 +158,7 @@ func vpx_table_files_of(game_id: String) -> Array:
 ## Strong match: a db table file that names this exact .vpx file name
 ## (some db entries carry one; many do not). Returns {} on no match.
 func find_by_table_filename(file_name: String) -> Dictionary:
-	var target: String = file_name.to_lower()
-	for gid: Variant in games_by_id.keys():
-		var game_id: String = str(gid)
-		for item: Variant in vpx_table_files_of(game_id):
-			if item is Dictionary:
-				var tf: Dictionary = item
-				var named: String = str(tf.get("fileName", tf.get("filename", "")))
-				if named != "" and named.to_lower() == target:
-					return {"game_id": game_id, "table_file": tf}
+	var hit: Variant = _by_table_filename.get(file_name.to_lower(), null)
+	if hit is Dictionary:
+		return hit
 	return {}

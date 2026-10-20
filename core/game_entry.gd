@@ -10,7 +10,26 @@ var manufacturer: String = ""
 var year: int = 0 ## 0 = unknown.
 var designers: PackedStringArray = PackedStringArray()
 var builds: Array[TableBuild] = []
-var art_path: String = "" ## Image file to show, or "" -> generated title card.
+var art_path: String = "" ## Loadable image (side image or extracted cache file), or "" -> generated title card.
+var art_source_path: String = "" ## Same-stem .directb2s whose backglass has not been extracted yet, or "".
+var _art_attempted: bool = false
+
+
+## Art the scan knows exists for this game - extracted or not.
+func has_art_available() -> bool:
+	return art_path != "" or art_source_path != ""
+
+
+## A loadable image path, extracting the backglass from the .directb2s
+## on first demand (ArtProvider caches the result under user://, so
+## each game pays the extraction cost at most once, ever). A failed
+## extraction leaves "" and is not retried - the title card covers it.
+func ensure_art() -> String:
+	if art_path != "" or art_source_path == "" or _art_attempted:
+		return art_path
+	_art_attempted = true
+	art_path = ArtProvider.extract_directb2s_image(art_source_path)
+	return art_path
 
 
 func build_count() -> int:

@@ -5,6 +5,14 @@ extends RefCounted
 ## same game, and matches them against the VPS database.
 ## Read-only: the scan never writes, moves, or touches anything in the
 ## table folders - table .ini files included.
+## Art is LAZY: the scan records only facts visible in a directory
+## listing (a same-stem image or .directb2s exists). Extracting a
+## backglass out of a .directb2s costs ~200 ms per file at real-world
+## sizes, so it happens on demand via GameEntry.ensure_art(), never
+## here. Safe to run on a worker thread: pure data in, pure data out.
+
+const MAX_SCAN_DEPTH: int = 12 ## Recursion cap - also the cycle backstop.
+const JUNK_FOLDERS: Array[String] = ["$recycle.bin", "system volume information", "recycler"]
 
 var games: Array[GameEntry] = []
 var total_files: int = 0
@@ -20,19 +28,30 @@ func _init() -> void:
 	_version_re.compile("(?i)\\bv?(\\d+\\.\\d+(?:\\.\\d+)?)\\b")
 
 
-func scan(folders: Array[String], db: VpsDatabase) -> void:
+func scan(folders: Array[String], db: VpsDatabase, progress: ScanProgress = null) -> void:
 	games.clear()
 	total_files = 0
 	matched_files = 0
 	game_matched_files = 0
 	art_covered_games = 0
+	if progress != null:
+		progress.begin("collecting", folders.size())
 	var files: Array[String] = []
+	var art_map: Dictionary = {} ## .vpx path -> {"side": path} and/or {"b2s": path}
+	var visited: Dictionary = {} ## canonical folder path -> true (cycle guard)
+	var folders_done: int = 0
 	for folder: String in folders:
-		_collect_vpx(folder, files)
+		_collect_vpx(folder, files, art_map, visited, 0)
+		folders_done += 1
+		if progress != null:
+			progress.report_collect(folders_done, files.size())
 	files.sort()
 	total_files = files.size()
 	var by_key: Dictionary = {}
-	for path: String in files:
+	for i: int in range(files.size()):
+		var path: String = files[i]
+		if progress != null and i % 16 == 0:
+			progress.report_match(i)
 		var build: TableBuild = _make_build(path, db)
 		if build.matched_db:
 			matched_files += 1
@@ -47,12 +66,19 @@ func scan(folders: Array[String], db: VpsDatabase) -> void:
 			by_key[build.game_key] = entry
 			games.append(entry)
 		entry.builds.append(build)
-		if entry.art_path == "":
-			entry.art_path = ArtProvider.resolve_art(path)
+		if entry.art_path == "" and entry.art_source_path == "":
+			var facts: Variant = art_map.get(path, null)
+			if facts is Dictionary:
+				var fd: Dictionary = facts
+				entry.art_path = str(fd.get("side", ""))
+				entry.art_source_path = str(fd.get("b2s", ""))
 	for entry: GameEntry in games:
 		_sort_builds(entry)
-		if entry.art_path != "":
+		if entry.has_art_available():
 			art_covered_games += 1
+	if progress != null:
+		progress.report_match(files.size())
+		progress.finish()
 
 
 func duplicate_group_count() -> int:
@@ -70,17 +96,50 @@ func game_by_id(game_id: String) -> GameEntry:
 	return null
 
 
-func _collect_vpx(folder: String, out_files: Array[String]) -> void:
+## Recursive collection with guards: a visited set on canonical folder
+## paths (junction/symlink cycles), a depth cap as the backstop, and
+## hidden/system junk folders skipped. Art facts come from this same
+## listing - no candidate file is ever opened during a scan.
+func _collect_vpx(folder: String, out_files: Array[String], art_map: Dictionary, visited: Dictionary, depth: int) -> void:
+	if depth > MAX_SCAN_DEPTH:
+		return
 	var dir: DirAccess = DirAccess.open(folder)
 	if dir == null:
 		return
+	var canon: String = dir.get_current_dir().to_lower()
+	if visited.has(canon):
+		return
+	visited[canon] = true
+	var names: PackedStringArray = dir.get_files()
+	var side_by_stem: Dictionary = {}
+	for ext: String in ArtProvider.IMAGE_EXTS:
+		for name: String in names:
+			if name.get_extension().to_lower() == ext:
+				var stem_key: String = name.get_basename().to_lower()
+				if not side_by_stem.has(stem_key):
+					side_by_stem[stem_key] = folder.path_join(name)
+	var b2s_by_stem: Dictionary = {}
+	for name: String in names:
+		if name.get_extension().to_lower() == "directb2s":
+			b2s_by_stem[name.get_basename().to_lower()] = folder.path_join(name)
+	for name: String in names:
+		if name.get_extension().to_lower() == "vpx":
+			var full: String = folder.path_join(name)
+			out_files.append(full)
+			var stem_key: String = name.get_basename().to_lower()
+			var facts: Dictionary = {}
+			if side_by_stem.has(stem_key):
+				facts["side"] = str(side_by_stem[stem_key])
+			elif b2s_by_stem.has(stem_key):
+				facts["b2s"] = str(b2s_by_stem[stem_key])
+			if not facts.is_empty():
+				art_map[full] = facts
 	for sub: String in dir.get_directories():
 		if sub.begins_with("."):
 			continue
-		_collect_vpx(folder.path_join(sub), out_files)
-	for name: String in dir.get_files():
-		if name.get_extension().to_lower() == "vpx":
-			out_files.append(folder.path_join(name))
+		if JUNK_FOLDERS.has(sub.to_lower()):
+			continue
+		_collect_vpx(folder.path_join(sub), out_files, art_map, visited, depth + 1)
 
 
 func _make_build(path: String, db: VpsDatabase) -> TableBuild:

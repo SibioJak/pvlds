@@ -21,6 +21,17 @@ VPX, the watchdog, and the OpenXR hand-off are M2. Design of record:
   game-only → filename-only. A build whose stated version matches
   nothing in the db stays local-only; it is **never** relabeled as a db
   build.
+- **Scans never block the UI, and art is lazy.** The scan (db load +
+  folder walk + matching) runs on a WorkerThreadPool task with live
+  progress in both routes that trigger it (desk Save & Scan, and the
+  configured auto-boot, which presents the desk as a shell and enters
+  the room when results land). Extracting a backglass from a
+  `.directb2s` costs ~200 ms per file at real-world sizes, so the scan
+  records only directory-listing facts (a same-stem image or
+  `.directb2s` exists); extraction happens on first display of that
+  game's panel/detail via `GameEntry.ensure_art()`, cached in
+  `user://art_cache`. (Field fix, 2026-10-20: the original eager,
+  main-thread scan froze the app for over a minute at 300 tables.)
 - **Versions, visible.** Panels carry a "N BUILDS" chip. The detail
   view lists every build (version, author, date) with **CURRENT** (the
   build that matters: a db-known build outranks a local-only one; then

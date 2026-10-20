@@ -19,6 +19,25 @@ var _desk: SetupDesk = null
 var _xr_interface: XRInterface
 var _xr_enabled: bool = false
 
+# Scan machinery. The scan (db load + folder walk + matching) runs on a
+# WorkerThreadPool task - NEVER on the main thread, in any route. A
+# real library scan takes seconds to minutes; run synchronously it
+# froze the desk pass on Chris's first Save & Scan and froze the boot
+# before the first frame once his config existed. The worker writes
+# only _worker_* members and the ScanProgress counters; the main
+# thread adopts the results after wait_for_task_completion().
+var _scan_progress: ScanProgress = null
+var _scan_task_id: int = -1
+var _scan_active: bool = false
+var _scan_folders: Array[String] = []
+var _enter_room_after_scan: bool = false
+var _worker_db: VpsDatabase = null
+var _worker_db_ok: bool = false
+var _worker_db_path: String = ""
+var _worker_scanner: LibraryScanner = null
+var _last_db_ok: bool = false
+var _last_db_path: String = ""
+
 
 func _ready() -> void:
 	var user_args: PackedStringArray = OS.get_cmdline_user_args()
@@ -36,8 +55,13 @@ func _ready() -> void:
 		_seed_dummy_config()
 		configured = true
 	if configured and _config.is_configured() and not user_args.has("--setup"):
-		perform_scan()
-		_enter_room()
+		# Configured boot: present the desk as a live shell immediately
+		# (first frame, progress ticking) and enter the room only when
+		# the threaded scan lands. No scan runs before the first frame.
+		_show_desk()
+		_enter_room_after_scan = true
+		if not start_scan():
+			_enter_room_after_scan = false
 	else:
 		_show_desk()
 
@@ -59,25 +83,95 @@ func _seed_dummy_config() -> void:
 	_config.table_folders.append(ProjectSettings.globalize_path("res://dummy_data/tables"))
 
 
-## Loads the database and scans the configured folders. Returns a
-## human-readable summary for the desk pass ("" on hard failure).
-func perform_scan() -> String:
+## Starts the library scan on a worker thread. Returns false when a
+## scan is already running or there is nothing to scan. Progress is
+## painted by _process() polling the ScanProgress counters; results
+## land in _finish_scan().
+func start_scan() -> bool:
+	if _scan_active:
+		return false
 	if _config == null or _config.table_folders.is_empty():
-		return ""
-	_db = VpsDatabase.new()
+		return false
+	_scan_folders.clear()
+	for f: String in _config.table_folders:
+		_scan_folders.append(f)
+	_scan_progress = ScanProgress.new()
+	_scan_progress.begin("loading_db", _scan_folders.size())
+	_scan_active = true
+	_scan_task_id = WorkerThreadPool.add_task(Callable(self, "_scan_worker"), false, "PVLDS library scan")
+	return true
+
+
+## Worker-thread body: db load + scan. Touches only _worker_* members,
+## the snapshotted _scan_folders, and the thread-safe _scan_progress.
+func _scan_worker() -> void:
 	var db_path: String = _config.vpsdb_path
 	if db_path == "" or not FileAccess.file_exists(db_path):
 		db_path = "res://data/vpsdb.json"
-	var db_ok: bool = _db.load_db(db_path)
-	_scanner = LibraryScanner.new()
-	_scanner.scan(_config.table_folders, _db)
+	var db: VpsDatabase = VpsDatabase.new()
+	var db_ok: bool = db.load_db(db_path)
+	var scanner: LibraryScanner = LibraryScanner.new()
+	scanner.scan(_scan_folders, db, _scan_progress)
+	_worker_db = db
+	_worker_db_ok = db_ok
+	_worker_db_path = db_path
+	_worker_scanner = scanner
+
+
+func _process(_delta: float) -> void:
+	if not _scan_active:
+		return
+	if _desk != null and _desk.visible:
+		_desk.set_scan_progress(_scan_progress_text())
+	if _scan_task_id >= 0 and WorkerThreadPool.is_task_completed(_scan_task_id):
+		WorkerThreadPool.wait_for_task_completion(_scan_task_id)
+		_scan_task_id = -1
+		_scan_active = false
+		_finish_scan()
+
+
+func _scan_progress_text() -> String:
+	if _scan_progress == null:
+		return "Scanning..."
+	var s: Dictionary = _scan_progress.snapshot()
+	var phase: String = str(s["phase"])
+	if phase == "loading_db":
+		return "Scanning... loading the VPS database."
+	if phase == "collecting":
+		return "Scanning... folder %d of %d, %d table files found so far." % [
+			int(s["folders_done"]), int(s["folders_total"]), int(s["files_found"])]
+	if phase == "matching":
+		return "Scanning... identifying tables, %d of %d files." % [
+			int(s["files_processed"]), int(s["files_found"])]
+	return "Scanning..."
+
+
+## Main thread, once the worker lands: adopt results, publish the
+## summary to the desk, and enter the room if a route is waiting on it.
+func _finish_scan() -> void:
+	_db = _worker_db
+	_scanner = _worker_scanner
+	_last_db_ok = _worker_db_ok
+	_last_db_path = _worker_db_path
+	var summary: String = build_scan_summary()
+	if _desk != null:
+		_desk.apply_scan_summary(summary)
+	if _enter_room_after_scan:
+		_enter_room_after_scan = false
+		_enter_room()
+
+
+## Human-readable summary of the last completed scan, for the desk pass.
+func build_scan_summary() -> String:
+	if _scanner == null:
+		return ""
 	var s: LibraryScanner = _scanner
 	var lines: Array[String] = []
 	lines.append("Scanned %d table files in %d folder(s): %d games (%d with multiple builds)." % [
 		s.total_files, _config.table_folders.size(), s.games.size(), s.duplicate_group_count()])
-	if db_ok:
+	if _last_db_ok:
 		lines.append("Database (%s): %d games known. Matched %d of %d builds exactly; %d more by game only." % [
-			db_path, _db.game_count(), s.matched_files, s.total_files, s.game_matched_files])
+			_last_db_path, _db.game_count(), s.matched_files, s.total_files, s.game_matched_files])
 	else:
 		lines.append("No database loaded - every game is identified from its file name alone.")
 	lines.append("Panel art: %d of %d games have art (side image or backglass); the rest get title cards." % [
@@ -94,10 +188,14 @@ func perform_scan() -> String:
 
 
 func _enter_room() -> void:
+	if _scanner == null:
+		# No results yet: queue the room behind the threaded scan
+		# instead of scanning inline (that was the boot-freeze bug).
+		_enter_room_after_scan = true
+		start_scan()
+		return
 	if _desk != null:
 		_desk.visible = false
-	if _scanner == null:
-		perform_scan()
 	if _room == null:
 		_room = RoomView.new()
 		add_child(_room)
@@ -158,7 +256,7 @@ func _run_core_test() -> void:
 	_expect(vb != null and vb.current_build() != null and vb.current_build().version == "1.3",
 		"Vector Bloom CURRENT is the db-known v1.3, not the newer local file", failures)
 	var pl: GameEntry = scanner.game_by_id("dg-pharaohs-ledger")
-	_expect(pl != null and pl.art_path != "", "Pharaoh's Ledger art extracted from .directb2s", failures)
+	_expect(pl != null and pl.ensure_art() != "", "Pharaoh's Ledger art extracted from .directb2s (on demand)", failures)
 	var nh: GameEntry = scanner.game_by_id("dg-neon-harbor")
 	_expect(nh != null and nh.art_path.ends_with(".png"), "Neon Harbor side-image art found", failures)
 

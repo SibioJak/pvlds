@@ -309,8 +309,9 @@ func _fill_wall_textures(gen: int) -> void:
 		var game: GameEntry = _visible_games[start + i]
 		var quad: ClickableQuad = _panels[i]
 		var tex: Texture2D = null
-		if game.art_path != "":
-			var art_tex: Texture2D = TextureFactory.load_art_texture(game.art_path)
+		var art_file: String = game.ensure_art()
+		if art_file != "":
+			var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
 			if art_tex != null:
 				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex), Vector2i(512, 640))
 		if tex == null:

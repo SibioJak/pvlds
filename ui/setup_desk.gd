@@ -15,6 +15,7 @@ var _args_edit: LineEdit
 var _db_edit: LineEdit
 var _folder_rows: VBoxContainer
 var _folder_edits: Array[LineEdit] = []
+var _scan_button: Button
 var _stats_label: Label
 var _enter_button: Button
 var _dialog: FileDialog
@@ -76,10 +77,10 @@ func _build_ui() -> void:
 	dummy_button.pressed.connect(_on_use_dummy)
 	vbox.add_child(dummy_button)
 
-	var scan_button: Button = Button.new()
-	scan_button.text = "Save && Scan"
-	scan_button.pressed.connect(_on_save_and_scan)
-	vbox.add_child(scan_button)
+	_scan_button = Button.new()
+	_scan_button.text = "Save && Scan"
+	_scan_button.pressed.connect(_on_save_and_scan)
+	vbox.add_child(_scan_button)
 
 	_stats_label = Label.new()
 	_stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -225,9 +226,31 @@ func _on_save_and_scan() -> void:
 	if not _config.save_to_disk():
 		_stats_label.text = "Config save failed - check the folder is writable, then try again."
 		return
+	# The scan runs on Main's worker thread; this form stays live and
+	# Main paints progress into the stats label until the summary lands.
 	var main: Node = get_parent()
-	if main != null and main.has_method("perform_scan"):
-		var summary: String = str(main.call("perform_scan"))
-		_stats_label.text = summary
-		_scanned = summary != ""
-		_enter_button.disabled = not _scanned
+	if main != null and main.has_method("start_scan"):
+		if bool(main.call("start_scan")):
+			_scanned = false
+			_scan_button.disabled = true
+			_enter_button.disabled = true
+			_stats_label.text = "Scanning..."
+		else:
+			_stats_label.text = "A scan is already running - one moment."
+
+
+## Live progress text while a scan runs (driven by Main's poll loop).
+## Also used by the configured-boot route, where the scan starts
+## before the user touches anything.
+func set_scan_progress(text: String) -> void:
+	_stats_label.text = text
+	_scan_button.disabled = true
+	_enter_button.disabled = true
+
+
+## Final summary when a scan lands; re-arms the form.
+func apply_scan_summary(summary: String) -> void:
+	_stats_label.text = summary
+	_scanned = summary != ""
+	_enter_button.disabled = not _scanned
+	_scan_button.disabled = false
