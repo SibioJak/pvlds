@@ -114,6 +114,24 @@ func handle(quad: ClickableQuad) -> void:
 				play_requested.emit(_game, target)
 
 
+## Launch-in-progress surface for this view's Play quad (Main owns
+## the wait): while the table loads the button goes dead and says
+## so; restoring re-renders the real play target.
+func set_launching(loading: bool) -> void:
+	if _play_quad == null:
+		return
+	if loading:
+		_play_quad.pick_enabled = false
+		var gen: int = _gen
+		var tex: Texture2D = await _factory.render_texture(
+			RoomSpecs.button_spec("LOADING...", true), Vector2i(1024, 200))
+		if gen == _gen and _play_quad != null:
+			_play_quad.set_texture(tex)
+	else:
+		_play_quad.pick_enabled = true
+		_refresh_play_texture(_gen)
+
+
 func _effective_target() -> TableBuild:
 	if _game == null:
 		return null

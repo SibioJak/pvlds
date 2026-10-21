@@ -89,6 +89,16 @@ func gameWindow(gamePID int) uintptr {
 	return best
 }
 
+// gameWindowExists reports whether the game process owns a
+// visible top-level window yet - the hand-off cue the resident
+// launcher waits for (plus a short settle) before it exits. The
+// game's largest visible window is the playfield window VPX raises
+// as it comes up; helpers and splash remnants don't count unless
+// they are all there is.
+func gameWindowExists(gamePID int) bool {
+	return gamePID > 0 && gameWindow(gamePID) != 0
+}
+
 func herdTick(gamePID int, _ int64, _ int64) {
 	if gamePID <= 0 {
 		return

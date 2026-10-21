@@ -3,8 +3,17 @@ extends Node
 ## PVLDS entry point. Owns the pieces both faces share - config, state,
 ## database, scanner, texture factory - and routes between the two:
 ## the first-run desk pass (2D) and the room (3D / XR). Owns the M2
-## hand-off endpoints too: LaunchService checkin on boot, launch +
-## full exit on Play, disarm on Exit / window close.
+## hand-off endpoints too: LaunchService checkin on boot, the launch
+## load wait + full exit at the hand-off point, disarm on Exit /
+## window close.
+##
+## The load wait (M2 fix round): on Play the launcher no longer
+## vanishes the instant VPX spawns. It stays in the room - panel
+## showing LOADING - until the hand-off point: the watchdog reports
+## VPX's main window up (+ a short settle), or the XR session starts
+## changing hands, or a 45s cap passes. Only then does it mark the
+## session "live" and exit completely. If VPX dies during the load,
+## the session fails in place and browsing resumes.
 ##
 ## Dev hooks (user args, after "--"):
 ##   --pvlds-core-test   run the UI-free library test suite, print, quit
@@ -18,7 +27,13 @@ extends Node
 ##                       seeded-dummy boot; when the scan lands, launch
 ##                       game GID's default build via LaunchService
 ##                       (config exe from env PVLDS_SMOKE_EXE, args
-##                       template from PVLDS_SMOKE_ARGS) and exit
+##                       template from PVLDS_SMOKE_ARGS), ride the
+##                       real load wait, print the verdict, exit
+##   --pvlds-shot-launch P
+##                       seeded-dummy boot; once the room's wall is
+##                       ready, launch a game (env overrides as
+##                       above), screenshot the LOADING room to P
+##                       ~1s into the wait, disarm, quit
 
 var _config: PvldsConfig
 var _state: StateStore
@@ -33,6 +48,24 @@ var _xr_tried: bool = false
 var _launch_service: LaunchService = null
 var _intentional_launch_exit: bool = false ## quitting FOR a launch must not disarm the watchdog
 var _smoke_launch_game: String = ""
+var _smoke_verdict_pending: bool = false ## a smoke launch is riding the load wait; its settle prints the verdict and quits
+var _shot_launch_path: String = ""
+var _shot_launch_fired: bool = false
+var _shot_launch_at_msec: int = 0
+
+# The launch load wait. While _launch_pending, _process polls for
+# the hand-off point and for VPX dying mid-load.
+const LAUNCH_SETTLE_MSEC: int = 1500 ## window up + this long = hand off
+const LAUNCH_CAP_MSEC: int = 45000 ## never hold the room hostage to a stuck load
+const LAUNCH_DEAD_GRACE_MSEC: int = 1500 ## a dead spawn pid gets this long for the watchdog's by-path window report before the launch is called failed
+var _launch_pending: bool = false
+var _launch_game: GameEntry = null
+var _launch_pid: int = 0
+var _launch_session_id: int = 0
+var _launch_started_msec: int = 0
+var _launch_window_seen_msec: int = -1
+var _launch_pid_dead_msec: int = -1
+var _xr_session_ending: bool = false ## latched by the OpenXR session_ending signal when present
 
 # Scan machinery. The scan (db load + folder walk + matching) runs on a
 # WorkerThreadPool task - NEVER on the main thread, in any route. A
@@ -76,6 +109,9 @@ func _ready() -> void:
 	var smoke_idx: int = user_args.find("--pvlds-smoke-launch")
 	if smoke_idx >= 0 and smoke_idx + 1 < user_args.size():
 		_smoke_launch_game = user_args[smoke_idx + 1]
+	var shot_launch_idx: int = user_args.find("--pvlds-shot-launch")
+	if shot_launch_idx >= 0 and shot_launch_idx + 1 < user_args.size():
+		_shot_launch_path = user_args[shot_launch_idx + 1]
 	# NOTE: no XR here. Desk work never touches OpenXR - initializing
 	# it at boot is what popped the "OpenXR was requested but failed
 	# to start" alert on flat launches with no runtime up (M2 papercut
@@ -98,7 +134,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	if _smoke_launch_game != "":
+	if _smoke_launch_game != "" or _shot_launch_path != "":
 		if OS.has_environment("PVLDS_SMOKE_EXE"):
 			_config.vpx_exe_path = OS.get_environment("PVLDS_SMOKE_EXE")
 		if OS.has_environment("PVLDS_SMOKE_ARGS"):
@@ -135,8 +171,26 @@ func _ensure_xr() -> void:
 	if _xr_interface != null and _xr_interface.is_initialized():
 		get_viewport().use_xr = true
 		_xr_enabled = true
+		# The launch load wait listens for the session changing hands:
+		# VPX initializing its own session is the cleanest hand-off cue
+		# there is. Guarded - a runtime without the signal just never
+		# latches it, and the window/cap cues carry the wait.
+		if _xr_interface.has_signal("session_ending"):
+			_xr_interface.session_ending.connect(func() -> void: _xr_session_ending = true)
 	else:
 		get_viewport().use_xr = false
+
+
+## True when our OpenXR session is on its way out (STOPPING or
+## worse). Best-effort by construction: no interface, no method, or
+## a flat run all answer false, and the other hand-off cues decide.
+func _xr_session_exiting() -> bool:
+	if _xr_session_ending:
+		return true
+	if _xr_interface != null and _xr_interface.has_method("get_session_state"):
+		var s: int = int(_xr_interface.call("get_session_state"))
+		return s >= 6 ## OpenXRInterface.SessionState: STOPPING=6, LOSS_PENDING=7, EXITING=8
+	return false
 
 
 func _seed_dummy_config() -> void:
@@ -186,6 +240,7 @@ func _scan_worker() -> void:
 
 
 func _process(_delta: float) -> void:
+	_poll_launch()
 	if _shot_path != "" and _shot_ready():
 		_shot_frames += 1
 		if _shot_frames >= 8:
@@ -317,26 +372,139 @@ func _enter_room() -> void:
 
 # ------------------------------------------------------- the hand-off
 
-## Play, from the card's Launch button or the detail view. On success
-## the launcher exits COMPLETELY (design section 3) - the watchdog
-## owns the return trip. On failure nothing exits; the player is sent
-## to the desk with the reason, because a bad exe path or template is
-## desk work.
+## Play, from the card's Launch button or the detail view. A good
+## spawn starts the load wait: the launcher stays in the room (the
+## panel says LOADING) until _poll_launch calls the hand-off. A bad
+## spawn (bad exe path, dead template) is desk work - the player is
+## sent there with the reason, as before.
 func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 	if _launch_service == null or game == null or build == null:
 		return
+	if _launch_pending:
+		return ## one load at a time; the room's buttons are dead too
 	var result: Dictionary = _launch_service.perform_launch(_config, _state, game, build)
 	if bool(result["ok"]):
-		print("PVLDS LAUNCH: %s -> build %s (pid %d); launcher exiting" % [
-			game.title, build.file_name, int(result.get("pid", -1))])
-		_intentional_launch_exit = true
-		get_tree().quit()
+		_launch_pending = true
+		_launch_game = game
+		_launch_pid = int(result.get("pid", -1))
+		_launch_session_id = int(result.get("session_id", 0))
+		_launch_started_msec = Time.get_ticks_msec()
+		_launch_window_seen_msec = -1
+		_launch_pid_dead_msec = -1
+		print("PVLDS LAUNCH: %s -> build %s (pid %d); staying in the room while it loads" % [
+			game.title, build.file_name, _launch_pid])
+		if _room != null:
+			_room.begin_launch(game)
+	elif _smoke_verdict_pending:
+		printerr("PVLDS SMOKE LAUNCH: FAIL - ", str(result["error"]))
+		get_tree().quit(1)
 	else:
 		var msg: String = "Launch failed: %s" % str(result["error"])
 		printerr("PVLDS LAUNCH: ", msg)
 		_show_desk()
 		if _desk != null:
 			_desk.show_message(msg + " Fix the setup here, then re-enter the room.")
+
+
+## The load wait's poll (every frame; the checks are cheap and the
+## contract file is small). Hand-off cues, in the order they are
+## judged: VPX dying mid-load (failure - unless the watchdog has
+## already reported the game's window by exe path, in which case the
+## spawn pid simply was not the whole story), the XR session
+## changing hands, the watchdog's window report + settle, the cap.
+func _poll_launch() -> void:
+	if _shot_launch_path != "":
+		_poll_shot_launch()
+		return
+	if not _launch_pending:
+		return
+	var now: int = Time.get_ticks_msec()
+	var pid_alive: bool = _launch_pid > 0 and OS.is_process_running(_launch_pid)
+	if not pid_alive:
+		if _launch_pid_dead_msec < 0:
+			_launch_pid_dead_msec = now
+		if now - _launch_pid_dead_msec >= LAUNCH_DEAD_GRACE_MSEC:
+			var seen: WatchdogContract = WatchdogContract.load_from_disk()
+			if not (seen.session_id == _launch_session_id and seen.game_window_seen_unix > 0):
+				_settle_launch(false, "VPX closed while the table was loading")
+				return
+	if _xr_enabled and _xr_session_exiting():
+		_settle_launch(true, "the XR session changed hands")
+		return
+	var contract: WatchdogContract = WatchdogContract.load_from_disk()
+	if contract.session_id == _launch_session_id and contract.game_window_seen_unix > 0:
+		if _launch_window_seen_msec < 0:
+			_launch_window_seen_msec = now
+		elif now - _launch_window_seen_msec >= LAUNCH_SETTLE_MSEC:
+			_settle_launch(true, "VPX's window is up")
+			return
+	if now - _launch_started_msec >= LAUNCH_CAP_MSEC:
+		_settle_launch(true, "the load cap was reached")
+
+
+## The wait resolves. Success: mark the session live and exit
+## completely - absence during play is still the design. Failure:
+## mark it failed, put the failure on the wall, keep browsing.
+func _settle_launch(ok: bool, reason: String) -> void:
+	if not _launch_pending:
+		return
+	_launch_pending = false
+	var game: GameEntry = _launch_game
+	_launch_game = null
+	var elapsed: float = float(Time.get_ticks_msec() - _launch_started_msec) / 1000.0
+	if ok:
+		_launch_service.mark_live()
+		print("PVLDS LAUNCH: hand-off complete (%s) after %.1fs; launcher exiting" % [reason, elapsed])
+		_intentional_launch_exit = true
+		if _smoke_verdict_pending:
+			print("PVLDS SMOKE LAUNCH: handed off (%s) after %.1fs" % [reason, elapsed])
+		get_tree().quit()
+	else:
+		_launch_service.fail_launch()
+		printerr("PVLDS LAUNCH: failed - ", reason)
+		if _smoke_verdict_pending:
+			printerr("PVLDS SMOKE LAUNCH: FAIL - ", reason)
+			get_tree().quit(1)
+			return
+		if _room != null and game != null:
+			_room.end_launch_failed(game, reason)
+
+
+## --pvlds-shot-launch: fire a real launch once the wall is ready,
+## then capture the LOADING room ~1s into the wait and leave.
+func _poll_shot_launch() -> void:
+	if not _shot_launch_fired:
+		if _room != null and _room.visible and _room.wall_ready:
+			_fire_shot_launch()
+		return
+	if _launch_pending and Time.get_ticks_msec() - _shot_launch_at_msec >= 1000:
+		var path: String = _shot_launch_path
+		_shot_launch_path = ""
+		var img: Image = get_viewport().get_texture().get_image()
+		var err: Error = img.save_png(path)
+		print("PVLDS SHOT LAUNCH: ", path, " err=", err, " size=", img.get_size())
+		if _launch_service != null:
+			_launch_service.disarm()
+		get_tree().quit(0 if err == OK else 1)
+	elif not _launch_pending and Time.get_ticks_msec() - _shot_launch_at_msec >= 3000:
+		printerr("PVLDS SHOT LAUNCH: FAIL - the launch never entered its wait")
+		get_tree().quit(1)
+
+
+func _fire_shot_launch() -> void:
+	_shot_launch_fired = true
+	_shot_launch_at_msec = Time.get_ticks_msec()
+	var game: GameEntry = null
+	if _scanner != null:
+		game = _scanner.game_by_id("dg-galaxy-corsair")
+		if game == null and not _scanner.games.is_empty():
+			game = _scanner.games[0]
+	if game == null:
+		printerr("PVLDS SHOT LAUNCH: FAIL - no game to launch")
+		get_tree().quit(1)
+		return
+	var build: TableBuild = game.resolve_default_build(_state)
+	_on_launch_requested(game, build)
 
 
 ## EXIT (room rail): disarm the watchdog first - the player who
@@ -385,29 +553,34 @@ func _run_db_stats(path: String) -> void:
 
 
 ## --pvlds-smoke-launch <game_id>: the launcher-side integration
-## smoke. Runs the real perform_launch against the seeded dummy
-## library with the config's exe pointed at a stub (env override),
-## prints the outcome, and - on success - exits exactly as a real
-## launch does, leaving the stub process and the contract behind
-## for the harness to inspect.
+## smoke. Fires the real launch path (same entry as the card's
+## Launch button) against the seeded dummy library with the config's
+## exe pointed at a stub (env override), rides the real load wait,
+## and lets _settle_launch print the verdict and quit: handed off
+## (0) when the stub's window report lands, FAIL (1) if the stub
+## dies mid-load. The harness reads the timing in the verdict line
+## as proof the launcher stayed resident during the load.
 func _smoke_launch(game_id: String) -> void:
 	var game: GameEntry = _scanner.game_by_id(game_id) if _scanner != null else null
 	if game == null:
 		printerr("PVLDS SMOKE LAUNCH: FAIL - game not found: ", game_id)
 		get_tree().quit(1)
 		return
+	_smoke_verdict_pending = true
 	var build: TableBuild = game.resolve_default_build(_state)
-	var result: Dictionary = _launch_service.perform_launch(_config, _state, game, build)
-	if bool(result["ok"]):
-		print("PVLDS SMOKE LAUNCH: ok pid=", int(result.get("pid", -1)))
-		_intentional_launch_exit = true
-		get_tree().quit(0)
-	else:
-		printerr("PVLDS SMOKE LAUNCH: FAIL - ", str(result["error"]))
-		get_tree().quit(1)
+	_on_launch_requested(game, build)
 
 
 # ------------------------------------------------------------ core test
+
+func _write_text_file(path: String, text: String) -> bool:
+	var f: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return false
+	f.store_string(text)
+	f.close()
+	return true
+
 
 func _expect(cond: bool, label: String, failures: Array[String]) -> void:
 	if cond:
@@ -523,17 +696,27 @@ func _run_core_test() -> void:
 	var contract: WatchdogContract = WatchdogContract.new()
 	contract.armed = true
 	contract.session_id = 7
-	contract.session_state = "playing"
+	contract.session_state = "live"
 	contract.game_exe_path = "C:/Visual Pinball/VPinball_GL64.exe"
 	contract.game_pid = 4242
+	contract.game_window_seen_unix = 1234567
 	contract.launcher_path = "C:/PVLDS/PVLDS.exe"
 	contract.focus_herding = false
 	_expect(contract.save_to_disk(), "watchdog contract saves", failures)
 	var contract2: WatchdogContract = WatchdogContract.load_from_disk()
 	_expect(contract2.armed and contract2.session_id == 7 and contract2.game_pid == 4242
-		and contract2.session_state == "playing" and not contract2.focus_herding
+		and contract2.session_state == "live" and contract2.game_window_seen_unix == 1234567
+		and not contract2.focus_herding
 		and contract2.launcher_path == "C:/PVLDS/PVLDS.exe",
-		"watchdog contract round-trips", failures)
+		"watchdog contract round-trips (incl. the window-seen stamp)", failures)
+	# Legacy schema-v1 state spellings normalize on load - a contract
+	# written by the M2 build is understood by this one.
+	_expect(_write_text_file(contract_file, "{\"session_state\": \"playing\"}"), "legacy contract written", failures)
+	_expect(WatchdogContract.load_from_disk().session_state == "live",
+		"legacy 'playing' loads as 'live'", failures)
+	_expect(_write_text_file(contract_file, "{\"session_state\": \"launching\"}"), "legacy contract rewritten", failures)
+	_expect(WatchdogContract.load_from_disk().session_state == "loading",
+		"legacy 'launching' loads as 'loading'", failures)
 	if contract_backup != "":
 		var cf: FileAccess = FileAccess.open(contract_file, FileAccess.WRITE)
 		if cf != null:
@@ -541,6 +724,30 @@ func _run_core_test() -> void:
 			cf.close()
 	elif FileAccess.file_exists(contract_file):
 		DirAccess.remove_absolute(contract_file)
+
+	# Config: the -exit default, the old-default migration, and the
+	# desk warning's condition (backed up + restored like the rest).
+	var config_file: String = PvldsConfig.user_path()
+	var config_backup: String = ""
+	if FileAccess.file_exists(config_file):
+		config_backup = FileAccess.get_file_as_string(config_file)
+	_expect(_write_text_file(config_file, JSON.stringify({"launch_args_template": PvldsConfig.OLD_DEFAULT_LAUNCH_ARGS})),
+		"old-default config written", failures)
+	var mig_cfg: PvldsConfig = PvldsConfig.new()
+	_expect(mig_cfg.load_from_disk() and mig_cfg.launch_args_template == PvldsConfig.DEFAULT_LAUNCH_ARGS,
+		"a saved old-default template migrates to the -exit default", failures)
+	_expect(_write_text_file(config_file, JSON.stringify({"launch_args_template": "-play -minimized \"{table}\""})),
+		"custom config written", failures)
+	var custom_cfg: PvldsConfig = PvldsConfig.new()
+	_expect(custom_cfg.load_from_disk() and custom_cfg.launch_args_template == "-play -minimized \"{table}\"",
+		"a customized template is never rewritten by migration", failures)
+	_expect(PvldsConfig.template_includes_exit("-play -exit \"{table}\""), "-exit passes the exit check", failures)
+	_expect(not PvldsConfig.template_includes_exit("-play \"{table}\""), "no -exit fails the exit check", failures)
+	_expect(PvldsConfig.template_includes_exit("-play /exit {table}"), "the /exit spelling passes the exit check", failures)
+	if config_backup != "":
+		_write_text_file(config_file, config_backup)
+	elif FileAccess.file_exists(config_file):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(config_file))
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")

@@ -8,15 +8,26 @@ extends RefCounted
 ## half-written contract.
 ##
 ## Fields:
-##   version          schema version (1)
+##   version          schema version (2)
 ##   armed            false = the player chose Exit; watchdog stands down
 ##   focus_herding    the config kill-switch, mirrored for the watchdog
 ##   session_id       increments on every launch; how the watchdog
 ##                    knows a NEW session was armed after a relaunch
-##   session_state    idle | launching | playing | returned
+##   session_state    idle | loading | live | returned | failed
+##                    loading: VPX spawned, the launcher is STILL
+##                    resident in the room while the table loads - if
+##                    VPX dies now the session failed and the watchdog
+##                    must NOT relaunch (the resident launcher shows
+##                    the failure). live: the hand-off completed and
+##                    the launcher has exited - VPX death now triggers
+##                    the one relaunch. (Schema v1 called these
+##                    "launching" / "playing"; loads normalize them.)
 ##   game_exe_path    the VPX executable of the live session
 ##   game_pid         VPX process id once spawned (0 = not yet / none)
 ##   game_started_unix
+##   game_window_seen_unix  stamped by the watchdog when the game's
+##                    main window first exists; the resident launcher
+##                    reads it (+ a short settle) as its hand-off cue
 ##   launcher_path    what the watchdog relaunches
 ##   launcher_args    ...with these arguments
 ##   launcher_pid     pid of the launcher that last checked in
@@ -25,7 +36,7 @@ extends RefCounted
 ##   updated_unix
 
 const CONTRACT_FILE_NAME: String = "pvlds_watchdog_contract.json"
-const SCHEMA_VERSION: int = 1
+const SCHEMA_VERSION: int = 2
 
 var armed: bool = false
 var focus_herding: bool = true
@@ -34,10 +45,23 @@ var session_state: String = "idle"
 var game_exe_path: String = ""
 var game_pid: int = 0
 var game_started_unix: int = 0
+var game_window_seen_unix: int = 0
 var launcher_path: String = ""
 var launcher_args: Array[String] = []
 var launcher_pid: int = 0
 var last_checkin_unix: int = 0
+
+
+## Schema v1 state spellings, mapped to the v2 machine. Both readers
+## (the launcher and the watchdog) normalize on load, so a contract
+## written by either build generation is understood by the other.
+static func normalize_state(state: String) -> String:
+	match state:
+		"launching":
+			return "loading"
+		"playing":
+			return "live"
+	return state
 
 
 static func contract_path() -> String:
@@ -65,9 +89,11 @@ static func load_from_disk() -> WatchdogContract:
 	c.focus_herding = bool(d.get("focus_herding", true))
 	c.session_id = int(d.get("session_id", 0))
 	c.session_state = str(d.get("session_state", "idle"))
+	c.session_state = WatchdogContract.normalize_state(c.session_state)
 	c.game_exe_path = str(d.get("game_exe_path", ""))
 	c.game_pid = int(d.get("game_pid", 0))
 	c.game_started_unix = int(d.get("game_started_unix", 0))
+	c.game_window_seen_unix = int(d.get("game_window_seen_unix", 0))
 	c.launcher_path = str(d.get("launcher_path", ""))
 	c.launcher_pid = int(d.get("launcher_pid", 0))
 	c.last_checkin_unix = int(d.get("last_checkin_unix", 0))
@@ -90,6 +116,7 @@ func to_dictionary() -> Dictionary:
 	d["game_exe_path"] = game_exe_path
 	d["game_pid"] = game_pid
 	d["game_started_unix"] = game_started_unix
+	d["game_window_seen_unix"] = game_window_seen_unix
 	d["launcher_path"] = launcher_path
 	var la: Array = []
 	for a: String in launcher_args:

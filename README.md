@@ -5,14 +5,21 @@ stand in front of your collection, pick a table, play. Built with
 Godot 4.7 + OpenXR for PCVR (Quest 3 via Virtual Desktop / VDXR first;
 SteamVR runtime is a later test target).
 
-**Status: M2 — "The hand-off" (built 2026-10-21, awaiting Chris's
-rig verdict).** M1's room plus real launching: card-level Launch,
-full launcher exit, a native watchdog that returns you to the room
-with your place restored, focus herding, and Exit-to-desktop. The
-M2 gate is an evening of real tables on Chris's machine — nothing
-here claims the Windows/VPX/VDXR hand-off works until he says so.
-Design of record: `~/workspace/vpx-vr-launcher/design.md` (outside
-this repo).
+**Status: M2 — "The hand-off" (built 2026-10-21; fix round the
+same day, after the first real-hardware session).** M1's room plus
+real launching: card-level Launch, a native watchdog that returns
+you to the room with your place restored, focus herding, and
+Exit-to-desktop. The first session proved the launch and the
+watchdog's return trip on Chris's rig; it also caught two defects
+this fix round addresses — the shipped launch template lacked
+VPX's `-exit` flag (quitting a table landed in the VPX editor),
+and the launcher vanished the instant VPX spawned, leaving a
+desktop gap during VPX's ~20s load (the launcher now stays in the
+room until the hand-off — see below). The M2 gate remains an
+evening of real tables on Chris's machine — nothing here claims
+the Windows/VPX/VDXR hand-off works until he says so. Design of
+record: `~/workspace/vpx-vr-launcher/design.md` (outside this
+repo).
 
 ## The hand-off (M2)
 
@@ -22,19 +29,49 @@ this repo).
   build choice. Launching uses the player's **default build** and
   the config's **launch-args template** (`{table}` expands to the
   build's full path; quotes in the template group arguments — never
-  a hard-coded command line). On launch the launcher records state
-  (recents, last-played, room view), writes the watchdog session
-  contract, spawns VPX detached, and **exits completely** — no
-  resident mode; absence is the fix for the XR/focus fights.
+  a hard-coded command line). The shipped default template is
+  `-play -exit "{table}"`: **`-exit` is what makes VPX quit back
+  out when the table exits** — without it, exiting a table lands in
+  the VPX editor and nothing returns until VPX is closed by hand
+  (the first field session's lesson). A saved template that is
+  byte-identical to the old default (`-play "{table}"`) was never
+  a customization and is upgraded to the new default on load; any
+  other template is the player's and is never rewritten — but the
+  desk pass warns in plain language when the active template lacks
+  `-exit`.
+- **The launcher stays for the load.** On launch the launcher
+  records state (recents, last-played, room view), writes the
+  watchdog session contract in the **loading** state, spawns VPX
+  detached — and **stays in the room**: the launched panel reads
+  LOADING..., every other Launch is disabled (no double launches),
+  EXIT stays live. The launcher exits at the hand-off, the first
+  of: (a) the watchdog's contract reports VPX's main window exists,
+  plus a ~1.5s settle; (b) the launcher's own XR session reports it
+  is ending (VPX is taking the headset over); (c) a 45s hard cap,
+  so the room can never hang on a stuck load. As it exits it marks
+  the session **live**. If VPX dies during the load instead, the
+  session is marked **failed**, nobody relaunches anything, and
+  the resident launcher flags the panel FAILED and returns to
+  normal browsing. EXIT during the wait disarms the session
+  entirely (VPX keeps loading, detached; its later exit resurrects
+  nothing) and quits. After the hand-off the launcher is fully
+  gone — no resident mode; absence remains the fix for the XR/
+  focus fights.
 - **The watchdog** (`watchdog/`, Go, stdlib only) is a separate tiny
   native process. The launcher starts it on boot (single-instance:
   a second start hands over via the contract file and exits). It
-  polls `pvlds_watchdog_contract.json` in the app's user data dir,
-  waits for the game process to die (exit or crash — same handling),
-  and relaunches the launcher **once**. The relaunched launcher
-  restores filter/sort/page with the just-played table selected.
-  It never auto-relaunches a table. A log lands beside the contract
-  (`pvlds_watchdog.log`).
+  polls `pvlds_watchdog_contract.json` in the app's user data dir
+  and runs the session state machine: in **loading** it stamps
+  `game_window_seen_unix` when the game's main window appears and,
+  if the game dies, either marks the session **failed** (the
+  supervising launcher is still resident — it owns the failure) or
+  promotes the session to **live** (the launcher is gone — a
+  launcher that died mid-wait must never strand the player at a
+  dead desktop). In **live** it waits for the game process to die
+  (exit or crash — same handling) and relaunches the launcher
+  **once**. The relaunched launcher restores filter/sort/page with
+  the just-played table selected. It never auto-relaunches a
+  table. A log lands beside the contract (`pvlds_watchdog.log`).
 - **Focus herding** (Windows, user32): while a session is live, if
   the foreground leaves the game process and stays away past a 2s
   grace period, the watchdog hands foreground back to the game's
@@ -163,11 +200,19 @@ cached `vpsdb.json` and the same code runs your actual library.
 - `--setup` — force the desk pass even when a config exists.
 - `--pvlds-smoke-launch <game_id>` — boot (real installed config if
   one exists, else the seeded dummy), and when the scan lands, run
-  the real launch path for that game's default build, then exit.
-  Config exe/args can be overridden with the `PVLDS_SMOKE_EXE` /
-  `PVLDS_SMOKE_ARGS` environment variables. This is the launcher-side
-  integration smoke; the assembled round trip (exported binary +
-  watchdog + stub VPX) was verified the same way under Xvfb.
+  the real launch path for that game's default build. The smoke
+  rides the real hand-off wait and prints its verdict with the
+  elapsed time: handed off (and why) = exit 0, failed load = exit
+  1. Config exe/args can be overridden with the `PVLDS_SMOKE_EXE` /
+  `PVLDS_SMOKE_ARGS` environment variables. This is the
+  launcher-side integration smoke; the assembled round trip
+  (exported binary + watchdog + a stub VPX that "loads" for a few
+  seconds before its window exists) was verified the same way
+  under Xvfb, including the failed-load variant.
+- `--pvlds-shot-launch <path.png>` — with `--pvlds-seed-dummy`:
+  once the wall is up, fire a real launch (same env overrides) and
+  screenshot the room ~1s into the load wait — the LOADING-state
+  QA capture. Disarms and quits right after the shot.
 
 ## Layout
 

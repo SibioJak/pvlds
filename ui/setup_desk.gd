@@ -12,6 +12,7 @@ signal enter_room_requested
 var _config: PvldsConfig
 var _exe_edit: LineEdit
 var _args_edit: LineEdit
+var _args_warning: Label
 var _herding_check: CheckBox
 var _db_edit: LineEdit
 var _folder_rows: VBoxContainer
@@ -85,6 +86,18 @@ func _build_ui() -> void:
 	_http.request_completed.connect(_on_download_completed)
 	add_child(_http)
 	_args_edit = _add_field(vbox, "Launch arguments template ({table} is the table file; quotes group arguments)")
+	# The -exit warning, directly under the field it is about. Plain
+	# language, shown only while the ACTIVE template lacks the flag:
+	# without it a table exit lands in the VPX editor (the process
+	# never dies), and the whole return trip silently never happens.
+	_args_warning = Label.new()
+	_args_warning.text = "Heads up: these launch arguments don't include -exit. Without it, exiting a table lands in the VPX editor instead of closing VPX - and the launcher can't come back until VPX is closed completely. The default template is: " + PvldsConfig.DEFAULT_LAUNCH_ARGS
+	_args_warning.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_args_warning.add_theme_color_override("font_color", Color(1.0, 0.75, 0.35))
+	_args_warning.visible = false
+	vbox.add_child(_args_warning)
+	vbox.move_child(_args_warning, _args_edit.get_index() + 1)
+	_args_edit.text_changed.connect(func(_t: String) -> void: _refresh_args_warning())
 	_herding_check = CheckBox.new()
 	_herding_check.text = "Focus herding - the watchdog keeps the game window in front during play (uncheck if it ever fights you)"
 	_herding_check.tooltip_text = "Design section 3 amendment: during the launch settle and during play, the watchdog returns foreground focus to the VPX window when something steals it. It never moves or resizes windows."
@@ -213,10 +226,19 @@ func _on_dialog_dir(path: String) -> void:
 			_folder_edits[idx].text = path
 
 
+## The warning tracks the field's current text (the ACTIVE
+## template), so it appears/disappears as the user types.
+func _refresh_args_warning() -> void:
+	if _args_warning == null or _args_edit == null:
+		return
+	_args_warning.visible = not PvldsConfig.template_includes_exit(_args_edit.text)
+
+
 func _fill_from_config() -> void:
 	_exe_edit.text = _config.vpx_exe_path
 	_db_edit.text = _config.vpsdb_path
 	_args_edit.text = _config.launch_args_template
+	_refresh_args_warning()
 	_herding_check.button_pressed = _config.focus_herding
 	for f: String in _config.table_folders:
 		_add_folder_row(f)

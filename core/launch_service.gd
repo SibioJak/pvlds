@@ -9,9 +9,17 @@ extends RefCounted
 ##   boot        checkin() - arm the contract, stamp the launcher's
 ##               identity, make sure a watchdog is on duty.
 ##   Play        perform_launch() - persist state, write the session
-##               contract, ensure the watchdog, spawn VPX detached.
-##               The CALLER then quits the launcher completely:
-##               absence is the fix (no resident mode, ever).
+##               contract (state "loading"), ensure the watchdog,
+##               spawn VPX detached. The launcher then STAYS RESIDENT
+##               in the room while the table loads (M2 fix round: the
+##               instant-exit choreography left the player staring
+##               at a desktop/void for VPX's whole ~20s load; the
+##               competing launcher keeps its room up, and so do we).
+##               The caller watches for the hand-off point and then
+##               calls mark_live() and quits completely - absence
+##               during PLAY is still the fix; only the load is
+##               covered. If VPX dies during the load, the caller
+##               calls fail_launch() and stays in the room.
 ##   Exit        disarm() - the player who wants out stays out; the
 ##               watchdog reads armed=false and stands down.
 ##
@@ -118,16 +126,18 @@ func checkin(config: PvldsConfig) -> WatchdogContract:
 	c.launcher_args = LaunchService.launcher_args()
 	c.launcher_pid = OS.get_process_id()
 	c.last_checkin_unix = int(Time.get_unix_time_from_system())
-	if c.session_state == "playing" or c.session_state == "launching":
+	if c.session_state == "loading" or c.session_state == "live" or c.session_state == "failed":
 		c.session_state = "returned"
 	c.game_pid = 0
+	c.game_window_seen_unix = 0
 	c.save_to_disk()
 	ensure_watchdog()
 	return c
 
 
-## Play. On success (result["ok"]) the caller must quit the launcher
-## immediately - VPX owns the machine now.
+## Play. On success (result["ok"]) VPX is spawned and loading; the
+## session is in the "loading" state and the launcher stays resident
+## until the hand-off (mark_live) or the failure (fail_launch).
 func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, build: TableBuild) -> Dictionary:
 	var plan: LaunchPlan = LaunchPlan.build_plan(config, game, build)
 	if not plan.valid:
@@ -145,9 +155,10 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	c.armed = true
 	c.focus_herding = config.focus_herding
 	c.session_id += 1
-	c.session_state = "launching"
+	c.session_state = "loading"
 	c.game_exe_path = plan.exe_path
 	c.game_pid = 0
+	c.game_window_seen_unix = 0
 	c.game_started_unix = int(Time.get_unix_time_from_system())
 	c.launcher_path = LaunchService.launcher_path()
 	c.launcher_args = LaunchService.launcher_args()
@@ -161,9 +172,29 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 		c.save_to_disk()
 		return {"ok": false, "error": "Could not start %s" % plan.exe_path, "plan": plan}
 	c.game_pid = pid
-	c.session_state = "playing"
 	c.save_to_disk()
-	return {"ok": true, "error": "", "plan": plan, "pid": pid}
+	return {"ok": true, "error": "", "plan": plan, "pid": pid, "session_id": c.session_id}
+
+
+## The hand-off point: the table is up and the launcher is about to
+## exit. From here the watchdog's live rule owns the session - when
+## VPX dies, it relaunches the launcher exactly once.
+func mark_live() -> void:
+	var c: WatchdogContract = WatchdogContract.load_from_disk()
+	if c.session_state == "loading":
+		c.session_state = "live"
+		c.save_to_disk()
+
+
+## VPX died while it was still loading and the launcher is resident
+## to say so. Terminal for this session: the watchdog reads "failed"
+## as inactive and never relaunches for it.
+func fail_launch() -> void:
+	var c: WatchdogContract = WatchdogContract.load_from_disk()
+	if c.session_state == "loading":
+		c.session_state = "failed"
+		c.game_pid = 0
+		c.save_to_disk()
 
 
 ## Exit to desktop: disarm, then the caller quits. The watchdog sees

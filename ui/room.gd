@@ -43,6 +43,9 @@ var _xr_camera: Camera3D
 var _desk_camera: Camera3D
 var _panels: Array[ClickableQuad] = []
 var _panel_launches: Array[ClickableQuad] = [] ## per-panel Launch button, parallel to _panels
+var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
+var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
+var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
 var _selected_game_id: String = "" ## last game opened/launched; restored + persisted as view state
 var _rail_quads: Dictionary = {} ## key -> ClickableQuad
 var _focusables: Array[ClickableQuad] = []
@@ -370,14 +373,31 @@ func _make_quad(parent: Node3D, action: String, payload: String, tex: Texture2D,
 	return q
 
 
-func _fill_wall_textures(gen: int) -> void:
-	# Banner first: it carries the library summary line.
+## The banner's one line: library summary, the empty-filter guard's
+## explanation when it fired, and any transient launch status.
+func _banner_line() -> String:
 	var line: String = "%d files - %d games - filter %s - sort %s" % [
 		_scanner.total_files, _scanner.games.size(),
 		str(FILTER_LABELS[_filter]), str(SORT_LABELS[_sort])]
 	if _filter_note != "":
 		line += " - " + _filter_note
-	var banner_tex: Texture2D = await _factory.render_texture(RoomSpecs.banner_spec(line), Vector2i(1024, 262))
+	if _status_note != "":
+		line += " - " + _status_note
+	return line
+
+
+func _refresh_banner() -> void:
+	if _banner_quad == null or _scanner == null:
+		return
+	var gen: int = _gen
+	var tex: Texture2D = await _factory.render_texture(RoomSpecs.banner_spec(_banner_line()), Vector2i(1024, 262))
+	if gen == _gen and _banner_quad != null:
+		_banner_quad.set_texture(tex)
+
+
+func _fill_wall_textures(gen: int) -> void:
+	# Banner first: it carries the library summary line.
+	var banner_tex: Texture2D = await _factory.render_texture(RoomSpecs.banner_spec(_banner_line()), Vector2i(1024, 262))
 	if gen != _gen or _banner_quad == null:
 		return
 	_banner_quad.set_texture(banner_tex)
@@ -398,7 +418,9 @@ func _fill_wall_textures(gen: int) -> void:
 			return
 		quad.set_texture(tex)
 		if i < _panel_launches.size():
-			var ltex: Texture2D = await _factory.render_texture(RoomSpecs.button_spec("LAUNCH", true), Vector2i(512, 164))
+			var failed: bool = game.game_id == _failed_game_id
+			var ltex: Texture2D = await _factory.render_texture(
+				RoomSpecs.button_spec("FAILED" if failed else "LAUNCH", not failed), Vector2i(512, 164))
 			if gen != _gen:
 				return
 			_panel_launches[i].set_texture(ltex)
@@ -509,6 +531,10 @@ func _activate(quad: ClickableQuad) -> void:
 
 
 func _handle_rail(key: String) -> void:
+	if key.begins_with("filter:") or key == "sort" or key == "page_prev" or key == "page_next":
+		# Browsing onward retires the last launch's marks.
+		_failed_game_id = ""
+		_status_note = ""
 	if key.begins_with("filter:"):
 		_filter = key.trim_prefix("filter:")
 		_page = 0
@@ -560,6 +586,62 @@ func _on_detail_play(game: GameEntry, build: TableBuild) -> void:
 	_selected_game_id = game.game_id
 	_persist_view()
 	launch_requested.emit(game, build)
+
+
+# ------------------------------------------------------- launch states
+
+## A launch is in its load wait (Main owns the wait itself): the
+## room freezes for browsing - no double launches, no detail
+## detours - the launched panel says LOADING, the banner says what
+## is loading, and EXIT stays live throughout: leaving mid-load
+## disarms the session, and VPX simply keeps loading detached.
+func begin_launch(game: GameEntry) -> void:
+	_launching_game_id = game.game_id
+	_failed_game_id = ""
+	_status_note = "Launching %s..." % game.title
+	for q: ClickableQuad in _panels:
+		q.pick_enabled = false
+	for q: ClickableQuad in _panel_launches:
+		q.pick_enabled = false
+	for k: Variant in _rail_quads.keys():
+		var key: String = str(k)
+		if key != "exit" and key != "desk":
+			_rail_quads[k].pick_enabled = false
+	if _detail != null and _detail.is_open():
+		_detail.set_launching(true)
+	_set_focused(_rail_quads["exit"])
+	_refresh_focusables()
+	_swap_launch_textures()
+	_refresh_banner()
+
+
+## VPX died during the load, with the launcher still resident to
+## say so: the failure lands on the wall (FAILED button, banner
+## note) and browsing resumes. In detail mode the detail view is
+## the visible surface - its Play button is restored and the wall
+## rebuilds when it closes, as usual.
+func end_launch_failed(game: GameEntry, reason: String) -> void:
+	_launching_game_id = ""
+	_failed_game_id = game.game_id
+	_status_note = "Launch failed: %s - %s" % [game.title, reason]
+	if _detail != null and _detail.is_open():
+		_detail.set_launching(false)
+	if _mode == "detail":
+		return
+	_rebuild_wall()
+
+
+func _swap_launch_textures() -> void:
+	var gen: int = _gen
+	var start: int = _page * PAGE_SIZE
+	for i: int in range(_panel_launches.size()):
+		var game: GameEntry = _visible_games[start + i]
+		var is_this: bool = game.game_id == _launching_game_id
+		var tex: Texture2D = await _factory.render_texture(
+			RoomSpecs.button_spec("LOADING..." if is_this else "LAUNCH", is_this), Vector2i(512, 164))
+		if gen != _gen:
+			return
+		_panel_launches[i].set_texture(tex)
 
 
 func _on_detail_closed() -> void:

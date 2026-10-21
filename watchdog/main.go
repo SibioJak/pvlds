@@ -7,10 +7,18 @@
 // VPX dies and bring the launcher back. That is all this process is:
 //
 //   - poll the session contract JSON the launcher writes,
-//   - while a session is live, watch the game process (and, on
-//     Windows, herd foreground focus back to the game window),
-//   - when the game dies (exit or crash - same handling), relaunch
-//     the launcher exactly once per death,
+//   - while a session is loading or live, watch the game process
+//     (and, on Windows, herd foreground focus back to the game
+//     window),
+//   - stamp the contract when the game's main window first exists
+//     (the resident launcher reads it as its hand-off cue),
+//   - when the game dies: in "live" (the launcher already exited)
+//     relaunch it exactly once; in "loading" the launcher is still
+//     resident and owns the failure, so the session is marked
+//     "failed" instead and this process never relaunches for it
+//     (if the supervising launcher itself is gone, a loading
+//     session is promoted to live - nobody is left to show a
+//     failure, and the player must not be stranded),
 //   - stand down forever when the contract says armed=false (the
 //     player's Exit), when the contract file disappears, or when
 //     the launcher hasn't checked in across 24 hours (stale watch).
@@ -36,19 +44,20 @@ import (
 )
 
 type Contract struct {
-	Version         int      `json:"version"`
-	Armed           bool     `json:"armed"`
-	FocusHerding    bool     `json:"focus_herding"`
-	SessionID       int      `json:"session_id"`
-	SessionState    string   `json:"session_state"`
-	GameExePath     string   `json:"game_exe_path"`
-	GamePID         int      `json:"game_pid"`
-	GameStartedUnix int64    `json:"game_started_unix"`
-	LauncherPath    string   `json:"launcher_path"`
-	LauncherArgs    []string `json:"launcher_args"`
-	LauncherPID     int      `json:"launcher_pid"`
-	LastCheckinUnix int64    `json:"last_checkin_unix"`
-	UpdatedUnix     int64    `json:"updated_unix"`
+	Version            int      `json:"version"`
+	Armed              bool     `json:"armed"`
+	FocusHerding       bool     `json:"focus_herding"`
+	SessionID          int      `json:"session_id"`
+	SessionState       string   `json:"session_state"`
+	GameExePath        string   `json:"game_exe_path"`
+	GamePID            int      `json:"game_pid"`
+	GameStartedUnix    int64    `json:"game_started_unix"`
+	GameWindowSeenUnix int64    `json:"game_window_seen_unix"`
+	LauncherPath       string   `json:"launcher_path"`
+	LauncherArgs       []string `json:"launcher_args"`
+	LauncherPID        int      `json:"launcher_pid"`
+	LastCheckinUnix    int64    `json:"last_checkin_unix"`
+	UpdatedUnix        int64    `json:"updated_unix"`
 }
 
 const (
@@ -75,6 +84,19 @@ func logf(format string, args ...interface{}) {
 	}
 }
 
+// normalizeState maps the schema-v1 session spellings onto the v2
+// machine (loading = launcher resident, live = launcher exited), so
+// a contract written by either build generation is understood.
+func normalizeState(s string) string {
+	switch s {
+	case "launching":
+		return "loading"
+	case "playing":
+		return "live"
+	}
+	return s
+}
+
 func readContract() (*Contract, error) {
 	data, err := os.ReadFile(contractPath)
 	if err != nil {
@@ -84,6 +106,7 @@ func readContract() (*Contract, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, err
 	}
+	c.SessionState = normalizeState(c.SessionState)
 	return &c, nil
 }
 
@@ -196,7 +219,7 @@ func main() {
 		logf("watchdog: relaunched launcher pid %d (%s)", pid, why)
 		// Mark the session consumed so nothing re-fires on it.
 		writeContractMerged(func(mc *Contract) {
-			if mc.SessionState == "playing" || mc.SessionState == "launching" {
+			if mc.SessionState == "live" || mc.SessionState == "loading" {
 				mc.SessionState = "returned"
 			}
 			mc.GamePID = 0
@@ -223,7 +246,7 @@ func main() {
 			return
 		}
 		now := time.Now().Unix()
-		sessionActive := c.SessionState == "launching" || c.SessionState == "playing"
+		sessionActive := c.SessionState == "loading" || c.SessionState == "live"
 		alive, gpid := gameAlive(c)
 		if alive && gpid > 0 && gpid != c.GamePID {
 			c.GamePID = gpid
@@ -266,14 +289,49 @@ func main() {
 					gameSeenAt = now
 					logf("watchdog: game process live (pid %d), session %d", gpid, c.SessionID)
 				}
+				// The hand-off cue for the resident launcher: the
+				// game's main window exists. Stamped once per session.
+				if c.GameWindowSeenUnix == 0 && gameWindowExists(c.GamePID) {
+					logf("watchdog: game window up (pid %d), session %d", c.GamePID, c.SessionID)
+					writeContractMerged(func(mc *Contract) {
+						if mc.GameWindowSeenUnix == 0 && (mc.SessionState == "loading" || mc.SessionState == "live") {
+							mc.GameWindowSeenUnix = time.Now().Unix()
+						}
+					})
+				}
+				// A loading session whose supervising launcher has
+				// died is unsupervised: promote it to live, so the
+				// game's death still brings a launcher back instead
+				// of stranding the player at a desktop.
+				if c.SessionState == "loading" && c.LauncherPID > 0 && !processAlive(c.LauncherPID) {
+					logf("watchdog: supervising launcher gone during load, session %d; promoting to live", c.SessionID)
+					writeContractMerged(func(mc *Contract) {
+						if mc.SessionState == "loading" {
+							mc.SessionState = "live"
+						}
+					})
+				}
 				if c.FocusHerding {
 					herdTick(c.GamePID, gameSeenAt, now)
 				}
 			} else if sawGameAlive {
-				logf("watchdog: game process died, session %d; relaunching launcher", c.SessionID)
 				sawGameAlive = false
-				relaunch(c, "game exited")
-				continue
+				if c.SessionState == "loading" && c.LauncherPID > 0 && processAlive(c.LauncherPID) {
+					// Died during the load, and the resident launcher
+					// is right there to show the failure. Terminal:
+					// mark it failed and NEVER relaunch for it.
+					logf("watchdog: game died during load, session %d; marking failed (launcher resident)", c.SessionID)
+					writeContractMerged(func(mc *Contract) {
+						if mc.SessionState == "loading" {
+							mc.SessionState = "failed"
+							mc.GamePID = 0
+						}
+					})
+				} else {
+					logf("watchdog: game process died, session %d; relaunching launcher", c.SessionID)
+					relaunch(c, "game exited")
+					continue
+				}
 			} else if c.GameStartedUnix > 0 && now-c.GameStartedUnix > pendingTimeoutSec && !launcherAlive(c, 0) {
 				// The launcher spawned... something that never
 				// appeared, and the launcher is gone too. Bring the
