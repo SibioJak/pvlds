@@ -23,6 +23,18 @@ package main
 // src/ui/win/WinEditor.cpp). Neither cue alone fires the duty; the
 // composite (player gone AND editor present), sustained, does.
 //
+// ARMING (the load-window fix): the editor frame exists from the
+// moment VPX starts, but the player window is created only when a
+// table's play begins - after the .vpx file has loaded. During a
+// slow load, "editor present, player absent" is therefore TRUE for
+// the wrong reason, and an unarmed duty reads it as a table exit
+// and closes VPX mid-load (Chris's field failure on the first
+// build with this duty: launch, freeze, flicker, back in the room,
+// no game). So the duty is armed per session: it may fire only
+// after a VPPlayer-class window has been OBSERVED at least once in
+// the session. Player-never-seen + editor-present means "still
+// loading", forever safe - the sustain clock does not even run.
+//
 // Escalation, per the design brief: (1) the PinSim::FrontEndControls
 // terminate request (published protocol; PinballY's Application.cpp
 // is the reference sender: RegisterWindowMessage("PinSim::
@@ -66,6 +78,7 @@ const (
 
 type closer struct {
 	sessionID     int
+	playerSeen    bool  // arming: a player window observed at least once this session
 	editorSinceMs int64 // first tick of the current sustained editor state; 0 = not in it
 	stage         int   // 0 watching, 1 FEC sent, 2 WM_CLOSE sent, 3 gave up
 	actionAtMs    int64 // when the current stage's action went out
@@ -79,6 +92,13 @@ func (cl *closer) tick(nowMs int64, sessionID int, state string, enabled bool, a
 	if sessionID != cl.sessionID {
 		*cl = closer{sessionID: sessionID}
 	}
+	// Arming latches on ANY live-process tick that observes the
+	// player window - including ticks during the loading phase
+	// (the launcher still resident): a fast table can raise its
+	// player before the launcher exits, and that sighting is real.
+	if alive && ws.playerPresent {
+		cl.playerSeen = true
+	}
 	if !enabled || state != "live" || !alive {
 		// Never while the launcher is resident/loading, never with
 		// the switch off, never against a dead process. A broken
@@ -86,7 +106,10 @@ func (cl *closer) tick(nowMs int64, sessionID int, state string, enabled bool, a
 		cl.editorSinceMs = 0
 		return closeNone
 	}
-	editorReturned := !ws.playerPresent && ws.editorPresent
+	// Unarmed (the player window has never been seen this session):
+	// editor-present is the load state, not an exit. Never fires,
+	// and the sustain clock stays at zero.
+	editorReturned := cl.playerSeen && !ws.playerPresent && ws.editorPresent
 	if !editorReturned {
 		cl.editorSinceMs = 0
 		return closeNone

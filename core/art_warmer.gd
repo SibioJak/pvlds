@@ -43,9 +43,15 @@ func warm_library(games: Array[GameEntry]) -> void:
 	_queued.clear()
 	for g: GameEntry in games:
 		var src: String = g.art_source_path
-		if src != "" and not _queued.has(src) and not ArtProvider.is_cached(src):
-			_queue.append(src)
-			_queued[src] = true
+		if src == "" or _queued.has(src) or ArtProvider.is_cached(src):
+			continue
+		# A stamped negative (no usable image / failed, for this
+		# exact file version) is never re-queued: retrying failures
+		# on every pass was the no-art pages' recurring tax.
+		if ArtProvider.is_negative_outcome(ArtProvider.outcome_for(src)):
+			continue
+		_queue.append(src)
+		_queued[src] = true
 	_start_locked()
 	_mutex.unlock()
 
@@ -76,6 +82,37 @@ func is_idle() -> bool:
 	var idle: bool = not _worker_active and _queue.is_empty()
 	_mutex.unlock()
 	return idle
+
+
+## Art health for a library, from the persisted outcome index -
+## the desk's diagnostic breakdown. Counts are over games with a
+## .directb2s source (side-image games need no extraction):
+##   ok       - extracted; the cache serves the image instantly
+##   no_image - extracted once; the file holds no usable image
+##   failed   - extracted once; read/parse/decode failed
+##   untried  - never extracted (no outcome recorded yet)
+## Reading the index costs no extraction, so the desk can show
+## these numbers after the fact - they are what convicts the
+## failure class on a real library.
+static func art_health(games: Array[GameEntry]) -> Dictionary:
+	var health: Dictionary = {"ok": 0, "no_image": 0, "failed": 0, "untried": 0, "total": 0}
+	for g: GameEntry in games:
+		if g.art_source_path == "":
+			continue
+		health["total"] = int(health["total"]) + 1
+		if ArtProvider.is_cached(g.art_source_path):
+			health["ok"] = int(health["ok"]) + 1
+			continue
+		match ArtProvider.outcome_for(g.art_source_path):
+			ArtProvider.STATUS_OK:
+				health["ok"] = int(health["ok"]) + 1
+			ArtProvider.STATUS_NO_IMAGE:
+				health["no_image"] = int(health["no_image"]) + 1
+			ArtProvider.STATUS_FAILED:
+				health["failed"] = int(health["failed"]) + 1
+			_:
+				health["untried"] = int(health["untried"]) + 1
+	return health
 
 
 ## Art-cache coverage for a library: x = games whose art is ready
@@ -118,6 +155,10 @@ func _run_pass() -> void:
 		_queued.erase(src)
 		_mutex.unlock()
 		if ArtProvider.is_cached(src):
+			continue
+		if ArtProvider.is_negative_outcome(ArtProvider.outcome_for(src)):
+			# Recorded (by a panel, most likely) after this pass
+			# was queued: the outcome stands, do not re-extract.
 			continue
 		if not ArtProvider.claim_extract(src):
 			# A visible panel is extracting this one itself - its

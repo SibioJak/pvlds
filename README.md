@@ -87,7 +87,15 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   `src/core/VPApp.cpp`), the editor frame's class is **`VPinball`**
   (`WinEditor::PreRegisterClass`); player-class gone AND
   editor-class present, sustained ~2.5s (a transient window
-  shuffle is not an exit), fires once per session. Close method,
+  shuffle is not an exit), fires once per session. **The duty is
+  armed per session**: the editor frame exists from VPX's start
+  while the player window appears only once the table has loaded,
+  so editor-present + player-absent is also the LOAD state — the
+  duty may fire only after a player window has been observed at
+  least once in the session (the first build without arming
+  closed VPX mid-load on slow tables; the hand-off cue is
+  likewise the player-class window specifically, not any visible
+  window). Close method,
   in order: (1) the **PinSim::FrontEndControls** terminate
   request — the published protocol modern VP implements
   (registered window message, wParam 2 = CLOSE_APP, reply 1 =
@@ -158,7 +166,21 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   game first extracts it itself via `GameEntry.ensure_art()`; a
   claim registry guarantees the warmer and a panel never extract
   the same file twice, and a panel never queues behind the
-  warmer's list. (History: the original eager, main-thread scan
+  warmer's list. Every extraction's outcome is recorded in an
+  index beside the cache (`art_index.json`, same stamp): **ok**,
+  **no image in file**, or **failed** (unreadable/undecodable).
+  A stamped negative is remembered — panels render the title card
+  immediately and the warmer never re-queues the file until it
+  changes, so a no-art table costs nothing on later visits; a
+  panel whose claim on the warmer's in-flight extraction stalls
+  past ~3s extracts the file itself rather than waiting. The
+  extractor targets the format as the B2S server (the reference
+  reader) defines it — `Images/BackglassImage`'s `Value`
+  attribute first, then the on/off pair, the DMD image, then the
+  largest image blob anywhere — and decodes PNG/JPEG/BMP/WebP/TGA
+  from UTF-8 or UTF-16LE files. The desk summary reports the
+  index's exact ok / no-image / failed / untried counts for the
+  library. (History: the original eager, main-thread scan
   froze the app for over a minute at 300 tables, 2026-10-20; the
   lazy-only fix that followed moved the cost onto first page
   visits, which is what the warmer retired, 2026-10-21.)

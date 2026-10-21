@@ -292,7 +292,10 @@ func main() {
 					logf("watchdog: game process live (pid %d), session %d", gpid, c.SessionID)
 				}
 				// The hand-off cue for the resident launcher: the
-				// game's main window exists. Stamped once per session.
+				// game's player window exists (on Windows, a
+				// VPPlayer-class window specifically - the editor
+				// frame is up from app start and must not stamp
+				// this). Stamped once per session.
 				if c.GameWindowSeenUnix == 0 && gameWindowExists(c.GamePID) {
 					logf("watchdog: game window up (pid %d), session %d", c.GamePID, c.SessionID)
 					writeContractMerged(func(mc *Contract) {

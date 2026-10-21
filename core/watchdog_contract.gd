@@ -34,8 +34,11 @@ extends RefCounted
 ##   game_pid         VPX process id once spawned (0 = not yet / none)
 ##   game_started_unix
 ##   game_window_seen_unix  stamped by the watchdog when the game's
-##                    main window first exists; the resident launcher
-##                    reads it (+ a short settle) as its hand-off cue
+##                    PLAYER window first exists (a VPPlayer-class
+##                    window on Windows - the editor frame is up from
+##                    app start and must not stamp this); the resident
+##                    launcher reads it (+ a short settle) as its
+##                    hand-off cue
 ##   launcher_path    what the watchdog relaunches
 ##   launcher_args    ...with these arguments
 ##   launcher_pid     pid of the launcher that last checked in

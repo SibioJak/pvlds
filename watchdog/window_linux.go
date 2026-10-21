@@ -44,8 +44,13 @@ func stubEditorMarker(gamePID int) string {
 // gameWindowState on Linux (smoke build only): the player is
 // "present" while the stub is in its X-linked window phase and no
 // editor marker exists; the editor is "present" once the stub
-// drops its marker (its table-exit-to-editor moment). No editor
-// handle exists off Windows.
+// drops its marker. The stub drops that marker in two situations
+// the smokes keep distinct by session shape: its table-exit-to-
+// editor moment (after a player phase), and - with
+// STUB_EDITOR_FIRST_S - from birth, modelling VPX's startup
+// order (editor frame first, player window only after the table
+// loads), which is the state the closer's arming gate exists for.
+// No editor handle exists off Windows.
 func gameWindowState(gamePID int) windowState {
 	var ws windowState
 	if gamePID <= 0 {

@@ -20,13 +20,25 @@ func has_art_available() -> bool:
 	return art_path != "" or art_source_path != ""
 
 
+## How long a visible panel waits on the warmer's in-flight
+## extraction of its file before it stops waiting and extracts the
+## file itself. The claim registry prevents DUPLICATE work; it
+## must never become a stall with no fallback.
+const CLAIM_WAIT_MSEC: int = 3000
+
+
 ## A loadable image path for a visible panel. Warm cache: a file
-## path, no work. Cold: this panel claims the extraction itself -
-## unless the background warmer is already extracting this exact
-## file, in which case the panel joins that wait (bounded by one
-## extraction) instead of queueing behind the warmer's library
-## list or duplicating its work. A failed extraction leaves "" and
-## is not retried - the title card covers it.
+## path, no work. Stamped negative (the file was already extracted
+## once and held no usable image, or failed): "" immediately, no
+## work at all - the title card renders without paying the
+## extraction cost again on every page visit. Cold and unstamped:
+## this panel claims the extraction itself - unless the background
+## warmer is already extracting this exact file, in which case the
+## panel joins that wait (bounded by CLAIM_WAIT_MSEC) instead of
+## queueing behind the warmer's library list; if the wait stalls,
+## the panel falls back to extracting the file itself. An outcome
+## is recorded either way, so a failure is never retried until the
+## file changes.
 func ensure_art() -> String:
 	if art_path != "" or art_source_path == "" or _art_attempted:
 		return art_path
@@ -34,11 +46,19 @@ func ensure_art() -> String:
 	if ArtProvider.is_cached(art_source_path):
 		art_path = ArtProvider.cache_path_for(art_source_path)
 		return art_path
+	if ArtProvider.is_negative_outcome(ArtProvider.outcome_for(art_source_path)):
+		return art_path
 	if ArtProvider.claim_extract(art_source_path):
 		art_path = ArtProvider.extract_directb2s_image(art_source_path)
 		ArtProvider.release_extract(art_source_path)
-	elif ArtProvider.await_extract(art_source_path, 30000):
+	elif ArtProvider.await_extract(art_source_path, CLAIM_WAIT_MSEC):
 		art_path = ArtProvider.cache_path_for(art_source_path)
+	elif ArtProvider.outcome_for(art_source_path) == "":
+		# The claim holder is still grinding past the wait bound
+		# (an enormous file, a wedged warmer): extract it ourselves
+		# rather than leaving the panel blank-faced. The registry
+		# prevented a duplicate; it does not get to prevent art.
+		art_path = ArtProvider.extract_directb2s_image(art_source_path)
 	return art_path
 
 

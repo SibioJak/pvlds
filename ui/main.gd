@@ -361,6 +361,10 @@ func build_scan_summary() -> String:
 	var cov: Vector2i = ArtWarmer.cache_coverage(s.games)
 	if cov.y > 0:
 		lines.append("Art cache: %d of %d art images are extracted and ready instantly; the rest pre-extract in the background while you browse." % [cov.x, cov.y])
+	var health: Dictionary = ArtWarmer.art_health(s.games)
+	if int(health["total"]) > 0:
+		lines.append("Backglass health (from the art cache's outcome index): %d extracted OK, %d no image in file, %d failed to read or parse, %d not tried yet." % [
+			int(health["ok"]), int(health["no_image"]), int(health["failed"]), int(health["untried"])])
 	var unknown: Array[String] = []
 	for g: GameEntry in s.games:
 		if g.game_id.begins_with("local:"):
@@ -693,6 +697,37 @@ func _write_text_file(path: String, text: String) -> bool:
 	return true
 
 
+func _zero_bytes(n: int) -> PackedByteArray:
+	var b: PackedByteArray = PackedByteArray()
+	b.resize(n)
+	return b
+
+
+## A minimal valid 24-bit BMP (BITMAPFILEHEADER + BITMAPINFOHEADER
+## + bottom-up BGR rows, rows padded to 4 bytes), hand-built the
+## way an external tool writes one - Godot has no BMP writer, which
+## is the point: old designer files carry bytes Godot never made.
+func _bmp_bytes(w: int, h: int) -> PackedByteArray:
+	var row_bytes: int = (w * 3 + 3) & ~3
+	var data_size: int = row_bytes * h
+	var total: int = 54 + data_size
+	var b: PackedByteArray = PackedByteArray()
+	b.resize(total)
+	b[0] = 0x42 # 'B'
+	b[1] = 0x4D # 'M'
+	b.encode_s32(2, total)
+	b.encode_s32(10, 54)
+	b.encode_s32(14, 40)
+	b.encode_s32(18, w)
+	b.encode_s32(22, h)
+	b.encode_s16(26, 1)
+	b.encode_s16(28, 24)
+	b.encode_s32(34, data_size)
+	for i: int in range(54, total):
+		b[i] = 0x80
+	return b
+
+
 func _expect(cond: bool, label: String, failures: Array[String]) -> void:
 	if cond:
 		print("  ok - ", label)
@@ -965,6 +1000,118 @@ func _run_core_test() -> void:
 	ArtProvider.release_extract(b2s_c)
 	_expect(claimed_entry.ensure_art() != "" and ArtProvider.is_cached(b2s_c),
 		"the priority path extracts the claimed file itself", failures)
+
+	# --- Art outcomes (diagnostic round): stamped negatives, the
+	# outcome index, format variants from the B2S server's reader,
+	# the claim-stall fallback, and the desk's health counts.
+	# A file with no image elements at all: extracted once, stamped
+	# no_image, and never extracted again while the file stands.
+	var b2s_neg: String = art_dir.path_join("No Image Table.directb2s")
+	_expect(_write_text_file(b2s_neg, "<DirectB2SData><Images></Images><Illumination></Illumination></DirectB2SData>"),
+		"no-image fixture written", failures)
+	_expect(ArtProvider.extract_directb2s_image(b2s_neg) == "" and not ArtProvider.is_cached(b2s_neg),
+		"a file with no image elements yields no art", failures)
+	_expect(ArtProvider.outcome_for(b2s_neg) == ArtProvider.STATUS_NO_IMAGE,
+		"the no-image outcome is recorded in the index", failures)
+	_expect(ArtProvider.extract_directb2s_image(b2s_neg) == "" and ArtProvider.outcome_for(b2s_neg) == ArtProvider.STATUS_NO_IMAGE,
+		"a stamped negative stays stamped (no silent re-extraction)", failures)
+	var neg_entry: GameEntry = GameEntry.new()
+	neg_entry.art_source_path = b2s_neg
+	_expect(neg_entry.ensure_art() == "", "a panel for a stamped-negative game gets the title card, no work", failures)
+	# An OK fixture the warmer test and the health counts share.
+	var b2s_ok: String = art_dir.path_join("Healthy Table.directb2s")
+	_expect(bool(mk_b2s.call(b2s_ok, 400, 500)), "healthy fixture written", failures)
+	_expect(ArtProvider.extract_directb2s_image(b2s_ok) != "" and ArtProvider.outcome_for(b2s_ok) == ArtProvider.STATUS_OK,
+		"a healthy extraction records ok", failures)
+	var ok_entry: GameEntry = GameEntry.new()
+	ok_entry.art_source_path = b2s_ok
+	# The warmer never re-queues a stamped negative (nor a cached
+	# file): a library of just those two extracts NOTHING.
+	var warmer3: ArtWarmer = ArtWarmer.new()
+	var skip_games: Array[GameEntry] = [neg_entry, ok_entry]
+	warmer3.warm_library(skip_games)
+	waited = 0
+	while not warmer3.is_idle() and waited < 20000:
+		OS.delay_msec(20)
+		waited += 20
+	_expect(warmer3.is_idle() and warmer3.last_pass_items == 0,
+		"the warmer skips stamped negatives and cached files entirely", failures)
+	# A designated backglass element whose payload will not decode
+	# is corruption: the failed class, not no_image.
+	var b2s_bad: String = art_dir.path_join("Corrupt Table.directb2s")
+	_expect(_write_text_file(b2s_bad, "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(_zero_bytes(300)) + "\" /></Images></DirectB2SData>"),
+		"corrupt fixture written", failures)
+	_expect(ArtProvider.extract_directb2s_image(b2s_bad) == "" and ArtProvider.outcome_for(b2s_bad) == ArtProvider.STATUS_FAILED,
+		"an undecodable designated backglass records failed", failures)
+	var bad_entry: GameEntry = GameEntry.new()
+	bad_entry.art_source_path = b2s_bad
+	# Variant 1 (B2S server reader): the on/off pair replaces
+	# BackglassImage in dual files. The lit (On) half is the panel
+	# art: 800x1000 fitted to 512x640, not the Off half's 400x500.
+	var pair_off: Image = mk_img.call(400, 500) as Image
+	var pair_on: Image = mk_img.call(800, 1000) as Image
+	var b2s_pair: String = art_dir.path_join("Pair Table.directb2s")
+	_expect(_write_text_file(b2s_pair, "<DirectB2SData><Images><BackglassOffImage Value=\"" + Marshalls.raw_to_base64(pair_off.save_png_to_buffer()) + "\" /><BackglassOnImage Value=\"" + Marshalls.raw_to_base64(pair_on.save_png_to_buffer()) + "\" /></Images></DirectB2SData>"),
+		"on/off pair fixture written", failures)
+	var pair_cache: String = ArtProvider.extract_directb2s_image(b2s_pair)
+	var pair_img: Image = Image.new()
+	_expect(pair_cache != "" and pair_img.load(pair_cache) == OK and pair_img.get_width() == 512 and pair_img.get_height() == 640,
+		"the on/off pair variant extracts its On image (800x1000 -> 512x640)", failures)
+	# Variant 2: a BMP-encoded backglass (older designer files) -
+	# hand-built BMP bytes, the way an external tool writes them.
+	var b2s_bmp: String = art_dir.path_join("Bmp Table.directb2s")
+	_expect(_write_text_file(b2s_bmp, "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(_bmp_bytes(4, 3)) + "\" /></Images></DirectB2SData>"),
+		"BMP fixture written", failures)
+	var bmp_cache: String = ArtProvider.extract_directb2s_image(b2s_bmp)
+	var bmp_img: Image = Image.new()
+	_expect(bmp_cache != "" and bmp_img.load(bmp_cache) == OK and bmp_img.get_width() == 4 and bmp_img.get_height() == 3,
+		"a BMP-encoded backglass extracts (4x3, unscaled)", failures)
+	# Variant 3: the same XML carried as UTF-16LE with a BOM.
+	var b2s_u16: String = art_dir.path_join("Utf16 Table.directb2s")
+	var u16_xml: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64((mk_img.call(400, 500) as Image).save_png_to_buffer()) + "\" /></Images></DirectB2SData>"
+	var u16_bytes: PackedByteArray = PackedByteArray()
+	u16_bytes.append(0xFF)
+	u16_bytes.append(0xFE)
+	u16_bytes.append_array(u16_xml.to_utf16_buffer())
+	var u16_file: FileAccess = FileAccess.open(b2s_u16, FileAccess.WRITE)
+	_expect(u16_file != null, "UTF-16 fixture opened for writing", failures)
+	if u16_file != null:
+		u16_file.store_buffer(u16_bytes)
+		u16_file.close()
+	_expect(ArtProvider.extract_directb2s_image(b2s_u16) != "" and ArtProvider.outcome_for(b2s_u16) == ArtProvider.STATUS_OK,
+		"a UTF-16LE backglass file extracts", failures)
+	# Claim-stall fallback: a claim held by someone who never
+	# finishes must not leave the panel waiting - after the bounded
+	# wait the panel extracts the file itself.
+	var b2s_stall: String = art_dir.path_join("Stalled Table.directb2s")
+	_expect(bool(mk_b2s.call(b2s_stall, 400, 500)), "stall fixture written", failures)
+	_expect(ArtProvider.claim_extract(b2s_stall), "stall claim taken (a stuck holder)", failures)
+	var stall_entry: GameEntry = GameEntry.new()
+	stall_entry.art_source_path = b2s_stall
+	var stall_t0: int = Time.get_ticks_msec()
+	var stall_art: String = stall_entry.ensure_art()
+	var stall_elapsed: int = Time.get_ticks_msec() - stall_t0
+	ArtProvider.release_extract(b2s_stall)
+	_expect(stall_art != "" and ArtProvider.is_cached(b2s_stall),
+		"a stalled claim falls back to the panel extracting it itself", failures)
+	_expect(stall_elapsed >= 2500 and stall_elapsed < 20000,
+		"the stall fallback waited the bounded wait, not forever (%d ms)" % stall_elapsed, failures)
+	# The desk's health breakdown, from the persisted index.
+	var b2s_untried: String = art_dir.path_join("Untried Table.directb2s")
+	_expect(bool(mk_b2s.call(b2s_untried, 400, 500)), "untried fixture written", failures)
+	var untried_entry: GameEntry = GameEntry.new()
+	untried_entry.art_source_path = b2s_untried
+	var health_games: Array[GameEntry] = [ok_entry, neg_entry, bad_entry, untried_entry]
+	var health: Dictionary = ArtWarmer.art_health(health_games)
+	_expect(int(health["total"]) == 4 and int(health["ok"]) == 1 and int(health["no_image"]) == 1
+		and int(health["failed"]) == 1 and int(health["untried"]) == 1,
+		"art health counts ok / no_image / failed / untried from the index", failures)
+	# A replaced file is a new stamp: the negative outcome dies with
+	# the old file version, and the new art extracts.
+	_expect(bool(mk_b2s.call(b2s_neg, 400, 500)), "no-image fixture replaced with a real backglass", failures)
+	_expect(ArtProvider.outcome_for(b2s_neg) == "", "replacing the file clears its stamped outcome (new stamp)", failures)
+	_expect(ArtProvider.extract_directb2s_image(b2s_neg) != "" and ArtProvider.outcome_for(b2s_neg) == ArtProvider.STATUS_OK,
+		"the replacement's art extracts and records ok", failures)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")

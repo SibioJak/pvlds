@@ -92,14 +92,28 @@ func gameWindow(gamePID int) uintptr {
 	return best
 }
 
-// gameWindowExists reports whether the game process owns a
-// visible top-level window yet - the hand-off cue the resident
-// launcher waits for (plus a short settle) before it exits. The
-// game's largest visible window is the playfield window VPX raises
-// as it comes up; helpers and splash remnants don't count unless
-// they are all there is.
+// gameWindowExists reports whether the game process's PLAYER
+// window is up - the hand-off cue the resident launcher waits for
+// (plus a short settle) before it exits. Tightened in the
+// diagnostic round: the cue used to accept ANY visible window,
+// and VPX's editor frame is visible from app start while the
+// player window appears only once the table has loaded and play
+// begins - so the launcher could hand off (and mark the session
+// live) while the table was still loading, which then exposed
+// the session-close duty to the load state it must never act on
+// (see closer.go's arming note). Only a VPPlayer-class window -
+// the discriminator's playerPresent, same enumeration - stamps
+// the contract now.
 func gameWindowExists(gamePID int) bool {
-	return gamePID > 0 && gameWindow(gamePID) != 0
+	if gamePID <= 0 {
+		return false
+	}
+	for _, hwnd := range visibleWindows(gamePID) {
+		if windowClassName(hwnd) == "VPPlayer" {
+			return true
+		}
+	}
+	return false
 }
 
 // windowClassName reads a window's Win32 class name - "VPPlayer"
