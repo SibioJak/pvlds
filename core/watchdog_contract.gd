@@ -19,6 +19,16 @@ extends RefCounted
 ##                    finish. Absent in contracts written before the
 ##                    duty existed; loads default it to true, and the
 ##                    schema stays v2.
+##   hold_exit_enabled  the hold-to-exit switch, mirrored the same
+##                    way: in a live session the watchdog polls the
+##                    gamepad, and a continuous hold of the exit
+##                    button (~1.5s) closes VPX so the return trip
+##                    runs. Absent in older contracts; loads default
+##                    it to true, schema stays v2.
+##   hold_exit_button   the XInput button the hold reads, by name
+##                    (PvldsConfig.HOLD_EXIT_BUTTONS); absent loads
+##                    default it to "dpad_right" - the player's
+##                    recorded ExitGame binding.
 ##   session_id       increments on every launch; how the watchdog
 ##                    knows a NEW session was armed after a relaunch
 ##   session_state    idle | loading | live | returned | failed
@@ -52,6 +62,8 @@ const SCHEMA_VERSION: int = 2
 var armed: bool = false
 var focus_herding: bool = true
 var close_vpx_on_table_exit: bool = true
+var hold_exit_enabled: bool = true
+var hold_exit_button: String = PvldsConfig.DEFAULT_HOLD_EXIT_BUTTON
 var session_id: int = 0
 var session_state: String = "idle"
 var game_exe_path: String = ""
@@ -100,6 +112,10 @@ static func load_from_disk() -> WatchdogContract:
 	c.armed = bool(d.get("armed", false))
 	c.focus_herding = bool(d.get("focus_herding", true))
 	c.close_vpx_on_table_exit = bool(d.get("close_vpx_on_table_exit", true))
+	c.hold_exit_enabled = bool(d.get("hold_exit_enabled", true))
+	c.hold_exit_button = str(d.get("hold_exit_button", PvldsConfig.DEFAULT_HOLD_EXIT_BUTTON))
+	if c.hold_exit_button == "":
+		c.hold_exit_button = PvldsConfig.DEFAULT_HOLD_EXIT_BUTTON
 	c.session_id = int(d.get("session_id", 0))
 	c.session_state = str(d.get("session_state", "idle"))
 	c.session_state = WatchdogContract.normalize_state(c.session_state)
@@ -125,6 +141,8 @@ func to_dictionary() -> Dictionary:
 	d["armed"] = armed
 	d["focus_herding"] = focus_herding
 	d["close_vpx_on_table_exit"] = close_vpx_on_table_exit
+	d["hold_exit_enabled"] = hold_exit_enabled
+	d["hold_exit_button"] = hold_exit_button
 	d["session_id"] = session_id
 	d["session_state"] = session_state
 	d["game_exe_path"] = game_exe_path

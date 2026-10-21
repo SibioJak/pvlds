@@ -25,6 +25,14 @@ var (
 	fecMsgOne sync.Once
 )
 
+// closeSendMu serializes the close sends: two duties can order a
+// close in the same session (the window-state closer from the main
+// loop, hold-to-exit from its watch goroutine), and the send path
+// below works through shared enumeration scratch. The sends are
+// idempotent requests to a process that is closing anyway, so
+// serializing - not suppressing - duplicates is the right shape.
+var closeSendMu sync.Mutex
+
 // frontEndControlsMsgID resolves the session-wide registered
 // message id for "PinSim::FrontEndControls" (the published
 // protocol's name; RegisterWindowMessage is how senders and
@@ -77,6 +85,8 @@ func allTopWindows(gamePID int) []uintptr {
 // application accepts and will close. Returns true if any window
 // acknowledged.
 func sendFrontEndControlsClose(gamePID int) bool {
+	closeSendMu.Lock()
+	defer closeSendMu.Unlock()
 	msg := frontEndControlsMsgID()
 	if msg == 0 || gamePID <= 0 {
 		return false
@@ -99,6 +109,8 @@ func sendFrontEndControlsClose(gamePID int) bool {
 // OnClose in the vpinball source). PostMessage, not SendMessage:
 // the watchdog never blocks on another process's window.
 func sendEditorClose(editorHWND uintptr) bool {
+	closeSendMu.Lock()
+	defer closeSendMu.Unlock()
 	if editorHWND == 0 {
 		return false
 	}

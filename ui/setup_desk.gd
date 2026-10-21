@@ -14,6 +14,8 @@ var _exe_edit: LineEdit
 var _args_edit: LineEdit
 var _herding_check: CheckBox
 var _close_check: CheckBox
+var _hold_check: CheckBox
+var _hold_button_picker: OptionButton
 var _db_edit: LineEdit
 var _folder_rows: VBoxContainer
 var _folder_edits: Array[LineEdit] = []
@@ -30,6 +32,13 @@ var _downloading: bool = false
 
 const MAX_FOLDER_ROWS: int = 6
 const DOWNLOAD_PARTIAL_PATH: String = "user://vpsdb_download.partial"
+## Picker labels for PvldsConfig.HOLD_EXIT_BUTTONS, in the same order.
+const HOLD_BUTTON_LABELS: Array[String] = [
+	"D-pad Up", "D-pad Down", "D-pad Left", "D-pad Right",
+	"A", "B", "X", "Y",
+	"LB (left bumper)", "RB (right bumper)",
+	"Back", "Start", "L3 (left stick click)", "R3 (right stick click)",
+]
 
 
 func setup(config: PvldsConfig) -> void:
@@ -94,6 +103,20 @@ func _build_ui() -> void:
 	_close_check.text = "Close VPX when a table exits to the editor - the watchdog ends VPX so the launcher can come back (uncheck if you want to stay in the editor after a table)"
 	_close_check.tooltip_text = "VPX has no exit-after-table flag: leaving a table lands in the VPX editor with the process still running. While a session is live, the watchdog notices the editor sitting in front with the player gone and closes VPX in an orderly way, which is what lets the launcher return."
 	vbox.add_child(_close_check)
+	_hold_check = CheckBox.new()
+	_hold_check.text = "Hold-to-exit - holding your gamepad exit button (about 1.5s) during play closes VPX and brings the launcher back; a tap still just drops to the editor"
+	_hold_check.tooltip_text = "While a session is live, the watchdog polls the gamepad. A tap of the exit button is VPX's own business (you land in the editor, as always); a continuous hold of about 1.5 seconds is the deliberate 'exit the whole thing' gesture - the watchdog closes VPX in an orderly way and the launcher returns. Read-only: the watchdog never writes to the controller."
+	vbox.add_child(_hold_check)
+	var hold_row: HBoxContainer = HBoxContainer.new()
+	hold_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(hold_row)
+	var hold_label: Label = Label.new()
+	hold_label.text = "Hold exit button"
+	hold_row.add_child(hold_label)
+	_hold_button_picker = OptionButton.new()
+	for i: int in range(PvldsConfig.HOLD_EXIT_BUTTONS.size()):
+		_hold_button_picker.add_item(HOLD_BUTTON_LABELS[i], i)
+	hold_row.add_child(_hold_button_picker)
 	_folder_rows = VBoxContainer.new()
 	_folder_rows.add_theme_constant_override("separation", 8)
 	vbox.add_child(_folder_label())
@@ -224,6 +247,9 @@ func _fill_from_config() -> void:
 	_args_edit.text = _config.launch_args_template
 	_herding_check.button_pressed = _config.focus_herding
 	_close_check.button_pressed = _config.close_vpx_on_table_exit
+	_hold_check.button_pressed = _config.hold_exit_enabled
+	var hold_idx: int = PvldsConfig.HOLD_EXIT_BUTTONS.find(_config.hold_exit_button)
+	_hold_button_picker.select(hold_idx if hold_idx >= 0 else PvldsConfig.HOLD_EXIT_BUTTONS.find(PvldsConfig.DEFAULT_HOLD_EXIT_BUTTON))
 	for f: String in _config.table_folders:
 		_add_folder_row(f)
 	if _folder_edits.is_empty():
@@ -246,6 +272,9 @@ func _collect_into_config() -> void:
 		_config.launch_args_template = PvldsConfig.DEFAULT_LAUNCH_ARGS
 	_config.focus_herding = _herding_check.button_pressed
 	_config.close_vpx_on_table_exit = _close_check.button_pressed
+	_config.hold_exit_enabled = _hold_check.button_pressed
+	if _hold_button_picker.selected >= 0 and _hold_button_picker.selected < PvldsConfig.HOLD_EXIT_BUTTONS.size():
+		_config.hold_exit_button = PvldsConfig.HOLD_EXIT_BUTTONS[_hold_button_picker.selected]
 	_config.table_folders.clear()
 	for edit: LineEdit in _folder_edits:
 		var f: String = edit.text.strip_edges()

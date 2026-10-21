@@ -12,6 +12,10 @@
 //     window - yielding to deliberate use - and, in a live
 //     session whose table exit landed in the VPX editor, close
 //     VPX orderly so the return trip can finish; see closer.go),
+//   - while a session is live, poll the gamepad at ~50ms: a
+//     deliberate HOLD of the configured exit button (~1.5s) is
+//     the player's own "exit the whole thing" gesture and fires
+//     the same orderly close (see hold_logic.go),
 //   - stamp the contract when the game's main window first exists
 //     (the resident launcher reads it as its hand-off cue),
 //   - when the game dies: in "live" (the launcher already exited)
@@ -42,25 +46,32 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
 type Contract struct {
-	Version             int      `json:"version"`
-	Armed               bool     `json:"armed"`
-	FocusHerding        bool     `json:"focus_herding"`
-	CloseVPXOnTableExit bool     `json:"close_vpx_on_table_exit"`
-	SessionID           int      `json:"session_id"`
-	SessionState        string   `json:"session_state"`
-	GameExePath         string   `json:"game_exe_path"`
-	GamePID             int      `json:"game_pid"`
-	GameStartedUnix     int64    `json:"game_started_unix"`
-	GameWindowSeenUnix  int64    `json:"game_window_seen_unix"`
-	LauncherPath        string   `json:"launcher_path"`
-	LauncherArgs        []string `json:"launcher_args"`
-	LauncherPID         int      `json:"launcher_pid"`
-	LastCheckinUnix     int64    `json:"last_checkin_unix"`
-	UpdatedUnix         int64    `json:"updated_unix"`
+	Version             int  `json:"version"`
+	Armed               bool `json:"armed"`
+	FocusHerding        bool `json:"focus_herding"`
+	CloseVPXOnTableExit bool `json:"close_vpx_on_table_exit"`
+	// HoldExitEnabled is a pointer so an ABSENT key (a contract
+	// written before hold-to-exit existed) can be told apart from
+	// an explicit off: absence normalizes to the default ON in
+	// readContract, and the schema stays v2.
+	HoldExitEnabled    *bool    `json:"hold_exit_enabled"`
+	HoldExitButton     string   `json:"hold_exit_button"`
+	SessionID          int      `json:"session_id"`
+	SessionState       string   `json:"session_state"`
+	GameExePath        string   `json:"game_exe_path"`
+	GamePID            int      `json:"game_pid"`
+	GameStartedUnix    int64    `json:"game_started_unix"`
+	GameWindowSeenUnix int64    `json:"game_window_seen_unix"`
+	LauncherPath       string   `json:"launcher_path"`
+	LauncherArgs       []string `json:"launcher_args"`
+	LauncherPID        int      `json:"launcher_pid"`
+	LastCheckinUnix    int64    `json:"last_checkin_unix"`
+	UpdatedUnix        int64    `json:"updated_unix"`
 }
 
 const (
@@ -77,14 +88,24 @@ var (
 	logPath      string
 	lockPath     string
 	logFile      *os.File
+	logMu        sync.Mutex // the main loop and the hold watch both log
 )
 
 func logf(format string, args ...interface{}) {
 	line := fmt.Sprintf("%s %s\n", time.Now().Format("2006-01-02 15:04:05"), fmt.Sprintf(format, args...))
+	logMu.Lock()
+	defer logMu.Unlock()
 	if logFile != nil {
 		logFile.WriteString(line)
 		logFile.Sync()
 	}
+}
+
+// holdExitOn reports the effective hold-to-exit switch: the key
+// defaults ON when absent (normalized in readContract, but answer
+// safely for a hand-built Contract too).
+func (c *Contract) holdExitOn() bool {
+	return c.HoldExitEnabled == nil || *c.HoldExitEnabled
 }
 
 // normalizeState maps the schema-v1 session spellings onto the v2
@@ -110,6 +131,18 @@ func readContract() (*Contract, error) {
 		return nil, err
 	}
 	c.SessionState = normalizeState(c.SessionState)
+	// Hold-to-exit normalization (schema stays v2): a contract
+	// that predates the feature has no keys; absence means the
+	// defaults, never a wedge - and normalizing here means a
+	// merged write (writeContractMerged) always emits real values
+	// for the launcher's reader.
+	if c.HoldExitEnabled == nil {
+		on := true
+		c.HoldExitEnabled = &on
+	}
+	if c.HoldExitButton == "" {
+		c.HoldExitButton = defaultHoldButton
+	}
 	return &c, nil
 }
 
@@ -164,6 +197,72 @@ func launcherAlive(c *Contract, extraPID int) bool {
 	return c.LauncherPID > 0 && processAlive(c.LauncherPID)
 }
 
+// ---- hold-to-exit watch ---------------------------------------
+//
+// The button is sampled on its own goroutine at ~50ms: the main
+// loop's 400ms tick would smear the 1.5s hold threshold by up to a
+// full tick, and the threshold IS the feel of the feature. The
+// main loop publishes the session context once per tick; the
+// watch reads it, polls the button feed (hold_windows.go /
+// hold_other.go), feeds the shared brain (hold_logic.go), and
+// delivers the close the brain orders - the closer's own orderly
+// sends, serialized against them (closer_windows.go).
+
+type holdContext struct {
+	sessionID int
+	live      bool // the contract's session is in the live state
+	enabled   bool // hold_exit_enabled (absent = on)
+	alive     bool // the game process is up inside an active session
+	gamePID   int
+	button    string
+}
+
+var (
+	holdCtxMu sync.Mutex
+	holdCtx   holdContext
+)
+
+func holdCtxUpdate(ctx holdContext) {
+	holdCtxMu.Lock()
+	holdCtx = ctx
+	holdCtxMu.Unlock()
+}
+
+func holdCtxSnapshot() holdContext {
+	holdCtxMu.Lock()
+	defer holdCtxMu.Unlock()
+	return holdCtx
+}
+
+func holdWatchLoop() {
+	var duty holdDuty
+	warnedSession := -1
+	for {
+		time.Sleep(holdPollIntervalMs * time.Millisecond)
+		ctx := holdCtxSnapshot()
+		mask, known := holdButtonMask(ctx.button)
+		active := ctx.live && ctx.enabled && ctx.alive && ctx.gamePID > 0
+		if active && !known && warnedSession != ctx.sessionID {
+			warnedSession = ctx.sessionID
+			logf("watchdog: hold-to-exit button %q is not a known XInput button name; hold-to-exit is inert for session %d", ctx.button, ctx.sessionID)
+		}
+		pressed := false
+		if active && known {
+			pressed = anyButtonPressed(mask)
+		}
+		switch duty.tick(time.Now().UnixMilli(), ctx.sessionID, active && known, pressed) {
+		case holdFEC:
+			ack := sendFrontEndControlsClose(ctx.gamePID)
+			logf("watchdog: session %d: hold-to-exit fired (button %s held %dms); sent FrontEndControls CLOSE_APP (acknowledged: %v)", ctx.sessionID, ctx.button, holdThresholdMs, ack)
+		case holdWMClose:
+			ok := sendEditorClose(gameWindowState(ctx.gamePID).editorHWND)
+			logf("watchdog: session %d: hold-to-exit: VPX still open after the FrontEndControls request; sent WM_CLOSE to the editor window (posted: %v)", ctx.sessionID, ok)
+		case holdGiveUp:
+			logf("watchdog: session %d: hold-to-exit: VPX did not close after FrontEndControls + WM_CLOSE; leaving VPX alone", ctx.sessionID)
+		}
+	}
+}
+
 func main() {
 	exe, _ := os.Executable()
 	dir := filepath.Dir(exe)
@@ -196,6 +295,11 @@ func main() {
 	os.WriteFile(lockPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
 	defer os.Remove(lockPath)
 	logf("watchdog: on duty (pid %d), contract %s", os.Getpid(), contractPath)
+
+	// The hold-to-exit watch runs for the watchdog's whole life;
+	// it acts only while the published context says a session is
+	// live with the feature on.
+	go holdWatchLoop()
 
 	var (
 		sawGameAlive      bool
@@ -254,6 +358,16 @@ func main() {
 		if alive && gpid > 0 && gpid != c.GamePID {
 			c.GamePID = gpid
 		}
+		// Publish the hold-to-exit context: live sessions only,
+		// and only while the game is actually up in one.
+		holdCtxUpdate(holdContext{
+			sessionID: c.SessionID,
+			live:      c.SessionState == "live",
+			enabled:   c.holdExitOn(),
+			alive:     alive && sessionActive,
+			gamePID:   c.GamePID,
+			button:    c.HoldExitButton,
+		})
 
 		// ---- relaunch outcome tracking -------------------------
 		if awaitingOutcome {

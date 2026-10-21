@@ -123,6 +123,8 @@ func checkin(config: PvldsConfig) -> WatchdogContract:
 	c.armed = true
 	c.focus_herding = config.focus_herding if config != null else true
 	c.close_vpx_on_table_exit = config.close_vpx_on_table_exit if config != null else true
+	c.hold_exit_enabled = config.hold_exit_enabled if config != null else true
+	c.hold_exit_button = config.hold_exit_button if config != null else PvldsConfig.DEFAULT_HOLD_EXIT_BUTTON
 	c.launcher_path = LaunchService.launcher_path()
 	c.launcher_args = LaunchService.launcher_args()
 	c.launcher_pid = OS.get_process_id()
@@ -156,6 +158,8 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	c.armed = true
 	c.focus_herding = config.focus_herding
 	c.close_vpx_on_table_exit = config.close_vpx_on_table_exit
+	c.hold_exit_enabled = config.hold_exit_enabled
+	c.hold_exit_button = config.hold_exit_button
 	c.session_id += 1
 	c.session_state = "loading"
 	c.game_exe_path = plan.exe_path

@@ -108,6 +108,32 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   the editor** checkbox on the desk pass (config
   `close_vpx_on_table_exit`, default on) — uncheck it if you ever
   want to stay in the editor after a table.
+- **Hold-to-exit** (Chris's proposal, echoing VpxLauncher's UX):
+  while a session is live, the watchdog also polls the gamepad
+  (XInput, ~50ms, read-only — it never writes to the controller).
+  A **tap** of the exit button is VPX's own business and lands in
+  the editor, unchanged. A continuous **hold** of the same button
+  for ~1.5s is the deliberate "exit the whole thing" gesture: the
+  watchdog fires the same orderly close ladder as the session-
+  close duty (FrontEndControls CLOSE_APP → WM_CLOSE → give up;
+  never a hard kill), VPX dies, and the ordinary return trip
+  brings the room back. The hold is the *primary* return path —
+  a deliberate gesture needs no window-state guessing, and it
+  completes even though VPX has usually already acted on the tap
+  half and dropped to the editor by the time the threshold
+  crosses (the live session is the only gate; no player-window
+  requirement). Decision logic is shared and unit-tested on
+  Linux (`hold_logic.go`); the threshold is the one constant
+  `holdThresholdMs` there. Config: `hold_exit_enabled` (default
+  on — the **Hold-to-exit** checkbox on the desk pass) and
+  `hold_exit_button`, an XInput button name from the standard
+  set (D-pad directions, A/B/X/Y, LB/RB, Back, Start, L3/R3);
+  the default is `dpad_right` — Chris's recorded VPX ExitGame
+  binding ("right directional") — rebindable in the desk's
+  button picker. Both fields ride the contract with the usual
+  absence-means-default rule. With the session-close duty also
+  on, the hold (1.5s) fires before the closer's editor-sustain
+  (2.5s) can; either path's close ends both cleanly.
 - **Focus herding** (Windows, user32): while a session is live, if
   the foreground leaves the game process and stays away past a 2s
   grace period, the watchdog hands foreground back to the game's

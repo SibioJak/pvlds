@@ -24,12 +24,29 @@ const DEFAULT_LAUNCH_ARGS: String = "-play \"{table}\""
 const BAD_DEFAULT_LAUNCH_ARGS: String = "-play -exit \"{table}\""
 const CONFIG_FILE_NAME: String = "pvlds_config.json"
 
+## Hold-to-exit's default button: D-pad Right, Chris's recorded VPX
+## ExitGame binding ("right directional"). The watchdog resolves the
+## name through the same XInput table on its side of the contract.
+const DEFAULT_HOLD_EXIT_BUTTON: String = "dpad_right"
+## The standard XInput button set, by the names the watchdog's table
+## resolves. The desk picker offers exactly these; a saved name
+## outside the set (a hand-edit typo) loads as the default rather
+## than silently killing the feature.
+const HOLD_EXIT_BUTTONS: Array[String] = [
+	"dpad_up", "dpad_down", "dpad_left", "dpad_right",
+	"a", "b", "x", "y",
+	"left_shoulder", "right_shoulder",
+	"back", "start", "left_thumb", "right_thumb",
+]
+
 var vpx_exe_path: String = ""
 var launch_args_template: String = DEFAULT_LAUNCH_ARGS
 var table_folders: Array[String] = []
 var vpsdb_path: String = ""
 var focus_herding: bool = true ## watchdog window duty kill-switch (design section 3 amendment)
 var close_vpx_on_table_exit: bool = true ## watchdog session-close duty kill-switch: when a table exit lands in the VPX editor, the watchdog closes VPX so the launcher can return
+var hold_exit_enabled: bool = true ## hold-to-exit switch: holding the gamepad exit button (~1.5s) during a live session closes VPX and brings the launcher back
+var hold_exit_button: String = DEFAULT_HOLD_EXIT_BUTTON ## which XInput button the hold gesture reads (a name from HOLD_EXIT_BUTTONS)
 
 
 static func beside_exe_path() -> String:
@@ -76,6 +93,10 @@ func load_from_disk() -> bool:
 	vpsdb_path = str(d.get("vpsdb_path", ""))
 	focus_herding = bool(d.get("focus_herding", true))
 	close_vpx_on_table_exit = bool(d.get("close_vpx_on_table_exit", true))
+	hold_exit_enabled = bool(d.get("hold_exit_enabled", true))
+	hold_exit_button = str(d.get("hold_exit_button", DEFAULT_HOLD_EXIT_BUTTON))
+	if not HOLD_EXIT_BUTTONS.has(hold_exit_button):
+		hold_exit_button = DEFAULT_HOLD_EXIT_BUTTON
 	table_folders.clear()
 	var folders: Variant = d.get("table_folders", [])
 	if folders is Array:
@@ -94,6 +115,8 @@ func save_to_disk() -> bool:
 	d["vpsdb_path"] = vpsdb_path
 	d["focus_herding"] = focus_herding
 	d["close_vpx_on_table_exit"] = close_vpx_on_table_exit
+	d["hold_exit_enabled"] = hold_exit_enabled
+	d["hold_exit_button"] = hold_exit_button
 	var folders: Array = []
 	for f: String in table_folders:
 		folders.append(f)
