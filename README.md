@@ -216,6 +216,16 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   plain JSON config, runs the scan, and reports what the scan
   measured — duplicates, match rate, art coverage, unidentified
   titles.
+- **SETUP never strands the headset.** The desk is a 2D form and
+  cannot render into the headset — so while XR is live, opening
+  setup (rail SETUP, or a failed launch routing to the desk) no
+  longer hides the room (that blacked out the player's view with
+  no way back — field fault, 2026-10-21). The desk still opens on
+  the monitor; in the room a placard stands instead — "Setup is
+  open on your desktop," any failure message riding on it, and a
+  BACK control. While it stands, every other room control is
+  inert; BACK (or Enter the Room on the desk) closes the desk and
+  hands the room back.
 - **No empty rooms.** If the active filter matches nothing in a
   non-empty library, the wall falls back to ALL and the banner says
   why. VR remains the default filter only when VR-tagged games
@@ -284,6 +294,12 @@ cached `vpsdb.json` and the same code runs your actual library.
   once the wall is up, fire a real launch (same env overrides) and
   screenshot the room ~1s into the load wait — the LOADING-state
   QA capture. Disarms and quits right after the shot.
+- `--pvlds-smoke-placard` — room boot; force the XR flag on, open
+  setup with a message, and assert the placard contract (room
+  stays up, placard stands with the message, wall/rail inert,
+  focus confined to BACK), then BACK restores the room and closes
+  the desk; a second leg with the flag off asserts the flat path
+  is the legacy one. Prints ok/FAIL lines, exits 0/1.
 
 ## Layout
 

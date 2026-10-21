@@ -7,6 +7,7 @@ extends Node3D
 ## over the same set of ClickableQuads.
 
 signal setup_requested
+signal setup_placard_dismissed ## the setup placard's BACK: Main closes the desk it opened alongside
 signal launch_requested(game: GameEntry, build: TableBuild) ## card Launch / detail Play - Main owns the launch + exit
 signal exit_requested ## rail EXIT: Main disarms the watchdog and quits
 signal art_prefetch_requested(games: Array) ## a page settled: Main's warmer should bring the neighbouring pages' art forward
@@ -48,6 +49,13 @@ var _launching_game_id: String = "" ## a launch is in its load wait (Main owns i
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
 var _selected_game_id: String = "" ## last game opened/launched; restored + persisted as view state
+var _placard: Node3D = null ## the setup placard's holder; in the tree only while the placard stands
+var _placard_face: ClickableQuad = null
+var _placard_back: ClickableQuad = null
+var _placard_up: bool = false
+var _placard_gen: int = 0
+var _placard_message: String = "" ## the message the standing placard carries (a launch failure rides it too)
+var _pick_snapshot: Dictionary = {} ## ClickableQuad -> pick_enabled, taken as the placard rises
 var _rail_quads: Dictionary = {} ## key -> ClickableQuad
 var _focusables: Array[ClickableQuad] = []
 var _focused: ClickableQuad = null
@@ -338,6 +346,11 @@ func _rebuild_wall() -> void:
 	_build_rail(placeholder)
 	_refresh_focusables()
 	_fill_wall_textures(gen)
+	if _placard_up:
+		# A rebuild while the placard stands (the launch-failure
+		# path) must not resurrect live controls behind it.
+		_inert_room_quads()
+		_set_focused(_placard_back)
 
 
 func _build_rail(placeholder: Texture2D) -> void:
@@ -476,7 +489,11 @@ func _fill_wall_textures(gen: int) -> void:
 
 func _refresh_focusables() -> void:
 	_focusables.clear()
-	if _mode == "detail" and _detail != null:
+	if _placard_up:
+		# The placard owns the room: BACK is the only focus stop.
+		if _placard_back != null:
+			_focusables.append(_placard_back)
+	elif _mode == "detail" and _detail != null:
 		_focusables = _detail.get_clickables()
 	else:
 		for i: int in range(_panels.size()):
@@ -508,6 +525,10 @@ func _refresh_quad_states() -> void:
 		all.append_array(_detail.get_clickables())
 	if _banner_quad != null:
 		all.append(_banner_quad)
+	if _placard_face != null:
+		all.append(_placard_face)
+	if _placard_back != null:
+		all.append(_placard_back)
 	for q: ClickableQuad in all:
 		q.set_visual_state(q == hovered, q == _focused)
 
@@ -523,6 +544,15 @@ func _on_select(quad: ClickableQuad) -> void:
 
 
 func _activate(quad: ClickableQuad) -> void:
+	if _placard_up:
+		# While the placard stands, everything else is inert. The
+		# pick flags already say so for the pointer; this is the
+		# lock for the keyboard/gamepad paths, which activate the
+		# focused quad directly.
+		if quad.action_id == "placard_back":
+			quad.pulse()
+			hide_setup_placard()
+		return
 	if _mode == "detail":
 		if quad.action_id.begins_with("detail"):
 			quad.pulse()
@@ -604,6 +634,162 @@ func _on_detail_play(game: GameEntry, build: TableBuild) -> void:
 	_selected_game_id = game.game_id
 	_persist_view()
 	launch_requested.emit(game, build)
+
+
+# ------------------------------------------------------- setup placard
+
+## SETUP while XR is live (Main routes here): the desk itself is a
+## 2D form in the root viewport and cannot reach the headset, so the
+## room stays up and this placard stands in it - the explanation,
+## plus the way back. While it stands, every other control in the
+## room is inert: pick flags down (the snapshot restores them on
+## the way out), focus confined to BACK, and _activate refuses
+## everything else. A Launch fired blind behind a setup session
+## would be a state bug waiting to happen.
+func show_setup_placard(message: String = "") -> void:
+	_placard_message = message
+	if _placard == null:
+		_build_placard()
+	if not _placard_up:
+		_pick_snapshot.clear()
+		for q: ClickableQuad in _room_pickables():
+			_pick_snapshot[q] = q.pick_enabled
+		_placard_up = true
+		add_child(_placard)
+		ClickableQuad.face_point(_placard, EYE)
+		_inert_room_quads()
+	_refresh_focusables()
+	_set_focused(_placard_back)
+	_placard_gen += 1
+	_fill_placard_textures(_placard_gen, message)
+
+
+## The placard's BACK: tear it down, hand the room back, and tell
+## Main to close the desk it opened alongside.
+func hide_setup_placard() -> void:
+	if not _placard_up:
+		return
+	clear_setup_placard()
+	setup_placard_dismissed.emit()
+
+
+## Silent teardown for Main's own routes (Enter the Room on the
+## desk, a fresh room entry): no signal - Main is already driving,
+## and entering the room must never find a stale placard standing.
+func clear_setup_placard() -> void:
+	if not _placard_up:
+		return
+	_placard_up = false
+	_placard_gen += 1
+	if _placard != null:
+		# Freed, not parked: an out-of-tree holder kept alive
+		# orphans its meshes/materials/textures, and the renderer
+		# teardown choked on them at exit (exported-build crash,
+		# placard round). The detail view frees its quads the
+		# same way; a rebuild on the next show costs nothing.
+		if _placard.get_parent() != null:
+			remove_child(_placard)
+		_placard.queue_free()
+		_placard = null
+		_placard_face = null
+		_placard_back = null
+	_restore_room_pick_states()
+	_set_focused(null)
+	_refresh_focusables()
+
+
+func is_setup_placard_up() -> bool:
+	return _placard_up
+
+
+func setup_placard_back_quad() -> ClickableQuad:
+	return _placard_back
+
+
+func setup_placard_message() -> String:
+	return _placard_message
+
+
+func _build_placard() -> void:
+	_placard = Node3D.new()
+	_placard.name = "SetupPlacard"
+	_placard.position = Vector3(0.0, 1.32, -1.72)
+	var placeholder: Texture2D = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
+	_placard_face = ClickableQuad.new()
+	_placard_face.setup("placard_face", "", placeholder, Vector2(1.3, 0.64))
+	_placard_face.position = Vector3(0.0, 0.17, 0.0)
+	_placard_face.pick_enabled = false
+	_placard.add_child(_placard_face)
+	_placard_back = ClickableQuad.new()
+	_placard_back.setup("placard_back", "", placeholder, Vector2(0.44, 0.15))
+	_placard_back.position = Vector3(0.0, -0.30, 0.0)
+	_placard.add_child(_placard_back)
+	# No face_point here: the holder is oriented in
+	# show_setup_placard, once it is inside the tree (look_at on
+	# an out-of-tree node just errors and does nothing).
+
+
+func _fill_placard_textures(gen: int, message: String) -> void:
+	var tex: Texture2D = await _factory.render_texture(RoomSpecs.placard_spec(message), Vector2i(1024, 504))
+	if gen != _placard_gen or not _placard_up or _placard_face == null:
+		return
+	_placard_face.set_texture(tex)
+	var btex: Texture2D = await _factory.render_texture(RoomSpecs.button_spec("BACK", true), Vector2i(512, 164))
+	if gen != _placard_gen or not _placard_up or _placard_back == null:
+		return
+	_placard_back.set_texture(btex)
+
+
+## Every quad the placard stands in front of, in one list: the
+## pick-state snapshot and the inert sweep share it.
+func _room_pickables() -> Array[ClickableQuad]:
+	var out: Array[ClickableQuad] = []
+	out.append_array(_panels)
+	out.append_array(_panel_launches)
+	for k: Variant in _rail_quads.keys():
+		var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
+		if rq != null:
+			out.append(rq)
+	if _banner_quad != null:
+		out.append(_banner_quad)
+	if _detail != null:
+		out.append_array(_detail.get_clickables())
+	return out
+
+
+func _inert_room_quads() -> void:
+	for q: ClickableQuad in _room_pickables():
+		q.pick_enabled = false
+
+
+func _restore_room_pick_states() -> void:
+	var handled: Array[ClickableQuad] = []
+	for key: Variant in _pick_snapshot.keys():
+		if not is_instance_valid(key):
+			continue
+		var q: ClickableQuad = key as ClickableQuad
+		if q == null:
+			continue
+		q.pick_enabled = bool(_pick_snapshot[key])
+		handled.append(q)
+	_pick_snapshot.clear()
+	# Quads born while the placard stood (a wall rebuild on the
+	# launch-failure path) hold no snapshot entry; they take the
+	# state the room's current mode would have built them with.
+	var launching: bool = _launching_game_id != ""
+	for q: ClickableQuad in _panels:
+		if not handled.has(q):
+			q.pick_enabled = not launching
+	for q: ClickableQuad in _panel_launches:
+		if not handled.has(q):
+			q.pick_enabled = not launching
+	for k: Variant in _rail_quads.keys():
+		var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
+		if rq != null and not handled.has(rq):
+			if launching:
+				rq.pick_enabled = str(k) == "exit" or str(k) == "desk"
+			else:
+				rq.pick_enabled = str(k) != "page_label"
 
 
 # ------------------------------------------------------- launch states

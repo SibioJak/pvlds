@@ -34,6 +34,12 @@ extends Node
 ##                       ready, launch a game (env overrides as
 ##                       above), screenshot the LOADING room to P
 ##                       ~1s into the wait, disarm, quit
+##   --pvlds-smoke-placard
+##                       room boot; force XR on, open setup with a
+##                       message, assert the placard contract (room
+##                       stays up, wall inert, BACK restores), then
+##                       assert the flat path is the legacy one,
+##                       print the verdict, quit
 
 var _config: PvldsConfig
 var _state: StateStore
@@ -53,6 +59,10 @@ var _smoke_verdict_pending: bool = false ## a smoke launch is riding the load wa
 var _shot_launch_path: String = ""
 var _shot_launch_fired: bool = false
 var _shot_launch_at_msec: int = 0
+var _smoke_placard: bool = false ## --pvlds-smoke-placard: drive the setup-placard contract once the room is up
+var _placard_smoke_phase: int = 0
+var _placard_smoke_wait: int = 0
+var _placard_smoke_failures: int = 0
 
 # The launch load wait. While _launch_pending, _process polls for
 # the hand-off point and for VPX dying mid-load.
@@ -120,6 +130,8 @@ func _ready() -> void:
 	var shot_launch_idx: int = user_args.find("--pvlds-shot-launch")
 	if shot_launch_idx >= 0 and shot_launch_idx + 1 < user_args.size():
 		_shot_launch_path = user_args[shot_launch_idx + 1]
+	if user_args.has("--pvlds-smoke-placard"):
+		_smoke_placard = true
 	if user_args.has("--pvlds-art-bench"):
 		_art_bench = true
 		_bench_phase = 0
@@ -256,6 +268,8 @@ func _scan_worker() -> void:
 
 func _process(_delta: float) -> void:
 	_poll_launch()
+	if _smoke_placard:
+		_drive_placard_smoke()
 	if _art_bench:
 		_drive_art_bench(_delta)
 	if _shot_path != "" and _shot_ready():
@@ -393,11 +407,15 @@ func _enter_room() -> void:
 		add_child(_room)
 		_room.setup(_factory, _scanner, _state, _xr_enabled)
 		_room.setup_requested.connect(_show_desk)
+		_room.setup_placard_dismissed.connect(_on_setup_placard_dismissed)
 		_room.launch_requested.connect(_on_launch_requested)
 		_room.exit_requested.connect(_on_exit_requested)
 		_room.art_prefetch_requested.connect(_on_art_prefetch)
 	else:
 		_room.refresh_library()
+		# Entering the room (e.g. Enter the Room on the desk while a
+		# placard stood in the headset) never leaves a stale placard.
+		_room.clear_setup_placard()
 	_room.visible = true
 	# Room entry with a cold cache (e.g. back from the desk without a
 	# rescan): make sure a warm pass is queued.
@@ -436,7 +454,7 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 	else:
 		var msg: String = "Launch failed: %s" % str(result["error"])
 		printerr("PVLDS LAUNCH: ", msg)
-		_show_desk()
+		_show_desk(msg)
 		if _desk != null:
 			_desk.show_message(msg + " Fix the setup here, then re-enter the room.")
 
@@ -559,8 +577,20 @@ func _notification(what: int) -> void:
 		get_tree().quit()
 
 
-func _show_desk() -> void:
-	if _room != null:
+## Show the desk pass. Flat (no XR): the room hides and the desk
+## takes the viewport, as always. XR live: the desk is a 2D form in
+## this same viewport and cannot reach the headset, so hiding the
+## room blacked out the player's view with no in-headset way back
+## (field fault, 2026-10-21: SETUP in the room -> black screen).
+## The room stays up and carries a placard instead - explanation
+## plus a BACK that dismisses both - while the desk still opens on
+## the monitor, where the setup work belongs. A caller with
+## something to say (the launch-failure path) passes a message;
+## it lands on the desk's stats area and on the placard alike.
+func _show_desk(message: String = "") -> void:
+	if _xr_enabled and _room != null:
+		_room.show_setup_placard(message)
+	elif _room != null:
 		_room.visible = false
 	if _desk == null:
 		_desk = SetupDesk.new()
@@ -568,6 +598,113 @@ func _show_desk() -> void:
 		_desk.setup(_config)
 		_desk.enter_room_requested.connect(_enter_room)
 	_desk.visible = true
+
+
+## The placard's BACK: the player chose the room over the desk -
+## close the desk (SETUP reopens it whenever it is needed).
+func _on_setup_placard_dismissed() -> void:
+	if _desk != null:
+		_desk.visible = false
+
+
+# -------------------------------------------------- placard smoke
+
+## --pvlds-smoke-placard: drive _show_desk with the XR flag forced
+## on (the flag is just a bool at this layer) and assert the
+## placard contract end to end - room stays up, placard stands,
+## wall inert, focus confined to BACK - then BACK restores the
+## room and closes the desk. A second leg with the flag off
+## asserts the legacy flat path is untouched.
+func _drive_placard_smoke() -> void:
+	match _placard_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_xr_enabled = true
+				_show_desk("Smoke: a launch failure message")
+				_placard_smoke_wait = 0
+				_placard_smoke_phase = 1
+			else:
+				_placard_smoke_wait += 1
+				if _placard_smoke_wait > 3600:
+					_placard_smoke_fail("the room never came up")
+					_finish_placard_smoke()
+		1:
+			_placard_smoke_wait += 1
+			if _placard_smoke_wait >= 3:
+				_placard_expect(_room.visible, "XR setup: the room stays visible")
+				_placard_expect(_room.is_setup_placard_up(), "XR setup: the placard is up")
+				_placard_expect(_room.setup_placard_message() == "Smoke: a launch failure message",
+					"XR setup: the placard carries the caller's message")
+				_placard_expect(_desk != null and _desk.visible, "XR setup: the desk still opens (for the monitor)")
+				var inert: bool = true
+				for q: ClickableQuad in _room._panels:
+					if q.pick_enabled:
+						inert = false
+				for q: ClickableQuad in _room._panel_launches:
+					if q.pick_enabled:
+						inert = false
+				for k: Variant in _room._rail_quads.keys():
+					var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
+					if rq != null and rq.pick_enabled:
+						inert = false
+				_placard_expect(inert, "XR setup: every wall/rail control is inert behind the placard")
+				var back: ClickableQuad = _room.setup_placard_back_quad()
+				_placard_expect(back != null, "XR setup: the placard has a BACK control")
+				_placard_expect(_room._focusables.size() == 1 and _room._focusables[0] == back,
+					"XR setup: focus navigation is confined to BACK")
+				if back != null:
+					_room._activate(back)
+				_placard_smoke_wait = 0
+				_placard_smoke_phase = 2
+		2:
+			_placard_smoke_wait += 1
+			if _placard_smoke_wait >= 3:
+				_placard_expect(not _room.is_setup_placard_up(), "BACK: the placard comes down")
+				_placard_expect(_desk != null and not _desk.visible, "BACK: the desk closes with it")
+				_placard_expect(_room.visible, "BACK: the room is still up")
+				var live: bool = true
+				for q: ClickableQuad in _room._panels:
+					if not q.pick_enabled:
+						live = false
+				_placard_expect(live, "BACK: the wall's controls are live again")
+				var desk_quad: ClickableQuad = _room._rail_quads.get("desk") as ClickableQuad
+				var label_quad: ClickableQuad = _room._rail_quads.get("page_label") as ClickableQuad
+				_placard_expect(desk_quad != null and desk_quad.pick_enabled, "BACK: the rail is live again (SETUP)")
+				_placard_expect(label_quad != null and not label_quad.pick_enabled,
+					"BACK: the page label stays non-pickable, as built")
+				_placard_expect(_room._focusables.size() > 1, "BACK: focus navigation roams the room again")
+				# Legacy leg: no XR - the desk replaces the room.
+				_xr_enabled = false
+				_show_desk()
+				_placard_smoke_wait = 0
+				_placard_smoke_phase = 3
+		3:
+			_placard_smoke_wait += 1
+			if _placard_smoke_wait >= 3:
+				_placard_expect(not _room.visible, "flat setup: the room hides for the desk, as before")
+				_placard_expect(_desk != null and _desk.visible, "flat setup: the desk shows")
+				_finish_placard_smoke()
+
+
+func _placard_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - placard smoke: ", label)
+	else:
+		_placard_smoke_fail(label)
+
+
+func _placard_smoke_fail(label: String) -> void:
+	_placard_smoke_failures += 1
+	printerr("  FAIL - placard smoke: ", label)
+
+
+func _finish_placard_smoke() -> void:
+	if _placard_smoke_failures == 0:
+		print("PVLDS PLACARD SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS PLACARD SMOKE: FAIL (%d)" % _placard_smoke_failures)
+		get_tree().quit(1)
 
 
 # ------------------------------------------------------------ dev hooks

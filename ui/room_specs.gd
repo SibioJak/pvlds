@@ -128,6 +128,27 @@ static func button_spec(text: String, accent: bool) -> Dictionary:
 	}
 
 
+## The setup placard: what stands in the room while the desk pass
+## is open on the monitor during an XR session (the desk itself
+## cannot reach the headset). Rendered with the banner layout -
+## centered title / sub / body, no band. The caller's message (a
+## launch failure's reason) rides on top when one is provided.
+static func placard_spec(message: String) -> Dictionary:
+	var body: String = "Finish on the desktop, then come back - or go back to the room now with BACK below."
+	if message != "":
+		body = message + "\n\n" + body
+	return {
+		"kind": "banner",
+		"bg": Color(0.05, 0.05, 0.09),
+		"title": "SETUP",
+		"title_size": 84,
+		"sub": "Setup is open on your desktop",
+		"sub_size": 42,
+		"body": body,
+		"body_size": 36,
+	}
+
+
 static func banner_spec(line: String) -> Dictionary:
 	return {
 		"kind": "banner",
