@@ -10,6 +10,15 @@ const MAX_RECENTS: int = 14
 var favorites: Dictionary = {} ## game_id -> true
 var default_builds: Dictionary = {} ## game_id -> .vpx file path
 var recents: Array[String] = [] ## game ids, most recent first
+var last_played_game_id: String = "" ## set by LaunchService on every Play
+var last_played_build_path: String = ""
+# Room view state, so the watchdog's relaunch lands the player exactly
+# where they left: same filter, sort, page, and selected game - with
+# the just-played table selected (design section 3, step 4).
+var view_filter: String = ""
+var view_sort: String = ""
+var view_page: int = 0
+var selected_game_id: String = ""
 
 
 static func state_path() -> String:
@@ -44,6 +53,12 @@ func load_from_disk() -> void:
 				recents.append(gid)
 	while recents.size() > MAX_RECENTS:
 		recents.pop_back()
+	last_played_game_id = str(d.get("last_played_game_id", ""))
+	last_played_build_path = str(d.get("last_played_build_path", ""))
+	view_filter = str(d.get("view_filter", ""))
+	view_sort = str(d.get("view_sort", ""))
+	view_page = int(d.get("view_page", 0))
+	selected_game_id = str(d.get("selected_game_id", ""))
 
 
 func save_to_disk() -> void:
@@ -57,6 +72,12 @@ func save_to_disk() -> void:
 	for gid: String in recents:
 		rec.append(gid)
 	d["recents"] = rec
+	d["last_played_game_id"] = last_played_game_id
+	d["last_played_build_path"] = last_played_build_path
+	d["view_filter"] = view_filter
+	d["view_sort"] = view_sort
+	d["view_page"] = view_page
+	d["selected_game_id"] = selected_game_id
 	var file: FileAccess = FileAccess.open(StateStore.state_path(), FileAccess.WRITE)
 	if file == null:
 		return
@@ -88,3 +109,19 @@ func touch_recent(game_id: String) -> void:
 	recents.push_front(game_id)
 	while recents.size() > MAX_RECENTS:
 		recents.pop_back()
+
+
+func set_last_played(game_id: String, build_path: String) -> void:
+	last_played_game_id = game_id
+	last_played_build_path = build_path
+	selected_game_id = game_id
+
+
+## The room calls this whenever its view moves; cheap fields, saved
+## by the caller's next save_to_disk().
+func set_view_state(filter: String, sort: String, page: int, selected: String) -> void:
+	view_filter = filter
+	view_sort = sort
+	view_page = page
+	if selected != "":
+		selected_game_id = selected

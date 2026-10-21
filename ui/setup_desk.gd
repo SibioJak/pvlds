@@ -12,6 +12,7 @@ signal enter_room_requested
 var _config: PvldsConfig
 var _exe_edit: LineEdit
 var _args_edit: LineEdit
+var _herding_check: CheckBox
 var _db_edit: LineEdit
 var _folder_rows: VBoxContainer
 var _folder_edits: Array[LineEdit] = []
@@ -83,7 +84,11 @@ func _build_ui() -> void:
 	_http.timeout = 180.0
 	_http.request_completed.connect(_on_download_completed)
 	add_child(_http)
-	_args_edit = _add_field(vbox, "Launch arguments template (used by M2; {table} is the file)")
+	_args_edit = _add_field(vbox, "Launch arguments template ({table} is the table file; quotes group arguments)")
+	_herding_check = CheckBox.new()
+	_herding_check.text = "Focus herding - the watchdog keeps the game window in front during play (uncheck if it ever fights you)"
+	_herding_check.tooltip_text = "Design section 3 amendment: during the launch settle and during play, the watchdog returns foreground focus to the VPX window when something steals it. It never moves or resizes windows."
+	vbox.add_child(_herding_check)
 	_folder_rows = VBoxContainer.new()
 	_folder_rows.add_theme_constant_override("separation", 8)
 	vbox.add_child(_folder_label())
@@ -212,6 +217,7 @@ func _fill_from_config() -> void:
 	_exe_edit.text = _config.vpx_exe_path
 	_db_edit.text = _config.vpsdb_path
 	_args_edit.text = _config.launch_args_template
+	_herding_check.button_pressed = _config.focus_herding
 	for f: String in _config.table_folders:
 		_add_folder_row(f)
 	if _folder_edits.is_empty():
@@ -232,6 +238,7 @@ func _collect_into_config() -> void:
 	_config.launch_args_template = _args_edit.text.strip_edges()
 	if _config.launch_args_template == "":
 		_config.launch_args_template = PvldsConfig.DEFAULT_LAUNCH_ARGS
+	_config.focus_herding = _herding_check.button_pressed
 	_config.table_folders.clear()
 	for edit: LineEdit in _folder_edits:
 		var f: String = edit.text.strip_edges()
@@ -320,6 +327,12 @@ func _on_save_and_scan() -> void:
 			_stats_label.text = "Scanning..."
 		else:
 			_stats_label.text = "A scan is already running - one moment."
+
+
+## A plain message in the stats area (e.g. why a launch failed and
+## what to fix here).
+func show_message(text: String) -> void:
+	_stats_label.text = text
 
 
 ## Live progress text while a scan runs (driven by Main's poll loop).

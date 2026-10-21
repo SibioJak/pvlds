@@ -30,4 +30,5 @@ environment/defaults/default_clear_color=Color(0.015, 0.015, 0.025, 1)
 [xr]
 
 openxr/enabled=true
+openxr/startup_alert=false
 shaders/enabled=true

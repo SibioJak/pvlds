@@ -1,14 +1,18 @@
 class_name DetailView
 extends Node3D
 
-## The detail view: standing at the machine. Big art (or title card),
-## the facts, every build listed with CURRENT / DEFAULT chips, a
-## favorite toggle, build selection with play-once / make-default, and
-## the Play quad - a labeled stub in M1 ("ARMED - M2 WILL LAUNCH").
-## Play always targets the default build unless a play-once is armed;
-## merely selecting a row never changes the target silently.
+## The detail view: standing at the machine - the More Info surface
+## (Chris, 2026-10-21: launching lives on the card; nobody passes
+## through here to play, but Play works here too). Big art (or title
+## card), the facts, every build listed with CURRENT / DEFAULT chips,
+## a favorite toggle, build selection with play-once / make-default,
+## and the Play quad. Play always targets the default build unless a
+## play-once is armed; merely selecting a row never changes the
+## target silently. The actual launch (and the launcher's exit) is
+## Main's job, via the play_requested signal.
 
 signal closed
+signal play_requested(game: GameEntry, build: TableBuild)
 
 const MAX_ROWS: int = 6
 
@@ -18,7 +22,6 @@ var _game: GameEntry = null
 var _selected_path: String = ""
 var _once_path: String = ""
 var _gen: int = 0
-var _flash_gen: int = 0
 
 var _big_quad: ClickableQuad
 var _info_quad: ClickableQuad
@@ -105,8 +108,10 @@ func handle(quad: ClickableQuad) -> void:
 			_once_path = ""
 			_rebuild()
 		"detail_play":
-			quad.pulse()
-			_flash_play()
+			var target: TableBuild = _effective_target()
+			if target != null:
+				quad.pulse()
+				play_requested.emit(_game, target)
 
 
 func _effective_target() -> TableBuild:
@@ -253,25 +258,6 @@ func _refresh_play_texture(gen: int) -> void:
 	else:
 		label += " (DEFAULT)"
 	var tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.button_spec(label + "  -  ARMED", true), Vector2i(1024, 200))
+		RoomSpecs.button_spec(label, true), Vector2i(1024, 200))
 	if gen == _gen and _play_quad != null:
 		_play_quad.set_texture(tex)
-
-
-func _flash_play() -> void:
-	var target: TableBuild = _effective_target()
-	if target == null:
-		return
-	_flash_gen += 1
-	var gen: int = _flash_gen
-	var tex: Texture2D = await _factory.render_texture(
-		{"kind": "info", "band_text": "M1 STUB - NOTHING LAUNCHES YET",
-			"band": Color(0.55, 0.38, 0.08),
-			"title": "ARMED", "title_size": 56,
-			"body": "M2 will launch:\n%s" % target.file_name, "body_size": 36},
-		Vector2i(1024, 440))
-	if gen == _flash_gen and _play_quad != null:
-		_play_quad.set_texture(tex)
-	await get_tree().create_timer(2.2).timeout
-	if gen == _flash_gen:
-		_refresh_play_texture(_gen)

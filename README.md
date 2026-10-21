@@ -5,10 +5,59 @@ stand in front of your collection, pick a table, play. Built with
 Godot 4.7 + OpenXR for PCVR (Quest 3 via Virtual Desktop / VDXR first;
 SteamVR runtime is a later test target).
 
-**Status: M1 — "The room."** Browsing, grouping, versions, favorites,
-and the desk setup pass are in. **Play is a labeled stub** — launching
-VPX, the watchdog, and the OpenXR hand-off are M2. Design of record:
-`~/workspace/vpx-vr-launcher/design.md` (outside this repo).
+**Status: M2 — "The hand-off" (built 2026-10-21, awaiting Chris's
+rig verdict).** M1's room plus real launching: card-level Launch,
+full launcher exit, a native watchdog that returns you to the room
+with your place restored, focus herding, and Exit-to-desktop. The
+M2 gate is an evening of real tables on Chris's machine — nothing
+here claims the Windows/VPX/VDXR hand-off works until he says so.
+Design of record: `~/workspace/vpx-vr-launcher/design.md` (outside
+this repo).
+
+## The hand-off (M2)
+
+- **Launch.** Every wall panel carries a **LAUNCH** button (the card
+  itself still opens the detail view — More Info). The detail view's
+  Play fires the same path, including its play-once / make-default
+  build choice. Launching uses the player's **default build** and
+  the config's **launch-args template** (`{table}` expands to the
+  build's full path; quotes in the template group arguments — never
+  a hard-coded command line). On launch the launcher records state
+  (recents, last-played, room view), writes the watchdog session
+  contract, spawns VPX detached, and **exits completely** — no
+  resident mode; absence is the fix for the XR/focus fights.
+- **The watchdog** (`watchdog/`, Go, stdlib only) is a separate tiny
+  native process. The launcher starts it on boot (single-instance:
+  a second start hands over via the contract file and exits). It
+  polls `pvlds_watchdog_contract.json` in the app's user data dir,
+  waits for the game process to die (exit or crash — same handling),
+  and relaunches the launcher **once**. The relaunched launcher
+  restores filter/sort/page with the just-played table selected.
+  It never auto-relaunches a table. A log lands beside the contract
+  (`pvlds_watchdog.log`).
+- **Focus herding** (Windows, user32): while a session is live, if
+  the foreground leaves the game process and stays away past a 2s
+  grace period, the watchdog hands foreground back to the game's
+  main window (rate-limited; it never moves or resizes windows).
+  Kill-switch: the **Focus herding** checkbox on the desk pass
+  (config `focus_herding`, default on). If it ever fights you,
+  uncheck it.
+- **Exit.** The rail's **EXIT** disarms the watchdog and quits —
+  the player who wants out stays out. Closing the window does the
+  same. Hygiene: the watchdog also stands down if the contract
+  file disappears, if the launcher hasn't checked in for 24h, and
+  after 3 fast-death relaunches (loop cap — it disarms rather than
+  resurrect-loop).
+- **Delivery.** The watchdog is a build artifact, not a commit:
+  `watchdog/build.sh` cross-compiles `pvlds_watchdog.exe` (and a
+  host binary for tests) into `watchdog/build/` (gitignored). The
+  exe must sit **beside the launcher exe** — that's where the
+  launcher looks first (then `$PVLDS_WATCHDOG_PATH`, then the repo
+  dev path). Ship `PVLDS.exe` + `pvlds_watchdog.exe` together.
+- **Lazy XR.** The desk pass never touches OpenXR; XR initializes
+  when the room is entered, and `xr/openxr/startup_alert` is off —
+  flat launches no longer pop the "OpenXR was requested but failed
+  to start" alert when no runtime is up.
 
 ## What M1 does
 
@@ -68,9 +117,11 @@ VPX, the watchdog, and the OpenXR hand-off are M2. Design of record:
   non-empty library, the wall falls back to ALL and the banner says
   why. VR remains the default filter only when VR-tagged games
   exist.
-- **State** (favorites, default builds, recents) persists as plain
-  JSON in `user://pvlds_state.json`, ready for the M2 exit/relaunch
-  cycle.
+- **State** (favorites, default builds, recents, last-played, and
+  the room's filter/sort/page/selection) persists as plain JSON in
+  `user://pvlds_state.json` — it is what the M2 return trip restores
+  from. From M2, recents records launches (detail opens still count
+  as touches while browsing).
 - **`.ini` files are sacred.** The launcher never reads, writes,
   moves, or regenerates table `.ini` files. Its own config lives next
   to the executable (or `user://` in editor runs), never in table
@@ -82,7 +133,10 @@ VPX, the watchdog, and the OpenXR hand-off are M2. Design of record:
   desk pass opens. Use its "Use the bundled dummy library" button to
   run the whole flow on invented tables.
 - **Export:** the "Windows Desktop" preset writes `../builds/PVLDS.exe`
-  relative to the project (i.e. `~/workspace/builds/`).
+  relative to the project (i.e. `~/workspace/builds/`); a "Linux"
+  preset writes `../builds/PVLDS_linux` (used for in-VM end-to-end
+  smokes of the hand-off). Copy `watchdog/build/pvlds_watchdog.exe`
+  beside the Windows exe before shipping — see "Delivery" above.
 
 ## Dummy data
 
@@ -107,22 +161,31 @@ cached `vpsdb.json` and the same code runs your actual library.
 - `--pvlds-db-stats <path>` — load a `vpsdb.json`, print game /
   VPX-file / VR-tagged-file counts, quit.
 - `--setup` — force the desk pass even when a config exists.
+- `--pvlds-smoke-launch <game_id>` — boot (real installed config if
+  one exists, else the seeded dummy), and when the scan lands, run
+  the real launch path for that game's default build, then exit.
+  Config exe/args can be overridden with the `PVLDS_SMOKE_EXE` /
+  `PVLDS_SMOKE_ARGS` environment variables. This is the launcher-side
+  integration smoke; the assembled round trip (exported binary +
+  watchdog + stub VPX) was verified the same way under Xvfb.
 
 ## Layout
 
 ```
-core/   UI-independent: config, database, scanner, art, state, data
+core/   UI-independent: config, database, scanner, art, state, data,
+        launch plan, watchdog contract, launch service
 ui/     the faces: main routing, room, detail view, desk pass,
         texture factory (renders every text surface once, to texture),
         pointer rig, clickable quads, card specs
+watchdog/  the native watchdog (Go): source + build.sh; exes are
+        gitignored build artifacts
 data/   bundled dummy vpsdb.json
 dummy_data/  placeholder tables for the dummy flow
 ```
 
-## M1 simplifications (honest list)
+## Simplifications (honest list)
 
 - Wall pages flip in blocks of 12 rather than a continuous drag-flip.
-- Recents records detail-view opens; from M2 it records launches.
 - One shared hover across both controllers (right hand preferred).
 - The bundled database is invented; real-library match quality is a
   verdict item for Chris's machine.

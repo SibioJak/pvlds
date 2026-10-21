@@ -6,6 +6,7 @@
 builds/
 *.exe
 *.pck
+watchdog/build/
 
 # Local config and state never belong in the repo
 pvlds_config.json

@@ -14,6 +14,7 @@ var vpx_exe_path: String = ""
 var launch_args_template: String = DEFAULT_LAUNCH_ARGS
 var table_folders: Array[String] = []
 var vpsdb_path: String = ""
+var focus_herding: bool = true ## watchdog window duty kill-switch (design section 3 amendment)
 
 
 static func beside_exe_path() -> String:
@@ -51,6 +52,7 @@ func load_from_disk() -> bool:
 	vpx_exe_path = str(d.get("vpx_exe_path", ""))
 	launch_args_template = str(d.get("launch_args_template", DEFAULT_LAUNCH_ARGS))
 	vpsdb_path = str(d.get("vpsdb_path", ""))
+	focus_herding = bool(d.get("focus_herding", true))
 	table_folders.clear()
 	var folders: Variant = d.get("table_folders", [])
 	if folders is Array:
@@ -67,6 +69,7 @@ func save_to_disk() -> bool:
 	d["vpx_exe_path"] = vpx_exe_path
 	d["launch_args_template"] = launch_args_template
 	d["vpsdb_path"] = vpsdb_path
+	d["focus_herding"] = focus_herding
 	var folders: Array = []
 	for f: String in table_folders:
 		folders.append(f)

@@ -2,7 +2,9 @@ extends Node
 
 ## PVLDS entry point. Owns the pieces both faces share - config, state,
 ## database, scanner, texture factory - and routes between the two:
-## the first-run desk pass (2D) and the room (3D / XR).
+## the first-run desk pass (2D) and the room (3D / XR). Owns the M2
+## hand-off endpoints too: LaunchService checkin on boot, launch +
+## full exit on Play, disarm on Exit / window close.
 ##
 ## Dev hooks (user args, after "--"):
 ##   --pvlds-core-test   run the UI-free library test suite, print, quit
@@ -12,6 +14,11 @@ extends Node
 ##   --pvlds-shot P      boot, save a screenshot of wherever the boot
 ##                       lands (room once its textures settle, or the
 ##                       desk once a scan lands on it) to P, quit
+##   --pvlds-smoke-launch GID
+##                       seeded-dummy boot; when the scan lands, launch
+##                       game GID's default build via LaunchService
+##                       (config exe from env PVLDS_SMOKE_EXE, args
+##                       template from PVLDS_SMOKE_ARGS) and exit
 
 var _config: PvldsConfig
 var _state: StateStore
@@ -22,6 +29,10 @@ var _room: RoomView = null
 var _desk: SetupDesk = null
 var _xr_interface: XRInterface
 var _xr_enabled: bool = false
+var _xr_tried: bool = false
+var _launch_service: LaunchService = null
+var _intentional_launch_exit: bool = false ## quitting FOR a launch must not disarm the watchdog
+var _smoke_launch_game: String = ""
 
 # Scan machinery. The scan (db load + folder walk + matching) runs on a
 # WorkerThreadPool task - NEVER on the main thread, in any route. A
@@ -62,7 +73,13 @@ func _ready() -> void:
 	var shot_idx: int = user_args.find("--pvlds-shot")
 	if shot_idx >= 0 and shot_idx + 1 < user_args.size():
 		_shot_path = user_args[shot_idx + 1]
-	_init_xr()
+	var smoke_idx: int = user_args.find("--pvlds-smoke-launch")
+	if smoke_idx >= 0 and smoke_idx + 1 < user_args.size():
+		_smoke_launch_game = user_args[smoke_idx + 1]
+	# NOTE: no XR here. Desk work never touches OpenXR - initializing
+	# it at boot is what popped the "OpenXR was requested but failed
+	# to start" alert on flat launches with no runtime up (M2 papercut
+	# fix). XR initializes lazily in _enter_room via _ensure_xr().
 	_factory = TextureFactory.new()
 	add_child(_factory)
 	_config = PvldsConfig.new()
@@ -73,6 +90,25 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
+	elif _smoke_launch_game != "" and not configured:
+		# The smoke hook prefers a real installed config (its whole
+		# point is integrating against one); seeding is only the
+		# fallback. Seeding over a real config also breaks in exports,
+		# where the seed's globalized res:// paths name no real files.
+		_seeded_dummy = true
+		_seed_dummy_config()
+		configured = true
+	if _smoke_launch_game != "":
+		if OS.has_environment("PVLDS_SMOKE_EXE"):
+			_config.vpx_exe_path = OS.get_environment("PVLDS_SMOKE_EXE")
+		if OS.has_environment("PVLDS_SMOKE_ARGS"):
+			_config.launch_args_template = OS.get_environment("PVLDS_SMOKE_ARGS")
+	# M2 boot duty: check in with the watchdog contract and make sure
+	# a watchdog is on duty (design section 3, step 1). A watchdog
+	# relaunch of this very process lands here too - checkin consumes
+	# the finished session; state restore does the rest.
+	_launch_service = LaunchService.new()
+	_launch_service.checkin(_config)
 	if configured and _config.is_configured() and not user_args.has("--setup"):
 		# Configured boot: present the desk as a live shell immediately
 		# (first frame, progress ticking) and enter the room only when
@@ -87,7 +123,14 @@ func _ready() -> void:
 		_show_desk()
 
 
-func _init_xr() -> void:
+## Lazy XR init: called only when the room is entered. If no runtime
+## answers, the room runs flat (desk testing) and nothing has popped
+## an alert - project.godot also sets xr/openxr/startup_alert=false
+## so a failed initialize stays silent.
+func _ensure_xr() -> void:
+	if _xr_tried:
+		return
+	_xr_tried = true
 	_xr_interface = XRServer.find_interface("OpenXR")
 	if _xr_interface != null and _xr_interface.is_initialized():
 		get_viewport().use_xr = true
@@ -202,6 +245,11 @@ func _finish_scan() -> void:
 	var summary: String = build_scan_summary()
 	if _desk != null:
 		_desk.apply_scan_summary(summary)
+	if _smoke_launch_game != "":
+		var gid: String = _smoke_launch_game
+		_smoke_launch_game = ""
+		_smoke_launch(gid)
+		return
 	if _enter_room_after_scan:
 		_enter_room_after_scan = false
 		if _last_db_kind == "sample" and not _seeded_dummy:
@@ -254,14 +302,58 @@ func _enter_room() -> void:
 		return
 	if _desk != null:
 		_desk.visible = false
+	_ensure_xr()
 	if _room == null:
 		_room = RoomView.new()
 		add_child(_room)
 		_room.setup(_factory, _scanner, _state, _xr_enabled)
 		_room.setup_requested.connect(_show_desk)
+		_room.launch_requested.connect(_on_launch_requested)
+		_room.exit_requested.connect(_on_exit_requested)
 	else:
 		_room.refresh_library()
 	_room.visible = true
+
+
+# ------------------------------------------------------- the hand-off
+
+## Play, from the card's Launch button or the detail view. On success
+## the launcher exits COMPLETELY (design section 3) - the watchdog
+## owns the return trip. On failure nothing exits; the player is sent
+## to the desk with the reason, because a bad exe path or template is
+## desk work.
+func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
+	if _launch_service == null or game == null or build == null:
+		return
+	var result: Dictionary = _launch_service.perform_launch(_config, _state, game, build)
+	if bool(result["ok"]):
+		print("PVLDS LAUNCH: %s -> build %s (pid %d); launcher exiting" % [
+			game.title, build.file_name, int(result.get("pid", -1))])
+		_intentional_launch_exit = true
+		get_tree().quit()
+	else:
+		var msg: String = "Launch failed: %s" % str(result["error"])
+		printerr("PVLDS LAUNCH: ", msg)
+		_show_desk()
+		if _desk != null:
+			_desk.show_message(msg + " Fix the setup here, then re-enter the room.")
+
+
+## EXIT (room rail): disarm the watchdog first - the player who
+## wants out stays out - then quit.
+func _on_exit_requested() -> void:
+	if _launch_service != null:
+		_launch_service.disarm()
+	get_tree().quit()
+
+
+## A window close without a launch is also an exit-to-desktop:
+## disarm, so no watchdog resurrects an app the player closed.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		if _launch_service != null and not _intentional_launch_exit:
+			_launch_service.disarm()
+		get_tree().quit()
 
 
 func _show_desk() -> void:
@@ -290,6 +382,29 @@ func _run_db_stats(path: String) -> void:
 	print("  VPX table files: ", db.vpx_table_file_count())
 	print("  VR-tagged VPX table files: ", db.vr_tagged_vpx_file_count())
 	get_tree().quit(0)
+
+
+## --pvlds-smoke-launch <game_id>: the launcher-side integration
+## smoke. Runs the real perform_launch against the seeded dummy
+## library with the config's exe pointed at a stub (env override),
+## prints the outcome, and - on success - exits exactly as a real
+## launch does, leaving the stub process and the contract behind
+## for the harness to inspect.
+func _smoke_launch(game_id: String) -> void:
+	var game: GameEntry = _scanner.game_by_id(game_id) if _scanner != null else null
+	if game == null:
+		printerr("PVLDS SMOKE LAUNCH: FAIL - game not found: ", game_id)
+		get_tree().quit(1)
+		return
+	var build: TableBuild = game.resolve_default_build(_state)
+	var result: Dictionary = _launch_service.perform_launch(_config, _state, game, build)
+	if bool(result["ok"]):
+		print("PVLDS SMOKE LAUNCH: ok pid=", int(result.get("pid", -1)))
+		_intentional_launch_exit = true
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS SMOKE LAUNCH: FAIL - ", str(result["error"]))
+		get_tree().quit(1)
 
 
 # ------------------------------------------------------------ core test
@@ -357,6 +472,17 @@ func _run_core_test() -> void:
 		var resolved: TableBuild = gc.resolve_default_build(store2)
 		_expect(resolved != null and resolved.version == "1.0.2", "stored default build wins over CURRENT", failures)
 	_expect(store2.recents.size() == 2 and store2.recents[0] == "dg-cinder-peak", "recents are most-recent-first", failures)
+
+	# Last-played + room view state round-trip (the M2 return trip).
+	store2.set_last_played("dg-cinder-peak", "/tables/Cinder Peak.vpx")
+	store2.set_view_state("vr", "year", 3, "dg-cinder-peak")
+	store2.save_to_disk()
+	var store3: StateStore = StateStore.new()
+	store3.load_from_disk()
+	_expect(store3.last_played_game_id == "dg-cinder-peak" and store3.last_played_build_path == "/tables/Cinder Peak.vpx",
+		"last-played persists across the exit/relaunch cycle", failures)
+	_expect(store3.view_filter == "vr" and store3.view_sort == "year" and store3.view_page == 3 and store3.selected_game_id == "dg-cinder-peak",
+		"room view state persists (filter/sort/page/selection)", failures)
 	if backup != "":
 		var f: FileAccess = FileAccess.open(state_file, FileAccess.WRITE)
 		if f != null:
@@ -364,6 +490,57 @@ func _run_core_test() -> void:
 			f.close()
 	elif FileAccess.file_exists(state_file):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(state_file))
+
+	# Launch plan: template expansion, quoting, build choice.
+	var lcfg: PvldsConfig = PvldsConfig.new()
+	lcfg.vpx_exe_path = "C:/Visual Pinball/VPinball_GL64.exe"
+	lcfg.launch_args_template = "-play \"{table}\""
+	if gc != null:
+		var def_build: TableBuild = gc.resolve_default_build(store3)
+		var plan: LaunchPlan = LaunchPlan.build_plan(lcfg, gc, def_build)
+		_expect(plan.valid and plan.args.size() == 2 and plan.args[0] == "-play" and plan.args[1] == def_build.file_path,
+			"launch plan expands {table} to the default build's path", failures)
+		var mod2: TableBuild = gc.build_by_path(dummy_tables.path_join("Galaxy Corsair (Northlight 1991) v0.9.9 MOD.vpx"))
+		if mod2 != null:
+			var once_plan: LaunchPlan = LaunchPlan.build_plan(lcfg, gc, mod2)
+			_expect(once_plan.valid and once_plan.args[1] == mod2.file_path,
+				"an explicit build (play-once) overrides the default in the plan", failures)
+		var bad_plan: LaunchPlan = LaunchPlan.build_plan(lcfg, gc, null)
+		_expect(not bad_plan.valid and bad_plan.error != "", "a plan with no build is invalid, with a reason", failures)
+	var spaced: Array[String] = LaunchPlan.expand_template(
+		"-Min -play \"{table}\" -flag \"two words\"", "C:/My Tables/Space Table (Maker 1999).vpx")
+	_expect(spaced.size() == 5 and spaced[2] == "C:/My Tables/Space Table (Maker 1999).vpx" and spaced[4] == "two words",
+		"quoted template segments with spaces stay single arguments", failures)
+	var bare: Array[String] = LaunchPlan.expand_template("-play {table}", "C:/My Tables/Space Table.vpx")
+	_expect(bare.size() == 2 and bare[1] == "C:/My Tables/Space Table.vpx",
+		"an unquoted {table} is still one argument (arrays are not shell-split)", failures)
+
+	# Watchdog contract round-trip (backed up + restored like state).
+	var contract_file: String = WatchdogContract.contract_path_absolute()
+	var contract_backup: String = ""
+	if FileAccess.file_exists(contract_file):
+		contract_backup = FileAccess.get_file_as_string(contract_file)
+	var contract: WatchdogContract = WatchdogContract.new()
+	contract.armed = true
+	contract.session_id = 7
+	contract.session_state = "playing"
+	contract.game_exe_path = "C:/Visual Pinball/VPinball_GL64.exe"
+	contract.game_pid = 4242
+	contract.launcher_path = "C:/PVLDS/PVLDS.exe"
+	contract.focus_herding = false
+	_expect(contract.save_to_disk(), "watchdog contract saves", failures)
+	var contract2: WatchdogContract = WatchdogContract.load_from_disk()
+	_expect(contract2.armed and contract2.session_id == 7 and contract2.game_pid == 4242
+		and contract2.session_state == "playing" and not contract2.focus_herding
+		and contract2.launcher_path == "C:/PVLDS/PVLDS.exe",
+		"watchdog contract round-trips", failures)
+	if contract_backup != "":
+		var cf: FileAccess = FileAccess.open(contract_file, FileAccess.WRITE)
+		if cf != null:
+			cf.store_string(contract_backup)
+			cf.close()
+	elif FileAccess.file_exists(contract_file):
+		DirAccess.remove_absolute(contract_file)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")

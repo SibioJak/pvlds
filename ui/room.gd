@@ -7,6 +7,8 @@ extends Node3D
 ## over the same set of ClickableQuads.
 
 signal setup_requested
+signal launch_requested(game: GameEntry, build: TableBuild) ## card Launch / detail Play - Main owns the launch + exit
+signal exit_requested ## rail EXIT: Main disarms the watchdog and quits
 
 const PAGE_COLS: int = 4
 const PAGE_ROWS: int = 3
@@ -40,6 +42,8 @@ var _rig: PointerRig
 var _xr_camera: Camera3D
 var _desk_camera: Camera3D
 var _panels: Array[ClickableQuad] = []
+var _panel_launches: Array[ClickableQuad] = [] ## per-panel Launch button, parallel to _panels
+var _selected_game_id: String = "" ## last game opened/launched; restored + persisted as view state
 var _rail_quads: Dictionary = {} ## key -> ClickableQuad
 var _focusables: Array[ClickableQuad] = []
 var _focused: ClickableQuad = null
@@ -61,13 +65,50 @@ func setup(factory: TextureFactory, scanner: LibraryScanner, store: StateStore, 
 	add_child(_detail)
 	ClickableQuad.face_point(_detail, EYE)
 	_detail.closed.connect(_on_detail_closed)
+	_detail.play_requested.connect(_on_detail_play)
+	# Return-trip restore (M2): the watchdog's relaunch should land
+	# the player exactly where they left - same filter/sort, and the
+	# just-played (or last-opened) table's page, selected.
+	if _store.view_filter != "" and FILTERS.has(_store.view_filter):
+		_filter = _store.view_filter
+	if _store.view_sort != "" and SORTS.has(_store.view_sort):
+		_sort = _store.view_sort
+	_selected_game_id = _store.selected_game_id
+	if _selected_game_id == "":
+		_selected_game_id = _store.last_played_game_id
 	refresh_library()
+	_restore_selection()
 
 
 func refresh_library() -> void:
 	_recompute_visible()
 	_page = 0
 	_rebuild_wall()
+
+
+## After a restore, put the wall on the selected game's page and the
+## focus on its panel. Runs once at setup; harmless no-ops when the
+## game is not in the current filter.
+func _restore_selection() -> void:
+	if _selected_game_id == "":
+		return
+	for i: int in range(_visible_games.size()):
+		if _visible_games[i].game_id == _selected_game_id:
+			var target_page: int = i / PAGE_SIZE
+			if target_page != _page:
+				_page = target_page
+				_rebuild_wall()
+			var slot: int = i % PAGE_SIZE
+			if slot < _panels.size():
+				_set_focused(_panels[slot])
+			return
+
+
+## View state outlives the process (the launcher exits on every
+## launch), so every view change lands in the store immediately.
+func _persist_view() -> void:
+	_store.set_view_state(_filter, _sort, _page, _selected_game_id)
+	_store.save_to_disk()
 
 
 # ---------------------------------------------------------------- rigs
@@ -253,6 +294,7 @@ func _rebuild_wall() -> void:
 		_rail.remove_child(child)
 		child.queue_free()
 	_panels.clear()
+	_panel_launches.clear()
 	_rail_quads.clear()
 	_set_focused(null)
 
@@ -278,6 +320,16 @@ func _rebuild_wall() -> void:
 		var pos: Vector3 = Vector3(sin(angle) * WALL_RADIUS, row_ys[row], -cos(angle) * WALL_RADIUS)
 		var q: ClickableQuad = _make_quad(_wall, "panel", game.game_id, placeholder, Vector2(0.54, 0.64), pos)
 		_panels.append(q)
+		# The card's Launch button (Chris, 2026-10-21): a distinct
+		# quad riding the panel's lower edge - pointing at the card
+		# browses (opens More Info); only the button commits to the
+		# ~20s VPX load. It inherits the panel's orientation and its
+		# pulse, sits proud of the card face so rays hit it first.
+		var lq: ClickableQuad = ClickableQuad.new()
+		lq.setup("panel_launch", game.game_id, placeholder, Vector2(0.36, 0.115))
+		lq.position = Vector3(0.0, -0.242, 0.032)
+		q.add_child(lq)
+		_panel_launches.append(lq)
 	# Rail.
 	_build_rail(placeholder)
 	_refresh_focusables()
@@ -289,10 +341,10 @@ func _build_rail(placeholder: Texture2D) -> void:
 	# rail width sits inside a 16:9 frustum (it was clipped at the
 	# bottom edge of the flat view when it hugged the player).
 	var y: float = 0.55
-	var z: float = -1.75
+	var z: float = -1.85
 	var defs: Array = [
-		["filter:all", 0.32], ["filter:vr", 0.26], ["filter:favorites", 0.46], ["filter:recents", 0.42],
-		["sort", 0.56], ["page_prev", 0.2], ["page_label", 0.3], ["page_next", 0.2], ["desk", 0.34],
+		["filter:all", 0.30], ["filter:vr", 0.24], ["filter:favorites", 0.44], ["filter:recents", 0.40],
+		["sort", 0.52], ["page_prev", 0.18], ["page_label", 0.28], ["page_next", 0.18], ["desk", 0.32], ["exit", 0.28],
 	]
 	var total: float = 0.0
 	for d: Variant in defs:
@@ -345,6 +397,11 @@ func _fill_wall_textures(gen: int) -> void:
 		if gen != _gen:
 			return
 		quad.set_texture(tex)
+		if i < _panel_launches.size():
+			var ltex: Texture2D = await _factory.render_texture(RoomSpecs.button_spec("LAUNCH", true), Vector2i(512, 164))
+			if gen != _gen:
+				return
+			_panel_launches[i].set_texture(ltex)
 	# Rail buttons.
 	for key: Variant in _rail_quads.keys():
 		var k: String = str(key)
@@ -365,6 +422,8 @@ func _fill_wall_textures(gen: int) -> void:
 			label = "%d / %d" % [_page + 1, page_count()]
 		elif k == "desk":
 			label = "SETUP"
+		elif k == "exit":
+			label = "EXIT"
 		var btex: Texture2D = await _factory.render_texture(RoomSpecs.button_spec(label, accent), Vector2i(512, 150))
 		if gen != _gen:
 			return
@@ -380,8 +439,10 @@ func _refresh_focusables() -> void:
 	if _mode == "detail" and _detail != null:
 		_focusables = _detail.get_clickables()
 	else:
-		for q: ClickableQuad in _panels:
-			_focusables.append(q)
+		for i: int in range(_panels.size()):
+			_focusables.append(_panels[i])
+			if i < _panel_launches.size() and _panel_launches[i].pick_enabled:
+				_focusables.append(_panel_launches[i])
 		for k: Variant in _rail_quads.keys():
 			var q: ClickableQuad = _rail_quads[k]
 			if q.pick_enabled:
@@ -400,6 +461,7 @@ func _refresh_quad_states() -> void:
 	var hovered: ClickableQuad = _rig.hovered if _rig != null else null
 	var all: Array[ClickableQuad] = []
 	all.append_array(_panels)
+	all.append_array(_panel_launches)
 	for k: Variant in _rail_quads.keys():
 		all.append(_rail_quads[k])
 	if _detail != null:
@@ -432,6 +494,15 @@ func _activate(quad: ClickableQuad) -> void:
 			if game != null:
 				quad.pulse()
 				_open_detail(game)
+		"panel_launch":
+			var game2: GameEntry = _scanner.game_by_id(quad.payload)
+			if game2 != null:
+				var build: TableBuild = game2.resolve_default_build(_store)
+				if build != null:
+					quad.pulse()
+					_selected_game_id = game2.game_id
+					_persist_view()
+					launch_requested.emit(game2, build)
 		"rail":
 			quad.pulse()
 			_handle_rail(quad.payload)
@@ -443,35 +514,52 @@ func _handle_rail(key: String) -> void:
 		_page = 0
 		_recompute_visible()
 		_rebuild_wall()
+		_persist_view()
 	elif key == "sort":
 		var idx: int = SORTS.find(_sort)
 		_sort = SORTS[(idx + 1) % SORTS.size()]
 		_page = 0
 		_recompute_visible()
 		_rebuild_wall()
+		_persist_view()
 	elif key == "page_prev":
 		if _page > 0:
 			_page -= 1
 			_rebuild_wall()
+			_persist_view()
 	elif key == "page_next":
 		if _page < page_count() - 1:
 			_page += 1
 			_rebuild_wall()
+			_persist_view()
 	elif key == "desk":
 		setup_requested.emit()
+	elif key == "exit":
+		exit_requested.emit()
 
 
 func _open_detail(game: GameEntry) -> void:
 	_mode = "detail"
+	_selected_game_id = game.game_id
 	_store.touch_recent(game.game_id)
-	_store.save_to_disk()
+	_persist_view()
 	for q: ClickableQuad in _panels:
+		q.pick_enabled = false
+	for q: ClickableQuad in _panel_launches:
 		q.pick_enabled = false
 	for k: Variant in _rail_quads.keys():
 		_rail_quads[k].pick_enabled = false
 	_detail.show_game(game)
 	_set_focused(null)
 	_refresh_focusables()
+
+
+## Detail Play forwards into the same launch path as the card's
+## Launch button (default build, or the armed play-once build).
+func _on_detail_play(game: GameEntry, build: TableBuild) -> void:
+	_selected_game_id = game.game_id
+	_persist_view()
+	launch_requested.emit(game, build)
 
 
 func _on_detail_closed() -> void:
