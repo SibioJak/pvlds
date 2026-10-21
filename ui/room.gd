@@ -9,6 +9,7 @@ extends Node3D
 signal setup_requested
 signal launch_requested(game: GameEntry, build: TableBuild) ## card Launch / detail Play - Main owns the launch + exit
 signal exit_requested ## rail EXIT: Main disarms the watchdog and quits
+signal art_prefetch_requested(games: Array) ## a page settled: Main's warmer should bring the neighbouring pages' art forward
 
 const PAGE_COLS: int = 4
 const PAGE_ROWS: int = 3
@@ -452,6 +453,23 @@ func _fill_wall_textures(gen: int) -> void:
 		quad.set_texture(btex)
 	if gen == _gen:
 		wall_ready = true
+		# The page is settled: ask Main's warmer to bring the
+		# neighbouring pages' art forward (next page first), so a
+		# flip lands on warm art even mid-warm-up.
+		var near: Array = []
+		var total: int = _visible_games.size()
+		var next_start: int = start + PAGE_SIZE
+		if next_start < total:
+			var next_cnt: int = mini(PAGE_SIZE, total - next_start)
+			for j: int in range(next_cnt):
+				near.append(_visible_games[next_start + j])
+		var prev_start: int = start - PAGE_SIZE
+		if prev_start >= 0:
+			var prev_cnt: int = mini(PAGE_SIZE, total - prev_start)
+			for j: int in range(prev_cnt):
+				near.append(_visible_games[prev_start + j])
+		if not near.is_empty():
+			art_prefetch_requested.emit(near)
 
 
 # ------------------------------------------------------------ interaction

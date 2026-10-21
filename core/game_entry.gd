@@ -20,15 +20,25 @@ func has_art_available() -> bool:
 	return art_path != "" or art_source_path != ""
 
 
-## A loadable image path, extracting the backglass from the .directb2s
-## on first demand (ArtProvider caches the result under user://, so
-## each game pays the extraction cost at most once, ever). A failed
-## extraction leaves "" and is not retried - the title card covers it.
+## A loadable image path for a visible panel. Warm cache: a file
+## path, no work. Cold: this panel claims the extraction itself -
+## unless the background warmer is already extracting this exact
+## file, in which case the panel joins that wait (bounded by one
+## extraction) instead of queueing behind the warmer's library
+## list or duplicating its work. A failed extraction leaves "" and
+## is not retried - the title card covers it.
 func ensure_art() -> String:
 	if art_path != "" or art_source_path == "" or _art_attempted:
 		return art_path
 	_art_attempted = true
-	art_path = ArtProvider.extract_directb2s_image(art_source_path)
+	if ArtProvider.is_cached(art_source_path):
+		art_path = ArtProvider.cache_path_for(art_source_path)
+		return art_path
+	if ArtProvider.claim_extract(art_source_path):
+		art_path = ArtProvider.extract_directb2s_image(art_source_path)
+		ArtProvider.release_extract(art_source_path)
+	elif ArtProvider.await_extract(art_source_path, 30000):
+		art_path = ArtProvider.cache_path_for(art_source_path)
 	return art_path
 
 

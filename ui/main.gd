@@ -39,6 +39,7 @@ var _config: PvldsConfig
 var _state: StateStore
 var _db: VpsDatabase
 var _scanner: LibraryScanner
+var _art_warmer: ArtWarmer
 var _factory: TextureFactory
 var _room: RoomView = null
 var _desk: SetupDesk = null
@@ -92,6 +93,13 @@ var _scan_db_path: String = "" ## resolved on the main thread in start_scan()
 var _scan_db_kind: String = "" ## "user" | "download" | "sample"
 var _shot_path: String = ""
 var _shot_frames: int = 0
+var _art_bench: bool = false ## --pvlds-art-bench: dev measurement route (cold/warm page-fill timings)
+var _bench_phase: int = -1
+var _bench_t_room: int = 0
+var _bench_t_mark: int = 0
+var _bench_warm_started_msec: int = 0
+var _bench_max_frame_msec: float = 0.0
+var _bench_max_frame_warm_msec: float = 0.0
 
 
 func _ready() -> void:
@@ -112,6 +120,9 @@ func _ready() -> void:
 	var shot_launch_idx: int = user_args.find("--pvlds-shot-launch")
 	if shot_launch_idx >= 0 and shot_launch_idx + 1 < user_args.size():
 		_shot_launch_path = user_args[shot_launch_idx + 1]
+	if user_args.has("--pvlds-art-bench"):
+		_art_bench = true
+		_bench_phase = 0
 	# NOTE: no XR here. Desk work never touches OpenXR - initializing
 	# it at boot is what popped the "OpenXR was requested but failed
 	# to start" alert on flat launches with no runtime up (M2 papercut
@@ -145,6 +156,10 @@ func _ready() -> void:
 	# the finished session; state restore does the rest.
 	_launch_service = LaunchService.new()
 	_launch_service.checkin(_config)
+	# The art warmer: background backglass pre-extraction so card
+	# art is warm before it is browsed to (art-speed round).
+	_art_warmer = ArtWarmer.new()
+	_art_warmer.on_drained = _on_art_warm_drained
 	if configured and _config.is_configured() and not user_args.has("--setup"):
 		# Configured boot: present the desk as a live shell immediately
 		# (first frame, progress ticking) and enter the room only when
@@ -241,6 +256,8 @@ func _scan_worker() -> void:
 
 func _process(_delta: float) -> void:
 	_poll_launch()
+	if _art_bench:
+		_drive_art_bench(_delta)
 	if _shot_path != "" and _shot_ready():
 		_shot_frames += 1
 		if _shot_frames >= 8:
@@ -300,6 +317,10 @@ func _finish_scan() -> void:
 	var summary: String = build_scan_summary()
 	if _desk != null:
 		_desk.apply_scan_summary(summary)
+	# Scan landed: start warming the whole library's art in the
+	# background (and re-arm on every later scan).
+	if _art_warmer != null and _scanner != null:
+		_art_warmer.warm_library(_scanner.games)
 	if _smoke_launch_game != "":
 		var gid: String = _smoke_launch_game
 		_smoke_launch_game = ""
@@ -307,7 +328,7 @@ func _finish_scan() -> void:
 		return
 	if _enter_room_after_scan:
 		_enter_room_after_scan = false
-		if _last_db_kind == "sample" and not _seeded_dummy:
+		if _last_db_kind == "sample" and not _seeded_dummy and not _art_bench:
 			# Sample data must never usher anyone into the room: the
 			# room would be built on 10 invented games, and the remedy
 			# (Download VPS database) lives on this desk. The summary
@@ -337,6 +358,9 @@ func build_scan_summary() -> String:
 		lines.append("No database loaded - every game is identified from its file name alone.")
 	lines.append("Panel art: %d of %d games have art (side image or backglass); the rest get title cards." % [
 		s.art_covered_games, s.games.size()])
+	var cov: Vector2i = ArtWarmer.cache_coverage(s.games)
+	if cov.y > 0:
+		lines.append("Art cache: %d of %d art images are extracted and ready instantly; the rest pre-extract in the background while you browse." % [cov.x, cov.y])
 	var unknown: Array[String] = []
 	for g: GameEntry in s.games:
 		if g.game_id.begins_with("local:"):
@@ -349,6 +373,8 @@ func build_scan_summary() -> String:
 
 
 func _enter_room() -> void:
+	if _art_bench and _bench_t_room == 0:
+		_bench_t_room = Time.get_ticks_msec()
 	if _scanner == null:
 		# No results yet: queue the room behind the threaded scan
 		# instead of scanning inline (that was the boot-freeze bug).
@@ -365,9 +391,14 @@ func _enter_room() -> void:
 		_room.setup_requested.connect(_show_desk)
 		_room.launch_requested.connect(_on_launch_requested)
 		_room.exit_requested.connect(_on_exit_requested)
+		_room.art_prefetch_requested.connect(_on_art_prefetch)
 	else:
 		_room.refresh_library()
 	_room.visible = true
+	# Room entry with a cold cache (e.g. back from the desk without a
+	# rescan): make sure a warm pass is queued.
+	if _art_warmer != null and _scanner != null:
+		_art_warmer.warm_library(_scanner.games)
 
 
 # ------------------------------------------------------- the hand-off
@@ -539,6 +570,86 @@ func _show_desk() -> void:
 
 ## --pvlds-db-stats <path>: load a vpsdb.json and print headline
 ## counts. Used to sanity-proof the real VPS database in tests.
+## Dev route --pvlds-art-bench: drives the room through a cold page,
+## a full-library warm, and a warm page, printing ARTBENCH timings.
+## Wall-clock numbers from a fixture library - a harness, not a verdict.
+func _drive_art_bench(delta: float) -> void:
+	var frame_msec: float = delta * 1000.0
+	if frame_msec > _bench_max_frame_msec:
+		_bench_max_frame_msec = frame_msec
+	if _art_warmer != null and not _art_warmer.is_idle() and frame_msec > _bench_max_frame_warm_msec:
+		_bench_max_frame_warm_msec = frame_msec
+	if _room == null or not _room.visible or _scanner == null:
+		return
+	match _bench_phase:
+		0:
+			if _room.wall_ready:
+				print("ARTBENCH page0_fill_msec=", Time.get_ticks_msec() - _bench_t_room)
+				_bench_flip_to(10)
+				_bench_t_mark = Time.get_ticks_msec()
+				_bench_phase = 1
+		1:
+			if _room.wall_ready:
+				print("ARTBENCH cold_flip_page10_msec=", Time.get_ticks_msec() - _bench_t_mark)
+				_bench_warm_started_msec = Time.get_ticks_msec()
+				_bench_begin_warm()
+				_bench_phase = 2
+		2:
+			if _bench_warm_done():
+				print("ARTBENCH warm_full_library_msec=", _bench_warm_duration_msec())
+				_bench_flip_to(12)
+				_bench_t_mark = Time.get_ticks_msec()
+				_bench_phase = 3
+		3:
+			if _room.wall_ready:
+				print("ARTBENCH warm_flip_page12_msec=", Time.get_ticks_msec() - _bench_t_mark)
+				print("ARTBENCH max_frame_msec=", snappedf(_bench_max_frame_msec, 0.1))
+				print("ARTBENCH max_frame_during_warm_msec=", snappedf(_bench_max_frame_warm_msec, 0.1))
+				print("ARTBENCH DONE")
+				_bench_phase = -1
+				get_tree().quit()
+
+
+func _bench_flip_to(page: int) -> void:
+	var guard: int = 0
+	while int(_room.get("_page")) < page and guard < 64:
+		_room._handle_rail("page_next")
+		guard += 1
+
+
+## The warmer auto-starts at scan finish; the bench just waits for
+## its pass to drain and reports the warmer's own pass duration.
+func _bench_begin_warm() -> void:
+	pass
+
+
+func _bench_warm_done() -> bool:
+	return _art_warmer == null or _art_warmer.is_idle()
+
+
+func _bench_warm_duration_msec() -> int:
+	return _art_warmer.last_pass_msec if _art_warmer != null else 0
+
+
+## Room prefetch: neighbouring pages' art jumps the warmer's queue.
+func _on_art_prefetch(games: Array) -> void:
+	if _art_warmer == null:
+		return
+	var typed: Array[GameEntry] = []
+	for g: Variant in games:
+		if g is GameEntry:
+			var ge: GameEntry = g
+			typed.append(ge)
+	_art_warmer.prioritize(typed)
+
+
+## A warm pass drained: refresh the desk's coverage line so the
+## art-cache stat reads current when the player next visits it.
+func _on_art_warm_drained() -> void:
+	if _desk != null and _scanner != null:
+		_desk.apply_scan_summary(build_scan_summary())
+
+
 func _run_db_stats(path: String) -> void:
 	var db: VpsDatabase = VpsDatabase.new()
 	if not db.load_db(path):
@@ -777,6 +888,83 @@ func _run_core_test() -> void:
 		_write_text_file(config_file, config_backup)
 	elif FileAccess.file_exists(config_file):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(config_file))
+
+	# --- Art cache (art-speed round): stamped invalidation, panel-
+	# size storage, claim coordination, the background warmer.
+	var art_dir: String = "user://core_test_art"
+	var user_dir: DirAccess = DirAccess.open("user://")
+	if user_dir != null and not user_dir.dir_exists("core_test_art"):
+		user_dir.make_dir("core_test_art")
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.seed = 1234
+	var block: PackedByteArray = PackedByteArray()
+	block.resize(65536)
+	for i: int in range(block.size()):
+		block[i] = rng.randi_range(0, 255)
+	var mk_img: Callable = func(w: int, h: int) -> Image:
+		var bytes: PackedByteArray = PackedByteArray()
+		var need: int = w * h * 4
+		while bytes.size() < need:
+			bytes.append_array(block)
+		bytes.resize(need)
+		return Image.create_from_data(w, h, false, Image.FORMAT_RGBA8, bytes)
+	var mk_b2s: Callable = func(path: String, w: int, h: int) -> bool:
+		var im: Image = mk_img.call(w, h) as Image
+		var text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(im.save_png_to_buffer()) + "\" /></Images></DirectB2SData>"
+		return _write_text_file(path, text)
+	var b2s_a: String = art_dir.path_join("Stamp Table.directb2s")
+	_expect(bool(mk_b2s.call(b2s_a, 800, 1000)), "stamp fixture A written", failures)
+	var p1: String = ArtProvider.extract_directb2s_image(b2s_a)
+	_expect(p1 != "" and p1 == ArtProvider.cache_path_for(b2s_a), "extraction lands at the stamped cache path", failures)
+	_expect(ArtProvider.is_cached(b2s_a), "the stamped entry reads as cached", failures)
+	var cached_img: Image = Image.new()
+	_expect(cached_img.load(p1) == OK and cached_img.get_width() == 512 and cached_img.get_height() == 640,
+		"the cached image is stored at panel size (800x1000 -> 512x640)", failures)
+	_expect(bool(mk_b2s.call(b2s_a, 600, 700)), "stamp fixture A replaced (different image)", failures)
+	var p2: String = ArtProvider.extract_directb2s_image(b2s_a)
+	_expect(p2 != "" and p2 != p1, "a replaced backglass invalidates its cache entry (new stamp, new path)", failures)
+	var cached_img2: Image = Image.new()
+	_expect(cached_img2.load(p2) == OK and cached_img2.get_width() == 512 and cached_img2.get_height() == 597,
+		"the replacement's art is what the new entry serves (600x700 -> 512x597)", failures)
+	_expect(ArtProvider.claim_extract(b2s_a), "the first claim on a file succeeds", failures)
+	_expect(not ArtProvider.claim_extract(b2s_a), "a second claim on the same file is refused (no double extraction)", failures)
+	ArtProvider.release_extract(b2s_a)
+	_expect(ArtProvider.claim_extract(b2s_a), "a released claim can be taken again", failures)
+	ArtProvider.release_extract(b2s_a)
+	# The warmer extracts an uncached file on its worker thread...
+	var b2s_b: String = art_dir.path_join("Warm Table.directb2s")
+	_expect(bool(mk_b2s.call(b2s_b, 400, 500)), "warm fixture written", failures)
+	var warm_entry: GameEntry = GameEntry.new()
+	warm_entry.art_source_path = b2s_b
+	var warm_games: Array[GameEntry] = [warm_entry]
+	var warmer: ArtWarmer = ArtWarmer.new()
+	warmer.warm_library(warm_games)
+	var waited: int = 0
+	while not warmer.is_idle() and waited < 20000:
+		OS.delay_msec(20)
+		waited += 20
+	_expect(warmer.is_idle() and ArtProvider.is_cached(b2s_b), "the warmer pre-extracts the library in the background", failures)
+	_expect(warmer.last_pass_items == 1, "the warm pass performed exactly one extraction", failures)
+	_expect(ArtWarmer.cache_coverage(warm_games) == Vector2i(1, 1), "cache coverage reports have/want", failures)
+	# ...but never duplicates a claimed (panel-owned) extraction:
+	# the claimed file is skipped, and the priority path completes it.
+	var b2s_c: String = art_dir.path_join("Claimed Table.directb2s")
+	_expect(bool(mk_b2s.call(b2s_c, 400, 500)), "claimed fixture written", failures)
+	var claimed_entry: GameEntry = GameEntry.new()
+	claimed_entry.art_source_path = b2s_c
+	var claimed_games: Array[GameEntry] = [claimed_entry]
+	_expect(ArtProvider.claim_extract(b2s_c), "panel claim taken for the coordination test", failures)
+	var warmer2: ArtWarmer = ArtWarmer.new()
+	warmer2.warm_library(claimed_games)
+	waited = 0
+	while not warmer2.is_idle() and waited < 20000:
+		OS.delay_msec(20)
+		waited += 20
+	_expect(warmer2.is_idle() and not ArtProvider.is_cached(b2s_c),
+		"the warmer skips a file a panel has claimed (never extracts twice)", failures)
+	ArtProvider.release_extract(b2s_c)
+	_expect(claimed_entry.ensure_art() != "" and ArtProvider.is_cached(b2s_c),
+		"the priority path extracts the claimed file itself", failures)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")

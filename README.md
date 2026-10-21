@@ -141,17 +141,27 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   game-only → filename-only. A build whose stated version matches
   nothing in the db stays local-only; it is **never** relabeled as a db
   build.
-- **Scans never block the UI, and art is lazy.** The scan (db load +
-  folder walk + matching) runs on a WorkerThreadPool task with live
-  progress in both routes that trigger it (desk Save & Scan, and the
-  configured auto-boot, which presents the desk as a shell and enters
-  the room when results land). Extracting a backglass from a
-  `.directb2s` costs ~200 ms per file at real-world sizes, so the scan
-  records only directory-listing facts (a same-stem image or
-  `.directb2s` exists); extraction happens on first display of that
-  game's panel/detail via `GameEntry.ensure_art()`, cached in
-  `user://art_cache`. (Field fix, 2026-10-20: the original eager,
-  main-thread scan froze the app for over a minute at 300 tables.)
+- **Scans never block the UI, and art warms in the background.**
+  The scan (db load + folder walk + matching) runs on a
+  WorkerThreadPool task with live progress in both routes that
+  trigger it (desk Save & Scan, and the configured auto-boot, which
+  presents the desk as a shell and enters the room when results
+  land). Extracting a backglass from a `.directb2s` costs ~200 ms
+  per file at real-world sizes, so the scan records only
+  directory-listing facts (a same-stem image or `.directb2s`
+  exists) — then `ArtWarmer` pre-extracts the whole library on a
+  background worker into `user://art_cache`, neighbouring pages
+  first as they are browsed to. Cache entries are stamped by the
+  source's size + modified time (a replaced backglass invalidates
+  its entry) and stored at panel size (fit inside 512x640), so a
+  warm panel is a small file read. A panel that reaches an unwarmed
+  game first extracts it itself via `GameEntry.ensure_art()`; a
+  claim registry guarantees the warmer and a panel never extract
+  the same file twice, and a panel never queues behind the
+  warmer's list. (History: the original eager, main-thread scan
+  froze the app for over a minute at 300 tables, 2026-10-20; the
+  lazy-only fix that followed moved the cost onto first page
+  visits, which is what the warmer retired, 2026-10-21.)
 - **Versions, visible.** Panels carry a "N BUILDS" chip. The detail
   view lists every build (version, author, date) with **CURRENT** (the
   build that matters: a db-known build outranks a local-only one; then
@@ -231,6 +241,11 @@ cached `vpsdb.json` and the same code runs your actual library.
   `--rendering-driver opengl3`, not the dummy one).
 - `--pvlds-db-stats <path>` — load a `vpsdb.json`, print game /
   VPX-file / VR-tagged-file counts, quit.
+- `--pvlds-art-bench` — with an installed config: boot into the
+  room, print ARTBENCH timings (cold first page, cold deep-page
+  flip, full-library warm duration, warm flip, worst frame costs),
+  quit. The art-speed measurement harness (needs a real rendering
+  driver, like `--pvlds-shot`).
 - `--setup` — force the desk pass even when a config exists.
 - `--pvlds-smoke-launch <game_id>` — boot (real installed config if
   one exists, else the seeded dummy), and when the scan lands, run

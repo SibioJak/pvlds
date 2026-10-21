@@ -9,9 +9,25 @@ extends RefCounted
 ##      XML carrying base64 image blobs, and any failure just falls
 ##      through to the generated title card.
 ## Returns "" when no art exists. Never writes anywhere near the tables.
+##
+## Cache discipline (the art-speed round): a cache entry is keyed by
+## the .directb2s path PLUS its size and modified time, so replacing
+## a backglass invalidates its cached image instead of serving the
+## stale one forever. Extracted images are stored at panel size
+## (fit inside PANEL_ART_MAX_W x PANEL_ART_MAX_H - the wall panel's
+## texture is 512x640 and the art rect covers it), so a warm panel
+## is a small file read, not a multi-megapixel decode + downscale.
+## Extractions are claimed (claim_extract) so the background warmer
+## and a panel's on-demand ensure_art can never extract the same
+## file twice.
 
 const CACHE_DIR: String = "user://art_cache"
 const IMAGE_EXTS: Array[String] = ["png", "jpg", "jpeg", "webp"]
+const PANEL_ART_MAX_W: int = 512
+const PANEL_ART_MAX_H: int = 640
+
+static var _claims_mutex: Mutex = Mutex.new()
+static var _claims: Dictionary = {}
 
 
 static func find_side_image(vpx_path: String) -> String:
@@ -40,8 +56,71 @@ static func resolve_art(vpx_path: String) -> String:
 	return extract_directb2s_image(b2s)
 
 
+## The cache file for a .directb2s, stamped by the source's size and
+## modified time: a replaced backglass maps to a fresh entry.
+static func cache_path_for(b2s_path: String) -> String:
+	var size: int = 0
+	var f: FileAccess = FileAccess.open(b2s_path, FileAccess.READ)
+	if f != null:
+		size = int(f.get_length())
+		f.close()
+	var mtime: int = int(FileAccess.get_modified_time(b2s_path))
+	var stamp: String = "%s|%d|%d" % [b2s_path, size, mtime]
+	return CACHE_DIR.path_join(stamp.md5_text() + ".png")
+
+
+static func is_cached(b2s_path: String) -> bool:
+	return FileAccess.file_exists(cache_path_for(b2s_path))
+
+
+## Claim the extraction of one file. Whoever holds the claim extracts;
+## everyone else skips (warmer) or joins the wait (a visible panel).
+static func claim_extract(b2s_path: String) -> bool:
+	_claims_mutex.lock()
+	var held: bool = _claims.has(b2s_path)
+	if not held:
+		_claims[b2s_path] = true
+	_claims_mutex.unlock()
+	return not held
+
+
+static func release_extract(b2s_path: String) -> void:
+	_claims_mutex.lock()
+	_claims.erase(b2s_path)
+	_claims_mutex.unlock()
+
+
+## Wait for another thread's in-flight extraction of this file to
+## land in the cache. Bounded; returns whether the cache now has it.
+static func await_extract(b2s_path: String, timeout_msec: int) -> bool:
+	var deadline: int = Time.get_ticks_msec() + timeout_msec
+	while Time.get_ticks_msec() < deadline:
+		if is_cached(b2s_path):
+			return true
+		_claims_mutex.lock()
+		var held: bool = _claims.has(b2s_path)
+		_claims_mutex.unlock()
+		if not held:
+			return is_cached(b2s_path)
+		OS.delay_msec(5)
+	return is_cached(b2s_path)
+
+
+## Delete cached images that no current source maps to (stale stamps
+## from replaced backglasses, pre-stamp path-only entries).
+static func prune_cache(keep_paths: Dictionary) -> void:
+	var dir: DirAccess = DirAccess.open(CACHE_DIR)
+	if dir == null:
+		return
+	for name: String in dir.get_files():
+		if not name.ends_with(".png"):
+			continue
+		if not keep_paths.has(CACHE_DIR.path_join(name)):
+			dir.remove(name)
+
+
 static func extract_directb2s_image(b2s_path: String) -> String:
-	var cache_path: String = CACHE_DIR.path_join(b2s_path.md5_text() + ".png")
+	var cache_path: String = cache_path_for(b2s_path)
 	if FileAccess.file_exists(cache_path):
 		return cache_path
 	var text: String = FileAccess.get_file_as_string(b2s_path)
@@ -60,10 +139,23 @@ static func extract_directb2s_image(b2s_path: String) -> String:
 			err = img.load_jpg_from_buffer(bytes)
 		if err != OK:
 			continue
+		_fit_to_panel(img)
 		_ensure_cache_dir()
 		if img.save_png(cache_path) == OK:
 			return cache_path
 	return ""
+
+
+## Downscale an extracted image to panel size (never upscale). The
+## panel's art rect covers a 512x640 texture, so anything larger is
+## decode cost every panel would pay again on every page.
+static func _fit_to_panel(img: Image) -> void:
+	var w: int = img.get_width()
+	var h: int = img.get_height()
+	if w <= PANEL_ART_MAX_W and h <= PANEL_ART_MAX_H:
+		return
+	var scale: float = minf(float(PANEL_ART_MAX_W) / float(w), float(PANEL_ART_MAX_H) / float(h))
+	img.resize(maxi(1, int(round(float(w) * scale))), maxi(1, int(round(float(h) * scale))), Image.INTERPOLATE_LANCZOS)
 
 
 static func _ensure_cache_dir() -> void:
