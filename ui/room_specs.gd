@@ -35,6 +35,18 @@ static func panel_spec(game: GameEntry, store: StateStore) -> Dictionary:
 		chips.append({"text": "%d BUILDS" % game.build_count(), "accent": false})
 	if store != null and store.is_favorite(game.game_id):
 		chips.append({"text": "FAVORITE", "accent": true})
+	# The build/file line: the exact file Play would launch (the
+	# player's default build), as ONE ellipsized line - the wall is a
+	# browsing surface, and the full string lives in the detail view.
+	# Skipped when it would merely repeat the title: a filename-
+	# identified game carries its file stem AS its title, and the
+	# two-line title cap below already disciplines it there.
+	var file_line: String = ""
+	var def: TableBuild = game.resolve_default_build(store)
+	if def != null:
+		var stem: String = def.file_name.get_basename()
+		if stem != "" and stem != game.title:
+			file_line = stem
 	return {
 		"kind": "panel",
 		"bg": CARD_BG,
@@ -42,8 +54,13 @@ static func panel_spec(game: GameEntry, store: StateStore) -> Dictionary:
 		"band_text": game.manufacturer if game.manufacturer != "" else "Unknown maker",
 		"title": game.title,
 		"title_size": 60,
+		"title_max_lines": 2,
 		"sub": "%s - %s" % [game.year_text(), game.designer_text()],
 		"sub_size": 30,
+		"sub_max_lines": 1,
+		"body": file_line,
+		"body_size": 26,
+		"body_max_lines": 1,
 		"chips": chips,
 	}
 

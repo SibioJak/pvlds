@@ -10,6 +10,9 @@ extends Control
 ##   info   - title plus stacked fact lines
 ##   banner - app title plus a summary line
 ## Specs are plain dictionaries built by callers; reads are defensive.
+## A spec may cap a text slot's lines ("title_max_lines" and friends);
+## a capped label ellipsizes its overrun instead of wrapping without
+## limit and pushing the rest of the card off its texture.
 
 var _bg: ColorRect
 var _margin: MarginContainer
@@ -23,6 +26,7 @@ var _chips_row: HBoxContainer
 var _art_rect: TextureRect
 var _art_strip: PanelContainer
 var _art_label: Label
+var _label_stock: Array = [] ## [label, autowrap, max_lines, overrun] per text label, for per-spec restore
 
 
 func _init() -> void:
@@ -43,6 +47,9 @@ func _init() -> void:
 	_art_strip.add_theme_stylebox_override("panel", _box(Color(0.02, 0.02, 0.04, 0.88), 0))
 	_art_label = Label.new()
 	_art_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	# The strip is one fixed-height line: a long name clips with an
+	# ellipsis there instead of spilling over the art it captions.
+	_art_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_art_label.add_theme_font_size_override("font_size", 44)
 	_art_label.add_theme_color_override("font_color", Color(0.95, 0.95, 0.97))
 	_art_strip.add_child(_art_label)
@@ -86,6 +93,13 @@ func _init() -> void:
 	_chips_row.add_theme_constant_override("separation", 10)
 	_vbox.add_child(_chips_row)
 
+	# One CardFace serves every render the TextureFactory makes, so
+	# per-spec line discipline (apply_spec) must be undone before the
+	# next spec: snapshot the stock label settings now.
+	_snapshot_label(_title_label)
+	_snapshot_label(_sub_label)
+	_snapshot_label(_body_label)
+
 
 func _box(color: Color, radius: int) -> StyleBoxFlat:
 	var sb: StyleBoxFlat = StyleBoxFlat.new()
@@ -116,6 +130,7 @@ func apply_spec(spec: Dictionary) -> void:
 		_art_label.text = str(spec.get("title", ""))
 		return
 
+	_restore_labels()
 	_band_panel.visible = kind == "panel" or kind == "info"
 	if _band_panel.visible:
 		_band_panel.add_theme_stylebox_override("panel", _box(band, 6))
@@ -133,6 +148,13 @@ func apply_spec(spec: Dictionary) -> void:
 	_body_label.text = str(spec.get("body", ""))
 	_body_label.visible = _body_label.text != ""
 	_body_label.add_theme_font_size_override("font_size", int(spec.get("body_size", 34)))
+	# Optional per-spec line discipline ("<slot>_max_lines" > 0): cap
+	# the label's lines and ellipsize the overrun, so a long string
+	# can never push the rest of the card off its texture. Specs that
+	# set no cap (detail info, rows, buttons) render exactly as before.
+	_discipline_label(_title_label, int(spec.get("title_max_lines", 0)))
+	_discipline_label(_sub_label, int(spec.get("sub_max_lines", 0)))
+	_discipline_label(_body_label, int(spec.get("body_max_lines", 0)))
 
 	for child: Node in _chips_row.get_children():
 		_chips_row.remove_child(child)
@@ -144,6 +166,32 @@ func apply_spec(spec: Dictionary) -> void:
 			if item is Dictionary:
 				var cd: Dictionary = item
 				_chips_row.add_child(_make_chip(str(cd.get("text", "")), bool(cd.get("accent", false))))
+
+
+func _snapshot_label(l: Label) -> void:
+	_label_stock.append([l, l.autowrap_mode, l.max_lines_visible, l.text_overrun_behavior])
+
+
+func _restore_labels() -> void:
+	for entry_v: Variant in _label_stock:
+		var e: Array = entry_v as Array
+		if e.size() < 4:
+			continue
+		var l: Label = e[0] as Label
+		if l == null:
+			continue
+		l.set("autowrap_mode", e[1])
+		l.max_lines_visible = int(e[2])
+		l.set("text_overrun_behavior", e[3])
+
+
+func _discipline_label(l: Label, max_lines: int) -> void:
+	if max_lines <= 0:
+		return
+	l.max_lines_visible = max_lines
+	l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	if max_lines == 1:
+		l.autowrap_mode = TextServer.AUTOWRAP_OFF
 
 
 func _make_chip(text: String, accent: bool) -> PanelContainer:
