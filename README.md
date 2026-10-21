@@ -326,6 +326,13 @@ cached `vpsdb.json` and the same code runs your actual library.
   focus confined to BACK), then BACK restores the room and closes
   the desk; a second leg with the flag off asserts the flat path
   is the legacy one. Prints ok/FAIL lines, exits 0/1.
+- `--pvlds-smoke-desk` — desk boot (the flag keeps the boot on
+  the desk: no scan, no room); flip the desk's session switches
+  through their real signals and assert the config FILE on disk
+  changed with no Save & Scan — the session switches (herding,
+  close-on-exit, hold-to-exit + its button) apply the moment
+  they are flipped; everything else stays on Save & Scan.
+  Prints ok/FAIL lines, exits 0/1.
 
 ## Layout
 

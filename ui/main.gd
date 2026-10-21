@@ -40,6 +40,10 @@ extends Node
 ##                       stays up, wall inert, BACK restores), then
 ##                       assert the flat path is the legacy one,
 ##                       print the verdict, quit
+##   --pvlds-smoke-desk  desk boot (stays on the desk); flip the
+##                       session switches through their real signals
+##                       and assert the config FILE on disk changed
+##                       with no Save & Scan, print the verdict, quit
 
 var _config: PvldsConfig
 var _state: StateStore
@@ -63,6 +67,10 @@ var _smoke_placard: bool = false ## --pvlds-smoke-placard: drive the setup-placa
 var _placard_smoke_phase: int = 0
 var _placard_smoke_wait: int = 0
 var _placard_smoke_failures: int = 0
+var _smoke_desk: bool = false ## --pvlds-smoke-desk: drive the desk's live session switches, assert the config file follows
+var _desk_smoke_phase: int = 0
+var _desk_smoke_wait: int = 0
+var _desk_smoke_failures: int = 0
 
 # The launch load wait. While _launch_pending, _process polls for
 # the hand-off point and for VPX dying mid-load.
@@ -132,6 +140,8 @@ func _ready() -> void:
 		_shot_launch_path = user_args[shot_launch_idx + 1]
 	if user_args.has("--pvlds-smoke-placard"):
 		_smoke_placard = true
+	if user_args.has("--pvlds-smoke-desk"):
+		_smoke_desk = true
 	if user_args.has("--pvlds-art-bench"):
 		_art_bench = true
 		_bench_phase = 0
@@ -172,7 +182,7 @@ func _ready() -> void:
 	# art is warm before it is browsed to (art-speed round).
 	_art_warmer = ArtWarmer.new()
 	_art_warmer.on_drained = _on_art_warm_drained
-	if configured and _config.is_configured() and not user_args.has("--setup"):
+	if configured and _config.is_configured() and not user_args.has("--setup") and not _smoke_desk:
 		# Configured boot: present the desk as a live shell immediately
 		# (first frame, progress ticking) and enter the room only when
 		# the threaded scan lands. No scan runs before the first frame.
@@ -270,6 +280,8 @@ func _process(_delta: float) -> void:
 	_poll_launch()
 	if _smoke_placard:
 		_drive_placard_smoke()
+	if _smoke_desk:
+		_drive_desk_smoke()
 	if _art_bench:
 		_drive_art_bench(_delta)
 	if _shot_path != "" and _shot_ready():
@@ -704,6 +716,81 @@ func _finish_placard_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS PLACARD SMOKE: FAIL (%d)" % _placard_smoke_failures)
+		get_tree().quit(1)
+
+
+# -------------------------------------------------- desk smoke
+
+## --pvlds-smoke-desk: the desk's session switches are live
+## settings - flipping one must rewrite the config file on disk
+## immediately, with no Save & Scan. The boot route with this
+## flag lands on the desk and stays there (no scan, no room).
+## The driver flips two checkboxes through their real toggled
+## signal and picks a hold button through the picker's real
+## item_selected signal, then re-reads the config FILE with a
+## fresh PvldsConfig and asserts what landed - plus that the
+## fields a flip does not own (exe path, folders) survived.
+func _drive_desk_smoke() -> void:
+	match _desk_smoke_phase:
+		0:
+			if _desk != null:
+				# The starting point, straight off the disk the
+				# boot read (the harness's scratch config beside
+				# the exported binary).
+				var before: PvldsConfig = PvldsConfig.new()
+				_desk_expect(before.load_from_disk(), "the scratch config loads")
+				_desk_expect(before.close_vpx_on_table_exit, "the scratch config starts with close-on-exit on")
+				_desk_expect(not before.focus_herding, "the scratch config starts with herding off")
+				# Flip through the real controls and their signals.
+				_desk._close_check.button_pressed = false
+				_desk._herding_check.button_pressed = true
+				var left_idx: int = PvldsConfig.HOLD_EXIT_BUTTONS.find("dpad_left")
+				_desk._hold_button_picker.select(left_idx)
+				_desk._hold_button_picker.item_selected.emit(left_idx)
+				_desk_smoke_wait = 0
+				_desk_smoke_phase = 1
+			else:
+				_desk_smoke_wait += 1
+				if _desk_smoke_wait > 600:
+					_desk_smoke_fail("the desk never came up")
+					_finish_desk_smoke()
+		1:
+			_desk_smoke_wait += 1
+			if _desk_smoke_wait >= 3:
+				# In memory first: Main's own config is the truth
+				# the contract mirrors at the next launch.
+				_desk_expect(not _config.close_vpx_on_table_exit, "the close flip is in Main's config immediately")
+				_desk_expect(_config.focus_herding, "the herding flip is in Main's config immediately")
+				_desk_expect(_config.hold_exit_button == "dpad_left", "the button pick is in Main's config immediately")
+				# Then the file itself - the whole point of the round.
+				var after: PvldsConfig = PvldsConfig.new()
+				_desk_expect(after.load_from_disk(), "the config file still loads after the flips")
+				_desk_expect(not after.close_vpx_on_table_exit, "the config FILE has close-on-exit off, no Save & Scan pressed")
+				_desk_expect(after.focus_herding, "the config FILE has herding on")
+				_desk_expect(after.hold_exit_button == "dpad_left", "the config FILE has the picked hold button")
+				_desk_expect(after.vpx_exe_path == _config.vpx_exe_path and after.table_folders == _config.table_folders,
+					"fields the flips do not own (exe path, folders) are untouched on disk")
+				_finish_desk_smoke()
+
+
+func _desk_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - desk smoke: ", label)
+	else:
+		_desk_smoke_fail(label)
+
+
+func _desk_smoke_fail(label: String) -> void:
+	_desk_smoke_failures += 1
+	printerr("  FAIL - desk smoke: ", label)
+
+
+func _finish_desk_smoke() -> void:
+	if _desk_smoke_failures == 0:
+		print("PVLDS DESK SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS DESK SMOKE: FAIL (%d)" % _desk_smoke_failures)
 		get_tree().quit(1)
 
 
