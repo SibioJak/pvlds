@@ -9,8 +9,9 @@ extends Node
 ##   --pvlds-seed-dummy  boot straight into the room on the dummy library
 ##   --setup             force the desk pass even when configured
 ##   --pvlds-db-stats P  load the database at P, print counts, quit
-##   --pvlds-shot P      boot (with --pvlds-seed-dummy), save a room
-##                       screenshot to P once textures settle, quit
+##   --pvlds-shot P      boot, save a screenshot of wherever the boot
+##                       lands (room once its textures settle, or the
+##                       desk once a scan lands on it) to P, quit
 
 var _config: PvldsConfig
 var _state: StateStore
@@ -34,6 +35,7 @@ var _scan_task_id: int = -1
 var _scan_active: bool = false
 var _scan_folders: Array[String] = []
 var _enter_room_after_scan: bool = false
+var _seeded_dummy: bool = false ## --pvlds-seed-dummy route: sample db + dummy folders, deliberately
 var _worker_db: VpsDatabase = null
 var _worker_db_ok: bool = false
 var _worker_db_path: String = ""
@@ -68,12 +70,15 @@ func _ready() -> void:
 	_state.load_from_disk()
 	var configured: bool = _config.load_from_disk()
 	if user_args.has("--pvlds-seed-dummy"):
+		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
 	if configured and _config.is_configured() and not user_args.has("--setup"):
 		# Configured boot: present the desk as a live shell immediately
 		# (first frame, progress ticking) and enter the room only when
 		# the threaded scan lands. No scan runs before the first frame.
+		# One exception: a scan that resolves to the bundled sample
+		# database never auto-enters the room (see _finish_scan).
 		_show_desk()
 		_enter_room_after_scan = true
 		if not start_scan():
@@ -138,7 +143,7 @@ func _scan_worker() -> void:
 
 
 func _process(_delta: float) -> void:
-	if _shot_path != "" and _room != null and _room.visible and _room.wall_ready:
+	if _shot_path != "" and _shot_ready():
 		_shot_frames += 1
 		if _shot_frames >= 8:
 			var shot_path: String = _shot_path
@@ -157,6 +162,17 @@ func _process(_delta: float) -> void:
 		_scan_task_id = -1
 		_scan_active = false
 		_finish_scan()
+
+
+## Dev-hook readiness for --pvlds-shot: the room once its wall
+## textures settle, or the desk once a scan has landed on it
+## (a sample-blocked boot ends on the desk - that is worth a picture).
+func _shot_ready() -> bool:
+	if _room != null and _room.visible and _room.wall_ready:
+		return true
+	if _desk != null and _desk.visible and not _scan_active and _scanner != null:
+		return true
+	return false
 
 
 func _scan_progress_text() -> String:
@@ -188,6 +204,14 @@ func _finish_scan() -> void:
 		_desk.apply_scan_summary(summary)
 	if _enter_room_after_scan:
 		_enter_room_after_scan = false
+		if _last_db_kind == "sample" and not _seeded_dummy:
+			# Sample data must never usher anyone into the room: the
+			# room would be built on 10 invented games, and the remedy
+			# (Download VPS database) lives on this desk. The summary
+			# applied above already carries the loud sample warning;
+			# stay here so the user actually sees it.
+			_show_desk()
+			return
 		_enter_room()
 
 
@@ -200,6 +224,7 @@ func build_scan_summary() -> String:
 	if _last_db_kind == "sample":
 		lines.append("!! SAMPLE DATABASE ACTIVE !!")
 		lines.append("The bundled database is 10 invented games that exist to test PVLDS itself - it cannot identify real tables. Use 'Download VPS database' above to fetch the real VPS database; until then tables are identified from file names only (no VR tags, designers, or known builds).")
+		lines.append("The room stays closed until a real database is in place - download it above, then Save & Scan.")
 	lines.append("Scanned %d table files in %d folder(s): %d games (%d with multiple builds)." % [
 		s.total_files, _config.table_folders.size(), s.games.size(), s.duplicate_group_count()])
 	if _last_db_ok:
