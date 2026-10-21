@@ -11,6 +11,14 @@ extends RefCounted
 ##   version          schema version (2)
 ##   armed            false = the player chose Exit; watchdog stands down
 ##   focus_herding    the config kill-switch, mirrored for the watchdog
+##   close_vpx_on_table_exit  the session-close duty switch, mirrored
+##                    the same way: in a live session, when a table
+##                    exit has landed in the VPX editor (player
+##                    window gone, editor window present, sustained),
+##                    the watchdog closes VPX so the return trip can
+##                    finish. Absent in contracts written before the
+##                    duty existed; loads default it to true, and the
+##                    schema stays v2.
 ##   session_id       increments on every launch; how the watchdog
 ##                    knows a NEW session was armed after a relaunch
 ##   session_state    idle | loading | live | returned | failed
@@ -40,6 +48,7 @@ const SCHEMA_VERSION: int = 2
 
 var armed: bool = false
 var focus_herding: bool = true
+var close_vpx_on_table_exit: bool = true
 var session_id: int = 0
 var session_state: String = "idle"
 var game_exe_path: String = ""
@@ -87,6 +96,7 @@ static func load_from_disk() -> WatchdogContract:
 	var d: Dictionary = parsed
 	c.armed = bool(d.get("armed", false))
 	c.focus_herding = bool(d.get("focus_herding", true))
+	c.close_vpx_on_table_exit = bool(d.get("close_vpx_on_table_exit", true))
 	c.session_id = int(d.get("session_id", 0))
 	c.session_state = str(d.get("session_state", "idle"))
 	c.session_state = WatchdogContract.normalize_state(c.session_state)
@@ -111,6 +121,7 @@ func to_dictionary() -> Dictionary:
 	d["version"] = SCHEMA_VERSION
 	d["armed"] = armed
 	d["focus_herding"] = focus_herding
+	d["close_vpx_on_table_exit"] = close_vpx_on_table_exit
 	d["session_id"] = session_id
 	d["session_state"] = session_state
 	d["game_exe_path"] = game_exe_path

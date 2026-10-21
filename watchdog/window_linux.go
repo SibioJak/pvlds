@@ -31,3 +31,30 @@ func gameWindowExists(gamePID int) bool {
 	s := string(maps)
 	return strings.Contains(s, "libX11") || strings.Contains(s, "libxcb")
 }
+
+// stubEditorMarker is the smoke stub's "I am sitting in the editor
+// now" signal: a file in the temp dir named by pid. There is no
+// real VPX on Linux to enumerate; the stub contract is how the
+// session-close DECISION logic (closer.go) gets exercised end to
+// end here, the same spirit as the maps contract above.
+func stubEditorMarker(gamePID int) string {
+	return "/tmp/pvlds-stub-editor-" + strconv.Itoa(gamePID)
+}
+
+// gameWindowState on Linux (smoke build only): the player is
+// "present" while the stub is in its X-linked window phase and no
+// editor marker exists; the editor is "present" once the stub
+// drops its marker (its table-exit-to-editor moment). No editor
+// handle exists off Windows.
+func gameWindowState(gamePID int) windowState {
+	var ws windowState
+	if gamePID <= 0 {
+		return ws
+	}
+	if _, err := os.Stat(stubEditorMarker(gamePID)); err == nil {
+		ws.editorPresent = true
+		return ws
+	}
+	ws.playerPresent = gameWindowExists(gamePID)
+	return ws
+}

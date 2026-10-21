@@ -9,7 +9,9 @@
 //   - poll the session contract JSON the launcher writes,
 //   - while a session is loading or live, watch the game process
 //     (and, on Windows, herd foreground focus back to the game
-//     window),
+//     window - yielding to deliberate use - and, in a live
+//     session whose table exit landed in the VPX editor, close
+//     VPX orderly so the return trip can finish; see closer.go),
 //   - stamp the contract when the game's main window first exists
 //     (the resident launcher reads it as its hand-off cue),
 //   - when the game dies: in "live" (the launcher already exited)
@@ -44,20 +46,21 @@ import (
 )
 
 type Contract struct {
-	Version            int      `json:"version"`
-	Armed              bool     `json:"armed"`
-	FocusHerding       bool     `json:"focus_herding"`
-	SessionID          int      `json:"session_id"`
-	SessionState       string   `json:"session_state"`
-	GameExePath        string   `json:"game_exe_path"`
-	GamePID            int      `json:"game_pid"`
-	GameStartedUnix    int64    `json:"game_started_unix"`
-	GameWindowSeenUnix int64    `json:"game_window_seen_unix"`
-	LauncherPath       string   `json:"launcher_path"`
-	LauncherArgs       []string `json:"launcher_args"`
-	LauncherPID        int      `json:"launcher_pid"`
-	LastCheckinUnix    int64    `json:"last_checkin_unix"`
-	UpdatedUnix        int64    `json:"updated_unix"`
+	Version             int      `json:"version"`
+	Armed               bool     `json:"armed"`
+	FocusHerding        bool     `json:"focus_herding"`
+	CloseVPXOnTableExit bool     `json:"close_vpx_on_table_exit"`
+	SessionID           int      `json:"session_id"`
+	SessionState        string   `json:"session_state"`
+	GameExePath         string   `json:"game_exe_path"`
+	GamePID             int      `json:"game_pid"`
+	GameStartedUnix     int64    `json:"game_started_unix"`
+	GameWindowSeenUnix  int64    `json:"game_window_seen_unix"`
+	LauncherPath        string   `json:"launcher_path"`
+	LauncherArgs        []string `json:"launcher_args"`
+	LauncherPID         int      `json:"launcher_pid"`
+	LastCheckinUnix     int64    `json:"last_checkin_unix"`
+	UpdatedUnix         int64    `json:"updated_unix"`
 }
 
 const (
@@ -195,13 +198,13 @@ func main() {
 	logf("watchdog: on duty (pid %d), contract %s", os.Getpid(), contractPath)
 
 	var (
-		sawGameAlive     bool
-		gameSeenAt       int64
-		awaitingOutcome  bool
-		relaunchedPID    int
-		relaunchedAt     int64
+		sawGameAlive      bool
+		awaitingOutcome   bool
+		relaunchedPID     int
+		relaunchedAt      int64
 		sessionAtRelaunch int
-		strikes          int
+		strikes           int
+		sessionCloser     closer
 	)
 
 	relaunch := func(c *Contract, why string) {
@@ -286,7 +289,6 @@ func main() {
 			if alive {
 				if !sawGameAlive {
 					sawGameAlive = true
-					gameSeenAt = now
 					logf("watchdog: game process live (pid %d), session %d", gpid, c.SessionID)
 				}
 				// The hand-off cue for the resident launcher: the
@@ -312,7 +314,23 @@ func main() {
 					})
 				}
 				if c.FocusHerding {
-					herdTick(c.GamePID, gameSeenAt, now)
+					herdTick(c.GamePID, c.SessionID, time.Now())
+				}
+				// Session-close duty (closer.go): in a live session
+				// whose table exit landed in the VPX editor, ask VPX
+				// to close - orderly, escalating, never a kill. The
+				// decision is shared logic; the sends are platform
+				// leaves. When VPX dies, the ordinary death path
+				// below relaunches the launcher.
+				switch sessionCloser.tick(time.Now().UnixMilli(), c.SessionID, c.SessionState, c.CloseVPXOnTableExit, true, gameWindowState(c.GamePID)) {
+				case closeFEC:
+					ack := sendFrontEndControlsClose(c.GamePID)
+					logf("watchdog: session %d: table exit landed in the VPX editor; sent PinSim::FrontEndControls CLOSE_APP (acknowledged: %v)", c.SessionID, ack)
+				case closeWMClose:
+					ok := sendEditorClose(gameWindowState(c.GamePID).editorHWND)
+					logf("watchdog: session %d: VPX still open after the FrontEndControls request; sent WM_CLOSE to the editor window (posted: %v)", c.SessionID, ok)
+				case closeGiveUp:
+					logf("watchdog: session %d: VPX did not close after FrontEndControls + WM_CLOSE; leaving VPX alone", c.SessionID)
 				}
 			} else if sawGameAlive {
 				sawGameAlive = false

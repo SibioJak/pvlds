@@ -702,13 +702,20 @@ func _run_core_test() -> void:
 	contract.game_window_seen_unix = 1234567
 	contract.launcher_path = "C:/PVLDS/PVLDS.exe"
 	contract.focus_herding = false
+	contract.close_vpx_on_table_exit = false
 	_expect(contract.save_to_disk(), "watchdog contract saves", failures)
 	var contract2: WatchdogContract = WatchdogContract.load_from_disk()
 	_expect(contract2.armed and contract2.session_id == 7 and contract2.game_pid == 4242
 		and contract2.session_state == "live" and contract2.game_window_seen_unix == 1234567
-		and not contract2.focus_herding
+		and not contract2.focus_herding and not contract2.close_vpx_on_table_exit
 		and contract2.launcher_path == "C:/PVLDS/PVLDS.exe",
-		"watchdog contract round-trips (incl. the window-seen stamp)", failures)
+		"watchdog contract round-trips (incl. the window-seen stamp and the close-duty switch)", failures)
+	# A contract written before the close duty existed has no
+	# close_vpx_on_table_exit key; it loads with the duty ON (the
+	# schema stays v2 - absence means default, never a wedge).
+	_expect(_write_text_file(contract_file, "{\"session_state\": \"live\"}"), "pre-duty contract written", failures)
+	_expect(WatchdogContract.load_from_disk().close_vpx_on_table_exit,
+		"a contract without the close-duty key defaults it to on", failures)
 	# Legacy schema-v1 state spellings normalize on load - a contract
 	# written by the M2 build is understood by this one.
 	_expect(_write_text_file(contract_file, "{\"session_state\": \"playing\"}"), "legacy contract written", failures)
@@ -725,25 +732,47 @@ func _run_core_test() -> void:
 	elif FileAccess.file_exists(contract_file):
 		DirAccess.remove_absolute(contract_file)
 
-	# Config: the -exit default, the old-default migration, and the
-	# desk warning's condition (backed up + restored like the rest).
-	var config_file: String = PvldsConfig.user_path()
+	# Config: the plain -play default and the bad-default repair
+	# (backed up + restored like the rest). INVERTED from the fix
+	# round that shipped "-exit": that flag is not VPX's (its parser
+	# calls it a frontend no-op), so the round-trip now proves the
+	# bad string is repaired and everything else is left alone.
+	# Write where load_from_disk reads (existing_path): outside the
+	# editor those differ from user_path() (beside-exe wins), and
+	# writing anywhere else makes the loads below read a different
+	# file than the test just wrote.
+	var config_file: String = PvldsConfig.existing_path()
 	var config_backup: String = ""
 	if FileAccess.file_exists(config_file):
 		config_backup = FileAccess.get_file_as_string(config_file)
-	_expect(_write_text_file(config_file, JSON.stringify({"launch_args_template": PvldsConfig.OLD_DEFAULT_LAUNCH_ARGS})),
-		"old-default config written", failures)
+	_expect(PvldsConfig.DEFAULT_LAUNCH_ARGS == "-play \"{table}\"",
+		"the shipped default is plain -play (no -exit folklore)", failures)
+	_expect(_write_text_file(config_file, JSON.stringify({"launch_args_template": PvldsConfig.BAD_DEFAULT_LAUNCH_ARGS})),
+		"bad-default config written", failures)
 	var mig_cfg: PvldsConfig = PvldsConfig.new()
 	_expect(mig_cfg.load_from_disk() and mig_cfg.launch_args_template == PvldsConfig.DEFAULT_LAUNCH_ARGS,
-		"a saved old-default template migrates to the -exit default", failures)
+		"a saved BAD-default template is repaired to the good default", failures)
 	_expect(_write_text_file(config_file, JSON.stringify({"launch_args_template": "-play -minimized \"{table}\""})),
 		"custom config written", failures)
 	var custom_cfg: PvldsConfig = PvldsConfig.new()
 	_expect(custom_cfg.load_from_disk() and custom_cfg.launch_args_template == "-play -minimized \"{table}\"",
-		"a customized template is never rewritten by migration", failures)
-	_expect(PvldsConfig.template_includes_exit("-play -exit \"{table}\""), "-exit passes the exit check", failures)
-	_expect(not PvldsConfig.template_includes_exit("-play \"{table}\""), "no -exit fails the exit check", failures)
-	_expect(PvldsConfig.template_includes_exit("-play /exit {table}"), "the /exit spelling passes the exit check", failures)
+		"a customized template is never rewritten by the repair", failures)
+	_expect(_write_text_file(config_file, JSON.stringify({"launch_args_template": "-minimized -play -exit \"{table}\""})),
+		"custom -exit-bearing config written", failures)
+	var own_exit_cfg: PvldsConfig = PvldsConfig.new()
+	_expect(own_exit_cfg.load_from_disk() and own_exit_cfg.launch_args_template == "-minimized -play -exit \"{table}\"",
+		"a user's own -exit-bearing template (not byte-identical to the bad default) is preserved", failures)
+	# The close-duty switch: defaults on, persists off.
+	_expect(_write_text_file(config_file, JSON.stringify({"close_vpx_on_table_exit": false})),
+		"close-duty-off config written", failures)
+	var close_cfg: PvldsConfig = PvldsConfig.new()
+	_expect(close_cfg.load_from_disk() and not close_cfg.close_vpx_on_table_exit,
+		"the close-duty switch persists as off", failures)
+	close_cfg.close_vpx_on_table_exit = true
+	_expect(close_cfg.save_to_disk(), "config saves", failures)
+	var close_cfg2: PvldsConfig = PvldsConfig.new()
+	_expect(close_cfg2.load_from_disk() and close_cfg2.close_vpx_on_table_exit,
+		"the close-duty switch round-trips through save", failures)
 	if config_backup != "":
 		_write_text_file(config_file, config_backup)
 	elif FileAccess.file_exists(config_file):

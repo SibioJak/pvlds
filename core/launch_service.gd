@@ -122,6 +122,7 @@ func checkin(config: PvldsConfig) -> WatchdogContract:
 	var c: WatchdogContract = WatchdogContract.load_from_disk()
 	c.armed = true
 	c.focus_herding = config.focus_herding if config != null else true
+	c.close_vpx_on_table_exit = config.close_vpx_on_table_exit if config != null else true
 	c.launcher_path = LaunchService.launcher_path()
 	c.launcher_args = LaunchService.launcher_args()
 	c.launcher_pid = OS.get_process_id()
@@ -154,6 +155,7 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	var c: WatchdogContract = WatchdogContract.load_from_disk()
 	c.armed = true
 	c.focus_herding = config.focus_herding
+	c.close_vpx_on_table_exit = config.close_vpx_on_table_exit
 	c.session_id += 1
 	c.session_state = "loading"
 	c.game_exe_path = plan.exe_path

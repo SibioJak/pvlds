@@ -1,22 +1,22 @@
+//go:build windows
+
 package main
 
-// Focus herding (Windows only) - the watchdog's single window duty
-// (design section 3, Chris's amendment). While a session is live,
-// if the foreground window leaves the game process and stays away
-// past the grace period, foreground is handed back to the game's
-// main window. Bounds, by construction:
-//   - herding NEVER moves or resizes any window;
-//   - a grace period (2s) follows every foreground change before
-//     any action - deliberate alt-tabs get their moment;
-//   - re-asserts are rate-limited (3s) and re-check the foreground
-//     immediately before acting;
-//   - the only calls are SetForegroundWindow / BringWindowToTop
-//     (with the AttachThreadInput dance Windows requires of a
-//     background process). Windows may still refuse; Virtual
-//     Desktop's own stream behaviour is outside our reach - both
-//     limits are stated in the design, and effectiveness is the
-//     player's verdict, with the focus_herding config kill-switch
-//     one toggle away.
+// Focus herding (Windows leaf) - the watchdog's window duties
+// (design section 3 amendment; M2 corrected fix round). The
+// DECISIONS live in shared, unit-tested logic: herd_logic.go for
+// herding (grace, rate limit, the yield to deliberate use) and
+// closer.go for the session-close duty. This file is only the
+// user32 plumbing: read the foreground, enumerate the game
+// process's windows, and - when a decision says so - hand
+// foreground back to the game's main window.
+//
+// Herding bounds, unchanged: it NEVER moves, resizes, or closes a
+// window to do its job; the only calls are SetForegroundWindow /
+// BringWindowToTop (with the AttachThreadInput dance Windows
+// requires of a background process). Windows may still refuse;
+// effectiveness is the player's verdict, with the focus_herding
+// config kill-switch one toggle away.
 
 import (
 	"syscall"
@@ -33,6 +33,10 @@ var (
 	procEnumWindows           = user32.NewProc("EnumWindows")
 	procIsWindowVisible       = user32.NewProc("IsWindowVisible")
 	procGetWindowRect         = user32.NewProc("GetWindowRect")
+	procGetClassNameW         = user32.NewProc("GetClassNameW")
+	procRegisterWindowMsgW    = user32.NewProc("RegisterWindowMessageW")
+	procSendMessageTimeoutW   = user32.NewProc("SendMessageTimeoutW")
+	procPostMessageW          = user32.NewProc("PostMessageW")
 	procAttachThreadInput     = user32.NewProc("AttachThreadInput")
 	procGetCurrentThreadID    = kernel32.NewProc("GetCurrentThreadId")
 )
@@ -42,16 +46,8 @@ type rect struct {
 }
 
 var (
-	herdLastFg       uintptr
-	herdLastFgChange int64 // unix millis
-	herdLastAssert   int64 // unix millis
-	enumCollect      []uintptr
-	enumTargetPID    uint32
-)
-
-const (
-	herdGraceMillis    = 2000
-	herdMinIntervalMil = 3000
+	enumCollect   []uintptr
+	enumTargetPID uint32
 )
 
 func enumCallback(hwnd uintptr, _ uintptr) uintptr {
@@ -69,15 +65,22 @@ func enumCallback(hwnd uintptr, _ uintptr) uintptr {
 
 var enumProc = syscall.NewCallback(enumCallback)
 
-// gameWindow finds the game process's largest visible top-level
-// window - the playfield window, not a helper.
-func gameWindow(gamePID int) uintptr {
+// visibleWindows lists the process's visible top-level windows.
+func visibleWindows(gamePID int) []uintptr {
 	enumCollect = enumCollect[:0]
 	enumTargetPID = uint32(gamePID)
 	procEnumWindows.Call(enumProc, 0)
+	out := make([]uintptr, len(enumCollect))
+	copy(out, enumCollect)
+	return out
+}
+
+// gameWindow finds the game process's largest visible top-level
+// window - the playfield window, not a helper.
+func gameWindow(gamePID int) uintptr {
 	var best uintptr
 	var bestArea int64
-	for _, hwnd := range enumCollect {
+	for _, hwnd := range visibleWindows(gamePID) {
 		var rc rect
 		procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
 		area := int64(rc.Right-rc.Left) * int64(rc.Bottom-rc.Top)
@@ -99,9 +102,52 @@ func gameWindowExists(gamePID int) bool {
 	return gamePID > 0 && gameWindow(gamePID) != 0
 }
 
-func herdTick(gamePID int, _ int64, _ int64) {
+// windowClassName reads a window's Win32 class name - "VPPlayer"
+// for the VPX player's SDL windows, "VPinball" for the editor
+// frame (see closer.go for the vpinball source citations).
+func windowClassName(hwnd uintptr) string {
+	buf := make([]uint16, 256)
+	n, _, _ := procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if n == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buf[:n])
+}
+
+// gameWindowState classifies the game process's visible top-level
+// windows for the session-close duty (closer.go). The close target
+// is the largest editor-class window (in practice the one frame).
+func gameWindowState(gamePID int) windowState {
+	var ws windowState
+	var bestEditorArea int64
+	for _, hwnd := range visibleWindows(gamePID) {
+		switch windowClassName(hwnd) {
+		case "VPPlayer":
+			ws.playerPresent = true
+		case "VPinball":
+			ws.editorPresent = true
+			var rc rect
+			procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
+			area := int64(rc.Right-rc.Left) * int64(rc.Bottom-rc.Top)
+			if area > bestEditorArea {
+				bestEditorArea = area
+				ws.editorHWND = hwnd
+			}
+		}
+	}
+	return ws
+}
+
+var herdState herdBrain
+
+// herdTick performs one herding duty tick: read the foreground, ask
+// the brain, act on its decision.
+func herdTick(gamePID int, sessionID int, now time.Time) {
 	if gamePID <= 0 {
 		return
+	}
+	if herdState.sessionID != sessionID {
+		herdState.reset(sessionID)
 	}
 	fg, _, _ := procGetForegroundWindow.Call()
 	if fg == 0 {
@@ -109,33 +155,29 @@ func herdTick(gamePID int, _ int64, _ int64) {
 	}
 	var fgPID uint32
 	procGetWindowThreadProcID.Call(fg, uintptr(unsafe.Pointer(&fgPID)))
-	if int(fgPID) == gamePID {
-		herdLastFg = fg
-		return
-	}
 	if int(fgPID) == syscall.Getpid() {
 		return // never chase our own (invisible) windows
 	}
-	nowMs := time.Now().UnixMilli()
-	if fg != herdLastFg {
-		herdLastFg = fg
-		herdLastFgChange = nowMs
-		return // grace period starts; deliberate action gets its moment
+	fgIsGame := int(fgPID) == gamePID
+	switch herdState.decide(now.UnixMilli(), fg, fgIsGame) {
+	case herdAssert:
+		target := gameWindow(gamePID)
+		if target == 0 || target == fg {
+			return
+		}
+		assertForeground(target, fg)
+	case herdYielded:
+		logf("watchdog: herding stands down for this session - the same window kept the foreground through %d re-assertions; deliberate use wins", herdMaxFails)
 	}
-	if nowMs-herdLastFgChange < herdGraceMillis {
-		return
-	}
-	if nowMs-herdLastAssert < herdMinIntervalMil {
-		return
-	}
-	target := gameWindow(gamePID)
-	if target == 0 || target == fg {
-		return
-	}
-	// Windows denies foreground theft to background processes unless
-	// the caller briefly shares the current foreground thread's
-	// input queue. Attach, assert, detach - windows are never moved
-	// or resized.
+}
+
+// assertForeground hands foreground activation to the game window.
+// Windows denies foreground theft to background processes unless
+// the caller briefly shares the current foreground thread's input
+// queue. Attach, assert, detach - windows are never moved or
+// resized. Fire-and-forget: whether it stuck is the brain's next
+// observation.
+func assertForeground(target uintptr, fg uintptr) {
 	fgThread, _, _ := procGetWindowThreadProcID.Call(fg, 0)
 	myThread, _, _ := procGetCurrentThreadID.Call()
 	attached := false
@@ -148,8 +190,5 @@ func herdTick(gamePID int, _ int64, _ int64) {
 	if attached {
 		procAttachThreadInput.Call(myThread, fgThread, 0)
 	}
-	herdLastAssert = nowMs
-	herdLastFg = target
-	herdLastFgChange = nowMs
-	logf("watchdog: focus herded back to the game window (was pid %d)", fgPID)
+	logf("watchdog: focus herded back to the game window (was hwnd %#x)", fg)
 }

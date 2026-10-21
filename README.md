@@ -5,21 +5,24 @@ stand in front of your collection, pick a table, play. Built with
 Godot 4.7 + OpenXR for PCVR (Quest 3 via Virtual Desktop / VDXR first;
 SteamVR runtime is a later test target).
 
-**Status: M2 — "The hand-off" (built 2026-10-21; fix round the
-same day, after the first real-hardware session).** M1's room plus
-real launching: card-level Launch, a native watchdog that returns
-you to the room with your place restored, focus herding, and
-Exit-to-desktop. The first session proved the launch and the
+**Status: M2 — "The hand-off" (built 2026-10-21; two fix rounds
+the same day, after the first real-hardware sessions).** M1's room
+plus real launching: card-level Launch, a native watchdog that
+returns you to the room with your place restored, focus herding,
+and Exit-to-desktop. The first session proved the launch and the
 watchdog's return trip on Chris's rig; it also caught two defects
-this fix round addresses — the shipped launch template lacked
-VPX's `-exit` flag (quitting a table landed in the VPX editor),
-and the launcher vanished the instant VPX spawned, leaving a
-desktop gap during VPX's ~20s load (the launcher now stays in the
-room until the hand-off — see below). The M2 gate remains an
-evening of real tables on Chris's machine — nothing here claims
-the Windows/VPX/VDXR hand-off works until he says so. Design of
-record: `~/workspace/vpx-vr-launcher/design.md` (outside this
-repo).
+the first fix round addressed — quitting a table landed in the
+VPX editor with the process still alive (fixed, wrongly, by
+adding `-exit` to the template: see below), and the launcher
+vanished the instant VPX spawned, leaving a desktop gap during
+VPX's ~20s load (the launcher now stays in the room until the
+hand-off). The second fix round — the corrected one — repairs
+the `-exit` damage and gives the watchdog the session-close duty
+(the ecosystem's actual pattern: the frontend closes VPX). The
+M2 gate remains an evening of real tables on Chris's machine —
+nothing here claims the Windows/VPX/VDXR hand-off works until he
+says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
+(outside this repo).
 
 ## The hand-off (M2)
 
@@ -30,15 +33,17 @@ repo).
   the config's **launch-args template** (`{table}` expands to the
   build's full path; quotes in the template group arguments — never
   a hard-coded command line). The shipped default template is
-  `-play -exit "{table}"`: **`-exit` is what makes VPX quit back
-  out when the table exits** — without it, exiting a table lands in
-  the VPX editor and nothing returns until VPX is closed by hand
-  (the first field session's lesson). A saved template that is
-  byte-identical to the old default (`-play "{table}"`) was never
-  a customization and is upgraded to the new default on load; any
-  other template is the player's and is never rewritten — but the
-  desk pass warns in plain language when the active template lacks
-  `-exit`.
+  `-play "{table}"`. **There is no `-exit` flag**: one fix round
+  shipped it from frontend folklore, and on the rig VPX read
+  `exit` as a table filename and errored. In vpinball's own parser
+  the token is a no-op "(ab)used by frontend, not handled by us"
+  (`src/core/AppCommands.cpp`) — exiting a table lands in the VPX
+  editor by design, and the watchdog's session-close duty (below)
+  is what finishes the trip. A saved template byte-identical to
+  the bad string (`-play -exit "{table}"`) was our dictation,
+  never a customization, and is repaired to the good default on
+  load; any other template is the player's and is never
+  rewritten.
 - **The launcher stays for the load.** On launch the launcher
   records state (recents, last-played, room view), writes the
   watchdog session contract in the **loading** state, spawns VPX
@@ -72,13 +77,42 @@ repo).
   **once**. The relaunched launcher restores filter/sort/page with
   the just-played table selected. It never auto-relaunches a
   table. A log lands beside the contract (`pvlds_watchdog.log`).
+- **Session-close duty** (Windows, user32; decision logic shared
+  and unit-tested on Linux): in a **live** session, a table exit
+  leaves VPX sitting in its editor — process alive, player window
+  gone. The watchdog detects exactly that composite state and
+  closes VPX, orderly, so the return trip can finish. The
+  discriminator is grounded in the vpinball source: the player's
+  SDL windows carry class **`VPPlayer`** (`SDL_RegisterApp` in
+  `src/core/VPApp.cpp`), the editor frame's class is **`VPinball`**
+  (`WinEditor::PreRegisterClass`); player-class gone AND
+  editor-class present, sustained ~2.5s (a transient window
+  shuffle is not an exit), fires once per session. Close method,
+  in order: (1) the **PinSim::FrontEndControls** terminate
+  request — the published protocol modern VP implements
+  (registered window message, wParam 2 = CLOSE_APP, reply 1 =
+  acknowledged; PinballY's `Application.cpp` is the reference
+  sender); (2) **WM_CLOSE** to the editor window — which VP's own
+  editor refuses while a player is open (`WinEditor::OnClose`),
+  so it can only land in the state this duty targets. Never a
+  hard kill; if neither lands, the watchdog logs it and leaves
+  VPX alone. Kill-switch: the **Close VPX when a table exits to
+  the editor** checkbox on the desk pass (config
+  `close_vpx_on_table_exit`, default on) — uncheck it if you ever
+  want to stay in the editor after a table.
 - **Focus herding** (Windows, user32): while a session is live, if
   the foreground leaves the game process and stays away past a 2s
   grace period, the watchdog hands foreground back to the game's
   main window (rate-limited; it never moves or resizes windows).
-  Kill-switch: the **Focus herding** checkbox on the desk pass
-  (config `focus_herding`, default on). If it ever fights you,
-  uncheck it.
+  **It yields to deliberate use**: if the same foreign window is
+  back in front after 3 re-assertions against it, herding stands
+  down for the rest of that session and logs it — a player working
+  at the desktop (say, clearing an error dialog) is never fought.
+  The decision logic is shared and unit-tested on Linux
+  (`herd_logic.go`); the next session starts fresh. Kill-switch:
+  the **Focus herding** checkbox on the desk pass (config
+  `focus_herding`, default on). If it ever fights you, uncheck
+  it.
 - **Exit.** The rail's **EXIT** disarms the watchdog and quits —
   the player who wants out stays out. Closing the window does the
   same. Hygiene: the watchdog also stands down if the contract
