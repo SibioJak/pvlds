@@ -60,6 +60,17 @@ func stubPlayerClass(gamePID int) string {
 	return playerWindowClass
 }
 
+// stubPlayerHiddenMarker is the smoke stub's "my player window
+// is hidden" signal: while the marker stands, the stub's player
+// observation carries visible=false - present in the unfiltered
+// window set the sighting gate reads, absent from the visible
+// set herding would use. It mirrors the Windows field fault of
+// 2026-10-22: the player rendering into a VR headset holds a
+// window with no desktop visibility at all.
+func stubPlayerHiddenMarker(gamePID int) string {
+	return "/tmp/pvlds-stub-player-hidden-" + strconv.Itoa(gamePID)
+}
+
 // playerSight is this leaf's sighting gate (sighting.go) - the
 // same shared gate the Windows leaf feeds, so the smokes exercise
 // the shipped rule, persistence included.
@@ -77,17 +88,21 @@ func gameWindowExists(gamePID int, sessionID int) (bool, string) {
 
 // gameWindowState on Linux (smoke build only), expressed as
 // sighting observations and folded through the shared gate: the
-// editor marker is a "VPinball"-class observation (and while it
-// stands, the player is gone - the stub's exit-to-editor state);
-// the maps signal is a player-window observation carrying the
-// stub's declared class at the stub window's real size
-// (400x300). The stub drops the editor marker in two situations
-// the smokes keep distinct by session shape: its
-// table-exit-to-editor moment (after a player phase), and - with
-// STUB_EDITOR_FIRST_S - from birth, modelling VPX's startup order
-// (editor frame first, player window only after the table loads),
-// which is the state the closer's arming gate exists for. No
-// editor handle exists off Windows.
+// editor marker is a "VPinball"-class observation, VISIBLE (the
+// editor is a presented frame wherever the facts matter; and
+// while the marker stands, the player is gone - the stub's
+// exit-to-editor state); the maps signal is a player-window
+// observation carrying the stub's declared class at the stub
+// window's real size (400x300), with visible=false while the
+// hidden marker stands - the unfiltered sighting gate must
+// count it anyway (see stubPlayerHiddenMarker). The stub drops
+// the editor marker in two situations the smokes keep distinct
+// by session shape: its table-exit-to-editor moment (after a
+// player phase), and - with STUB_EDITOR_FIRST_S - from birth,
+// modelling VPX's startup order (editor frame first, player
+// window only after the table loads), which is the state the
+// closer's arming gate exists for. No editor handle exists off
+// Windows.
 func gameWindowState(gamePID int, sessionID int) windowState {
 	var ws windowState
 	if gamePID <= 0 {
@@ -96,9 +111,13 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	var obs []windowObs
 	if _, err := os.Stat(stubEditorMarker(gamePID)); err == nil {
 		ws.editorPresent = true
-		obs = append(obs, windowObs{class: editorWindowClass, width: 1280, height: 900})
+		obs = append(obs, windowObs{class: editorWindowClass, width: 1280, height: 900, visible: true})
 	} else if gameWindowPresentOnMaps(gamePID) {
-		obs = append(obs, windowObs{class: stubPlayerClass(gamePID), width: 400, height: 300})
+		visible := true
+		if _, err := os.Stat(stubPlayerHiddenMarker(gamePID)); err == nil {
+			visible = false
+		}
+		obs = append(obs, windowObs{class: stubPlayerClass(gamePID), width: 400, height: 300, visible: visible})
 	}
 	candidate, rule := classifyPlayerCandidate(obs)
 	present, _ := playerSight.observe(sessionID, candidate, rule)

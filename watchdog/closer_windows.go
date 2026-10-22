@@ -66,8 +66,11 @@ func enumAllCallback(hwnd uintptr, _ uintptr) uintptr {
 var enumAllProc = syscall.NewCallback(enumAllCallback)
 
 // allTopWindows lists every top-level window of the process,
-// visible or not: the FrontEndControls handler may sit on a window
-// the visible-only enumeration (the discriminator's) skips.
+// visible or not. Two consumers: the FrontEndControls handler
+// may sit on a window the visible-only enumeration (herding's)
+// skips, and the sighting/closer window facts enumerate through
+// it because the headset-bound player window has no desktop
+// visibility (see herd_windows.go's enumerateGameWindows).
 func allTopWindows(gamePID int) []uintptr {
 	enumAllCollect = enumAllCollect[:0]
 	enumAllTargetPID = uint32(gamePID)

@@ -159,14 +159,17 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   window never carried that class across whole sessions of live
   play (the contract's `game_window_seen_unix` stayed 0, so
   neither close duty ever armed and both exit gestures were
-  inert), so the rule is now class-**independent**: any visible
-  window of the game process that is NOT the editor class and is
-  substantial (≥ ~320×240) counts once it persists across two
-  polls; the editor class never counts, at any size, ever. The
-  watchdog logs each session's first window inventory (class and
-  size of every visible window of the game pid) and names the
-  rule that stamped the sighting — the field evidence the old
-  rule never produced. **The duty is
+  inert), so the rule is now class-**independent**: any window
+  of the game process — visible or hidden (see the next
+  bullet) — that is NOT the editor class and is substantial
+  (≥ ~320×240) counts once it persists across two polls; the
+  editor class never counts, at any size, ever. The watchdog
+  logs the game pid's full window inventory (class, size, and
+  visibility of every window) when a session's set is first
+  observed and again whenever it changes, naming the current
+  foreground window each time, and names the rule that stamped
+  the sighting — the field evidence the old rule never
+  produced. **The duty is
   armed per session**: the editor frame exists from VPX's start
   while the player window appears only once the table has loaded,
   so editor-present + player-absent is also the LOAD state — the
@@ -185,6 +188,29 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   VPX alone. The duty is **unconditional** — there is no
   kill-switch and no desk checkbox for it (both were removed
   when the exit model was simplified; see the next bullet).
+- **Two field findings the current code is shaped by**
+  (2026-10-22, from Chris's rig logs): **the player window is
+  not a desktop window at all** — under Virtual Desktop the
+  GL64 player renders into the headset, so the watchdog's
+  window inventory listed exactly one window for the game
+  process across whole sessions (the editor, 1167×634), and
+  every window fact that filtered on visibility (the old
+  enumeration skipped `IsWindowVisible == 0`) starved the
+  sighting even after the class rule was fixed; the sighting
+  and the closer's transition facts now enumerate ALL of the
+  game pid's top-level windows, visibility recorded but
+  ignored, while herding keeps the visible-only set its anchor
+  needs. **And a relaunched room can be born with the button
+  already down**: after Chris closed the editor by hand, the
+  death → relaunch trip worked — and the fresh room then quit
+  to the desktop uncommanded, its log ending in a "room Exit"
+  disarm, because its controller reconnected mid-relaunch and
+  D-pad right read pressed as the new instance polled. So the
+  room's D-pad exit is baseline-armed: it fires only on a
+  press edge that occurs after that room instance has observed
+  the button released at least once; a button pressed from
+  the instance's first poll can never fire it, however long
+  it sits.
 - **The exit model — one BACK button, two rules** (Chris's
   ruling, 2026-10-22, replacing the tap/hold arbitration model
   wholesale): **there is no hold gesture anywhere.** D-pad
@@ -430,7 +456,11 @@ cached `vpsdb.json` and the same code runs your actual library.
   The app must exit through the rail EXIT path before the
   driver can complain (disarm "room Exit" + quit); the harness
   (`run_dpadexit_smoke.sh`) asserts exit code 0 and the disarm
-  + reason on the contract from outside.
+  + reason on the contract from outside. Sibling flag
+  `--pvlds-smoke-dpadexit-held` is the baseline-arming leg:
+  the button is pinned pressed from boot, before the room
+  instance's first poll — the app must survive it pinned,
+  then exit on a fresh press after the driver's release.
 - `--pvlds-smoke-quitwarm` — desk boot; the exit-hang harness
   driver (`~/workspace/pvlds-harness/run_quitwarm_smoke.sh`).
   Exits mid-warm-pass through the real rail path; mode "drain"

@@ -59,6 +59,14 @@ extends Node
 ##                       The harness asserts the exit + the
 ##                       contract from outside; if the press does
 ##                       nothing the driver prints FAIL and quits 1
+##   --pvlds-smoke-dpadexit-held
+##                       the baseline-arming leg: the button is
+##                       pinned pressed from boot, before the room
+##                       instance's first poll (the field phantom:
+##                       a controller reconnecting to a relaunched
+##                       room). The app must NOT exit while it sits
+##                       pressed; after a release, a fresh press
+##                       must exit through the same rail path
 ##   --pvlds-smoke-lockout
 ##                       room boot; fire a real launch (env
 ##                       overrides as --pvlds-smoke-launch), then
@@ -106,6 +114,7 @@ var _placard_smoke_wait: int = 0
 var _placard_smoke_failures: int = 0
 var _smoke_desk: bool = false ## --pvlds-smoke-desk: drive the desk's live session switch, assert the config file follows
 var _smoke_dpadexit: bool = false ## --pvlds-smoke-dpadexit: a fresh D-pad Right in the room must exit the app
+var _dpadexit_held_leg: bool = false ## --pvlds-smoke-dpadexit-held: the button is pinned from boot; no exit until a witnessed release, then a fresh press exits
 var _dpadexit_smoke_phase: int = 0
 var _dpadexit_smoke_wait: int = 0
 var _desk_smoke_phase: int = 0
@@ -204,6 +213,9 @@ func _ready() -> void:
 		_smoke_desk = true
 	if user_args.has("--pvlds-smoke-dpadexit"):
 		_smoke_dpadexit = true
+	if user_args.has("--pvlds-smoke-dpadexit-held"):
+		_smoke_dpadexit = true
+		_dpadexit_held_leg = true
 	if user_args.has("--pvlds-smoke-lockout"):
 		_smoke_lockout = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -211,6 +223,19 @@ func _ready() -> void:
 	if user_args.has("--pvlds-art-bench"):
 		_art_bench = true
 		_bench_phase = 0
+	if _dpadexit_held_leg:
+		# Held leg: pin D-pad Right pressed NOW, in _ready - before
+		# the first frame, hence before the room instance's first
+		# poll. The button reads held from that instance's birth,
+		# exactly the phantom shape from the field report (a
+		# controller reconnecting to a watchdog-relaunched room):
+		# with the baseline-release arming, no exit may come of it.
+		var pin: InputEventJoypadButton = InputEventJoypadButton.new()
+		pin.device = 0
+		pin.button_index = JOY_BUTTON_DPAD_RIGHT
+		pin.pressed = true
+		Input.parse_input_event(pin)
+		print("  info - dpadexit smoke: held leg - D-pad Right pinned from boot")
 	# NOTE: no XR here. Desk work never touches OpenXR - initializing
 	# it at boot is what popped the "OpenXR was requested but failed
 	# to start" alert on flat launches with no runtime up (M2 papercut
@@ -1197,7 +1222,21 @@ func _finish_desk_smoke() -> void:
 ## lives outside: the harness sees exit code 0 and reads the
 ## disarm + its reason off the contract file. If the press does
 ## nothing, the driver survives to phase 2 and fails loudly.
+## The held leg (--pvlds-smoke-dpadexit-held) drives the
+## baseline-arming contract instead: the button was pinned in
+## _ready, before the room instance's first poll, so no exit may
+## fire while it sits pressed (the driver surviving the pinned
+## stretch IS the assertion - a phantom exit kills the driver
+## with the app, and the harness fails on the missing survival
+## line); after the release, a fresh press must exit as usual.
 func _drive_dpadexit_smoke() -> void:
+	if _dpadexit_held_leg:
+		_drive_dpadexit_held()
+	else:
+		_drive_dpadexit_fresh()
+
+
+func _drive_dpadexit_fresh() -> void:
 	match _dpadexit_smoke_phase:
 		0:
 			if _room != null and _room.visible and _room.wall_ready:
@@ -1224,6 +1263,61 @@ func _drive_dpadexit_smoke() -> void:
 				Input.parse_input_event(release)
 			if _dpadexit_smoke_wait > 30:
 				printerr("PVLDS DPAD EXIT SMOKE: FAIL - a fresh D-pad Right press in the room did not exit the app")
+				get_tree().quit(1)
+
+
+func _drive_dpadexit_held() -> void:
+	match _dpadexit_smoke_phase:
+		0:
+			# Room up: start counting the pinned stretch. The
+			# button has read pressed since before this instance
+			# existed - if the exit were going to fire on it, it
+			# fires in the first polls after the room comes up.
+			if _room != null and _room.visible and _room.wall_ready:
+				_dpadexit_smoke_wait = 0
+				_dpadexit_smoke_phase = 1
+			else:
+				_dpadexit_smoke_wait += 1
+				if _dpadexit_smoke_wait > 3600:
+					printerr("PVLDS DPAD EXIT SMOKE: FAIL - the room never came up (held leg)")
+					get_tree().quit(1)
+		1:
+			_dpadexit_smoke_wait += 1
+			if _dpadexit_smoke_wait >= 90:
+				# Survived 90 frames pinned. (A phantom exit would
+				# have killed the process - and this driver - long
+				# before this print; the harness asserts the line.)
+				print("  info - dpadexit smoke: held leg survived 90 frames pinned - releasing")
+				var release: InputEventJoypadButton = InputEventJoypadButton.new()
+				release.device = 0
+				release.button_index = JOY_BUTTON_DPAD_RIGHT
+				release.pressed = false
+				Input.parse_input_event(release)
+				_dpadexit_smoke_wait = 0
+				_dpadexit_smoke_phase = 2
+		2:
+			_dpadexit_smoke_wait += 1
+			if _dpadexit_smoke_wait >= 10:
+				# Released polls witnessed: a fresh press now must
+				# exit through the rail path, arming or not.
+				var press: InputEventJoypadButton = InputEventJoypadButton.new()
+				press.device = 0
+				press.button_index = JOY_BUTTON_DPAD_RIGHT
+				press.pressed = true
+				Input.parse_input_event(press)
+				print("  info - dpadexit smoke: held leg - fresh D-pad Right injected after the release")
+				_dpadexit_smoke_wait = 0
+				_dpadexit_smoke_phase = 3
+		3:
+			_dpadexit_smoke_wait += 1
+			if _dpadexit_smoke_wait == 2:
+				var release2: InputEventJoypadButton = InputEventJoypadButton.new()
+				release2.device = 0
+				release2.button_index = JOY_BUTTON_DPAD_RIGHT
+				release2.pressed = false
+				Input.parse_input_event(release2)
+			if _dpadexit_smoke_wait > 30:
+				printerr("PVLDS DPAD EXIT SMOKE: FAIL - after a witnessed release, a fresh D-pad Right press did not exit the app (held leg)")
 				get_tree().quit(1)
 
 

@@ -20,6 +20,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -107,43 +108,92 @@ type obsWindow struct {
 	obs  windowObs
 }
 
-// enumLogOnce guards the per-session window inventory log line.
+// The per-session window inventory state: the composition
+// signature last logged for the session. One line per CHANGE,
+// never per poll.
 var (
 	enumLogMu      sync.Mutex
 	enumLogSession int
+	enumLogSig     string
 )
 
-// enumerateGameWindows lists the game process's visible top-level
-// windows as sighting observations. The FIRST enumeration of a
-// session that finds any window logs the full inventory - class
-// and size of each - exactly once: permanent field evidence of
-// what the game process actually puts on screen, the evidence
-// the old VPPlayer-only rule never produced while it silently
-// matched nothing on Chris's rig.
+// enumerateGameWindows lists the game process's top-level
+// windows - ALL of them, visible or not - as sighting
+// observations, each carrying its visibility flag. (The
+// unfiltered enumeration itself, allTopWindows, lives in
+// closer_windows.go beside the FEC sender that also needs it.)
+//
+// Why unfiltered (field forensics, 2026-10-22): on Chris's VR
+// rig the player renders into the headset, so its window has no
+// desktop visibility, and the visible-only enumeration this
+// function used to run listed exactly ONE window for the game
+// process across whole sessions - the editor. The sighting
+// starved no matter what the class rule said. Herding keeps its
+// own visible-only enumeration (visibleWindows): its anchor is
+// a window it must actually foreground, which only a visible
+// window can be.
 func enumerateGameWindows(gamePID int, sessionID int) []obsWindow {
 	var out []obsWindow
-	for _, hwnd := range visibleWindows(gamePID) {
+	for _, hwnd := range allTopWindows(gamePID) {
 		var rc rect
 		procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
+		visible := false
+		if r, _, _ := procIsWindowVisible.Call(hwnd); r != 0 {
+			visible = true
+		}
 		out = append(out, obsWindow{hwnd: hwnd, obs: windowObs{
-			class:  windowClassName(hwnd),
-			width:  int64(rc.Right - rc.Left),
-			height: int64(rc.Bottom - rc.Top),
+			class:   windowClassName(hwnd),
+			width:   int64(rc.Right - rc.Left),
+			height:  int64(rc.Bottom - rc.Top),
+			visible: visible,
 		}})
 	}
-	if len(out) > 0 {
-		enumLogMu.Lock()
-		if enumLogSession != sessionID {
-			enumLogSession = sessionID
-			parts := make([]string, 0, len(out))
-			for _, w := range out {
-				parts = append(parts, fmt.Sprintf("class %q %dx%d", w.obs.class, w.obs.width, w.obs.height))
-			}
-			logf("watchdog: session %d: game pid %d visible windows: %s", sessionID, gamePID, strings.Join(parts, "; "))
-		}
-		enumLogMu.Unlock()
-	}
+	logWindowInventory(gamePID, sessionID, out)
 	return out
+}
+
+// logWindowInventory writes the self-diagnosing inventory: the
+// game pid's FULL window set (class, size, visible|hidden) the
+// first time it is observed in a session and again whenever its
+// composition changes - by class, size, or visibility - each
+// line naming the current foreground window's class and owning
+// pid. No per-poll spam: the line exists so the next field
+// surprise is answered by the log, not by another instrumented
+// build.
+func logWindowInventory(gamePID int, sessionID int, windows []obsWindow) {
+	parts := make([]string, 0, len(windows))
+	for _, w := range windows {
+		vis := "hidden"
+		if w.obs.visible {
+			vis = "visible"
+		}
+		parts = append(parts, fmt.Sprintf("class %q %dx%d %s", w.obs.class, w.obs.width, w.obs.height, vis))
+	}
+	sort.Strings(parts) // composition signature: enumeration order must not fake a change
+	sig := strings.Join(parts, "; ")
+
+	enumLogMu.Lock()
+	defer enumLogMu.Unlock()
+	if enumLogSession != sessionID {
+		enumLogSession = sessionID
+		enumLogSig = ""
+	}
+	if sig == enumLogSig || (sig == "" && enumLogSig == "") {
+		return
+	}
+	enumLogSig = sig
+
+	fgClass := ""
+	var fgPID uint32
+	if fg, _, _ := procGetForegroundWindow.Call(); fg != 0 {
+		fgClass = windowClassName(fg)
+		procGetWindowThreadProcID.Call(fg, uintptr(unsafe.Pointer(&fgPID)))
+	}
+	set := sig
+	if set == "" {
+		set = "(none)"
+	}
+	logf("watchdog: session %d: game pid %d windows: %s; foreground %q (pid %d)", sessionID, gamePID, set, fgClass, int(fgPID))
 }
 
 // gameWindowExists reports whether a player sighting has
@@ -178,14 +228,19 @@ func windowClassName(hwnd uintptr) string {
 	return syscall.UTF16ToString(buf[:n])
 }
 
-// gameWindowState classifies the game process's visible top-level
-// windows for the session-close duties (closer.go / arbiter.go).
-// The editor facts stay class-based (a visible "VPinball"-class
-// frame; the close target is the largest such window - in
-// practice the one frame). The player fact comes from the
-// sighting gate (sighting.go): a VPPlayer-class window counts at
-// once; a substantial non-editor window counts once it has
-// persisted across two polls; the editor class never counts.
+// gameWindowState classifies the game process's top-level
+// windows for the session-close duties (closer.go), over the
+// UNFILTERED enumeration (enumerateGameWindows): the sighting the
+// player fact comes from must see the headset-bound player
+// window, which has no desktop visibility at all (field
+// forensics in enumerateGameWindows). The editor facts stay on
+// the VISIBLE subset - the editor is a presented desktop frame
+// in practice, and its window is the close target, which wants
+// the real frame, not a hidden namesake. The player fact comes
+// from the sighting gate (sighting.go) fed the full set, hidden
+// windows included: a VPPlayer-class window counts at once; a
+// substantial non-editor window counts once it has persisted
+// across two polls; the editor class never counts.
 func gameWindowState(gamePID int, sessionID int) windowState {
 	var ws windowState
 	if gamePID <= 0 {
@@ -196,7 +251,7 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	var bestEditorArea int64
 	for _, w := range windows {
 		obs = append(obs, w.obs)
-		if w.obs.class == editorWindowClass {
+		if w.obs.class == editorWindowClass && w.obs.visible {
 			ws.editorPresent = true
 			if area := w.obs.area(); area > bestEditorArea {
 				bestEditorArea = area

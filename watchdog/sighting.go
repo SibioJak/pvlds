@@ -27,25 +27,42 @@ import "sync"
 //
 //   - a "VPPlayer"-class window is the player, immediately (the
 //     classic path, unchanged);
-//   - any other visible window of the game pid whose class is NOT
-//     the editor class and whose size is substantial (at least
+//   - any other window of the game pid whose class is NOT the
+//     editor class and whose size is substantial (at least
 //     ~320x240) is a player CANDIDATE; it counts as present only
 //     once it has persisted across playerSightingStreak
 //     consecutive poll observations, so a splash or helper window
 //     flashing up during a load cannot stamp a sighting;
 //   - the editor class never counts, at any size, ever.
 //
+// Visibility is NOT evidence either (field forensics, later the
+// same day): on Chris's VR rig the player (VPinballX_GL64 under
+// Virtual Desktop) renders into the headset and its window
+// carries no desktop visibility - the per-session inventory,
+// which enumerated VISIBLE windows only, listed exactly one
+// window for the game process across whole sessions (the
+// editor), and this gate starved again even with the class rule
+// fixed. The platform leaves therefore enumerate ALL top-level
+// windows of the game pid for this gate (visibility is carried
+// on the observation for the inventory log, and ignored here):
+// a HIDDEN substantial non-editor window counts exactly like a
+// visible one. What drops "present" is the window going away,
+// which is what a table exit does to it.
+//
 // "Seen" latches per session (it stamps the contract's
 // game_window_seen and arms the closer); "present" is
 // per-observation and drops the moment no candidate is up, which
 // is what lets the editor landing register as an exit.
 
-// windowObs is one visible top-level window of the game process,
-// as a platform leaf observed it.
+// windowObs is one top-level window of the game process, as a
+// platform leaf observed it. Visibility is recorded for the
+// diagnostic inventory (herd_windows.go logs it); the sighting
+// rule itself deliberately ignores it - see the file header.
 type windowObs struct {
-	class  string
-	width  int64
-	height int64
+	class   string
+	width   int64
+	height  int64
+	visible bool
 }
 
 func (w windowObs) area() int64 { return w.width * w.height }

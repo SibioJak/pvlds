@@ -26,6 +26,20 @@ var (
 		{class: "VPinball", width: 1280, height: 900},
 		{class: "VPPlayer", width: 1920, height: 1080},
 	}
+	// The VR shape (Chris's rig, 2026-10-22): the editor is the
+	// only VISIBLE window; the player renders into the headset
+	// and its window carries no desktop visibility at all.
+	obsEditorVisiblePlayerHidden = []windowObs{
+		{class: "VPinball", width: 1167, height: 634, visible: true},
+		{class: "SDL_app", width: 1920, height: 1080, visible: false},
+	}
+	obsEditorVisibleVPPlayerHidden = []windowObs{
+		{class: "VPinball", width: 1167, height: 634, visible: true},
+		{class: "VPPlayer", width: 1920, height: 1080, visible: false},
+	}
+	obsEditorOnlyHidden = []windowObs{
+		{class: "VPinball", width: 1920, height: 1080, visible: false},
+	}
 )
 
 // The faf0673 lesson, preserved: editor alone, however large,
@@ -124,6 +138,59 @@ func TestSightingFlickerResetsStreakNotLatch(t *testing.T) {
 	}
 	if ok, _ := s.hasSighted(1); !ok {
 		t.Fatal("sighting unlatched when the player window closed")
+	}
+}
+
+// A HIDDEN player window counts like a visible one (the gate
+// is fed unfiltered observations and ignores the flag): a
+// substantial non-editor window with no desktop visibility
+// sights under the class-independent rule, persistence and all.
+func TestSightingHiddenPlayerCounts(t *testing.T) {
+	s := &playerSighting{}
+	present, stamped := foldSight(s, 1, obsEditorVisiblePlayerHidden)
+	if present || stamped {
+		t.Fatalf("first poll: present=%v stamped=%v, want both false (persistence gate applies to hidden windows too)", present, stamped)
+	}
+	present, stamped = foldSight(s, 1, obsEditorVisiblePlayerHidden)
+	if !present || !stamped {
+		t.Fatalf("second poll: present=%v stamped=%v, want both true - a hidden player window must sight", present, stamped)
+	}
+	if ok, rule := s.hasSighted(1); !ok || rule != sightRuleClassFree {
+		t.Fatalf("hasSighted = %v, %q; want true, %q", ok, rule, sightRuleClassFree)
+	}
+	// And its disappearance still registers as the exit, even
+	// though it was never visible to begin with.
+	present, _ = foldSight(s, 1, obsEditorOnly)
+	if present {
+		t.Fatal("hidden player window gone: present must drop")
+	}
+}
+
+// A hidden VPPlayer-class window takes the classic fast path:
+// hidden is not the same as absent.
+func TestSightingHiddenVPPlayerImmediate(t *testing.T) {
+	s := &playerSighting{}
+	present, stamped := foldSight(s, 1, obsEditorVisibleVPPlayerHidden)
+	if !present || !stamped {
+		t.Fatalf("hidden VPPlayer first poll: present=%v stamped=%v, want both true", present, stamped)
+	}
+	if ok, rule := s.hasSighted(1); !ok || rule != sightRuleClassic {
+		t.Fatalf("hasSighted = %v, %q; want true, %q", ok, rule, sightRuleClassic)
+	}
+}
+
+// A hidden editor is still just the editor: it never counts,
+// visible or not.
+func TestSightingHiddenEditorNeverCounts(t *testing.T) {
+	s := &playerSighting{}
+	for i := 0; i < 4; i++ {
+		present, stamped := foldSight(s, 1, obsEditorOnlyHidden)
+		if present || stamped {
+			t.Fatalf("obs %d: hidden editor-only observation presented/stamped", i)
+		}
+	}
+	if ok, _ := s.hasSighted(1); ok {
+		t.Fatal("hidden editor latched a sighting")
 	}
 }
 

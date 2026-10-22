@@ -107,6 +107,7 @@ var _joy_cooldown: float = 0.0
 var _joy_prev_a: bool = false
 var _joy_prev_b: bool = false
 var _joy_prev_right: bool = false ## D-pad Right edge tracking: the room's BACK-out press (see _process)
+var _joy_right_armed: bool = false ## baseline-release arming: set once THIS room instance has observed D-pad Right released; until then no right-press edge can exit (see _process)
 
 
 func setup(factory: TextureFactory, scanner: LibraryScanner, store: StateStore, xr_enabled: bool) -> void:
@@ -1197,6 +1198,18 @@ func _process(delta: float) -> void:
 	# the desktop - the rail EXIT action, on the pad. The left
 	# stick still moves focus in all four directions, right
 	# included.
+	# The press must also be ARMED (baseline-release arming,
+	# field forensics 2026-10-22): a watchdog-relaunched room
+	# once exited through this very path with no human press -
+	# its controller reconnected mid-relaunch and the button
+	# read pressed as the fresh instance polled, manufacturing
+	# an edge out of _joy_prev_right's initial false. The exit
+	# may fire only on a press edge that occurs AFTER this room
+	# instance has observed the button released at least once.
+	# A button pressed at the instance's first poll - stuck,
+	# reconnect transient, still held from the game - can never
+	# fire it, no matter how long it sits pressed; once a
+	# released poll is witnessed, fresh presses work at once.
 	# During the load wait the room is deaf (see begin_launch): the
 	# poll still tracks button state - so a press held through the
 	# settle can't resurface as a phantom edge afterwards - but it
@@ -1233,7 +1246,9 @@ func _process(delta: float) -> void:
 		_detail.handle_escape()
 	_joy_prev_b = b_now
 	var right_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_RIGHT)
-	if right_now and not _joy_prev_right and not deaf and not _placard_up:
+	if not right_now:
+		_joy_right_armed = true ## a witnessed released poll: fresh press edges count from here on
+	if right_now and not _joy_prev_right and _joy_right_armed and not deaf and not _placard_up:
 		_handle_rail("exit")
 	_joy_prev_right = right_now
 
