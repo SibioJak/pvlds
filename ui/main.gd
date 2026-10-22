@@ -52,6 +52,19 @@ extends Node
 ##                       deaf, the contract stays armed/loading,
 ##                       and the wait still settles at the hand-off
 ##                       with no Save & Scan, print the verdict, quit
+##   --pvlds-smoke-quitwarm
+##                       desk boot on a scratch library of large
+##                       .directb2s files; once the post-scan warm
+##                       has banked a few extractions and is still
+##                       chewing, exit through the REAL rail path
+##                       (_on_exit_requested) - the harness times
+##                       how long the process takes to die. Mode
+##                       "drain" (env PVLDS_QUITWARM_MODE=drain)
+##                       instead lets the warm finish and reports
+##                       the pass duration before exiting the same
+##                       way. Guards the exit-hang fault: an
+##                       unstoppable warm pass made quit wait out
+##                       the whole queue.
 
 var _config: PvldsConfig
 var _state: StateStore
@@ -81,6 +94,9 @@ var _desk_smoke_wait: int = 0
 var _desk_smoke_failures: int = 0
 var _smoke_lockout: bool = false ## --pvlds-smoke-lockout: attack the load wait's input lockout mid-flight
 var _lockout_smoke_pending: bool = false ## a launch fired by the lockout smoke is in its wait; _settle_launch prints its verdict
+var _smoke_quitwarm: bool = false ## --pvlds-smoke-quitwarm: exit mid-warm-pass through the real Exit path (mode via PVLDS_QUITWARM_MODE)
+var _quitwarm_fired: bool = false
+var _quitwarm_started_msec: int = 0
 var _lockout_smoke_phase: int = 0
 var _lockout_smoke_wait: int = 0
 var _lockout_smoke_failures: int = 0
@@ -160,6 +176,8 @@ func _ready() -> void:
 		_smoke_desk = true
 	if user_args.has("--pvlds-smoke-lockout"):
 		_smoke_lockout = true
+	if user_args.has("--pvlds-smoke-quitwarm"):
+		_smoke_quitwarm = true
 	if user_args.has("--pvlds-art-bench"):
 		_art_bench = true
 		_bench_phase = 0
@@ -302,6 +320,8 @@ func _process(_delta: float) -> void:
 		_drive_desk_smoke()
 	if _smoke_lockout:
 		_drive_lockout_smoke()
+	if _smoke_quitwarm:
+		_drive_quitwarm_smoke()
 	if _art_bench:
 		_drive_art_bench(_delta)
 	if _shot_path != "" and _shot_ready():
@@ -541,6 +561,7 @@ func _settle_launch(ok: bool, reason: String) -> void:
 		_launch_service.mark_live()
 		print("PVLDS LAUNCH: hand-off complete (%s) after %.1fs; launcher exiting" % [reason, elapsed])
 		_intentional_launch_exit = true
+		_request_art_warm_stop()
 		if _smoke_verdict_pending:
 			print("PVLDS SMOKE LAUNCH: handed off (%s) after %.1fs" % [reason, elapsed])
 		if _lockout_smoke_pending:
@@ -608,10 +629,23 @@ func _fire_shot_launch() -> void:
 	_on_launch_requested(game, build)
 
 
+## Every deliberate quit stops the art warmer first. Its pass is a
+## WorkerThreadPool task, and Godot waits for pool tasks during
+## shutdown: an unstopped pass with a full queue (a fresh scan's
+## worth of real multi-second extractions) turns an exit into a
+## minutes-long hang (field fault, 2026-10-22). The pass abandons
+## its queue at the next item boundary; items already extracted
+## keep their cache entries and outcome stamps.
+func _request_art_warm_stop() -> void:
+	if _art_warmer != null:
+		_art_warmer.request_stop()
+
+
 ## EXIT (room rail): disarm the watchdog first - the player who
 ## wants out stays out - then quit. The disarm names itself, as
 ## every disarm now does.
 func _on_exit_requested() -> void:
+	_request_art_warm_stop()
 	if _launch_service != null:
 		_launch_service.disarm("room Exit")
 	get_tree().quit()
@@ -625,10 +659,17 @@ func _on_exit_requested() -> void:
 ## the headset is the known suspect), and the environment must
 ## not be able to dismiss a session the player is waiting on.
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_EXIT_TREE:
+		# Backstop for every quit route not named above (dev
+		# hooks, smoke drivers): the tree is going down, so the
+		# warm pass gets its stop before the pool wait begins.
+		_request_art_warm_stop()
+		return
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		if _launch_pending:
 			print("PVLDS: window close ignored during the load wait")
 			return
+		_request_art_warm_stop()
 		if _launch_service != null and not _intentional_launch_exit:
 			_launch_service.disarm("window close")
 		get_tree().quit()
@@ -1068,6 +1109,54 @@ func _on_art_warm_drained() -> void:
 		_desk.apply_scan_summary(build_scan_summary())
 
 
+## --pvlds-smoke-quitwarm: the exit-hang harness driver. Mode
+## "quit" (default): once the post-scan warm has banked a few
+## extractions and is still chewing, drop a marker file (env
+## PVLDS_QUITWARM_MARKER - the shell times from its appearance,
+## immune to stdout buffering) and exit through the REAL rail
+## path, _on_exit_requested - the exact handler the room's EXIT
+## fires. Mode "drain" (PVLDS_QUITWARM_MODE=drain): let the warm
+## finish, report the pass's wall duration, exit the same way.
+func _drive_quitwarm_smoke() -> void:
+	if _quitwarm_fired or _scan_active or _scanner == null or _art_warmer == null:
+		return
+	if _quitwarm_started_msec == 0:
+		_quitwarm_started_msec = Time.get_ticks_msec()
+	var elapsed: int = Time.get_ticks_msec() - _quitwarm_started_msec
+	var total: int = 0
+	var cached: int = 0
+	for g: GameEntry in _scanner.games:
+		if g.art_source_path == "":
+			continue
+		total += 1
+		if ArtProvider.is_cached(g.art_source_path):
+			cached += 1
+	if OS.get_environment("PVLDS_QUITWARM_MODE") == "drain":
+		if total > 0 and cached == total and _art_warmer.is_idle():
+			_quitwarm_fired = true
+			print("PVLDS QUITWARM: drained pass_msec=%d cached=%d of %d" % [_art_warmer.last_pass_msec, cached, total])
+			_on_exit_requested()
+		elif elapsed > 300000:
+			_quitwarm_fired = true
+			printerr("PVLDS QUITWARM: FAIL - the warm did not drain in 300s (cached %d of %d)" % [cached, total])
+			get_tree().quit(1)
+		return
+	if cached >= 3 and not _art_warmer.is_idle():
+		_quitwarm_fired = true
+		print("PVLDS QUITWARM: quit requested (cached=%d of %d)" % [cached, total])
+		var marker: String = OS.get_environment("PVLDS_QUITWARM_MARKER")
+		if marker != "":
+			var mf: FileAccess = FileAccess.open(marker, FileAccess.WRITE)
+			if mf != null:
+				mf.store_string("quit requested: cached=%d of %d\n" % [cached, total])
+				mf.close()
+		_on_exit_requested()
+	elif elapsed > 180000:
+		_quitwarm_fired = true
+		printerr("PVLDS QUITWARM: FAIL - the warm never got under way (cached %d of %d)" % [cached, total])
+		get_tree().quit(1)
+
+
 func _run_db_stats(path: String) -> void:
 	var db: VpsDatabase = VpsDatabase.new()
 	if not db.load_db(path):
@@ -1436,6 +1525,47 @@ func _run_core_test() -> void:
 	_expect(warmer.is_idle() and ArtProvider.is_cached(b2s_b), "the warmer pre-extracts the library in the background", failures)
 	_expect(warmer.last_pass_items == 1, "the warm pass performed exactly one extraction", failures)
 	_expect(ArtWarmer.cache_coverage(warm_games) == Vector2i(1, 1), "cache coverage reports have/want", failures)
+	# The stop request (exit-hang round): a pass abandoned at an
+	# item boundary leaves the rest of its queue unextracted, keeps
+	# what it finished, and does not poison the next pass. Forty
+	# fixtures make a pass that measurably outlasts the request.
+	var count_cached: Callable = func(games: Array[GameEntry]) -> int:
+		var n: int = 0
+		for ge: GameEntry in games:
+			if ge.art_source_path != "" and ArtProvider.is_cached(ge.art_source_path):
+				n += 1
+		return n
+	var stop_entries: Array[GameEntry] = []
+	for si: int in range(40):
+		var sp: String = art_dir.path_join("Stop Table %02d.directb2s" % si)
+		_expect(bool(mk_b2s.call(sp, 400, 500)), "stop fixture %02d written" % si, failures)
+		var sentry: GameEntry = GameEntry.new()
+		sentry.art_source_path = sp
+		stop_entries.append(sentry)
+	var stop_warmer: ArtWarmer = ArtWarmer.new()
+	stop_warmer.warm_library(stop_entries)
+	var swait: int = 0
+	while int(count_cached.call(stop_entries)) == 0 and swait < 10000:
+		OS.delay_msec(10)
+		swait += 10
+	stop_warmer.request_stop()
+	swait = 0
+	while not stop_warmer.is_idle() and swait < 30000:
+		OS.delay_msec(20)
+		swait += 20
+	var stopped_cached: int = int(count_cached.call(stop_entries))
+	_expect(stop_warmer.is_idle(), "a stopped warm pass goes idle", failures)
+	_expect(stopped_cached > 0 and stopped_cached < stop_entries.size(),
+		"the stop abandoned the queue mid-pass (%d of %d extracted)" % [stopped_cached, stop_entries.size()], failures)
+	# A later warm (the next boot, in the field) finishes the job:
+	# the stop flag must not leak into it.
+	stop_warmer.warm_library(stop_entries)
+	swait = 0
+	while not stop_warmer.is_idle() and swait < 60000:
+		OS.delay_msec(20)
+		swait += 20
+	_expect(int(count_cached.call(stop_entries)) == stop_entries.size(),
+		"a fresh warm after a stop completes the queue", failures)
 	# ...but never duplicates a claimed (panel-owned) extraction:
 	# the claimed file is skipped, and the priority path completes it.
 	var b2s_c: String = art_dir.path_join("Claimed Table.directb2s")

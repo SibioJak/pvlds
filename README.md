@@ -390,6 +390,15 @@ cached `vpsdb.json` and the same code runs your actual library.
   close-on-exit, hold-to-exit + its button) apply the moment
   they are flipped; everything else stays on Save & Scan.
   Prints ok/FAIL lines, exits 0/1.
+- `--pvlds-smoke-quitwarm` — desk boot; the exit-hang harness
+  driver (`~/workspace/pvlds-harness/run_quitwarm_smoke.sh`).
+  Exits mid-warm-pass through the real rail path; mode "drain"
+  (env `PVLDS_QUITWARM_MODE=drain`) lets the warm finish first.
+  Every app quit now stops the art warmer's pass at its next
+  item boundary (`ArtWarmer.request_stop`, called on the rail
+  Exit, window-close, and launch hand-off paths, with a
+  NOTIFICATION_EXIT_TREE backstop) — an unstopped pass made
+  quit wait out the whole queue.
 
 ## Layout
 

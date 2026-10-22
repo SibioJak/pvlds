@@ -24,6 +24,7 @@ var _mutex: Mutex = Mutex.new()
 var _queue: Array[String] = []
 var _queued: Dictionary = {}
 var _worker_active: bool = false
+var _stop_requested: bool = false
 var _pass_started_msec: int = 0
 var _pass_items: int = 0
 
@@ -84,6 +85,22 @@ func is_idle() -> bool:
 	return idle
 
 
+## Ask the running pass to abandon its queue at the next item
+## boundary. For app shutdown: Godot waits for WorkerThreadPool
+## tasks during quit, so an unstoppable pass turns an exit into a
+## wait for the entire remaining queue (field fault, 2026-10-22:
+## EXIT after a desktop scan hung for minutes once extractor v2
+## filled the queue with real multi-second extractions). Items
+## already extracted keep their cache entries and outcome stamps -
+## those are written per file during extraction, before the next
+## item starts. Safe to call when no pass is running: a pass
+## started later clears the flag (see _start_locked).
+func request_stop() -> void:
+	_mutex.lock()
+	_stop_requested = true
+	_mutex.unlock()
+
+
 ## Art health for a library, from the persisted outcome index -
 ## the desk's diagnostic breakdown. Counts are over games with a
 ## .directb2s source (side-image games need no extraction):
@@ -134,6 +151,10 @@ static func cache_coverage(games: Array[GameEntry]) -> Vector2i:
 func _start_locked() -> void:
 	if _worker_active or _queue.is_empty():
 		return
+	# A fresh pass is a new lease: a stop requested of some earlier,
+	# already-finished moment must not abandon it. (While a pass is
+	# active this function returns above, so a live stop stands.)
+	_stop_requested = false
 	_worker_active = true
 	_pass_started_msec = Time.get_ticks_msec()
 	_pass_items = 0
@@ -143,6 +164,21 @@ func _start_locked() -> void:
 func _run_pass() -> void:
 	while true:
 		_mutex.lock()
+		if _stop_requested:
+			# Shutdown: abandon the rest of the queue at this item
+			# boundary. Completed items keep their cache entries
+			# and outcome stamps; the unextracted remainder is
+			# simply re-queued by the next boot's warm. No
+			# on_drained: the queue did not drain, it was
+			# abandoned, and the owner is going away regardless.
+			_stop_requested = false
+			_queue.clear()
+			_queued.clear()
+			_worker_active = false
+			last_pass_msec = Time.get_ticks_msec() - _pass_started_msec
+			last_pass_items = _pass_items
+			_mutex.unlock()
+			return
 		if _queue.is_empty():
 			_worker_active = false
 			last_pass_msec = Time.get_ticks_msec() - _pass_started_msec
