@@ -53,6 +53,12 @@ import (
 type Contract struct {
 	Version             int  `json:"version"`
 	Armed               bool `json:"armed"`
+	// DisarmReason names who dismissed the session ("room Exit",
+	// "window close", "watchdog loop cap", ...), written by the
+	// disarmer alongside armed=false and read into the stand-down
+	// log line. Absent in contracts written before the field
+	// existed: the empty string falls back to the legacy generic.
+	DisarmReason        string `json:"disarm_reason"`
 	FocusHerding        bool `json:"focus_herding"`
 	CloseVPXOnTableExit bool `json:"close_vpx_on_table_exit"`
 	// HoldExitEnabled is a pointer so an ABSENT key (a contract
@@ -349,7 +355,11 @@ func main() {
 			continue // mid-write or transient: retry next tick
 		}
 		if !c.Armed {
-			logf("watchdog: contract disarmed (player Exit); standing down")
+			reason := c.DisarmReason
+			if reason == "" {
+				reason = "player Exit"
+			}
+			logf("watchdog: contract disarmed (%s); standing down", reason)
 			return
 		}
 		now := time.Now().Unix()
@@ -382,7 +392,7 @@ func main() {
 					logf("watchdog: relaunched launcher died within %ds (strike %d/%d)", healthyWindowSec, strikes, maxStrikes)
 					if strikes >= maxStrikes {
 						logf("watchdog: loop cap tripped; disarming and standing down")
-						writeContractMerged(func(mc *Contract) { mc.Armed = false })
+						writeContractMerged(func(mc *Contract) { mc.Armed = false; mc.DisarmReason = "watchdog loop cap" })
 						return
 					}
 					relaunch(c, "retry after fast launcher death")

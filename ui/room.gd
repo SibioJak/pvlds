@@ -489,7 +489,12 @@ func _fill_wall_textures(gen: int) -> void:
 
 func _refresh_focusables() -> void:
 	_focusables.clear()
-	if _placard_up:
+	if _launching_game_id != "":
+		# The load wait is deaf (see begin_launch): the focusable
+		# set is EMPTY, so focus navigation has nowhere to land
+		# and there is no focused quad for a stray press to fire.
+		pass
+	elif _placard_up:
 		# The placard owns the room: BACK is the only focus stop.
 		if _placard_back != null:
 			_focusables.append(_placard_back)
@@ -552,6 +557,12 @@ func _activate(quad: ClickableQuad) -> void:
 		if quad.action_id == "placard_back":
 			quad.pulse()
 			hide_setup_placard()
+		return
+	if _launching_game_id != "":
+		# The load wait is deaf (see begin_launch): NO quad
+		# activates until the wait settles - not EXIT, not SETUP,
+		# not a card. Every input path funnels through here, so
+		# this one refusal covers pointer, keyboard, and gamepad.
 		return
 	if _mode == "detail":
 		if quad.action_id.begins_with("detail"):
@@ -787,7 +798,7 @@ func _restore_room_pick_states() -> void:
 		var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
 		if rq != null and not handled.has(rq):
 			if launching:
-				rq.pick_enabled = str(k) == "exit" or str(k) == "desk"
+				rq.pick_enabled = false ## the load wait is deaf: no rail quad picks, EXIT/SETUP included
 			else:
 				rq.pick_enabled = str(k) != "page_label"
 
@@ -795,25 +806,35 @@ func _restore_room_pick_states() -> void:
 # ------------------------------------------------------- launch states
 
 ## A launch is in its load wait (Main owns the wait itself): the
-## room freezes for browsing - no double launches, no detail
-## detours - the launched panel says LOADING, the banner says what
-## is loading, and EXIT stays live throughout: leaving mid-load
-## disarms the session, and VPX simply keeps loading detached.
+## room goes DEAF for the whole wait - no quad picks, the focusable
+## set is empty, _activate refuses everything, EXIT and SETUP
+## included. The wait is bounded (Main's hand-off cues, its failure
+## path, and the 45s cap), so no cancel control is needed, and none
+## is offered.
+##
+## Why deaf, in full (field root cause, 2026-10-21): this room
+## listens to the same gamepad the player plays VPX with, and A is
+## both "activate the focused quad" here and the player's plunger
+## button there. The old wait deliberately kept EXIT pickable and
+## parked focus ON it ("EXIT stays live throughout"), so the
+## player's first play press during the load fired EXIT: the
+## session disarmed silently, VPX kept loading detached, and the
+## player later exited to an editor with no watchdog on duty - the
+## "never returns to the interface" failure that survived five
+## builds because every switch combination left this path open.
 func begin_launch(game: GameEntry) -> void:
 	_launching_game_id = game.game_id
 	_failed_game_id = ""
-	_status_note = "Launching %s..." % game.title
+	_status_note = "Launching %s... controls are locked while the table loads" % game.title
 	for q: ClickableQuad in _panels:
 		q.pick_enabled = false
 	for q: ClickableQuad in _panel_launches:
 		q.pick_enabled = false
 	for k: Variant in _rail_quads.keys():
-		var key: String = str(k)
-		if key != "exit" and key != "desk":
-			_rail_quads[k].pick_enabled = false
+		_rail_quads[k].pick_enabled = false
 	if _detail != null and _detail.is_open():
 		_detail.set_launching(true)
-	_set_focused(_rail_quads["exit"])
+	_set_focused(null)
 	_refresh_focusables()
 	_swap_launch_textures()
 	_refresh_banner()
@@ -833,6 +854,31 @@ func end_launch_failed(game: GameEntry, reason: String) -> void:
 	if _mode == "detail":
 		return
 	_rebuild_wall()
+
+
+## Load-wait queries (the lockout smoke reads the room the way the
+## placard smoke reads the placard): is a wait in progress, what
+## the banner note says, where focus sits, how many focus stops
+## exist, and the rail quads by key.
+func is_launch_in_wait() -> bool:
+	return _launching_game_id != ""
+
+
+func launch_status_note() -> String:
+	return _status_note
+
+
+func focusable_count() -> int:
+	return _focusables.size()
+
+
+func focused_quad() -> ClickableQuad:
+	return _focused
+
+
+func rail_quad(key: String) -> ClickableQuad:
+	var q: Variant = _rail_quads.get(key, null)
+	return q as ClickableQuad
 
 
 func _swap_launch_textures() -> void:
@@ -856,6 +902,8 @@ func _on_detail_closed() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _launching_game_id != "":
+		return ## the load wait is deaf: no focus moves, no activation, no detail escape
 	if event is InputEventKey:
 		var k: InputEventKey = event
 		if not k.pressed or k.echo:
@@ -885,6 +933,11 @@ func _process(delta: float) -> void:
 	# drifts with the cursor makes every click target swim (field
 	# finding, round 2). XR head tracking owns the view in XR only.
 	# Gamepad: left stick / d-pad moves focus, A selects, B goes back.
+	# During the load wait the room is deaf (see begin_launch): the
+	# poll still tracks button state - so a press held through the
+	# settle can't resurface as a phantom edge afterwards - but it
+	# moves no focus, activates nothing, and escapes nothing.
+	var deaf: bool = _launching_game_id != ""
 	_joy_cooldown = maxf(0.0, _joy_cooldown - delta)
 	var ax: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)
 	var ay: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_Y)
@@ -898,14 +951,15 @@ func _process(delta: float) -> void:
 	elif Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_DOWN) or ay > 0.55:
 		dir = Vector2(0.0, 1.0)
 	if dir != Vector2.ZERO and _joy_cooldown <= 0.0:
-		_move_focus(dir)
+		if not deaf:
+			_move_focus(dir)
 		_joy_cooldown = 0.24
 	var a_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_A)
-	if a_now and not _joy_prev_a and _focused != null:
+	if a_now and not _joy_prev_a and _focused != null and not deaf:
 		_activate(_focused)
 	_joy_prev_a = a_now
 	var b_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_B)
-	if b_now and not _joy_prev_b and _mode == "detail":
+	if b_now and not _joy_prev_b and _mode == "detail" and not deaf:
 		_detail.handle_escape()
 	_joy_prev_b = b_now
 

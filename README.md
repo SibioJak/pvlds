@@ -5,8 +5,11 @@ stand in front of your collection, pick a table, play. Built with
 Godot 4.7 + OpenXR for PCVR (Quest 3 via Virtual Desktop / VDXR first;
 SteamVR runtime is a later test target).
 
-**Status: M2 — "The hand-off" (built 2026-10-21; two fix rounds
-the same day, after the first real-hardware sessions).** M1's room
+**Status: M2 — "The hand-off" (built 2026-10-21; fix rounds
+the same day, after the first real-hardware sessions — the
+latest makes the room deaf during the load wait and makes every
+disarm name its author, after the field logs caught sessions
+being dismissed from under loading tables).** M1's room
 plus real launching: card-level Launch, a native watchdog that
 returns you to the room with your place restored, focus herding,
 and Exit-to-desktop. The first session proved the launch and the
@@ -44,24 +47,52 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   never a customization, and is repaired to the good default on
   load; any other template is the player's and is never
   rewritten.
-- **The launcher stays for the load.** On launch the launcher
-  records state (recents, last-played, room view), writes the
-  watchdog session contract in the **loading** state, spawns VPX
-  detached — and **stays in the room**: the launched panel reads
-  LOADING..., every other Launch is disabled (no double launches),
-  EXIT stays live. The launcher exits at the hand-off, the first
-  of: (a) the watchdog's contract reports VPX's main window exists,
-  plus a ~1.5s settle; (b) the launcher's own XR session reports it
-  is ending (VPX is taking the headset over); (c) a 45s hard cap,
-  so the room can never hang on a stuck load. As it exits it marks
-  the session **live**. If VPX dies during the load instead, the
-  session is marked **failed**, nobody relaunches anything, and
-  the resident launcher flags the panel FAILED and returns to
-  normal browsing. EXIT during the wait disarms the session
-  entirely (VPX keeps loading, detached; its later exit resurrects
-  nothing) and quits. After the hand-off the launcher is fully
-  gone — no resident mode; absence remains the fix for the XR/
-  focus fights.
+- **The launcher stays for the load — and the room goes deaf for
+  it.** On launch the launcher records state (recents, last-played,
+  room view), writes the watchdog session contract in the
+  **loading** state, spawns VPX detached — and **stays in the
+  room**: the launched panel reads LOADING..., and **no control in
+  the room answers input until the wait settles** — every quad is
+  pick-disabled (EXIT and SETUP included), the focusable set is
+  empty, the activation funnel refuses everything, and the banner
+  says the controls are locked while the table loads. The wait is
+  bounded (below), so no cancel control is offered. The deafness
+  is a root-cause fix, not a nicety: the room listens to the same
+  gamepad the player plays VPX with, and A is both "activate the
+  focused quad" here and the player's plunger button there. An
+  earlier build deliberately kept EXIT live during the wait with
+  focus parked on it, so the player's first play press fired
+  EXIT: the session disarmed silently, VPX finished loading
+  detached, and the player later exited to an editor with no
+  watchdog on duty — the "never returns to the interface" failure
+  that survived five builds and every switch combination. A
+  window close arriving during the wait is likewise logged and
+  ignored (the environment — Virtual Desktop's session transfer
+  is the known suspect — must not dismiss a session mid-handoff);
+  outside the wait, a window close disarms and quits as before.
+  The launcher exits at the hand-off, the first of: (a) the
+  watchdog's contract reports VPX's player-class window exists,
+  plus a ~1.5s settle; (b) the launcher's own XR session reports
+  it is ending (VPX is taking the headset over); (c) a 45s hard
+  cap, so the room can never hang on a stuck load. As it exits it
+  marks the session **live**. If VPX dies during the load instead,
+  the session is marked **failed**, nobody relaunches anything,
+  and the resident launcher flags the panel FAILED and returns to
+  normal browsing (the rebuild restores every control exactly).
+  After the hand-off the launcher is fully gone — no resident
+  mode; absence remains the fix for the XR/focus fights.
+- **Every disarm names its author.** `disarm()` takes a reason
+  ("room Exit", "window close", the watchdog's own "watchdog loop
+  cap", ...): the launcher prints `PVLDS DISARM: <reason>`, the
+  reason rides the contract (`disarm_reason`, schema still v2 —
+  absent in older contracts, read as empty), and the watchdog's
+  stand-down log line quotes it (`contract disarmed (<reason>);
+  standing down`, falling back to the legacy generic when empty).
+  The silent disarm above is why: the log line that finally
+  caught it could only say "player Exit", and which of its two
+  possible authors fired in those historical sessions can no
+  longer be proven — the reason field exists so the next
+  occurrence, if any, confesses.
 - **The watchdog** (`watchdog/`, Go, stdlib only) is a separate tiny
   native process. The launcher starts it on boot (single-instance:
   a second start hands over via the contract file and exits). It

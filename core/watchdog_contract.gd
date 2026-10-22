@@ -9,7 +9,18 @@ extends RefCounted
 ##
 ## Fields:
 ##   version          schema version (2)
-##   armed            false = the player chose Exit; watchdog stands down
+##   armed            false = the session was disarmed; watchdog stands down
+##   disarm_reason    who disarmed, in plain words ("room Exit",
+##                    "window close", "watchdog loop cap", ...),
+##                    written by disarm() alongside armed=false and
+##                    read by the watchdog into its stand-down log
+##                    line - a silent dismissal cost five builds of
+##                    field diagnosis, so every disarm now names its
+##                    author. Absent in contracts written before the
+##                    field existed; loads default it to "" and the
+##                    watchdog falls back to the legacy generic.
+##                    Cleared whenever a session (re)arms. Schema
+##                    stays v2.
 ##   focus_herding    the config kill-switch, mirrored for the watchdog
 ##   close_vpx_on_table_exit  the session-close duty switch, mirrored
 ##                    the same way: in a live session, when a table
@@ -60,6 +71,7 @@ const CONTRACT_FILE_NAME: String = "pvlds_watchdog_contract.json"
 const SCHEMA_VERSION: int = 2
 
 var armed: bool = false
+var disarm_reason: String = ""
 var focus_herding: bool = true
 var close_vpx_on_table_exit: bool = true
 var hold_exit_enabled: bool = true
@@ -110,6 +122,7 @@ static func load_from_disk() -> WatchdogContract:
 		return c
 	var d: Dictionary = parsed
 	c.armed = bool(d.get("armed", false))
+	c.disarm_reason = str(d.get("disarm_reason", ""))
 	c.focus_herding = bool(d.get("focus_herding", true))
 	c.close_vpx_on_table_exit = bool(d.get("close_vpx_on_table_exit", true))
 	c.hold_exit_enabled = bool(d.get("hold_exit_enabled", true))
@@ -139,6 +152,7 @@ func to_dictionary() -> Dictionary:
 	var d: Dictionary = {}
 	d["version"] = SCHEMA_VERSION
 	d["armed"] = armed
+	d["disarm_reason"] = disarm_reason
 	d["focus_herding"] = focus_herding
 	d["close_vpx_on_table_exit"] = close_vpx_on_table_exit
 	d["hold_exit_enabled"] = hold_exit_enabled

@@ -43,6 +43,14 @@ extends Node
 ##   --pvlds-smoke-desk  desk boot (stays on the desk); flip the
 ##                       session switches through their real signals
 ##                       and assert the config FILE on disk changed
+##   --pvlds-smoke-lockout
+##                       room boot; fire a real launch (env
+##                       overrides as --pvlds-smoke-launch), then
+##                       attack the load wait - direct EXIT/SETUP
+##                       activations, a synthetic gamepad A press,
+##                       a window close - and assert the room stays
+##                       deaf, the contract stays armed/loading,
+##                       and the wait still settles at the hand-off
 ##                       with no Save & Scan, print the verdict, quit
 
 var _config: PvldsConfig
@@ -71,6 +79,14 @@ var _smoke_desk: bool = false ## --pvlds-smoke-desk: drive the desk's live sessi
 var _desk_smoke_phase: int = 0
 var _desk_smoke_wait: int = 0
 var _desk_smoke_failures: int = 0
+var _smoke_lockout: bool = false ## --pvlds-smoke-lockout: attack the load wait's input lockout mid-flight
+var _lockout_smoke_pending: bool = false ## a launch fired by the lockout smoke is in its wait; _settle_launch prints its verdict
+var _lockout_smoke_phase: int = 0
+var _lockout_smoke_wait: int = 0
+var _lockout_smoke_failures: int = 0
+var _lockout_smoke_fired_msec: int = 0
+var _lockout_exit_fired: bool = false
+var _lockout_setup_fired: bool = false
 
 # The launch load wait. While _launch_pending, _process polls for
 # the hand-off point and for VPX dying mid-load.
@@ -142,6 +158,8 @@ func _ready() -> void:
 		_smoke_placard = true
 	if user_args.has("--pvlds-smoke-desk"):
 		_smoke_desk = true
+	if user_args.has("--pvlds-smoke-lockout"):
+		_smoke_lockout = true
 	if user_args.has("--pvlds-art-bench"):
 		_art_bench = true
 		_bench_phase = 0
@@ -159,7 +177,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif _smoke_launch_game != "" and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -167,7 +185,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	if _smoke_launch_game != "" or _shot_launch_path != "":
+	if _smoke_launch_game != "" or _shot_launch_path != "" or _smoke_lockout:
 		if OS.has_environment("PVLDS_SMOKE_EXE"):
 			_config.vpx_exe_path = OS.get_environment("PVLDS_SMOKE_EXE")
 		if OS.has_environment("PVLDS_SMOKE_ARGS"):
@@ -282,6 +300,8 @@ func _process(_delta: float) -> void:
 		_drive_placard_smoke()
 	if _smoke_desk:
 		_drive_desk_smoke()
+	if _smoke_lockout:
+		_drive_lockout_smoke()
 	if _art_bench:
 		_drive_art_bench(_delta)
 	if _shot_path != "" and _shot_ready():
@@ -523,12 +543,22 @@ func _settle_launch(ok: bool, reason: String) -> void:
 		_intentional_launch_exit = true
 		if _smoke_verdict_pending:
 			print("PVLDS SMOKE LAUNCH: handed off (%s) after %.1fs" % [reason, elapsed])
+		if _lockout_smoke_pending:
+			if _lockout_smoke_failures > 0:
+				printerr("PVLDS LOCKOUT SMOKE: FAIL - %d assertion(s) failed; the hand-off itself completed (%s)" % [_lockout_smoke_failures, reason])
+				get_tree().quit(1)
+				return
+			print("PVLDS LOCKOUT SMOKE: PASS - the wait stayed deaf, the window close was ignored, and the hand-off completed (%s)" % reason)
 		get_tree().quit()
 	else:
 		_launch_service.fail_launch()
 		printerr("PVLDS LAUNCH: failed - ", reason)
 		if _smoke_verdict_pending:
 			printerr("PVLDS SMOKE LAUNCH: FAIL - ", reason)
+			get_tree().quit(1)
+			return
+		if _lockout_smoke_pending:
+			printerr("PVLDS LOCKOUT SMOKE: FAIL - the load wait itself failed (%s), with %d prior assertion failure(s)" % [reason, _lockout_smoke_failures])
 			get_tree().quit(1)
 			return
 		if _room != null and game != null:
@@ -549,7 +579,7 @@ func _poll_shot_launch() -> void:
 		var err: Error = img.save_png(path)
 		print("PVLDS SHOT LAUNCH: ", path, " err=", err, " size=", img.get_size())
 		if _launch_service != null:
-			_launch_service.disarm()
+			_launch_service.disarm("shot-launch dev hook")
 		get_tree().quit(0 if err == OK else 1)
 	elif not _launch_pending and Time.get_ticks_msec() - _shot_launch_at_msec >= 3000:
 		printerr("PVLDS SHOT LAUNCH: FAIL - the launch never entered its wait")
@@ -573,19 +603,28 @@ func _fire_shot_launch() -> void:
 
 
 ## EXIT (room rail): disarm the watchdog first - the player who
-## wants out stays out - then quit.
+## wants out stays out - then quit. The disarm names itself, as
+## every disarm now does.
 func _on_exit_requested() -> void:
 	if _launch_service != null:
-		_launch_service.disarm()
+		_launch_service.disarm("room Exit")
 	get_tree().quit()
 
 
 ## A window close without a launch is also an exit-to-desktop:
 ## disarm, so no watchdog resurrects an app the player closed.
+## DURING the load wait, though, a close is logged and ignored -
+## no disarm, no quit. The environment can produce one mid-
+## handoff (Virtual Desktop's session transfer when VPX takes
+## the headset is the known suspect), and the environment must
+## not be able to dismiss a session the player is waiting on.
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		if _launch_pending:
+			print("PVLDS: window close ignored during the load wait")
+			return
 		if _launch_service != null and not _intentional_launch_exit:
-			_launch_service.disarm()
+			_launch_service.disarm("window close")
 		get_tree().quit()
 
 
@@ -617,6 +656,151 @@ func _show_desk(message: String = "") -> void:
 func _on_setup_placard_dismissed() -> void:
 	if _desk != null:
 		_desk.visible = false
+
+
+# -------------------------------------------------- lockout smoke
+
+## --pvlds-smoke-lockout: fire a real launch (env overrides, as
+## --pvlds-smoke-launch) and, DURING the load wait, attack the
+## room the way the field failure did - and the way the fixed
+## room must now refuse:
+##   leg 1: hand the activation funnel the EXIT and SETUP quads
+##          directly (the pad reaches _activate through the
+##          focused quad; the funnel is where the refusal lives),
+##          plus a synthetic gamepad A press through the input
+##          singleton, the way the player's plunger press arrives;
+##   leg 2: fire a window close at Main mid-wait (the VD session
+##          transfer can produce one).
+## The contract must stay armed/loading with no disarm reason,
+## focus must be nowhere, and the wait must then settle normally
+## at the hand-off - _settle_launch prints the verdict.
+func _drive_lockout_smoke() -> void:
+	match _lockout_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and _scanner != null:
+				_lockout_smoke_fire()
+			else:
+				_lockout_smoke_wait += 1
+				if _lockout_smoke_wait > 3600:
+					_lockout_expect(false, "the room never came up")
+					_finish_lockout_smoke()
+		1:
+			if not _launch_pending:
+				_lockout_expect(false, "the load wait settled before the attack could run")
+				_finish_lockout_smoke()
+				return
+			_lockout_smoke_attack()
+			_lockout_smoke_wait = 0
+			_lockout_smoke_phase = 2
+		2:
+			_lockout_smoke_wait += 1
+			if _lockout_smoke_wait >= 5:
+				_lockout_smoke_after_pad()
+				_lockout_smoke_phase = 3
+		3:
+			# The settle owns the verdict and the quit. Only a
+			# wait that NEVER settles fails here.
+			if _launch_pending and Time.get_ticks_msec() - _lockout_smoke_fired_msec > 60000:
+				_lockout_expect(false, "the load wait never settled")
+				_finish_lockout_smoke()
+
+
+func _lockout_smoke_fire() -> void:
+	var game: GameEntry = null
+	if _scanner != null:
+		game = _scanner.game_by_id("dg-galaxy-corsair")
+		if game == null and not _scanner.games.is_empty():
+			game = _scanner.games[0]
+	if game == null:
+		_lockout_expect(false, "no game to launch")
+		_finish_lockout_smoke()
+		return
+	# Count the two signals whose firing would mean the room was
+	# NOT deaf. Main's own handlers are connected as well; if EXIT
+	# truly fired, Main would disarm + quit mid-attack and the
+	# harness would see the wreckage instead of a verdict.
+	_room.exit_requested.connect(func() -> void: _lockout_exit_fired = true)
+	_room.setup_requested.connect(func() -> void: _lockout_setup_fired = true)
+	_lockout_smoke_pending = true
+	_lockout_smoke_fired_msec = Time.get_ticks_msec()
+	var build: TableBuild = game.resolve_default_build(_state)
+	_on_launch_requested(game, build)
+	if not _launch_pending:
+		_lockout_expect(false, "the launch never entered its wait")
+		_finish_lockout_smoke()
+		return
+	_lockout_smoke_phase = 1
+
+
+func _lockout_smoke_attack() -> void:
+	# The room's side of the lockout: deaf, focusless, honest.
+	_lockout_expect(_room.is_launch_in_wait(), "the room reports a launch in its wait")
+	_lockout_expect(_room.focused_quad() == null, "no quad holds focus during the wait")
+	_lockout_expect(_room.focusable_count() == 0, "the focusable set is empty during the wait")
+	var exit_q: ClickableQuad = _room.rail_quad("exit")
+	var desk_q: ClickableQuad = _room.rail_quad("desk")
+	_lockout_expect(exit_q != null and not exit_q.pick_enabled, "the EXIT quad is pick-disabled during the wait")
+	_lockout_expect(desk_q != null and not desk_q.pick_enabled, "the SETUP quad is pick-disabled during the wait")
+	_lockout_expect(_room.launch_status_note().contains("controls are locked"),
+		"the banner note says the controls are locked during the wait")
+	# Leg 1a: the field attack, aimed at the funnel by hand.
+	if exit_q != null:
+		_room._activate(exit_q)
+	if desk_q != null:
+		_room._activate(desk_q)
+	_lockout_expect(not _lockout_exit_fired, "activating EXIT during the wait fired nothing")
+	_lockout_expect(not _lockout_setup_fired, "activating SETUP during the wait fired nothing")
+	_lockout_expect(_launch_pending, "the launcher is still resident after the activation attempts")
+	# Leg 1b: feed a gamepad A press (release follows in phase 2,
+	# so the room's poll sees a genuinely held button across
+	# frames - the player's plunger press, arriving mid-load).
+	var press: InputEventJoypadButton = InputEventJoypadButton.new()
+	press.device = 0
+	press.button_index = JOY_BUTTON_A
+	press.pressed = true
+	Input.parse_input_event(press)
+
+
+func _lockout_smoke_after_pad() -> void:
+	# Whether the synthetic press registered with the input
+	# singleton at all - reported, not asserted: the direct
+	# _activate leg above is the load-bearing refusal proof, and
+	# this line keeps the report honest about the pad leg.
+	print("  info - lockout smoke: synthetic A press visible to Input: ", Input.is_joy_button_pressed(0, JOY_BUTTON_A))
+	var release: InputEventJoypadButton = InputEventJoypadButton.new()
+	release.device = 0
+	release.button_index = JOY_BUTTON_A
+	release.pressed = false
+	Input.parse_input_event(release)
+	_lockout_expect(not _lockout_exit_fired, "a gamepad A press during the wait fired no EXIT")
+	_lockout_expect(not _lockout_setup_fired, "a gamepad A press during the wait fired no SETUP")
+	_lockout_expect(_launch_pending, "the launcher is still resident after the A press")
+	var c: WatchdogContract = WatchdogContract.load_from_disk()
+	_lockout_expect(c.armed, "the contract is still armed after the attack")
+	_lockout_expect(c.session_state == "loading", "the session is still loading after the attack")
+	_lockout_expect(c.disarm_reason == "", "no disarm reason was written by the attack")
+	# Leg 2: a window close lands mid-wait. Logged and ignored:
+	# no disarm, no quit, the session sails on to its hand-off.
+	_notification(NOTIFICATION_WM_CLOSE_REQUEST)
+	_lockout_expect(_launch_pending, "a window close during the wait did not end it")
+	var c2: WatchdogContract = WatchdogContract.load_from_disk()
+	_lockout_expect(c2.armed and c2.session_state == "loading" and c2.disarm_reason == "",
+		"the contract is untouched by the window close")
+
+
+func _lockout_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - lockout smoke: ", label)
+	else:
+		_lockout_smoke_failures += 1
+		printerr("  FAIL - lockout smoke: ", label)
+
+
+func _finish_lockout_smoke() -> void:
+	_lockout_smoke_phase = 3
+	_smoke_lockout = false
+	printerr("PVLDS LOCKOUT SMOKE: FAIL - %d assertion(s) failed; aborted before the hand-off" % maxi(_lockout_smoke_failures, 1))
+	get_tree().quit(1)
 
 
 # -------------------------------------------------- placard smoke
@@ -1075,6 +1259,7 @@ func _run_core_test() -> void:
 	contract.close_vpx_on_table_exit = false
 	contract.hold_exit_enabled = false
 	contract.hold_exit_button = "start"
+	contract.disarm_reason = "room Exit"
 	_expect(contract.save_to_disk(), "watchdog contract saves", failures)
 	var contract2: WatchdogContract = WatchdogContract.load_from_disk()
 	_expect(contract2.armed and contract2.session_id == 7 and contract2.game_pid == 4242
@@ -1083,6 +1268,8 @@ func _run_core_test() -> void:
 		and not contract2.hold_exit_enabled and contract2.hold_exit_button == "start"
 		and contract2.launcher_path == "C:/PVLDS/PVLDS.exe",
 		"watchdog contract round-trips (incl. the window-seen stamp, the close-duty switch, and the hold-to-exit fields)", failures)
+	_expect(contract2.disarm_reason == "room Exit",
+		"the disarm reason round-trips with the contract", failures)
 	# A contract written before the close duty existed has no
 	# close_vpx_on_table_exit key; it loads with the duty ON (the
 	# schema stays v2 - absence means default, never a wedge).
@@ -1094,6 +1281,10 @@ func _run_core_test() -> void:
 	# ON, button D-pad Right (the recorded ExitGame binding).
 	_expect(pre_duty.hold_exit_enabled and pre_duty.hold_exit_button == PvldsConfig.DEFAULT_HOLD_EXIT_BUTTON,
 		"a contract without the hold-to-exit keys defaults them (on, dpad_right)", failures)
+	# And the disarm reason: no key, empty string - the watchdog
+	# falls back to its legacy generic in the stand-down line.
+	_expect(pre_duty.disarm_reason == "",
+		"a contract without the disarm-reason key loads it empty", failures)
 	# Legacy schema-v1 state spellings normalize on load - a contract
 	# written by the M2 build is understood by this one.
 	_expect(_write_text_file(contract_file, "{\"session_state\": \"playing\"}"), "legacy contract written", failures)

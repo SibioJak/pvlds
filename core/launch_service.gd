@@ -20,8 +20,12 @@ extends RefCounted
 ##               during PLAY is still the fix; only the load is
 ##               covered. If VPX dies during the load, the caller
 ##               calls fail_launch() and stays in the room.
-##   Exit        disarm() - the player who wants out stays out; the
-##               watchdog reads armed=false and stands down.
+##   Exit        disarm(reason) - the player who wants out stays
+##               out; the watchdog reads armed=false and stands
+##               down. Every caller names itself in the reason: a
+##               silent disarm once dismissed whole sessions from
+##               under a loading table, and the log line that finally
+##               caught it could only say "player Exit".
 ##
 ## The watchdog is a separate tiny native process (watchdog/ in the
 ## repo). It is located beside the launcher executable first, then via
@@ -121,6 +125,7 @@ func ensure_watchdog() -> bool:
 func checkin(config: PvldsConfig) -> WatchdogContract:
 	var c: WatchdogContract = WatchdogContract.load_from_disk()
 	c.armed = true
+	c.disarm_reason = "" ## a fresh arm buries the last dismissal's reason
 	c.focus_herding = config.focus_herding if config != null else true
 	c.close_vpx_on_table_exit = config.close_vpx_on_table_exit if config != null else true
 	c.hold_exit_enabled = config.hold_exit_enabled if config != null else true
@@ -156,6 +161,7 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	# instantly, the watchdog still knows a session existed.
 	var c: WatchdogContract = WatchdogContract.load_from_disk()
 	c.armed = true
+	c.disarm_reason = ""
 	c.focus_herding = config.focus_herding
 	c.close_vpx_on_table_exit = config.close_vpx_on_table_exit
 	c.hold_exit_enabled = config.hold_exit_enabled
@@ -204,10 +210,15 @@ func fail_launch() -> void:
 
 
 ## Exit to desktop: disarm, then the caller quits. The watchdog sees
-## armed=false on its next poll and stands down for good.
-func disarm() -> void:
+## armed=false on its next poll and stands down for good. The caller
+## names itself in `reason`; the name is printed here, written into
+## the contract, and read back out by the watchdog's stand-down log
+## line, so a dismissal always confesses who ordered it.
+func disarm(reason: String) -> void:
 	var c: WatchdogContract = WatchdogContract.load_from_disk()
 	c.armed = false
+	c.disarm_reason = reason
 	c.session_state = "idle"
 	c.game_pid = 0
 	c.save_to_disk()
+	print("PVLDS DISARM: ", reason)
