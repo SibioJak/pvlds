@@ -9,7 +9,12 @@ SteamVR runtime is a later test target).
 the same day, after the first real-hardware sessions — the
 latest makes the room deaf during the load wait and makes every
 disarm name its author, after the field logs caught sessions
-being dismissed from under loading tables).** M1's room
+being dismissed from under loading tables). A further round
+(2026-10-22) swaps the exit gestures to Chris's mapping (tap
+returns to the room, hold bails to the editor — the exit
+arbitrator), adds the loading marquee, and fixes backglass
+extraction for entity-escaped files (255 of his 281 backglasses
+were stamped failed by the old reader).** M1's room
 plus real launching: card-level Launch, a native watchdog that
 returns you to the room with your place restored, focus herding,
 and Exit-to-desktop. The first session proved the launch and the
@@ -55,7 +60,14 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   the room answers input until the wait settles** — every quad is
   pick-disabled (EXIT and SETUP included), the focusable set is
   empty, the activation funnel refuses everything, and the banner
-  says the controls are locked while the table loads. The wait is
+  says the controls are locked while the table loads. The wait's
+  headline is the **loading marquee** (not a loading screen — no
+  spinner, no progress bar): the wall of cards fades down and the
+  launched table's year, with its designer beneath, flies in from
+  the wall in big display letters and holds at reading distance
+  with a gentle pulse until the wait settles (`room.gd`'s
+  MARQUEE_* constants carry the tunables; fallbacks: manufacturer
+  for a missing year, the title for a missing designer). The wait is
   bounded (below), so no cancel control is offered. The deafness
   is a root-cause fix, not a nicety: the room listens to the same
   gamepad the player plays VPX with, and A is both "activate the
@@ -139,32 +151,36 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   the editor** checkbox on the desk pass (config
   `close_vpx_on_table_exit`, default on) — uncheck it if you ever
   want to stay in the editor after a table.
-- **Hold-to-exit** (Chris's proposal, echoing VpxLauncher's UX):
-  while a session is live, the watchdog also polls the gamepad
-  (XInput, ~50ms, read-only — it never writes to the controller).
-  A **tap** of the exit button is VPX's own business and lands in
-  the editor, unchanged. A continuous **hold** of the same button
-  for ~1.5s is the deliberate "exit the whole thing" gesture: the
-  watchdog fires the same orderly close ladder as the session-
-  close duty (FrontEndControls CLOSE_APP → WM_CLOSE → give up;
-  never a hard kill), VPX dies, and the ordinary return trip
-  brings the room back. The hold is the *primary* return path —
-  a deliberate gesture needs no window-state guessing, and it
-  completes even though VPX has usually already acted on the tap
-  half and dropped to the editor by the time the threshold
-  crosses (the live session is the only gate; no player-window
-  requirement). Decision logic is shared and unit-tested on
-  Linux (`hold_logic.go`); the threshold is the one constant
-  `holdThresholdMs` there. Config: `hold_exit_enabled` (default
-  on — the **Hold-to-exit** checkbox on the desk pass) and
-  `hold_exit_button`, an XInput button name from the standard
-  set (D-pad directions, A/B/X/Y, LB/RB, Back, Start, L3/R3);
-  the default is `dpad_right` — Chris's recorded VPX ExitGame
-  binding ("right directional") — rebindable in the desk's
-  button picker. Both fields ride the contract with the usual
-  absence-means-default rule. With the session-close duty also
-  on, the hold (1.5s) fires before the closer's editor-sustain
-  (2.5s) can; either path's close ends both cleanly.
+- **Exit gestures — tap returns, hold bails** (the mapping
+  Chris settled, matching VPX Launcher's): while a session is
+  live, the watchdog also polls the gamepad (XInput, ~50ms,
+  read-only — it never writes to the controller). VPX's own tap
+  of the exit button always lands in the editor first; what the
+  button does next decides. With **both** exit switches on, the
+  exit arbitrator (`arbiter.go`) owns the gesture: the editor
+  landing opens a window, and — if the button was released
+  before the ~1.5s threshold (a **tap**) — the orderly close
+  ladder fires after a short debounce and the ordinary return
+  trip brings the room back; if it is still held when the
+  threshold passes (a **hold**), no close is ever sent: the
+  watchdog disarms the contract (`disarm_reason` "hold to
+  editor") and stands down, leaving VPX open in the editor. A
+  landing with no press at all (keyboard / menu / crash) also
+  resolves as a tap, after a ~500ms grace — no 2.5s sustain.
+  With the session-close switch **off**, the original
+  hold-to-exit stands alone (`hold_logic.go`): a continuous
+  hold during play fires the same orderly close ladder
+  (FrontEndControls CLOSE_APP → WM_CLOSE → give up; never a
+  hard kill), and a tap is VPX's own business. Both brains are
+  shared logic, unit-tested on Linux; the threshold is the one
+  constant `holdThresholdMs`. Config: `hold_exit_enabled`
+  (default on — the **Hold-to-exit** checkbox on the desk pass)
+  and `hold_exit_button`, an XInput button name from the
+  standard set (D-pad directions, A/B/X/Y, LB/RB, Back, Start,
+  L3/R3); the default is `dpad_right` — Chris's recorded VPX
+  ExitGame binding ("right directional") — rebindable in the
+  desk's button picker. Both fields ride the contract with the
+  usual absence-means-default rule.
 - **Focus herding** (Windows, user32): while a session is live, if
   the foreground leaves the game process and stays away past a 2s
   grace period, the watchdog hands foreground back to the game's
@@ -228,7 +244,15 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   **no image in file**, or **failed** (unreadable/undecodable).
   A stamped negative is remembered — panels render the title card
   immediately and the warmer never re-queues the file until it
-  changes, so a no-art table costs nothing on later visits; a
+  changes, so a no-art table costs nothing on later visits. Each
+  entry also carries the extractor's format version: entries from
+  an older extractor count as untried and are retried once under
+  the current one — v2's retry is what recovered the library's
+  entity-escaped backglasses (designer files that wrap the
+  base64 at 76 chars and store each wrap's CRLF in the attribute
+  as `&#xD;&#xA;`, which v1's strict decoder refused whole: 255
+  of 281 backglasses on Chris's library; the reader now
+  XML-unescapes attribute values before decoding); a
   panel whose claim on the warmer's in-flight extraction stalls
   past ~3s extracts the file itself rather than waiting. The
   extractor targets the format as the B2S server (the reference
@@ -350,7 +374,9 @@ cached `vpsdb.json` and the same code runs your actual library.
 - `--pvlds-shot-launch <path.png>` — with `--pvlds-seed-dummy`:
   once the wall is up, fire a real launch (same env overrides) and
   screenshot the room ~1s into the load wait — the LOADING-state
-  QA capture. Disarms and quits right after the shot.
+  QA capture. Disarms and quits right after the shot. The capture
+  delay is retunable via `PVLDS_SHOT_LAUNCH_DELAY_MS` (the
+  marquee QA loop shoots mid-fly-in and settled frames).
 - `--pvlds-smoke-placard` — room boot; force the XR flag on, open
   setup with a message, and assert the placard contract (room
   stays up, placard stands with the message, wall/rail inert,

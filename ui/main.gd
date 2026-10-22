@@ -566,13 +566,19 @@ func _settle_launch(ok: bool, reason: String) -> void:
 
 
 ## --pvlds-shot-launch: fire a real launch once the wall is ready,
-## then capture the LOADING room ~1s into the wait and leave.
+## then capture the LOADING room ~1s into the wait and leave. The
+## capture delay is retunable via PVLDS_SHOT_LAUNCH_DELAY_MS (the
+## marquee QA loop shoots mid-fly-in and settled frames).
 func _poll_shot_launch() -> void:
 	if not _shot_launch_fired:
 		if _room != null and _room.visible and _room.wall_ready:
 			_fire_shot_launch()
 		return
-	if _launch_pending and Time.get_ticks_msec() - _shot_launch_at_msec >= 1000:
+	var delay_ms: int = 1000
+	var delay_env: String = OS.get_environment("PVLDS_SHOT_LAUNCH_DELAY_MS")
+	if delay_env.is_valid_int():
+		delay_ms = delay_env.to_int()
+	if _launch_pending and Time.get_ticks_msec() - _shot_launch_at_msec >= delay_ms:
 		var path: String = _shot_launch_path
 		_shot_launch_path = ""
 		var img: Image = get_viewport().get_texture().get_image()
@@ -581,7 +587,7 @@ func _poll_shot_launch() -> void:
 		if _launch_service != null:
 			_launch_service.disarm("shot-launch dev hook")
 		get_tree().quit(0 if err == OK else 1)
-	elif not _launch_pending and Time.get_ticks_msec() - _shot_launch_at_msec >= 3000:
+	elif not _launch_pending and Time.get_ticks_msec() - _shot_launch_at_msec >= maxi(3000, delay_ms + 1500):
 		printerr("PVLDS SHOT LAUNCH: FAIL - the launch never entered its wait")
 		get_tree().quit(1)
 
@@ -1561,6 +1567,61 @@ func _run_core_test() -> void:
 	_expect(ArtProvider.outcome_for(b2s_neg) == "", "replacing the file clears its stamped outcome (new stamp)", failures)
 	_expect(ArtProvider.extract_directb2s_image(b2s_neg) != "" and ArtProvider.outcome_for(b2s_neg) == ArtProvider.STATUS_OK,
 		"the replacement's art extracts and records ok", failures)
+	# Extractor v2 (this round): the entity-escaped payload. Real
+	# designer files wrap the base64 at 76 characters and store each
+	# wrap's CRLF inside the attribute as &#xD;&#xA; - a real XML
+	# parser decodes them automatically; the v1 raw-text reader fed
+	# the escapes to the strict base64 decoder, which refused the
+	# whole blob, and the file stamped failed (255 of Chris's 281
+	# backglasses). This fixture is exactly that shape, with every
+	# '+' additionally escaped as the decimal reference &#43; to
+	# exercise the general numeric path.
+	_expect(ArtProvider._xml_unescape("a&#xD;&#xA;b&#43;c&amp;d") == "a\r\nb+c&d",
+		"the unescape decodes hex, decimal, and named references (amp last)", failures)
+	var esc_img: Image = mk_img.call(400, 500) as Image
+	var esc_raw: String = Marshalls.raw_to_base64(esc_img.save_png_to_buffer())
+	var esc_wrapped: String = ""
+	var esc_i: int = 0
+	while esc_i < esc_raw.length():
+		if esc_i > 0:
+			esc_wrapped += "&#xD;&#xA;"
+		esc_wrapped += esc_raw.substr(esc_i, 76).replace("+", "&#43;")
+		esc_i += 76
+	var b2s_esc: String = art_dir.path_join("Escaped Table.directb2s")
+	_expect(_write_text_file(b2s_esc, "<DirectB2SData><Images><BackglassImage Value=\"" + esc_wrapped + "\" /></Images></DirectB2SData>"),
+		"entity-escaped fixture written", failures)
+	var esc_cache: String = ArtProvider.extract_directb2s_image(b2s_esc)
+	var esc_out: Image = Image.new()
+	_expect(esc_cache != "" and esc_out.load(esc_cache) == OK and esc_out.get_width() == 400 and esc_out.get_height() == 500
+		and ArtProvider.outcome_for(b2s_esc) == ArtProvider.STATUS_OK,
+		"an entity-escaped backglass extracts under the v2 reader (400x500, unscaled)", failures)
+	# Extractor-version migration: an index entry written by the
+	# old reader (no "v" field = v1) counts as untried under v2, so
+	# a file v1 stamped failed gets its one retry - and the retry's
+	# record carries the new version, so it settles.
+	var b2s_mig: String = art_dir.path_join("Migrated Table.directb2s")
+	_expect(bool(mk_b2s.call(b2s_mig, 400, 500)), "migration fixture written", failures)
+	var mig_key: String = ArtProvider.stamp_key_for(b2s_mig)
+	var idx_path: String = "user://art_cache/art_index.json"
+	var planted: Dictionary = {}
+	var idx_text: String = FileAccess.get_file_as_string(idx_path)
+	if idx_text != "":
+		var parsed_idx: Variant = JSON.parse_string(idx_text)
+		if parsed_idx is Dictionary:
+			planted = parsed_idx as Dictionary
+	planted[mig_key] = {"status": "failed", "src": b2s_mig}
+	_expect(_write_text_file(idx_path, JSON.stringify(planted)), "v1 failed entry planted", failures)
+	ArtProvider.reload_index()
+	_expect(ArtProvider.outcome_for(b2s_mig) == "", "a v1 failed entry reads as untried under extractor v2", failures)
+	_expect(ArtProvider.extract_directb2s_image(b2s_mig) != "" and ArtProvider.outcome_for(b2s_mig) == ArtProvider.STATUS_OK,
+		"the migrated file extracts on retry and records ok", failures)
+	var after_idx: Dictionary = {}
+	var parsed_after: Variant = JSON.parse_string(FileAccess.get_file_as_string(idx_path))
+	if parsed_after is Dictionary:
+		after_idx = parsed_after as Dictionary
+	var after_entry: Variant = after_idx.get(mig_key, null)
+	_expect(after_entry is Dictionary and int((after_entry as Dictionary).get("v", 0)) == ArtProvider.EXTRACTOR_VERSION,
+		"the retried entry is stamped with the current extractor version", failures)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")

@@ -22,6 +22,32 @@ const FILTER_LABELS: Dictionary = {"all": "ALL", "vr": "VR", "favorites": "FAVOR
 const SORTS: Array[String] = ["name", "year", "manufacturer", "designer"]
 const SORT_LABELS: Dictionary = {"name": "NAME", "year": "YEAR", "manufacturer": "MAKER", "designer": "DESIGNER"}
 
+# ------------------------------------------------------- loading marquee
+## The load wait's headline. Chris: "I have 50 years of hating
+## loading screens" - so this is NOT a loading screen: no spinner,
+## no progress bar, no percentage, no LOADING text. While a table
+## loads, the wall of cards fades down and the launched table's
+## year, with its designer beneath, flies in from the wall in big
+## marquee letters, settles at reading distance, and holds with a
+## gentle pulse until the wait settles. Every feel knob is a
+## constant here, for one-line retunes after Chris's verdict.
+const MARQUEE_FADE_SEC: float = 0.6 ## wall fade-down duration
+const MARQUEE_WALL_ALPHA: float = 0.16 ## the wall's alpha while the marquee stands
+const MARQUEE_FLY_IN_SEC: float = 1.4 ## the letters' travel time, wall -> settle
+const MARQUEE_START_Z: float = -3.05 ## fly-in start depth (at the wall)
+const MARQUEE_SETTLE_POS: Vector3 = Vector3(0.0, 1.42, -1.55) ## reading distance, on the view axis
+const MARQUEE_PIXEL_SIZE: float = 0.005 ## Label3D world scale
+const MARQUEE_YEAR_FONT_SIZE: int = 170
+const MARQUEE_NAME_FONT_SIZE: int = 84
+const MARQUEE_YEAR_Y: float = 0.30 ## year line's offset from the holder's centre
+const MARQUEE_NAME_Y: float = -0.34 ## designer/title line's offset
+const MARQUEE_PULSE_RATE: float = 1.6 ## settle pulse, cycles per second
+const MARQUEE_PULSE_AMOUNT: float = 0.025 ## settle pulse, scale amplitude
+const MARQUEE_YEAR_COLOR: Color = Color(1.0, 0.78, 0.25) ## marquee amber
+const MARQUEE_NAME_COLOR: Color = Color(0.45, 0.85, 1.0) ## playfield blue
+const MARQUEE_OUTLINE_COLOR: Color = Color(0.04, 0.02, 0.0)
+const MARQUEE_OUTLINE_SIZE: int = 24
+
 var _factory: TextureFactory
 var _scanner: LibraryScanner
 var _store: StateStore
@@ -49,6 +75,12 @@ var _launching_game_id: String = "" ## a launch is in its load wait (Main owns i
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
 var _selected_game_id: String = "" ## last game opened/launched; restored + persisted as view state
+var _marquee: Node3D = null ## the loading marquee's holder; in the tree only during a load wait
+var _marquee_year: Label3D = null
+var _marquee_name: Label3D = null
+var _marquee_up: bool = false
+var _marquee_t: float = 0.0 ## seconds since the marquee rose
+var _wall_alpha_applied: float = 1.0 ## the wall fade's last applied alpha (change guard)
 var _placard: Node3D = null ## the setup placard's holder; in the tree only while the placard stands
 var _placard_face: ClickableQuad = null
 var _placard_back: ClickableQuad = null
@@ -308,6 +340,7 @@ func _rebuild_wall() -> void:
 	_panels.clear()
 	_panel_launches.clear()
 	_rail_quads.clear()
+	_wall_alpha_applied = 1.0 ## fresh quads start opaque; the marquee fade re-applies from there
 	_set_focused(null)
 
 	var placeholder: Texture2D = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
@@ -838,6 +871,7 @@ func begin_launch(game: GameEntry) -> void:
 	_refresh_focusables()
 	_swap_launch_textures()
 	_refresh_banner()
+	_raise_marquee(game)
 
 
 ## VPX died during the load, with the launcher still resident to
@@ -846,6 +880,7 @@ func begin_launch(game: GameEntry) -> void:
 ## the visible surface - its Play button is restored and the wall
 ## rebuilds when it closes, as usual.
 func end_launch_failed(game: GameEntry, reason: String) -> void:
+	_dismiss_marquee()
 	_launching_game_id = ""
 	_failed_game_id = game.game_id
 	_status_note = "Launch failed: %s - %s" % [game.title, reason]
@@ -854,6 +889,127 @@ func end_launch_failed(game: GameEntry, reason: String) -> void:
 	if _mode == "detail":
 		return
 	_rebuild_wall()
+
+
+## Raise the loading marquee for the wait begin_launch just
+## started. Line 1 is the year in big display letters; line 2 is
+## the designer beneath it. Fallbacks, per the brief: no year ->
+## line 1 falls back to the manufacturer (and then to the title);
+## no designer -> line 2 falls back to the title. An empty line
+## is HIDDEN - never an "Unknown designer" placeholder.
+func _raise_marquee(game: GameEntry) -> void:
+	_dismiss_marquee()
+	_build_marquee()
+	var top: String = ""
+	if game.year > 0:
+		top = str(game.year)
+	elif game.manufacturer != "":
+		top = game.manufacturer
+	var bottom: String = ""
+	if not game.designers.is_empty():
+		bottom = ", ".join(PackedStringArray(game.designers))
+	elif top != game.title:
+		bottom = game.title
+	if top == "":
+		top = game.title
+		bottom = ""
+	_marquee_year.text = top
+	_marquee_name.text = bottom
+	_marquee_name.visible = bottom != ""
+	_marquee_t = 0.0
+	_marquee_up = true
+	add_child(_marquee)
+	ClickableQuad.face_point(_marquee, EYE)
+
+
+func _build_marquee() -> void:
+	_marquee = Node3D.new()
+	_marquee.name = "LoadingMarquee"
+	_marquee.position = Vector3(MARQUEE_SETTLE_POS.x, MARQUEE_SETTLE_POS.y, MARQUEE_START_Z)
+	_marquee_year = Label3D.new()
+	_marquee_year.pixel_size = MARQUEE_PIXEL_SIZE
+	_marquee_year.font_size = MARQUEE_YEAR_FONT_SIZE
+	_marquee_year.outline_size = MARQUEE_OUTLINE_SIZE
+	_marquee_year.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_marquee_year.position = Vector3(0.0, MARQUEE_YEAR_Y, 0.0)
+	_marquee_year.modulate = Color(MARQUEE_YEAR_COLOR, 0.0)
+	_marquee_year.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, 0.0)
+	_marquee.add_child(_marquee_year)
+	_marquee_name = Label3D.new()
+	_marquee_name.pixel_size = MARQUEE_PIXEL_SIZE
+	_marquee_name.font_size = MARQUEE_NAME_FONT_SIZE
+	_marquee_name.outline_size = MARQUEE_OUTLINE_SIZE
+	_marquee_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_marquee_name.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_marquee_name.width = 700.0
+	_marquee_name.position = Vector3(0.0, MARQUEE_NAME_Y, 0.0)
+	_marquee_name.modulate = Color(MARQUEE_NAME_COLOR, 0.0)
+	_marquee_name.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, 0.0)
+	_marquee.add_child(_marquee_name)
+	# No face_point here: the holder is oriented in _raise_marquee,
+	# once it is inside the tree (the placard's lesson).
+
+
+## Tear the marquee down and hand the wall its opacity back. The
+## holder is FREED, not parked - the placard's rule (renderer
+## teardown choked on parked holders at exit). On a successful
+## hand-off this never runs: the process exits with the marquee
+## standing, which is the point - it holds until the wait settles.
+func _dismiss_marquee() -> void:
+	_marquee_up = false
+	if _marquee != null:
+		if _marquee.get_parent() != null:
+			remove_child(_marquee)
+		_marquee.queue_free()
+		_marquee = null
+		_marquee_year = null
+		_marquee_name = null
+	_apply_wall_alpha(1.0)
+
+
+## Per-frame marquee animation, driven from _process: the wall
+## fades down and stays down; the letters fly from the wall to the
+## settle point and hold there with a gentle pulse.
+func _update_marquee(delta: float) -> void:
+	if not _marquee_up or _marquee == null:
+		return
+	_marquee_t += delta
+	var fade_p: float = clampf(_marquee_t / MARQUEE_FADE_SEC, 0.0, 1.0)
+	var fade_e: float = fade_p * fade_p * (3.0 - 2.0 * fade_p)
+	_apply_wall_alpha(lerpf(1.0, MARQUEE_WALL_ALPHA, fade_e))
+	var fly_p: float = clampf(_marquee_t / MARQUEE_FLY_IN_SEC, 0.0, 1.0)
+	var fly_e: float = 1.0 - pow(1.0 - fly_p, 3.0)
+	_marquee.position = Vector3(MARQUEE_SETTLE_POS.x, MARQUEE_SETTLE_POS.y,
+		lerpf(MARQUEE_START_Z, MARQUEE_SETTLE_POS.z, fly_e))
+	# The pulse ramps in across the fly-in (multiplied by fly_p)
+	# and the scale eases up from the wall, so neither jumps at
+	# the settle point.
+	var pulse: float = 1.0 + MARQUEE_PULSE_AMOUNT * sin(_marquee_t * MARQUEE_PULSE_RATE * TAU) * fly_p
+	_marquee.scale = Vector3.ONE * pulse * lerpf(0.85, 1.0, fly_e)
+	var alpha: float = clampf(_marquee_t / (MARQUEE_FLY_IN_SEC * 0.4), 0.0, 1.0)
+	_marquee_year.modulate = Color(MARQUEE_YEAR_COLOR, alpha)
+	_marquee_year.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, alpha)
+	_marquee_name.modulate = Color(MARQUEE_NAME_COLOR, alpha)
+	_marquee_name.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, alpha)
+
+
+## The wall fade itself: panels, their Launch buttons, the rail,
+## and the banner. Change-guarded - _update_marquee calls this
+## every frame of the wait.
+func _apply_wall_alpha(a: float) -> void:
+	if absf(a - _wall_alpha_applied) < 0.002:
+		return
+	_wall_alpha_applied = a
+	for q: ClickableQuad in _panels:
+		q.set_content_alpha(a)
+	for q: ClickableQuad in _panel_launches:
+		q.set_content_alpha(a)
+	for k: Variant in _rail_quads.keys():
+		var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
+		if rq != null:
+			rq.set_content_alpha(a)
+	if _banner_quad != null:
+		_banner_quad.set_content_alpha(a)
 
 
 ## Load-wait queries (the lockout smoke reads the room the way the
@@ -937,6 +1093,9 @@ func _process(delta: float) -> void:
 	# poll still tracks button state - so a press held through the
 	# settle can't resurface as a phantom edge afterwards - but it
 	# moves no focus, activates nothing, and escapes nothing.
+	# The loading marquee animates on this same per-frame beat.
+	if _marquee_up:
+		_update_marquee(delta)
 	var deaf: bool = _launching_game_id != ""
 	_joy_cooldown = maxf(0.0, _joy_cooldown - delta)
 	var ax: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)

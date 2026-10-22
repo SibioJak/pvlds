@@ -31,6 +31,7 @@ func setup(p_action: String, p_payload: String, tex: Texture2D, size: Vector2) -
 	_frame_mat = StandardMaterial3D.new()
 	_frame_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_frame_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_frame_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_frame_mat.albedo_color = HOVER_COLOR
 	_frame = MeshInstance3D.new()
 	var fq: QuadMesh = QuadMesh.new()
@@ -44,6 +45,14 @@ func setup(p_action: String, p_payload: String, tex: Texture2D, size: Vector2) -
 	_mat = StandardMaterial3D.new()
 	_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	# Alpha transparency from the start (its alpha sits at 1 until
+	# set_content_alpha moves it): the wall fade animates the
+	# material's albedo alpha - the per-instance
+	# GeometryInstance3D.transparency fade is silently ignored by
+	# the Compatibility renderer. Depth is always written so the
+	# resting room resolves overlaps exactly like an opaque one.
+	_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
 	_mat.albedo_texture = tex
 	var mesh_instance: MeshInstance3D = MeshInstance3D.new()
 	var qm: QuadMesh = QuadMesh.new()
@@ -62,6 +71,24 @@ func setup(p_action: String, p_payload: String, tex: Texture2D, size: Vector2) -
 func set_texture(tex: Texture2D) -> void:
 	if _mat != null and tex != null:
 		_mat.albedo_texture = tex
+
+
+## Fade the quad's face (and its frame) toward transparent via
+## the materials' albedo alpha (see setup for why the material
+## route, not the instance fade). The loading marquee's wall
+## fade drives this (room.gd). 1 = fully opaque (the resting
+## state), 0 = invisible. Only the alpha moves - the frame's
+## hover/focus colour and the face's white tint are preserved.
+func set_content_alpha(a: float) -> void:
+	var alpha: float = clampf(a, 0.0, 1.0)
+	if _mat != null:
+		var c: Color = _mat.albedo_color
+		c.a = alpha
+		_mat.albedo_color = c
+	if _frame_mat != null:
+		var fc: Color = _frame_mat.albedo_color
+		fc.a = alpha
+		_frame_mat.albedo_color = fc
 
 
 func set_visual_state(hovered: bool, focused: bool) -> void:

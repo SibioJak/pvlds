@@ -27,6 +27,14 @@ package main
 // VP's editor while a player is open - WinEditor::OnClose - so
 // the escalation can only land in a state where closing is safe.)
 //
+// MODE NOTE (the arbitration round): the mapping above is the
+// hold-ONLY mode (the closer switch off). With the closer switch
+// ALSO on, this duty is fed inactive and the exit arbitrator
+// (arbiter.go) owns the gesture with the INVERTED mapping Chris
+// settled: a tap returns to the room (the arbitrator fires the
+// close at the editor landing), a hold bails to the editor and
+// disarms. See the mode table at the dispatch in main.go.
+//
 // This file owns: the XInput button name/mask table (the config's
 // hold_exit_button string resolves through it on both sides of the
 // contract), the hold brain (press timing, once-per-hold, release

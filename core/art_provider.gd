@@ -47,6 +47,14 @@ extends RefCounted
 ## visit. The index is also the desk's art-health telemetry: exact
 ## ok / no-image / failed counts for the current library, readable
 ## after the fact without extracting anything.
+##
+## Extractor version (EXTRACTOR_VERSION): every index entry carries
+## the version of the extractor that wrote it. Entries written by an
+## OLDER extractor count as untried everywhere the index is
+## consulted, so a fixed reader re-attempts every file the old
+## reader stamped - once, under the new version. That is how the
+## entity-escaped backglasses (see _xml_unescape) got their retry:
+## v1 stamped them "failed"; v2 reads them.
 
 const CACHE_DIR: String = "user://art_cache"
 const INDEX_PATH: String = CACHE_DIR + "/art_index.json"
@@ -57,6 +65,15 @@ const PANEL_ART_MAX_H: int = 640
 const STATUS_OK: String = "ok"
 const STATUS_NO_IMAGE: String = "no_image"
 const STATUS_FAILED: String = "failed"
+
+## The extractor's format version, stamped into every outcome-index
+## entry as "v". v1: the original reader (no unescaping - it
+## refused entity-escaped backglass payloads whole). v2: attribute
+## values are XML-unescaped before decoding. Bump this whenever the
+## reader learns to read something a previous version stamped
+## negatively; older entries then count as untried and are retried
+## once under the new reader.
+const EXTRACTOR_VERSION: int = 2
 
 ## Designated image elements, in the server's own precedence: the
 ## plain backglass; the lit half of an on/off pair; the dark half;
@@ -121,14 +138,21 @@ static func is_cached(b2s_path: String) -> bool:
 
 ## The recorded extraction outcome for the file's CURRENT stamp:
 ## STATUS_OK / STATUS_NO_IMAGE / STATUS_FAILED, or "" when this
-## exact file version has never been extracted.
+## exact file version has never been extracted. An entry written by
+## an older extractor version also reads "" (untried): the index is
+## only consulted through here - panels, the warmer, art health -
+## so this one gate gives every stale stamp its one retry under the
+## current reader.
 static func outcome_for(b2s_path: String) -> String:
 	_index_mutex.lock()
 	_load_index_locked()
 	var entry: Variant = _index.get(stamp_key_for(b2s_path), null)
 	_index_mutex.unlock()
 	if entry is Dictionary:
-		return str((entry as Dictionary).get("status", ""))
+		var d: Dictionary = entry as Dictionary
+		if int(d.get("v", 1)) < EXTRACTOR_VERSION:
+			return ""
+		return str(d.get("status", ""))
 	return ""
 
 
@@ -141,11 +165,28 @@ static func _record_outcome(b2s_path: String, status: String) -> void:
 	_index_mutex.lock()
 	_load_index_locked()
 	var entry: Variant = _index.get(key, null)
-	if entry is Dictionary and str((entry as Dictionary).get("status", "")) == status:
-		_index_mutex.unlock()
-		return
-	_index[key] = {"status": status, "src": b2s_path}
+	# The same-status shortcut must ALSO require a current version:
+	# a v1 entry re-recorded by the v2 reader has to gain its "v",
+	# or it would read as untried forever and be retried every pass.
+	if entry is Dictionary:
+		var d: Dictionary = entry as Dictionary
+		if str(d.get("status", "")) == status and int(d.get("v", 1)) >= EXTRACTOR_VERSION:
+			_index_mutex.unlock()
+			return
+	_index[key] = {"status": status, "src": b2s_path, "v": EXTRACTOR_VERSION}
 	_save_index_locked()
+	_index_mutex.unlock()
+
+
+## Drop the in-memory index copy and re-read it from disk. The
+## core-test migration case uses this to plant a pre-version index
+## file; nothing in the running app needs it (the index is written
+## only through _record_outcome, under the mutex).
+static func reload_index() -> void:
+	_index_mutex.lock()
+	_index_loaded = false
+	_index = {}
+	_load_index_locked()
 	_index_mutex.unlock()
 
 
@@ -268,7 +309,12 @@ static func _extract_uncached(b2s_path: String, cache_path: String) -> Dictionar
 	if designated_seen:
 		return {"path": "", "status": STATUS_FAILED}
 	# 2. Fallback: any image blob anywhere in the file (reel and
-	# illumination art included), largest first.
+	# illumination art included), largest first. NOTE: this path
+	# reads the raw text as-is - it does NOT XML-unescape, so an
+	# entity-escaped payload's base64 runs stay broken up by the
+	# entity text and are not candidates here. The designated path
+	# above is the one that unescapes; a file whose designated
+	# image is escaped-but-decodable never reaches this fallback.
 	var tried: Dictionary = {}
 	for element2: String in DESIGNATED_ELEMENTS:
 		for blob2: String in _element_value_blobs(text, element2):
@@ -328,13 +374,86 @@ static func _element_value_blobs(text: String, element: String) -> Array[String]
 				var start: int = v + 7
 				var end: int = tag.find("\"", start)
 				if end > start:
-					var blob: String = tag.substr(start, end - start).replace(" ", "").replace("\t", "").replace("\r", "").replace("\n", "")
+					# Unescape BEFORE the whitespace strip: real
+					# designer files store the base64 wrapped at 76
+					# characters with each wrap's CRLF written into
+					# the attribute as &#xD;&#xA; - what an XML
+					# parser hands the B2S server automatically,
+					# but this raw-text reader must decode itself.
+					# Undecoded, the strict base64 decoder refuses
+					# the whole blob and the file stamps "failed".
+					var blob: String = _xml_unescape(tag.substr(start, end - start)).replace(" ", "").replace("\t", "").replace("\r", "").replace("\n", "")
 					if blob.length() >= 100:
 						out.append(blob)
 			from = close
 		else:
 			from = after
 	return out
+
+
+## Decode the XML character/entity references in an attribute
+## value, the way a real XML parser hands the value to its reader:
+## numeric references (&#xHH; hex, &#NN; decimal) and the five
+## named entities (&amp; &lt; &gt; &quot; &apos;). Used ONLY on
+## base64 attribute payloads, whose alphabet contains no '&' of its
+## own - every '&' in one is an entity's start, which is what makes
+## the bulk passes below safe here (they would not be safe on
+## arbitrary XML text).
+static func _xml_unescape(value: String) -> String:
+	if not value.contains("&"):
+		return value
+	var s: String = value
+	# Bulk passes first: single sweeps for the shapes the designer
+	# actually writes. The overwhelmingly common one is the wrap
+	# CRLF - one file can carry 300k+ of them, and a per-entity
+	# parse of a 27 MB payload would crawl.
+	s = s.replace("&#xD;", "\r").replace("&#xA;", "\n")
+	s = s.replace("&#xd;", "\r").replace("&#xa;", "\n")
+	s = s.replace("&#13;", "\r").replace("&#10;", "\n")
+	s = s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'")
+	if s.contains("&#"):
+		s = _xml_unescape_numeric(s)
+	# &amp; LAST: an escaped ampersand is data, not another
+	# entity's start; decoding it earlier could re-form an entity
+	# the source meant as literal text.
+	s = s.replace("&amp;", "&")
+	return s
+
+
+## The general numeric-reference pass of _xml_unescape, for any
+## reference the bulk passes did not cover (a writer escaping '+'
+## as &#43;, say). Scans once, left to right; decoded text is
+## never rescanned. Malformed references pass through verbatim.
+static func _xml_unescape_numeric(value: String) -> String:
+	var parts: PackedStringArray = PackedStringArray()
+	var i: int = 0
+	var n: int = value.length()
+	while i < n:
+		var amp: int = value.find("&#", i)
+		if amp < 0:
+			parts.append(value.substr(i))
+			break
+		var semi: int = value.find(";", amp)
+		if semi < 0 or semi - amp > 10:
+			parts.append(value.substr(i, amp + 2 - i))
+			i = amp + 2
+			continue
+		var body: String = value.substr(amp + 2, semi - amp - 2)
+		var code: int = -1
+		if body.begins_with("x") or body.begins_with("X"):
+			var hex: String = body.substr(1)
+			if hex.is_valid_hex_number():
+				code = hex.hex_to_int()
+		elif body.is_valid_int():
+			code = body.to_int()
+		if code <= 0 or code > 0x10FFFF:
+			parts.append(value.substr(i, semi + 1 - i))
+			i = semi + 1
+			continue
+		parts.append(value.substr(i, amp - i))
+		parts.append(char(code))
+		i = semi + 1
+	return "".join(parts)
 
 
 ## Decode one base64 blob to an Image, or null. Cheap probe first:
