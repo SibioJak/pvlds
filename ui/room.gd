@@ -106,6 +106,7 @@ var _focused: ClickableQuad = null
 var _joy_cooldown: float = 0.0
 var _joy_prev_a: bool = false
 var _joy_prev_b: bool = false
+var _joy_prev_right: bool = false ## D-pad Right edge tracking: the room's BACK-out press (see _process)
 
 
 func setup(factory: TextureFactory, scanner: LibraryScanner, store: StateStore, xr_enabled: bool) -> void:
@@ -1187,10 +1188,21 @@ func _process(delta: float) -> void:
 	# drifts with the cursor makes every click target swim (field
 	# finding, round 2). XR head tracking owns the view in XR only.
 	# Gamepad: left stick / d-pad moves focus, A selects, B goes back.
+	# D-pad Right is NOT a focus direction: it is the BACK button,
+	# with exactly two meanings in the whole app (the player's
+	# ruling, 2026-10-22 - no hold gesture exists anywhere). In
+	# play it is VPX's own Exit Game binding: the press lands in
+	# the editor and the watchdog's close duty brings the room
+	# back. Here in the room, a FRESH press of it quits the app to
+	# the desktop - the rail EXIT action, on the pad. The left
+	# stick still moves focus in all four directions, right
+	# included.
 	# During the load wait the room is deaf (see begin_launch): the
 	# poll still tracks button state - so a press held through the
 	# settle can't resurface as a phantom edge afterwards - but it
-	# moves no focus, activates nothing, and escapes nothing.
+	# moves no focus, activates nothing, and escapes nothing. On
+	# the SETUP placard the press also does nothing: BACK is the
+	# only way off the placard.
 	# The loading marquee animates on this same per-frame beat.
 	if _marquee_up:
 		_update_marquee(delta)
@@ -1202,7 +1214,7 @@ func _process(delta: float) -> void:
 	var dir: Vector2 = Vector2.ZERO
 	if Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_LEFT) or ax < -0.55:
 		dir = Vector2(-1.0, 0.0)
-	elif Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_RIGHT) or ax > 0.55:
+	elif ax > 0.55:
 		dir = Vector2(1.0, 0.0)
 	elif Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_UP) or ay < -0.55:
 		dir = Vector2(0.0, -1.0)
@@ -1220,6 +1232,10 @@ func _process(delta: float) -> void:
 	if b_now and not _joy_prev_b and _mode == "detail" and not deaf:
 		_detail.handle_escape()
 	_joy_prev_b = b_now
+	var right_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_RIGHT)
+	if right_now and not _joy_prev_right and not deaf and not _placard_up:
+		_handle_rail("exit")
+	_joy_prev_right = right_now
 
 
 func _cycle_focus(step: int) -> void:

@@ -14,9 +14,6 @@ var _filling_from_config: bool = false ## true while _fill_from_config sets widg
 var _exe_edit: LineEdit
 var _args_edit: LineEdit
 var _herding_check: CheckBox
-var _close_check: CheckBox
-var _hold_check: CheckBox
-var _hold_button_picker: OptionButton
 var _db_edit: LineEdit
 var _folder_rows: VBoxContainer
 var _folder_edits: Array[LineEdit] = []
@@ -33,13 +30,6 @@ var _downloading: bool = false
 
 const MAX_FOLDER_ROWS: int = 6
 const DOWNLOAD_PARTIAL_PATH: String = "user://vpsdb_download.partial"
-## Picker labels for PvldsConfig.HOLD_EXIT_BUTTONS, in the same order.
-const HOLD_BUTTON_LABELS: Array[String] = [
-	"D-pad Up", "D-pad Down", "D-pad Left", "D-pad Right",
-	"A", "B", "X", "Y",
-	"LB (left bumper)", "RB (right bumper)",
-	"Back", "Start", "L3 (left stick click)", "R3 (right stick click)",
-]
 
 
 func setup(config: PvldsConfig) -> void:
@@ -101,27 +91,6 @@ func _build_ui() -> void:
 	_herding_check.tooltip_text = "Design section 3 amendment: during the launch settle and during play, the watchdog returns foreground focus to the VPX window when something steals it. It never moves or resizes windows."
 	_herding_check.toggled.connect(func(_on: bool) -> void: _apply_session_settings())
 	vbox.add_child(_herding_check)
-	_close_check = CheckBox.new()
-	_close_check.text = "Close VPX when a table exits to the editor - the watchdog ends VPX so the launcher can come back (uncheck if you want to stay in the editor after a table)"
-	_close_check.tooltip_text = "VPX has no exit-after-table flag: leaving a table lands in the VPX editor with the process still running. While a session is live, the watchdog notices the editor sitting in front with the player gone and closes VPX in an orderly way, which is what lets the launcher return."
-	_close_check.toggled.connect(func(_on: bool) -> void: _apply_session_settings())
-	vbox.add_child(_close_check)
-	_hold_check = CheckBox.new()
-	_hold_check.text = "Hold-to-exit - holding your gamepad exit button (about 1.5s) during play closes VPX and brings the launcher back; a tap still just drops to the editor"
-	_hold_check.tooltip_text = "While a session is live, the watchdog polls the gamepad. A tap of the exit button is VPX's own business (you land in the editor, as always); a continuous hold of about 1.5 seconds is the deliberate 'exit the whole thing' gesture - the watchdog closes VPX in an orderly way and the launcher returns. Read-only: the watchdog never writes to the controller."
-	_hold_check.toggled.connect(func(_on: bool) -> void: _apply_session_settings())
-	vbox.add_child(_hold_check)
-	var hold_row: HBoxContainer = HBoxContainer.new()
-	hold_row.add_theme_constant_override("separation", 8)
-	vbox.add_child(hold_row)
-	var hold_label: Label = Label.new()
-	hold_label.text = "Hold exit button"
-	hold_row.add_child(hold_label)
-	_hold_button_picker = OptionButton.new()
-	for i: int in range(PvldsConfig.HOLD_EXIT_BUTTONS.size()):
-		_hold_button_picker.add_item(HOLD_BUTTON_LABELS[i], i)
-	_hold_button_picker.item_selected.connect(func(_idx: int) -> void: _apply_session_settings())
-	hold_row.add_child(_hold_button_picker)
 	_folder_rows = VBoxContainer.new()
 	_folder_rows.add_theme_constant_override("separation", 8)
 	vbox.add_child(_folder_label())
@@ -259,14 +228,14 @@ func _fill_from_config() -> void:
 	_filling_from_config = false
 
 
-## The four session widgets from the config - the fill half of the
-## live-settings pair (see _apply_session_settings).
+## The session widget from the config - the fill half of the
+## live-settings pair (see _apply_session_settings). Focus herding
+## is the only session switch left: the close duty lost its
+## checkbox when the exit model was simplified (the watchdog
+## closes the editor unconditionally now), and hold-to-exit was
+## stricken outright (2026-10-22).
 func _fill_session_widgets() -> void:
 	_herding_check.button_pressed = _config.focus_herding
-	_close_check.button_pressed = _config.close_vpx_on_table_exit
-	_hold_check.button_pressed = _config.hold_exit_enabled
-	var hold_idx: int = PvldsConfig.HOLD_EXIT_BUTTONS.find(_config.hold_exit_button)
-	_hold_button_picker.select(hold_idx if hold_idx >= 0 else PvldsConfig.HOLD_EXIT_BUTTONS.find(PvldsConfig.DEFAULT_HOLD_EXIT_BUTTON))
 
 
 func _on_use_dummy() -> void:
@@ -291,41 +260,31 @@ func _collect_into_config() -> void:
 			_config.table_folders.append(f)
 
 
-## Just the session switches out of the widgets - shared by the
+## Just the session switch out of the widget - shared by the
 ## full Save & Scan collect and the live apply below.
 func _collect_session_settings() -> void:
 	_config.focus_herding = _herding_check.button_pressed
-	_config.close_vpx_on_table_exit = _close_check.button_pressed
-	_config.hold_exit_enabled = _hold_check.button_pressed
-	if _hold_button_picker.selected >= 0 and _hold_button_picker.selected < PvldsConfig.HOLD_EXIT_BUTTONS.size():
-		_config.hold_exit_button = PvldsConfig.HOLD_EXIT_BUTTONS[_hold_button_picker.selected]
 
 
-## The session switches (focus herding, close-on-exit, hold-to-exit
-## and its button) are live settings, not form data: they apply the
-## moment they are flipped - collect just those fields and save,
-## no scan, no other side effects. Everything else on this desk
-## (paths, template, folders) stays on the Save & Scan model, so
-## half-typed text never half-saves. (Before this, the switches
-## were only read on Save & Scan, so a flip followed by Enter the
-## Room silently did nothing - Chris's isolation test, 2026-10-21.)
-## A failed save restores the config and the widgets to exactly
-## what they were and says so in the stats area: a switch that did
-## not save must not look - or act - flipped.
+## The session switch (focus herding) is a live setting, not form
+## data: it applies the moment it is flipped - collect just that
+## field and save, no scan, no other side effects. Everything
+## else on this desk (paths, template, folders) stays on the
+## Save & Scan model, so half-typed text never half-saves.
+## (Before this, the switches were only read on Save & Scan, so a
+## flip followed by Enter the Room silently did nothing - Chris's
+## isolation test, 2026-10-21.) A failed save restores the config
+## and the widget to exactly what they were and says so in the
+## stats area: a switch that did not save must not look - or act -
+## flipped.
 func _apply_session_settings() -> void:
 	if _filling_from_config or _config == null:
 		return
 	var prev_herding: bool = _config.focus_herding
-	var prev_close: bool = _config.close_vpx_on_table_exit
-	var prev_hold: bool = _config.hold_exit_enabled
-	var prev_hold_button: String = _config.hold_exit_button
 	_collect_session_settings()
 	if _config.save_to_disk():
 		return
 	_config.focus_herding = prev_herding
-	_config.close_vpx_on_table_exit = prev_close
-	_config.hold_exit_enabled = prev_hold
-	_config.hold_exit_button = prev_hold_button
 	_filling_from_config = true
 	_fill_session_widgets()
 	_filling_from_config = false

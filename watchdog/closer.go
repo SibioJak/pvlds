@@ -68,9 +68,15 @@ const (
 )
 
 const (
-	// How long the editor-returned state must hold before the first
-	// close request: a transient window shuffle is not an exit.
-	editorSustainMs = 2500
+	// How long the editor-returned state must hold before the
+	// first close request - a landing confirmation, not a wait:
+	// the watchdog ticks every 400ms, so the close fires on the
+	// first tick at/after this, ~400ms after the landing confirms.
+	// (It was 2500ms when the duty had a desk switch and shared
+	// the stage with the hold arbitrator; with hold stricken and
+	// the duty unconditional - the player's ruling, 2026-10-22 -
+	// the return should feel immediate.)
+	editorSustainMs = 400
 	// Grace after the FrontEndControls request before escalating to
 	// WM_CLOSE (an acked request still needs a moment to act).
 	fecGraceMs = 4000
@@ -87,11 +93,12 @@ type closer struct {
 	actionAtMs    int64 // when the current stage's action went out
 }
 
-// tick advances the duty by one watchdog tick. It only acts in a
-// live session with the duty enabled and the game process alive, and
-// fires each escalation step at most once per session. A new
-// sessionID resets everything: the next session starts fresh.
-func (cl *closer) tick(nowMs int64, sessionID int, state string, enabled bool, alive bool, ws windowState) closeAction {
+// tick advances the duty by one watchdog tick. The duty is
+// unconditional - there is no switch - but it only acts in a live
+// session with the game process alive, and fires each escalation
+// step at most once per session. A new sessionID resets
+// everything: the next session starts fresh.
+func (cl *closer) tick(nowMs int64, sessionID int, state string, alive bool, ws windowState) closeAction {
 	if sessionID != cl.sessionID {
 		*cl = closer{sessionID: sessionID}
 	}
@@ -102,10 +109,10 @@ func (cl *closer) tick(nowMs int64, sessionID int, state string, enabled bool, a
 	if alive && ws.playerPresent {
 		cl.playerSeen = true
 	}
-	if !enabled || state != "live" || !alive {
-		// Never while the launcher is resident/loading, never with
-		// the switch off, never against a dead process. A broken
-		// editor state also restarts the sustain clock.
+	if state != "live" || !alive {
+		// Never while the launcher is resident/loading, never
+		// against a dead process. A broken editor state also
+		// restarts the sustain clock.
 		cl.editorSinceMs = 0
 		return closeNone
 	}

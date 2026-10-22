@@ -47,8 +47,18 @@ extends Node
 ##                       assert the flat path is the legacy one,
 ##                       print the verdict, quit
 ##   --pvlds-smoke-desk  desk boot (stays on the desk); flip the
-##                       session switches through their real signals
-##                       and assert the config FILE on disk changed
+##                       session switch through its real signal and
+##                       assert the config FILE on disk changed;
+##                       also assert the stricken close/hold
+##                       controls are absent from the desk
+##   --pvlds-smoke-dpadexit
+##                       room boot; inject a synthetic fresh
+##                       D-pad Right press into the room's real
+##                       poll - the app must exit through the rail
+##                       EXIT path (disarm "room Exit" + quit).
+##                       The harness asserts the exit + the
+##                       contract from outside; if the press does
+##                       nothing the driver prints FAIL and quits 1
 ##   --pvlds-smoke-lockout
 ##                       room boot; fire a real launch (env
 ##                       overrides as --pvlds-smoke-launch), then
@@ -94,7 +104,10 @@ var _smoke_placard: bool = false ## --pvlds-smoke-placard: drive the setup-placa
 var _placard_smoke_phase: int = 0
 var _placard_smoke_wait: int = 0
 var _placard_smoke_failures: int = 0
-var _smoke_desk: bool = false ## --pvlds-smoke-desk: drive the desk's live session switches, assert the config file follows
+var _smoke_desk: bool = false ## --pvlds-smoke-desk: drive the desk's live session switch, assert the config file follows
+var _smoke_dpadexit: bool = false ## --pvlds-smoke-dpadexit: a fresh D-pad Right in the room must exit the app
+var _dpadexit_smoke_phase: int = 0
+var _dpadexit_smoke_wait: int = 0
 var _desk_smoke_phase: int = 0
 var _desk_smoke_wait: int = 0
 var _desk_smoke_failures: int = 0
@@ -189,6 +202,8 @@ func _ready() -> void:
 		_smoke_placard = true
 	if user_args.has("--pvlds-smoke-desk"):
 		_smoke_desk = true
+	if user_args.has("--pvlds-smoke-dpadexit"):
+		_smoke_dpadexit = true
 	if user_args.has("--pvlds-smoke-lockout"):
 		_smoke_lockout = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -210,7 +225,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _shot_pop_prefix != "") and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _shot_pop_prefix != "") and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -333,6 +348,8 @@ func _process(_delta: float) -> void:
 		_drive_placard_smoke()
 	if _smoke_desk:
 		_drive_desk_smoke()
+	if _smoke_dpadexit:
+		_drive_dpadexit_smoke()
 	if _smoke_lockout:
 		_drive_lockout_smoke()
 	if _smoke_quitwarm:
@@ -800,7 +817,9 @@ func _on_setup_placard_dismissed() -> void:
 ##          plus a synthetic gamepad A press through the input
 ##          singleton, the way the player's plunger press arrives;
 ##   leg 2: fire a window close at Main mid-wait (the VD session
-##          transfer can produce one).
+##          transfer can produce one);
+##   leg 3: a fresh D-pad Right press - the room's BACK-out -
+##          which the deaf wait must swallow like everything else.
 ## The contract must stay armed/loading with no disarm reason,
 ## focus must be nowhere, and the wait must then settle normally
 ## at the hand-off - _settle_launch prints the verdict.
@@ -826,6 +845,12 @@ func _drive_lockout_smoke() -> void:
 			_lockout_smoke_wait += 1
 			if _lockout_smoke_wait >= 5:
 				_lockout_smoke_after_pad()
+				_lockout_smoke_wait = 0
+				_lockout_smoke_phase = 4
+		4:
+			_lockout_smoke_wait += 1
+			if _lockout_smoke_wait >= 5:
+				_lockout_smoke_after_dpad()
 				_lockout_smoke_phase = 3
 		3:
 			# The settle owns the verdict and the quit. Only a
@@ -916,6 +941,30 @@ func _lockout_smoke_after_pad() -> void:
 	var c2: WatchdogContract = WatchdogContract.load_from_disk()
 	_lockout_expect(c2.armed and c2.session_state == "loading" and c2.disarm_reason == "",
 		"the contract is untouched by the window close")
+	# Leg 3: a fresh D-pad Right press during the wait. In the
+	# room that press is the BACK-out (exit the app) - and the
+	# load wait is deaf, so even it must do nothing here. The
+	# release + assertions land in _lockout_smoke_after_dpad,
+	# frames later, so the room's poll has had its chance to
+	# (not) act.
+	var dpress: InputEventJoypadButton = InputEventJoypadButton.new()
+	dpress.device = 0
+	dpress.button_index = JOY_BUTTON_DPAD_RIGHT
+	dpress.pressed = true
+	Input.parse_input_event(dpress)
+
+
+func _lockout_smoke_after_dpad() -> void:
+	var drelease: InputEventJoypadButton = InputEventJoypadButton.new()
+	drelease.device = 0
+	drelease.button_index = JOY_BUTTON_DPAD_RIGHT
+	drelease.pressed = false
+	Input.parse_input_event(drelease)
+	_lockout_expect(not _lockout_exit_fired, "a D-pad Right press during the wait fired no EXIT")
+	_lockout_expect(_launch_pending, "the launcher is still resident after the D-pad Right press")
+	var c: WatchdogContract = WatchdogContract.load_from_disk()
+	_lockout_expect(c.armed and c.session_state == "loading" and c.disarm_reason == "",
+		"the contract is untouched by the D-pad Right press")
 
 
 func _lockout_expect(cond: bool, label: String) -> void:
@@ -978,8 +1027,30 @@ func _drive_placard_smoke() -> void:
 				_placard_expect(back != null, "XR setup: the placard has a BACK control")
 				_placard_expect(_room._focusables.size() == 1 and _room._focusables[0] == back,
 					"XR setup: focus navigation is confined to BACK")
-				if back != null:
-					_room._activate(back)
+				# D-pad Right on the placard: the room's BACK-out
+				# press must do NOTHING here - BACK is the only
+				# way off the placard. Inject it and give the
+				# room's poll frames to (not) act (phase 4).
+				var dpress: InputEventJoypadButton = InputEventJoypadButton.new()
+				dpress.device = 0
+				dpress.button_index = JOY_BUTTON_DPAD_RIGHT
+				dpress.pressed = true
+				Input.parse_input_event(dpress)
+				_placard_smoke_wait = 0
+				_placard_smoke_phase = 4
+		4:
+			_placard_smoke_wait += 1
+			if _placard_smoke_wait >= 5:
+				var drelease: InputEventJoypadButton = InputEventJoypadButton.new()
+				drelease.device = 0
+				drelease.button_index = JOY_BUTTON_DPAD_RIGHT
+				drelease.pressed = false
+				Input.parse_input_event(drelease)
+				_placard_expect(_room.is_setup_placard_up(), "D-pad Right on the placard: the placard stands")
+				_placard_expect(_room.visible, "D-pad Right on the placard: the room is still up (no exit)")
+				var back2: ClickableQuad = _room.setup_placard_back_quad()
+				if back2 != null:
+					_room._activate(back2)
 				_placard_smoke_wait = 0
 				_placard_smoke_phase = 2
 		2:
@@ -1035,15 +1106,16 @@ func _finish_placard_smoke() -> void:
 
 # -------------------------------------------------- desk smoke
 
-## --pvlds-smoke-desk: the desk's session switches are live
-## settings - flipping one must rewrite the config file on disk
+## --pvlds-smoke-desk: the desk's session switch is a live
+## setting - flipping it must rewrite the config file on disk
 ## immediately, with no Save & Scan. The boot route with this
 ## flag lands on the desk and stays there (no scan, no room).
-## The driver flips two checkboxes through their real toggled
-## signal and picks a hold button through the picker's real
-## item_selected signal, then re-reads the config FILE with a
-## fresh PvldsConfig and asserts what landed - plus that the
-## fields a flip does not own (exe path, folders) survived.
+## The driver asserts the stricken close/hold controls are
+## absent, flips the herding checkbox through its real toggled
+## signal, then re-reads the config FILE with a fresh
+## PvldsConfig and asserts what landed - plus that the fields a
+## flip does not own (exe path, folders) survived, and that the
+## saved file carries none of the stricken keys.
 func _drive_desk_smoke() -> void:
 	match _desk_smoke_phase:
 		0:
@@ -1053,14 +1125,17 @@ func _drive_desk_smoke() -> void:
 				# the exported binary).
 				var before: PvldsConfig = PvldsConfig.new()
 				_desk_expect(before.load_from_disk(), "the scratch config loads")
-				_desk_expect(before.close_vpx_on_table_exit, "the scratch config starts with close-on-exit on")
 				_desk_expect(not before.focus_herding, "the scratch config starts with herding off")
-				# Flip through the real controls and their signals.
-				_desk._close_check.button_pressed = false
+				# The stricken controls are ABSENT: no Close VPX
+				# checkbox (the watchdog's close duty is
+				# unconditional now), no Hold-to-exit checkbox,
+				# no hold-button picker (there is no hold gesture).
+				_desk_expect(_desk._close_check == null, "the desk has no Close VPX checkbox")
+				_desk_expect(_desk._hold_check == null, "the desk has no Hold-to-exit checkbox")
+				_desk_expect(_desk._hold_button_picker == null, "the desk has no hold-button picker")
+				# Flip the one surviving switch through its real
+				# control and signal.
 				_desk._herding_check.button_pressed = true
-				var left_idx: int = PvldsConfig.HOLD_EXIT_BUTTONS.find("dpad_left")
-				_desk._hold_button_picker.select(left_idx)
-				_desk._hold_button_picker.item_selected.emit(left_idx)
 				_desk_smoke_wait = 0
 				_desk_smoke_phase = 1
 			else:
@@ -1073,17 +1148,19 @@ func _drive_desk_smoke() -> void:
 			if _desk_smoke_wait >= 3:
 				# In memory first: Main's own config is the truth
 				# the contract mirrors at the next launch.
-				_desk_expect(not _config.close_vpx_on_table_exit, "the close flip is in Main's config immediately")
 				_desk_expect(_config.focus_herding, "the herding flip is in Main's config immediately")
-				_desk_expect(_config.hold_exit_button == "dpad_left", "the button pick is in Main's config immediately")
 				# Then the file itself - the whole point of the round.
 				var after: PvldsConfig = PvldsConfig.new()
-				_desk_expect(after.load_from_disk(), "the config file still loads after the flips")
-				_desk_expect(not after.close_vpx_on_table_exit, "the config FILE has close-on-exit off, no Save & Scan pressed")
-				_desk_expect(after.focus_herding, "the config FILE has herding on")
-				_desk_expect(after.hold_exit_button == "dpad_left", "the config FILE has the picked hold button")
+				_desk_expect(after.load_from_disk(), "the config file still loads after the flip")
+				_desk_expect(after.focus_herding, "the config FILE has herding on, no Save & Scan pressed")
 				_desk_expect(after.vpx_exe_path == _config.vpx_exe_path and after.table_folders == _config.table_folders,
-					"fields the flips do not own (exe path, folders) are untouched on disk")
+					"fields the flip does not own (exe path, folders) are untouched on disk")
+				# And the save is clean of the stricken keys: the
+				# simplified exit model writes no close/hold fields.
+				var raw: String = FileAccess.get_file_as_string(PvldsConfig.existing_path())
+				_desk_expect(not raw.contains("close_vpx_on_table_exit"), "the saved config carries no close_vpx_on_table_exit key")
+				_desk_expect(not raw.contains("hold_exit_enabled"), "the saved config carries no hold_exit_enabled key")
+				_desk_expect(not raw.contains("hold_exit_button"), "the saved config carries no hold_exit_button key")
 				_finish_desk_smoke()
 
 
@@ -1106,6 +1183,48 @@ func _finish_desk_smoke() -> void:
 	else:
 		printerr("PVLDS DESK SMOKE: FAIL (%d)" % _desk_smoke_failures)
 		get_tree().quit(1)
+
+
+# -------------------------------------------------- dpadexit smoke
+
+## --pvlds-smoke-dpadexit: the room half of the two-rule exit
+## model. A FRESH D-pad Right press in the room (browsing) is the
+## BACK-out: it must run the rail EXIT path - disarm ("room Exit")
+## + quit - through the room's real gamepad poll, fed here by a
+## synthetic InputEventJoypadButton (the lockout smoke's feed).
+## Success quits the process from inside _on_exit_requested
+## before this driver can print a verdict, so the PASS evidence
+## lives outside: the harness sees exit code 0 and reads the
+## disarm + its reason off the contract file. If the press does
+## nothing, the driver survives to phase 2 and fails loudly.
+func _drive_dpadexit_smoke() -> void:
+	match _dpadexit_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				var press: InputEventJoypadButton = InputEventJoypadButton.new()
+				press.device = 0
+				press.button_index = JOY_BUTTON_DPAD_RIGHT
+				press.pressed = true
+				Input.parse_input_event(press)
+				print("  info - dpadexit smoke: fresh D-pad Right injected into the room")
+				_dpadexit_smoke_wait = 0
+				_dpadexit_smoke_phase = 1
+			else:
+				_dpadexit_smoke_wait += 1
+				if _dpadexit_smoke_wait > 3600:
+					printerr("PVLDS DPAD EXIT SMOKE: FAIL - the room never came up")
+					get_tree().quit(1)
+		1:
+			_dpadexit_smoke_wait += 1
+			if _dpadexit_smoke_wait == 2:
+				var release: InputEventJoypadButton = InputEventJoypadButton.new()
+				release.device = 0
+				release.button_index = JOY_BUTTON_DPAD_RIGHT
+				release.pressed = false
+				Input.parse_input_event(release)
+			if _dpadexit_smoke_wait > 30:
+				printerr("PVLDS DPAD EXIT SMOKE: FAIL - a fresh D-pad Right press in the room did not exit the app")
+				get_tree().quit(1)
 
 
 # ------------------------------------------------------------ dev hooks
@@ -1434,34 +1553,32 @@ func _run_core_test() -> void:
 	contract.game_window_seen_unix = 1234567
 	contract.launcher_path = "C:/PVLDS/PVLDS.exe"
 	contract.focus_herding = false
-	contract.close_vpx_on_table_exit = false
-	contract.hold_exit_enabled = false
-	contract.hold_exit_button = "start"
 	contract.disarm_reason = "room Exit"
 	_expect(contract.save_to_disk(), "watchdog contract saves", failures)
 	var contract2: WatchdogContract = WatchdogContract.load_from_disk()
 	_expect(contract2.armed and contract2.session_id == 7 and contract2.game_pid == 4242
 		and contract2.session_state == "live" and contract2.game_window_seen_unix == 1234567
-		and not contract2.focus_herding and not contract2.close_vpx_on_table_exit
-		and not contract2.hold_exit_enabled and contract2.hold_exit_button == "start"
+		and not contract2.focus_herding
 		and contract2.launcher_path == "C:/PVLDS/PVLDS.exe",
-		"watchdog contract round-trips (incl. the window-seen stamp, the close-duty switch, and the hold-to-exit fields)", failures)
+		"watchdog contract round-trips (incl. the window-seen stamp)", failures)
 	_expect(contract2.disarm_reason == "room Exit",
 		"the disarm reason round-trips with the contract", failures)
-	# A contract written before the close duty existed has no
-	# close_vpx_on_table_exit key; it loads with the duty ON (the
-	# schema stays v2 - absence means default, never a wedge).
-	_expect(_write_text_file(contract_file, "{\"session_state\": \"live\"}"), "pre-duty contract written", failures)
-	var pre_duty: WatchdogContract = WatchdogContract.load_from_disk()
-	_expect(pre_duty.close_vpx_on_table_exit,
-		"a contract without the close-duty key defaults it to on", failures)
-	# The same absence rule covers hold-to-exit: no keys, feature
-	# ON, button D-pad Right (the recorded ExitGame binding).
-	_expect(pre_duty.hold_exit_enabled and pre_duty.hold_exit_button == PvldsConfig.DEFAULT_HOLD_EXIT_BUTTON,
-		"a contract without the hold-to-exit keys defaults them (on, dpad_right)", failures)
+	# The simplified exit model writes NO close-duty or hold keys
+	# (the close duty is unconditional; hold was stricken) - and a
+	# contract that still CARRIES the old keys (written by an older
+	# build) loads without a murmur: both readers ignore them.
+	var written: Dictionary = contract.to_dictionary()
+	_expect(not written.has("close_vpx_on_table_exit") and not written.has("hold_exit_enabled")
+		and not written.has("hold_exit_button"),
+		"the written contract carries no close-duty or hold keys", failures)
+	_expect(_write_text_file(contract_file, "{\"session_state\": \"live\", \"close_vpx_on_table_exit\": false, \"hold_exit_enabled\": false, \"hold_exit_button\": \"y\"}"),
+		"legacy contract with the stricken keys written", failures)
+	var legacy_keys: WatchdogContract = WatchdogContract.load_from_disk()
+	_expect(legacy_keys.session_state == "live",
+		"a contract carrying the stricken keys loads (they are ignored)", failures)
 	# And the disarm reason: no key, empty string - the watchdog
 	# falls back to its legacy generic in the stand-down line.
-	_expect(pre_duty.disarm_reason == "",
+	_expect(legacy_keys.disarm_reason == "",
 		"a contract without the disarm-reason key loads it empty", failures)
 	# Legacy schema-v1 state spellings normalize on load - a contract
 	# written by the M2 build is understood by this one.
@@ -1509,43 +1626,28 @@ func _run_core_test() -> void:
 	var own_exit_cfg: PvldsConfig = PvldsConfig.new()
 	_expect(own_exit_cfg.load_from_disk() and own_exit_cfg.launch_args_template == "-minimized -play -exit \"{table}\"",
 		"a user's own -exit-bearing template (not byte-identical to the bad default) is preserved", failures)
-	# The close-duty switch: defaults on, persists off.
-	_expect(_write_text_file(config_file, JSON.stringify({"close_vpx_on_table_exit": false})),
-		"close-duty-off config written", failures)
-	var close_cfg: PvldsConfig = PvldsConfig.new()
-	_expect(close_cfg.load_from_disk() and not close_cfg.close_vpx_on_table_exit,
-		"the close-duty switch persists as off", failures)
-	close_cfg.close_vpx_on_table_exit = true
-	_expect(close_cfg.save_to_disk(), "config saves", failures)
-	var close_cfg2: PvldsConfig = PvldsConfig.new()
-	_expect(close_cfg2.load_from_disk() and close_cfg2.close_vpx_on_table_exit,
-		"the close-duty switch round-trips through save", failures)
-	# The hold-to-exit fields: defaults when absent (on, D-pad
-	# Right), persistence when set, and a hand-typed unknown
-	# button name degrades to the default, never to a dead
-	# feature.
-	_expect(_write_text_file(config_file, JSON.stringify({})),
-		"empty config written", failures)
-	var hold_def_cfg: PvldsConfig = PvldsConfig.new()
-	_expect(hold_def_cfg.load_from_disk() and hold_def_cfg.hold_exit_enabled
-		and hold_def_cfg.hold_exit_button == PvldsConfig.DEFAULT_HOLD_EXIT_BUTTON,
-		"a config without the hold-to-exit keys defaults them (on, dpad_right)", failures)
-	_expect(_write_text_file(config_file, JSON.stringify({"hold_exit_enabled": false, "hold_exit_button": "y"})),
-		"hold-off config written", failures)
-	var hold_cfg: PvldsConfig = PvldsConfig.new()
-	_expect(hold_cfg.load_from_disk() and not hold_cfg.hold_exit_enabled and hold_cfg.hold_exit_button == "y",
-		"the hold-to-exit fields persist as set (off, y)", failures)
-	hold_cfg.hold_exit_enabled = true
-	hold_cfg.hold_exit_button = "back"
-	_expect(hold_cfg.save_to_disk(), "hold config saves", failures)
-	var hold_cfg2: PvldsConfig = PvldsConfig.new()
-	_expect(hold_cfg2.load_from_disk() and hold_cfg2.hold_exit_enabled and hold_cfg2.hold_exit_button == "back",
-		"the hold-to-exit fields round-trip through save", failures)
-	_expect(_write_text_file(config_file, JSON.stringify({"hold_exit_button": "paddle_9"})),
-		"unknown-button config written", failures)
-	var hold_clamp_cfg: PvldsConfig = PvldsConfig.new()
-	_expect(hold_clamp_cfg.load_from_disk() and hold_clamp_cfg.hold_exit_button == PvldsConfig.DEFAULT_HOLD_EXIT_BUTTON,
-		"an unknown hold button name loads as the default (dpad_right)", failures)
+	# The stricken exit-model keys: a config that still CARRIES
+	# them (written by an older build) loads cleanly - they are
+	# simply not read - and the next save writes a file without
+	# them. There are no close-duty or hold settings any more:
+	# the watchdog's close is unconditional and hold is gone.
+	_expect(_write_text_file(config_file, JSON.stringify({
+		"close_vpx_on_table_exit": false,
+		"hold_exit_enabled": false,
+		"hold_exit_button": "y",
+		"focus_herding": false,
+	})), "legacy config with the stricken keys written", failures)
+	var legacy_cfg: PvldsConfig = PvldsConfig.new()
+	_expect(legacy_cfg.load_from_disk() and not legacy_cfg.focus_herding,
+		"a config carrying the stricken keys loads (they are ignored)", failures)
+	_expect(legacy_cfg.save_to_disk(), "legacy config saves", failures)
+	var saved_raw: String = FileAccess.get_file_as_string(config_file)
+	_expect(not saved_raw.contains("close_vpx_on_table_exit") and not saved_raw.contains("hold_exit_enabled")
+		and not saved_raw.contains("hold_exit_button"),
+		"the saved config carries none of the stricken keys", failures)
+	var resaved_cfg: PvldsConfig = PvldsConfig.new()
+	_expect(resaved_cfg.load_from_disk() and not resaved_cfg.focus_herding,
+		"the cleaned config round-trips through save", failures)
 	if config_backup != "":
 		_write_text_file(config_file, config_backup)
 	elif FileAccess.file_exists(config_file):

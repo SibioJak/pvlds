@@ -11,15 +11,13 @@
 //     (and, on Windows, herd foreground focus back to the game
 //     window - yielding to deliberate use - and, in a live
 //     session whose table exit landed in the VPX editor, close
-//     VPX orderly so the return trip can finish; see closer.go),
-//   - while a session is live, poll the gamepad at ~50ms: a
-//     deliberate HOLD of the configured exit button (~1.5s) is
-//     the player's own "exit the whole thing" gesture and fires
-//     the same orderly close (see hold_logic.go). With BOTH exit
-//     switches on, the hold watch and the session-close duty
-//     merge into the exit arbitrator instead (see arbiter.go
-//     and the mode table at the dispatch): a TAP returns to the
-//     room, a HOLD bails to the editor and disarms the watch,
+//     VPX orderly so the return trip can finish; see closer.go).
+//     The close duty is unconditional - there is no hold gesture
+//     and no exit switch (both were stricken by the player's
+//     ruling, 2026-10-22): D-pad right is a plain BACK button -
+//     in play it is VPX's own Exit Game binding and lands in the
+//     editor, which this duty then closes promptly; in the room
+//     the same press quits the app (the launcher's side),
 //   - stamp the contract when the game's main window first exists
 //     (the resident launcher reads it as its hand-off cue),
 //   - when the game dies: in "live" (the launcher already exited)
@@ -62,15 +60,14 @@ type Contract struct {
 	// disarmer alongside armed=false and read into the stand-down
 	// log line. Absent in contracts written before the field
 	// existed: the empty string falls back to the legacy generic.
-	DisarmReason        string `json:"disarm_reason"`
-	FocusHerding        bool   `json:"focus_herding"`
-	CloseVPXOnTableExit bool   `json:"close_vpx_on_table_exit"`
-	// HoldExitEnabled is a pointer so an ABSENT key (a contract
-	// written before hold-to-exit existed) can be told apart from
-	// an explicit off: absence normalizes to the default ON in
-	// readContract, and the schema stays v2.
-	HoldExitEnabled    *bool    `json:"hold_exit_enabled"`
-	HoldExitButton     string   `json:"hold_exit_button"`
+	DisarmReason string `json:"disarm_reason"`
+	FocusHerding bool   `json:"focus_herding"`
+	// No close-duty or hold keys: the exit model was simplified
+	// (2026-10-22) - the close duty is unconditional and there is
+	// no hold gesture. Contracts written by older builds may
+	// still carry close_vpx_on_table_exit / hold_exit_enabled /
+	// hold_exit_button; encoding/json ignores unknown keys on
+	// read, and merged writes here simply stop carrying them.
 	SessionID          int      `json:"session_id"`
 	SessionState       string   `json:"session_state"`
 	GameExePath        string   `json:"game_exe_path"`
@@ -98,7 +95,7 @@ var (
 	logPath      string
 	lockPath     string
 	logFile      *os.File
-	logMu        sync.Mutex // the main loop and the hold watch both log
+	logMu        sync.Mutex // guards logFile writes
 )
 
 func logf(format string, args ...interface{}) {
@@ -109,13 +106,6 @@ func logf(format string, args ...interface{}) {
 		logFile.WriteString(line)
 		logFile.Sync()
 	}
-}
-
-// holdExitOn reports the effective hold-to-exit switch: the key
-// defaults ON when absent (normalized in readContract, but answer
-// safely for a hand-built Contract too).
-func (c *Contract) holdExitOn() bool {
-	return c.HoldExitEnabled == nil || *c.HoldExitEnabled
 }
 
 // normalizeState maps the schema-v1 session spellings onto the v2
@@ -141,18 +131,6 @@ func readContract() (*Contract, error) {
 		return nil, err
 	}
 	c.SessionState = normalizeState(c.SessionState)
-	// Hold-to-exit normalization (schema stays v2): a contract
-	// that predates the feature has no keys; absence means the
-	// defaults, never a wedge - and normalizing here means a
-	// merged write (writeContractMerged) always emits real values
-	// for the launcher's reader.
-	if c.HoldExitEnabled == nil {
-		on := true
-		c.HoldExitEnabled = &on
-	}
-	if c.HoldExitButton == "" {
-		c.HoldExitButton = defaultHoldButton
-	}
 	return &c, nil
 }
 
@@ -207,116 +185,6 @@ func launcherAlive(c *Contract, extraPID int) bool {
 	return c.LauncherPID > 0 && processAlive(c.LauncherPID)
 }
 
-// ---- hold-to-exit watch ---------------------------------------
-//
-// The button is sampled on its own goroutine at ~50ms: the main
-// loop's 400ms tick would smear the 1.5s hold threshold by up to a
-// full tick, and the threshold IS the feel of the feature. The
-// main loop publishes the session context once per tick; the
-// watch reads it, polls the button feed (hold_windows.go /
-// hold_other.go), feeds the shared brain (hold_logic.go), and
-// delivers the close the brain orders - the closer's own orderly
-// sends, serialized against them (closer_windows.go).
-
-type holdContext struct {
-	sessionID int
-	live      bool // the contract's session is in the live state
-	enabled   bool // hold_exit_enabled (absent = on)
-	closerOn  bool // close_vpx_on_table_exit: with enabled, arbitration mode
-	alive     bool // the game process is up inside an active session
-	gamePID   int
-	button    string
-}
-
-var (
-	holdCtxMu sync.Mutex
-	holdCtx   holdContext
-)
-
-func holdCtxUpdate(ctx holdContext) {
-	holdCtxMu.Lock()
-	holdCtx = ctx
-	holdCtxMu.Unlock()
-}
-
-func holdCtxSnapshot() holdContext {
-	holdCtxMu.Lock()
-	defer holdCtxMu.Unlock()
-	return holdCtx
-}
-
-// The arbitrator's button feed: the hold watch publishes one
-// pressTracker snapshot per poll while arbitration mode is
-// active; the main loop reads the latest for its session. A
-// snapshot published for another session reads as empty (no
-// press history) - a new session's arbitration starts clean.
-var (
-	btnSnapMu      sync.Mutex
-	btnSnap        buttonSnapshot
-	btnSnapSession int
-)
-
-func publishButtonSnapshot(sessionID int, snap buttonSnapshot) {
-	btnSnapMu.Lock()
-	btnSnap = snap
-	btnSnapSession = sessionID
-	btnSnapMu.Unlock()
-}
-
-func currentButtonSnapshot(sessionID int) buttonSnapshot {
-	btnSnapMu.Lock()
-	defer btnSnapMu.Unlock()
-	if btnSnapSession != sessionID {
-		return buttonSnapshot{}
-	}
-	return btnSnap
-}
-
-func holdWatchLoop() {
-	var duty holdDuty
-	var tracker pressTracker
-	warnedSession := -1
-	for {
-		time.Sleep(holdPollIntervalMs * time.Millisecond)
-		ctx := holdCtxSnapshot()
-		mask, known := holdButtonMask(ctx.button)
-		nowMs := time.Now().UnixMilli()
-		// The mode split (the full table is at the dispatch in
-		// main): with the closer switch ALSO on, the hold and the
-		// closer merge into the exit arbitrator - this watch then
-		// only TRACKS the button for the arbitrator, and the
-		// plain hold duty is fed inactive so its old hold=close
-		// can never fire. Hold-only mode feeds the duty as before.
-		arbitrate := ctx.live && ctx.enabled && ctx.closerOn && ctx.alive && ctx.gamePID > 0
-		holdOnly := ctx.live && ctx.enabled && !ctx.closerOn && ctx.alive && ctx.gamePID > 0
-		if (arbitrate || holdOnly) && !known && warnedSession != ctx.sessionID {
-			warnedSession = ctx.sessionID
-			logf("watchdog: exit button %q is not a known XInput button name; the exit gestures are inert for session %d", ctx.button, ctx.sessionID)
-		}
-		if arbitrate {
-			if known {
-				publishButtonSnapshot(ctx.sessionID, tracker.observe(nowMs, ctx.sessionID, anyButtonPressed(mask)))
-			} else {
-				publishButtonSnapshot(ctx.sessionID, tracker.reset(ctx.sessionID))
-			}
-		}
-		pressed := false
-		if holdOnly && known {
-			pressed = anyButtonPressed(mask)
-		}
-		switch duty.tick(nowMs, ctx.sessionID, holdOnly && known, pressed) {
-		case holdFEC:
-			ack := sendFrontEndControlsClose(ctx.gamePID)
-			logf("watchdog: session %d: hold-to-exit fired (button %s held %dms); sent FrontEndControls CLOSE_APP (acknowledged: %v)", ctx.sessionID, ctx.button, holdThresholdMs, ack)
-		case holdWMClose:
-			ok := sendEditorClose(gameWindowState(ctx.gamePID, ctx.sessionID).editorHWND)
-			logf("watchdog: session %d: hold-to-exit: VPX still open after the FrontEndControls request; sent WM_CLOSE to the editor window (posted: %v)", ctx.sessionID, ok)
-		case holdGiveUp:
-			logf("watchdog: session %d: hold-to-exit: VPX did not close after FrontEndControls + WM_CLOSE; leaving VPX alone", ctx.sessionID)
-		}
-	}
-}
-
 func main() {
 	exe, _ := os.Executable()
 	dir := filepath.Dir(exe)
@@ -350,11 +218,6 @@ func main() {
 	defer os.Remove(lockPath)
 	logf("watchdog: on duty (pid %d), contract %s", os.Getpid(), contractPath)
 
-	// The hold-to-exit watch runs for the watchdog's whole life;
-	// it acts only while the published context says a session is
-	// live with the feature on.
-	go holdWatchLoop()
-
 	var (
 		sawGameAlive      bool
 		awaitingOutcome   bool
@@ -363,7 +226,6 @@ func main() {
 		sessionAtRelaunch int
 		strikes           int
 		sessionCloser     closer
-		sessionArbiter    exitArbitrator
 	)
 
 	relaunch := func(c *Contract, why string) {
@@ -417,18 +279,6 @@ func main() {
 		if alive && gpid > 0 && gpid != c.GamePID {
 			c.GamePID = gpid
 		}
-		// Publish the hold-to-exit context: live sessions only,
-		// and only while the game is actually up in one.
-		holdCtxUpdate(holdContext{
-			sessionID: c.SessionID,
-			live:      c.SessionState == "live",
-			enabled:   c.holdExitOn(),
-			closerOn:  c.CloseVPXOnTableExit,
-			alive:     alive && sessionActive,
-			gamePID:   c.GamePID,
-			button:    c.HoldExitButton,
-		})
-
 		// ---- relaunch outcome tracking -------------------------
 		if awaitingOutcome {
 			switch {
@@ -495,74 +345,23 @@ func main() {
 				if c.FocusHerding {
 					herdTick(c.GamePID, c.SessionID, time.Now())
 				}
-				// Exit-gesture dispatch - the mode table:
-				//   closer on,  hold on   -> ARBITRATION
-				//                            (arbiter.go): the editor
-				//                            landing opens a window;
-				//                            a tap (or a press-free
-				//                            landing) resolves to the
-				//                            orderly close + return,
-				//                            a hold through the
-				//                            threshold bails to the
-				//                            editor and disarms.
-				//   closer on,  hold off  -> the plain
-				//                            session-close duty
-				//                            (closer.go) below:
-				//                            landing + sustain closes.
-				//   closer off, hold on   -> hold-to-exit alone
-				//                            (hold_logic.go, fed by
-				//                            the hold watch): a hold
-				//                            during play fires the
-				//                            close; a tap is VPX's
-				//                            own business (the editor).
-				//   closer off, hold off  -> no exit closing at
-				//                            all; the return rides
-				//                            VPX's process death alone.
-				// In arbitration mode neither plain duty decides:
-				// the closer is not ticked and the hold watch only
-				// tracks the button (see holdWatchLoop).
-				if c.CloseVPXOnTableExit && c.holdExitOn() {
-					// Exit arbitrator (arbiter.go): in a live
-					// session whose table exit landed in the VPX
-					// editor, decide tap vs hold from the button,
-					// then ask VPX to close - orderly, escalating,
-					// never a kill - or stand down entirely.
-					switch sessionArbiter.tick(time.Now().UnixMilli(), c.SessionID, c.SessionState, true, gameWindowState(c.GamePID, c.SessionID), currentButtonSnapshot(c.SessionID)) {
-					case arbCloseFEC:
-						ack := sendFrontEndControlsClose(c.GamePID)
-						logf("watchdog: session %d: exit arbitrator: tap out of the table; sent PinSim::FrontEndControls CLOSE_APP (acknowledged: %v)", c.SessionID, ack)
-					case arbCloseWMClose:
-						ok := sendEditorClose(gameWindowState(c.GamePID, c.SessionID).editorHWND)
-						logf("watchdog: session %d: exit arbitrator: VPX still open after the FrontEndControls request; sent WM_CLOSE to the editor window (posted: %v)", c.SessionID, ok)
-					case arbGiveUp:
-						logf("watchdog: session %d: exit arbitrator: VPX did not close after FrontEndControls + WM_CLOSE; leaving VPX alone", c.SessionID)
-					case arbBail:
-						// The launcher is not running during play,
-						// so the watchdog is the disarming actor
-						// (the loop-cap disarm's pattern). VPX is
-						// left open in the editor; this process
-						// stands down for good.
-						logf("watchdog: session %d: exit button held through the threshold at the table exit - hold to editor; disarming and standing down, VPX stays open in the editor", c.SessionID)
-						writeContractMerged(func(mc *Contract) { mc.Armed = false; mc.DisarmReason = "hold to editor" })
-						return
-					}
-				} else {
-					// Session-close duty (closer.go): in a live session
-					// whose table exit landed in the VPX editor, ask VPX
-					// to close - orderly, escalating, never a kill. The
-					// decision is shared logic; the sends are platform
-					// leaves. When VPX dies, the ordinary death path
-					// below relaunches the launcher.
-					switch sessionCloser.tick(time.Now().UnixMilli(), c.SessionID, c.SessionState, c.CloseVPXOnTableExit, true, gameWindowState(c.GamePID, c.SessionID)) {
-					case closeFEC:
-						ack := sendFrontEndControlsClose(c.GamePID)
-						logf("watchdog: session %d: table exit landed in the VPX editor; sent PinSim::FrontEndControls CLOSE_APP (acknowledged: %v)", c.SessionID, ack)
-					case closeWMClose:
-						ok := sendEditorClose(gameWindowState(c.GamePID, c.SessionID).editorHWND)
-						logf("watchdog: session %d: VPX still open after the FrontEndControls request; sent WM_CLOSE to the editor window (posted: %v)", c.SessionID, ok)
-					case closeGiveUp:
-						logf("watchdog: session %d: VPX did not close after FrontEndControls + WM_CLOSE; leaving VPX alone", c.SessionID)
-					}
+				// Session-close duty (closer.go) - the only exit
+				// path in play, and unconditional: in a live
+				// session whose table exit landed in the VPX
+				// editor, ask VPX to close - orderly, escalating,
+				// never a kill. The decision is shared logic; the
+				// sends are platform leaves. When VPX dies, the
+				// ordinary death path below relaunches the
+				// launcher.
+				switch sessionCloser.tick(time.Now().UnixMilli(), c.SessionID, c.SessionState, true, gameWindowState(c.GamePID, c.SessionID)) {
+				case closeFEC:
+					ack := sendFrontEndControlsClose(c.GamePID)
+					logf("watchdog: session %d: table exit landed in the VPX editor; sent PinSim::FrontEndControls CLOSE_APP (acknowledged: %v)", c.SessionID, ack)
+				case closeWMClose:
+					ok := sendEditorClose(gameWindowState(c.GamePID, c.SessionID).editorHWND)
+					logf("watchdog: session %d: VPX still open after the FrontEndControls request; sent WM_CLOSE to the editor window (posted: %v)", c.SessionID, ok)
+				case closeGiveUp:
+					logf("watchdog: session %d: VPX did not close after FrontEndControls + WM_CLOSE; leaving VPX alone", c.SessionID)
 				}
 			} else if sawGameAlive {
 				sawGameAlive = false

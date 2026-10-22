@@ -10,8 +10,8 @@ import (
 // session logic in this repo's smokes - it never ships anywhere
 // (the shipping watchdog is the Windows build, whose window
 // facts are a real user32 enumeration). The stub contract below
-// is how the shared DECISION logic (closer.go, arbiter.go,
-// sighting.go) gets exercised end to end here.
+// is how the shared DECISION logic (closer.go, sighting.go)
+// gets exercised end to end here.
 //
 // gameWindowPresentOnMaps is the existence signal for the stub's
 // player window: a process that has opened a display and created

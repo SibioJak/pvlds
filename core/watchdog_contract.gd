@@ -22,24 +22,13 @@ extends RefCounted
 ##                    Cleared whenever a session (re)arms. Schema
 ##                    stays v2.
 ##   focus_herding    the config kill-switch, mirrored for the watchdog
-##   close_vpx_on_table_exit  the session-close duty switch, mirrored
-##                    the same way: in a live session, when a table
-##                    exit has landed in the VPX editor (player
-##                    window gone, editor window present, sustained),
-##                    the watchdog closes VPX so the return trip can
-##                    finish. Absent in contracts written before the
-##                    duty existed; loads default it to true, and the
-##                    schema stays v2.
-##   hold_exit_enabled  the hold-to-exit switch, mirrored the same
-##                    way: in a live session the watchdog polls the
-##                    gamepad, and a continuous hold of the exit
-##                    button (~1.5s) closes VPX so the return trip
-##                    runs. Absent in older contracts; loads default
-##                    it to true, schema stays v2.
-##   hold_exit_button   the XInput button the hold reads, by name
-##                    (PvldsConfig.HOLD_EXIT_BUTTONS); absent loads
-##                    default it to "dpad_right" - the player's
-##                    recorded ExitGame binding.
+##   (No close-duty or hold keys: the exit model was simplified
+##   by the player's ruling, 2026-10-22 - the watchdog's
+##   session-close duty is unconditional and there is no hold
+##   gesture. Contracts written by older builds may still carry
+##   close_vpx_on_table_exit / hold_exit_enabled /
+##   hold_exit_button; both readers ignore them, and writes here
+##   stop emitting them. Schema stays v2.)
 ##   session_id       increments on every launch; how the watchdog
 ##                    knows a NEW session was armed after a relaunch
 ##   session_state    idle | loading | live | returned | failed
@@ -55,8 +44,8 @@ extends RefCounted
 ##   game_pid         VPX process id once spawned (0 = not yet / none)
 ##   game_started_unix
 ##   game_window_seen_unix  stamped by the watchdog when the game's
-##                    PLAYER window first exists (a VPPlayer-class
-##                    window on Windows - the editor frame is up from
+##                    PLAYER window first exists (the watchdog's
+##                    sighting rule - the editor frame is up from
 ##                    app start and must not stamp this); the resident
 ##                    launcher reads it (+ a short settle) as its
 ##                    hand-off cue
@@ -73,9 +62,6 @@ const SCHEMA_VERSION: int = 2
 var armed: bool = false
 var disarm_reason: String = ""
 var focus_herding: bool = true
-var close_vpx_on_table_exit: bool = true
-var hold_exit_enabled: bool = true
-var hold_exit_button: String = PvldsConfig.DEFAULT_HOLD_EXIT_BUTTON
 var session_id: int = 0
 var session_state: String = "idle"
 var game_exe_path: String = ""
@@ -124,11 +110,6 @@ static func load_from_disk() -> WatchdogContract:
 	c.armed = bool(d.get("armed", false))
 	c.disarm_reason = str(d.get("disarm_reason", ""))
 	c.focus_herding = bool(d.get("focus_herding", true))
-	c.close_vpx_on_table_exit = bool(d.get("close_vpx_on_table_exit", true))
-	c.hold_exit_enabled = bool(d.get("hold_exit_enabled", true))
-	c.hold_exit_button = str(d.get("hold_exit_button", PvldsConfig.DEFAULT_HOLD_EXIT_BUTTON))
-	if c.hold_exit_button == "":
-		c.hold_exit_button = PvldsConfig.DEFAULT_HOLD_EXIT_BUTTON
 	c.session_id = int(d.get("session_id", 0))
 	c.session_state = str(d.get("session_state", "idle"))
 	c.session_state = WatchdogContract.normalize_state(c.session_state)
@@ -154,9 +135,6 @@ func to_dictionary() -> Dictionary:
 	d["armed"] = armed
 	d["disarm_reason"] = disarm_reason
 	d["focus_herding"] = focus_herding
-	d["close_vpx_on_table_exit"] = close_vpx_on_table_exit
-	d["hold_exit_enabled"] = hold_exit_enabled
-	d["hold_exit_button"] = hold_exit_button
 	d["session_id"] = session_id
 	d["session_state"] = session_state
 	d["game_exe_path"] = game_exe_path

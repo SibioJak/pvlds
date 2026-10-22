@@ -36,7 +36,7 @@ import "sync"
 //   - the editor class never counts, at any size, ever.
 //
 // "Seen" latches per session (it stamps the contract's
-// game_window_seen and arms the closer/arbitrator); "present" is
+// game_window_seen and arms the closer); "present" is
 // per-observation and drops the moment no candidate is up, which
 // is what lets the editor landing register as an exit.
 
@@ -95,8 +95,7 @@ func classifyPlayerCandidate(obs []windowObs) (bool, string) {
 }
 
 // playerSighting is the per-session persistence gate over
-// classifyPlayerCandidate. Safe for concurrent use: the main loop
-// and the hold watch both take window snapshots.
+// classifyPlayerCandidate. Safe for concurrent use.
 type playerSighting struct {
 	mu        sync.Mutex
 	sessionID int

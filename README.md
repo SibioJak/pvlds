@@ -20,7 +20,15 @@ sighting no longer demands the `VPPlayer` window class (his
 player window never matched it, so neither duty ever armed;
 `sighting.go`) — retunes the marquee smaller and farther back
 (his verdict on the first pass: too big, too close), and gives
-the focused card a hover pop-out off the wall.** M1's room
+the focused card a hover pop-out off the wall. A fourth round
+the same day strikes the hold gesture entirely, at Chris's
+ruling ("I don't want any hold anything to do anything"):
+D-pad right is now a plain BACK button with exactly two
+meanings — in play it is VPX's own Exit Game and the watchdog
+closes the editor it lands in, promptly and unconditionally;
+in the room it quits the app to the desktop. The arbitrator,
+the hold duty, the XInput button watch, and both exit switches
+are gone.** M1's room
 plus real launching: card-level Launch, a native watchdog that
 returns you to the room with your place restored, focus herding,
 and Exit-to-desktop. The first session proved the launch and the
@@ -174,40 +182,39 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   editor refuses while a player is open (`WinEditor::OnClose`),
   so it can only land in the state this duty targets. Never a
   hard kill; if neither lands, the watchdog logs it and leaves
-  VPX alone. Kill-switch: the **Close VPX when a table exits to
-  the editor** checkbox on the desk pass (config
-  `close_vpx_on_table_exit`, default on) — uncheck it if you ever
-  want to stay in the editor after a table.
-- **Exit gestures — tap returns, hold bails** (the mapping
-  Chris settled, matching VPX Launcher's): while a session is
-  live, the watchdog also polls the gamepad (XInput, ~50ms,
-  read-only — it never writes to the controller). VPX's own tap
-  of the exit button always lands in the editor first; what the
-  button does next decides. With **both** exit switches on, the
-  exit arbitrator (`arbiter.go`) owns the gesture: the editor
-  landing opens a window, and — if the button was released
-  before the ~1.5s threshold (a **tap**) — the orderly close
-  ladder fires after a short debounce and the ordinary return
-  trip brings the room back; if it is still held when the
-  threshold passes (a **hold**), no close is ever sent: the
-  watchdog disarms the contract (`disarm_reason` "hold to
-  editor") and stands down, leaving VPX open in the editor. A
-  landing with no press at all (keyboard / menu / crash) also
-  resolves as a tap, after a ~500ms grace — no 2.5s sustain.
-  With the session-close switch **off**, the original
-  hold-to-exit stands alone (`hold_logic.go`): a continuous
-  hold during play fires the same orderly close ladder
-  (FrontEndControls CLOSE_APP → WM_CLOSE → give up; never a
-  hard kill), and a tap is VPX's own business. Both brains are
-  shared logic, unit-tested on Linux; the threshold is the one
-  constant `holdThresholdMs`. Config: `hold_exit_enabled`
-  (default on — the **Hold-to-exit** checkbox on the desk pass)
-  and `hold_exit_button`, an XInput button name from the
-  standard set (D-pad directions, A/B/X/Y, LB/RB, Back, Start,
-  L3/R3); the default is `dpad_right` — Chris's recorded VPX
-  ExitGame binding ("right directional") — rebindable in the
-  desk's button picker. Both fields ride the contract with the
-  usual absence-means-default rule.
+  VPX alone. The duty is **unconditional** — there is no
+  kill-switch and no desk checkbox for it (both were removed
+  when the exit model was simplified; see the next bullet).
+- **The exit model — one BACK button, two rules** (Chris's
+  ruling, 2026-10-22, replacing the tap/hold arbitration model
+  wholesale): **there is no hold gesture anywhere.** D-pad
+  right — Chris's recorded VPX ExitGame binding ("right
+  directional") — is a plain BACK button. **Playing a table:**
+  a tap is VPX's own business and lands in the VPX editor, as
+  it always has; the watchdog's session-close duty (above)
+  then closes VPX promptly — the landing confirmation is
+  ~400ms (`editorSustainMs`), down from the old 2.5s sustain —
+  and the ordinary death → relaunch flow brings the room back.
+  The editor is never a resting place. **On the table select
+  screen (the room):** a fresh D-pad right press quits the app
+  altogether to the desktop — the rail EXIT action (disarm
+  "room Exit" + quit) on the pad, in browsing and in the
+  detail view. D-pad up/down/left and the left stick still
+  move focus (the stick moves it rightward too); during the
+  load wait the room stays deaf and swallows the press like
+  everything else, and on the SETUP placard it does nothing —
+  BACK remains the only way off the placard. Neither side
+  reads the button for the other: PVLDS never sees the
+  in-play press at all (the watchdog no longer contains a
+  gamepad watch of any kind), and the room's press is an
+  ordinary edge-triggered poll of the pad it already reads
+  for focus. The stricken machinery — `arbiter.go`, the hold
+  duty, the press tracker, the XInput watch, and the
+  `close_vpx_on_table_exit` / `hold_exit_enabled` /
+  `hold_exit_button` settings on the desk, in the config, and
+  in the contract — is deleted, not disabled; contracts and
+  configs written by older builds still load (both readers
+  ignore the dead keys, and fresh writes stop emitting them).
 - **Focus herding** (Windows, user32): while a session is live, if
   the foreground leaves the game process and stays away past a 2s
   grace period, the watchdog hands foreground back to the game's
@@ -411,12 +418,19 @@ cached `vpsdb.json` and the same code runs your actual library.
   the desk; a second leg with the flag off asserts the flat path
   is the legacy one. Prints ok/FAIL lines, exits 0/1.
 - `--pvlds-smoke-desk` — desk boot (the flag keeps the boot on
-  the desk: no scan, no room); flip the desk's session switches
-  through their real signals and assert the config FILE on disk
-  changed with no Save & Scan — the session switches (herding,
-  close-on-exit, hold-to-exit + its button) apply the moment
-  they are flipped; everything else stays on Save & Scan.
-  Prints ok/FAIL lines, exits 0/1.
+  the desk: no scan, no room); flip the desk's session switch
+  (focus herding — the only one left) through its real signal
+  and assert the config FILE on disk changed with no Save &
+  Scan; also assert the stricken Close VPX / Hold-to-exit
+  controls are absent from the desk and that the saved config
+  carries none of the stricken keys. Prints ok/FAIL lines,
+  exits 0/1.
+- `--pvlds-smoke-dpadexit` — room boot; inject a synthetic
+  fresh D-pad Right press into the room's real gamepad poll.
+  The app must exit through the rail EXIT path before the
+  driver can complain (disarm "room Exit" + quit); the harness
+  (`run_dpadexit_smoke.sh`) asserts exit code 0 and the disarm
+  + reason on the contract from outside.
 - `--pvlds-smoke-quitwarm` — desk boot; the exit-hang harness
   driver (`~/workspace/pvlds-harness/run_quitwarm_smoke.sh`).
   Exits mid-warm-pass through the real rail path; mode "drain"
