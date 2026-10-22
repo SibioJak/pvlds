@@ -35,10 +35,10 @@ const MARQUEE_FADE_SEC: float = 0.6 ## wall fade-down duration
 const MARQUEE_WALL_ALPHA: float = 0.16 ## the wall's alpha while the marquee stands
 const MARQUEE_FLY_IN_SEC: float = 1.4 ## the letters' travel time, wall -> settle
 const MARQUEE_START_Z: float = -3.05 ## fly-in start depth (at the wall)
-const MARQUEE_SETTLE_POS: Vector3 = Vector3(0.0, 1.42, -1.55) ## reading distance, on the view axis
+const MARQUEE_SETTLE_POS: Vector3 = Vector3(0.0, 1.42, -2.30) ## reading distance, on the view axis (retuned 2026-10-22: first pass sat too close)
 const MARQUEE_PIXEL_SIZE: float = 0.005 ## Label3D world scale
-const MARQUEE_YEAR_FONT_SIZE: int = 170
-const MARQUEE_NAME_FONT_SIZE: int = 84
+const MARQUEE_YEAR_FONT_SIZE: int = 110 ## retuned 2026-10-22: 170 read too big in the headset
+const MARQUEE_NAME_FONT_SIZE: int = 56 ## the designer/title line (Chris's "date and designer"); 84 -> 56 in the same retune
 const MARQUEE_YEAR_Y: float = 0.30 ## year line's offset from the holder's centre
 const MARQUEE_NAME_Y: float = -0.34 ## designer/title line's offset
 const MARQUEE_PULSE_RATE: float = 1.6 ## settle pulse, cycles per second
@@ -47,6 +47,14 @@ const MARQUEE_YEAR_COLOR: Color = Color(1.0, 0.78, 0.25) ## marquee amber
 const MARQUEE_NAME_COLOR: Color = Color(0.45, 0.85, 1.0) ## playfield blue
 const MARQUEE_OUTLINE_COLOR: Color = Color(0.04, 0.02, 0.0)
 const MARQUEE_OUTLINE_SIZE: int = 24
+
+## Card pop-out (Chris, 2026-10-22): the card under the pointer -
+## or holding gamepad/keyboard focus - lifts off the wall toward
+## the viewer with depth from its neighbours. Only the one card
+## is ever popped; focus loss settles it back flush.
+const POP_OUT_DISTANCE: float = 0.15 ## metres off the wall at full pop
+const POP_OUT_SCALE: float = 1.08 ## card scale at full pop
+const POP_OUT_SEC: float = 0.15 ## pop in/out travel time, seconds
 
 var _factory: TextureFactory
 var _scanner: LibraryScanner
@@ -71,6 +79,10 @@ var _xr_camera: Camera3D
 var _desk_camera: Camera3D
 var _panels: Array[ClickableQuad] = []
 var _panel_launches: Array[ClickableQuad] = [] ## per-panel Launch button, parallel to _panels
+var _panel_base_pos: Array[Vector3] = [] ## wall-flush position per panel, parallel to _panels
+var _panel_pop_dir: Array[Vector3] = [] ## unit vector from the panel toward the viewer (its wall normal)
+var _panel_pop: Array[float] = [] ## current pop amount per panel, 0 flush .. 1 popped
+var _panel_pop_applied: Array[float] = [] ## last pop amount written to a panel's transform (write guard)
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
@@ -339,6 +351,10 @@ func _rebuild_wall() -> void:
 		child.queue_free()
 	_panels.clear()
 	_panel_launches.clear()
+	_panel_base_pos.clear()
+	_panel_pop_dir.clear()
+	_panel_pop.clear()
+	_panel_pop_applied.clear()
 	_rail_quads.clear()
 	_wall_alpha_applied = 1.0 ## fresh quads start opaque; the marquee fade re-applies from there
 	_set_focused(null)
@@ -365,6 +381,10 @@ func _rebuild_wall() -> void:
 		var pos: Vector3 = Vector3(sin(angle) * WALL_RADIUS, row_ys[row], -cos(angle) * WALL_RADIUS)
 		var q: ClickableQuad = _make_quad(_wall, "panel", game.game_id, placeholder, Vector2(0.54, 0.64), pos)
 		_panels.append(q)
+		_panel_base_pos.append(pos)
+		_panel_pop_dir.append((EYE - pos).normalized())
+		_panel_pop.append(0.0)
+		_panel_pop_applied.append(0.0)
 		# The card's Launch button (Chris, 2026-10-21): a distinct
 		# quad riding the panel's lower edge - pointing at the card
 		# browses (opens More Info); only the button commits to the
@@ -573,6 +593,62 @@ func _refresh_quad_states() -> void:
 
 func _on_hover_changed(_quad: ClickableQuad) -> void:
 	_refresh_quad_states()
+
+
+## The panel a focus-ish quad belongs to: the quad itself when it
+## is a card, or the card whose Launch button it is. Anything else
+## (rail, detail, banner) owns no card.
+func _panel_for(q: ClickableQuad) -> ClickableQuad:
+	if q == null:
+		return null
+	if _panels.has(q):
+		return q
+	var lidx: int = _panel_launches.find(q)
+	if lidx >= 0 and lidx < _panels.size():
+		return _panels[lidx]
+	return null
+
+
+## The one card that should be popped right now, on the room's
+## single shared focus: the pointer's card wins (VR laser and
+## mouse hover both arrive as the rig's hover), else the
+## gamepad/keyboard focus's card. No pop while the detail view or
+## the placard owns the room, and none during the load wait - the
+## wall is frozen behind the marquee there.
+func _pop_target_panel() -> ClickableQuad:
+	if _mode != "wall" or _placard_up or _launching_game_id != "":
+		return null
+	var hovered: ClickableQuad = _rig.hovered if _rig != null else null
+	var p: ClickableQuad = _panel_for(hovered)
+	if p != null:
+		return p
+	return _panel_for(_focused)
+
+
+## Per-frame pop animation, driven from _process: each panel's
+## amount walks toward 1 (the target) or 0 at POP_OUT_SEC pace,
+## and the transform is written only while the amount is actually
+## moving - a resting panel is never touched, so a Launch
+## button's activation pulse (a scale tween) never fights this.
+## The Launch button rides its panel (it is a child), so it stays
+## glued to the card face and clickable while popped. The marquee
+## fade needs no help here: it drives material alpha, which a
+## popped card carries like any other.
+func _update_pop(delta: float) -> void:
+	if _panels.is_empty():
+		return
+	var target: ClickableQuad = _pop_target_panel()
+	var step: float = delta / POP_OUT_SEC
+	for i: int in range(_panels.size()):
+		var want: float = 1.0 if _panels[i] == target else 0.0
+		var amt: float = move_toward(_panel_pop[i], want, step)
+		_panel_pop[i] = amt
+		if absf(amt - _panel_pop_applied[i]) < 0.001:
+			continue
+		_panel_pop_applied[i] = amt
+		var q: ClickableQuad = _panels[i]
+		q.position = _panel_base_pos[i] + _panel_pop_dir[i] * (POP_OUT_DISTANCE * amt)
+		q.scale = Vector3.ONE * (1.0 + (POP_OUT_SCALE - 1.0) * amt)
 
 
 func _on_select(quad: ClickableQuad) -> void:
@@ -1037,6 +1113,28 @@ func rail_quad(key: String) -> ClickableQuad:
 	return q as ClickableQuad
 
 
+## Pop-out queries (the pop shot hook reads the room the way the
+## other smokes read theirs): a panel's current pop amount, how
+## far it currently sits off its wall-flush position, and the
+## panel the shared focus would pop.
+func panel_pop_amount(q: ClickableQuad) -> float:
+	var idx: int = _panels.find(q)
+	if idx < 0:
+		return 0.0
+	return _panel_pop[idx]
+
+
+func panel_pop_offset(q: ClickableQuad) -> Vector3:
+	var idx: int = _panels.find(q)
+	if idx < 0:
+		return Vector3.ZERO
+	return q.position - _panel_base_pos[idx]
+
+
+func pop_target() -> ClickableQuad:
+	return _pop_target_panel()
+
+
 func _swap_launch_textures() -> void:
 	var gen: int = _gen
 	var start: int = _page * PAGE_SIZE
@@ -1096,6 +1194,7 @@ func _process(delta: float) -> void:
 	# The loading marquee animates on this same per-frame beat.
 	if _marquee_up:
 		_update_marquee(delta)
+	_update_pop(delta)
 	var deaf: bool = _launching_game_id != ""
 	_joy_cooldown = maxf(0.0, _joy_cooldown - delta)
 	var ax: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)

@@ -19,6 +19,9 @@ package main
 // config kill-switch one toggle away.
 
 import (
+	"fmt"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -92,28 +95,75 @@ func gameWindow(gamePID int) uintptr {
 	return best
 }
 
-// gameWindowExists reports whether the game process's PLAYER
-// window is up - the hand-off cue the resident launcher waits for
-// (plus a short settle) before it exits. Tightened in the
-// diagnostic round: the cue used to accept ANY visible window,
-// and VPX's editor frame is visible from app start while the
-// player window appears only once the table has loaded and play
-// begins - so the launcher could hand off (and mark the session
-// live) while the table was still loading, which then exposed
-// the session-close duty to the load state it must never act on
-// (see closer.go's arming note). Only a VPPlayer-class window -
-// the discriminator's playerPresent, same enumeration - stamps
-// the contract now.
-func gameWindowExists(gamePID int) bool {
-	if gamePID <= 0 {
-		return false
-	}
+// playerSight is this leaf's sighting gate (sighting.go): the
+// one filtered record of whether the game process's PLAYER
+// window has been observed this session, and whether it counts
+// as present right now.
+var playerSight playerSighting
+
+// obsWindow pairs a window handle with its sighting observation.
+type obsWindow struct {
+	hwnd uintptr
+	obs  windowObs
+}
+
+// enumLogOnce guards the per-session window inventory log line.
+var (
+	enumLogMu      sync.Mutex
+	enumLogSession int
+)
+
+// enumerateGameWindows lists the game process's visible top-level
+// windows as sighting observations. The FIRST enumeration of a
+// session that finds any window logs the full inventory - class
+// and size of each - exactly once: permanent field evidence of
+// what the game process actually puts on screen, the evidence
+// the old VPPlayer-only rule never produced while it silently
+// matched nothing on Chris's rig.
+func enumerateGameWindows(gamePID int, sessionID int) []obsWindow {
+	var out []obsWindow
 	for _, hwnd := range visibleWindows(gamePID) {
-		if windowClassName(hwnd) == "VPPlayer" {
-			return true
-		}
+		var rc rect
+		procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
+		out = append(out, obsWindow{hwnd: hwnd, obs: windowObs{
+			class:  windowClassName(hwnd),
+			width:  int64(rc.Right - rc.Left),
+			height: int64(rc.Bottom - rc.Top),
+		}})
 	}
-	return false
+	if len(out) > 0 {
+		enumLogMu.Lock()
+		if enumLogSession != sessionID {
+			enumLogSession = sessionID
+			parts := make([]string, 0, len(out))
+			for _, w := range out {
+				parts = append(parts, fmt.Sprintf("class %q %dx%d", w.obs.class, w.obs.width, w.obs.height))
+			}
+			logf("watchdog: session %d: game pid %d visible windows: %s", sessionID, gamePID, strings.Join(parts, "; "))
+		}
+		enumLogMu.Unlock()
+	}
+	return out
+}
+
+// gameWindowExists reports whether a player sighting has
+// STAMPED for this session - the hand-off cue the resident
+// launcher waits for (plus a short settle) before it exits.
+// Tightened in the diagnostic round: the cue used to accept ANY
+// visible window, and VPX's editor frame is visible from app
+// start while the player window appears only once the table has
+// loaded and play begins - so the launcher could hand off (and
+// mark the session live) while the table was still loading,
+// which then exposed the session-close duty to the load state it
+// must never act on (see closer.go's arming note). The stamp now
+// reads the sighting gate's latch (sighting.go) - the same
+// definition the session-close duties arm on - and reports the
+// rule that stamped it, for the log.
+func gameWindowExists(gamePID int, sessionID int) (bool, string) {
+	if gamePID <= 0 {
+		return false, ""
+	}
+	return playerSight.hasSighted(sessionID)
 }
 
 // windowClassName reads a window's Win32 class name - "VPPlayer"
@@ -129,26 +179,34 @@ func windowClassName(hwnd uintptr) string {
 }
 
 // gameWindowState classifies the game process's visible top-level
-// windows for the session-close duty (closer.go). The close target
-// is the largest editor-class window (in practice the one frame).
-func gameWindowState(gamePID int) windowState {
+// windows for the session-close duties (closer.go / arbiter.go).
+// The editor facts stay class-based (a visible "VPinball"-class
+// frame; the close target is the largest such window - in
+// practice the one frame). The player fact comes from the
+// sighting gate (sighting.go): a VPPlayer-class window counts at
+// once; a substantial non-editor window counts once it has
+// persisted across two polls; the editor class never counts.
+func gameWindowState(gamePID int, sessionID int) windowState {
 	var ws windowState
+	if gamePID <= 0 {
+		return ws
+	}
+	windows := enumerateGameWindows(gamePID, sessionID)
+	obs := make([]windowObs, 0, len(windows))
 	var bestEditorArea int64
-	for _, hwnd := range visibleWindows(gamePID) {
-		switch windowClassName(hwnd) {
-		case "VPPlayer":
-			ws.playerPresent = true
-		case "VPinball":
+	for _, w := range windows {
+		obs = append(obs, w.obs)
+		if w.obs.class == editorWindowClass {
 			ws.editorPresent = true
-			var rc rect
-			procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
-			area := int64(rc.Right-rc.Left) * int64(rc.Bottom-rc.Top)
-			if area > bestEditorArea {
+			if area := w.obs.area(); area > bestEditorArea {
 				bestEditorArea = area
-				ws.editorHWND = hwnd
+				ws.editorHWND = w.hwnd
 			}
 		}
 	}
+	candidate, rule := classifyPlayerCandidate(obs)
+	present, _ := playerSight.observe(sessionID, candidate, rule)
+	ws.playerPresent = present
 	return ws
 }
 

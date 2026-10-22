@@ -14,7 +14,13 @@ being dismissed from under loading tables). A further round
 returns to the room, hold bails to the editor — the exit
 arbitrator), adds the loading marquee, and fixes backglass
 extraction for entity-escaped files (255 of his 281 backglasses
-were stamped failed by the old reader).** M1's room
+were stamped failed by the old reader). A third round the same
+day fixes the gestures' silent failure on his rig — the player
+sighting no longer demands the `VPPlayer` window class (his
+player window never matched it, so neither duty ever armed;
+`sighting.go`) — retunes the marquee smaller and farther back
+(his verdict on the first pass: too big, too close), and gives
+the focused card a hover pop-out off the wall.** M1's room
 plus real launching: card-level Launch, a native watchdog that
 returns you to the room with your place restored, focus herding,
 and Exit-to-desktop. The first session proved the launch and the
@@ -67,8 +73,16 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   the wall in big display letters and holds at reading distance
   with a gentle pulse until the wait settles (`room.gd`'s
   MARQUEE_* constants carry the tunables; fallbacks: manufacturer
-  for a missing year, the title for a missing designer). The wait is
-  bounded (below), so no cancel control is offered. The deafness
+  for a missing year, the title for a missing designer). First
+  pass judged too big and too close in the headset; retuned the
+  same day (year 170→110px, name 84→56px, settle depth
+  −1.55→−2.30m). The wait is
+  bounded (below), so no cancel control is offered. While
+  browsing, the card on the room's shared focus — the pointer's
+  card (VR laser / mouse hover) or the gamepad/keyboard focus's
+  card — **pops out** toward the viewer (~0.15m, ~1.08×, ~150ms;
+  `room.gd`'s POP_OUT_* constants), its Launch button riding the
+  card face; focus loss settles it back flush. The deafness
   is a root-cause fix, not a nicety: the room listens to the same
   gamepad the player plays VPX with, and A is both "activate the
   focused quad" here and the player's plunger button there. An
@@ -125,20 +139,33 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   leaves VPX sitting in its editor — process alive, player window
   gone. The watchdog detects exactly that composite state and
   closes VPX, orderly, so the return trip can finish. The
-  discriminator is grounded in the vpinball source: the player's
-  SDL windows carry class **`VPPlayer`** (`SDL_RegisterApp` in
-  `src/core/VPApp.cpp`), the editor frame's class is **`VPinball`**
-  (`WinEditor::PreRegisterClass`); player-class gone AND
-  editor-class present, sustained ~2.5s (a transient window
-  shuffle is not an exit), fires once per session. **The duty is
+  discriminator: player gone AND editor present, sustained
+  ~2.5s (a transient window shuffle is not an exit), fires once
+  per session. The editor's half stays grounded in the vpinball
+  source — the editor frame's class is **`VPinball`**
+  (`WinEditor::PreRegisterClass` in `src/ui/win/WinEditor.cpp`).
+  The player's half is the **sighting rule** (`sighting.go`):
+  the source names the player's SDL class as `VPPlayer`
+  (`SDL_RegisterApp` in `src/core/VPApp.cpp`), and where a build
+  uses it, it still counts at once — but Chris's build's player
+  window never carried that class across whole sessions of live
+  play (the contract's `game_window_seen_unix` stayed 0, so
+  neither close duty ever armed and both exit gestures were
+  inert), so the rule is now class-**independent**: any visible
+  window of the game process that is NOT the editor class and is
+  substantial (≥ ~320×240) counts once it persists across two
+  polls; the editor class never counts, at any size, ever. The
+  watchdog logs each session's first window inventory (class and
+  size of every visible window of the game pid) and names the
+  rule that stamped the sighting — the field evidence the old
+  rule never produced. **The duty is
   armed per session**: the editor frame exists from VPX's start
   while the player window appears only once the table has loaded,
   so editor-present + player-absent is also the LOAD state — the
   duty may fire only after a player window has been observed at
   least once in the session (the first build without arming
   closed VPX mid-load on slow tables; the hand-off cue is
-  likewise the player-class window specifically, not any visible
-  window). Close method,
+  likewise the sighting specifically, not any visible window). Close method,
   in order: (1) the **PinSim::FrontEndControls** terminate
   request — the published protocol modern VP implements
   (registered window message, wParam 2 = CLOSE_APP, reply 1 =

@@ -309,7 +309,7 @@ func holdWatchLoop() {
 			ack := sendFrontEndControlsClose(ctx.gamePID)
 			logf("watchdog: session %d: hold-to-exit fired (button %s held %dms); sent FrontEndControls CLOSE_APP (acknowledged: %v)", ctx.sessionID, ctx.button, holdThresholdMs, ack)
 		case holdWMClose:
-			ok := sendEditorClose(gameWindowState(ctx.gamePID).editorHWND)
+			ok := sendEditorClose(gameWindowState(ctx.gamePID, ctx.sessionID).editorHWND)
 			logf("watchdog: session %d: hold-to-exit: VPX still open after the FrontEndControls request; sent WM_CLOSE to the editor window (posted: %v)", ctx.sessionID, ok)
 		case holdGiveUp:
 			logf("watchdog: session %d: hold-to-exit: VPX did not close after FrontEndControls + WM_CLOSE; leaving VPX alone", ctx.sessionID)
@@ -465,18 +465,20 @@ func main() {
 					sawGameAlive = true
 					logf("watchdog: game process live (pid %d), session %d", gpid, c.SessionID)
 				}
-				// The hand-off cue for the resident launcher: the
-				// game's player window exists (on Windows, a
-				// VPPlayer-class window specifically - the editor
-				// frame is up from app start and must not stamp
-				// this). Stamped once per session.
-				if c.GameWindowSeenUnix == 0 && gameWindowExists(c.GamePID) {
-					logf("watchdog: game window up (pid %d), session %d", c.GamePID, c.SessionID)
-					writeContractMerged(func(mc *Contract) {
-						if mc.GameWindowSeenUnix == 0 && (mc.SessionState == "loading" || mc.SessionState == "live") {
-							mc.GameWindowSeenUnix = time.Now().Unix()
-						}
-					})
+				// The hand-off cue for the resident launcher: a
+				// player sighting has stamped for this session
+				// (sighting.go - the editor frame is up from app
+				// start and must never stamp this). Stamped once
+				// per session; the log names the sighting rule.
+				if c.GameWindowSeenUnix == 0 {
+					if sighted, rule := gameWindowExists(c.GamePID, c.SessionID); sighted {
+						logf("watchdog: game window up (pid %d), session %d (sighting: %s)", c.GamePID, c.SessionID, rule)
+						writeContractMerged(func(mc *Contract) {
+							if mc.GameWindowSeenUnix == 0 && (mc.SessionState == "loading" || mc.SessionState == "live") {
+								mc.GameWindowSeenUnix = time.Now().Unix()
+							}
+						})
+					}
 				}
 				// A loading session whose supervising launcher has
 				// died is unsupervised: promote it to live, so the
@@ -525,12 +527,12 @@ func main() {
 					// editor, decide tap vs hold from the button,
 					// then ask VPX to close - orderly, escalating,
 					// never a kill - or stand down entirely.
-					switch sessionArbiter.tick(time.Now().UnixMilli(), c.SessionID, c.SessionState, true, gameWindowState(c.GamePID), currentButtonSnapshot(c.SessionID)) {
+					switch sessionArbiter.tick(time.Now().UnixMilli(), c.SessionID, c.SessionState, true, gameWindowState(c.GamePID, c.SessionID), currentButtonSnapshot(c.SessionID)) {
 					case arbCloseFEC:
 						ack := sendFrontEndControlsClose(c.GamePID)
 						logf("watchdog: session %d: exit arbitrator: tap out of the table; sent PinSim::FrontEndControls CLOSE_APP (acknowledged: %v)", c.SessionID, ack)
 					case arbCloseWMClose:
-						ok := sendEditorClose(gameWindowState(c.GamePID).editorHWND)
+						ok := sendEditorClose(gameWindowState(c.GamePID, c.SessionID).editorHWND)
 						logf("watchdog: session %d: exit arbitrator: VPX still open after the FrontEndControls request; sent WM_CLOSE to the editor window (posted: %v)", c.SessionID, ok)
 					case arbGiveUp:
 						logf("watchdog: session %d: exit arbitrator: VPX did not close after FrontEndControls + WM_CLOSE; leaving VPX alone", c.SessionID)
@@ -551,12 +553,12 @@ func main() {
 					// decision is shared logic; the sends are platform
 					// leaves. When VPX dies, the ordinary death path
 					// below relaunches the launcher.
-					switch sessionCloser.tick(time.Now().UnixMilli(), c.SessionID, c.SessionState, c.CloseVPXOnTableExit, true, gameWindowState(c.GamePID)) {
+					switch sessionCloser.tick(time.Now().UnixMilli(), c.SessionID, c.SessionState, c.CloseVPXOnTableExit, true, gameWindowState(c.GamePID, c.SessionID)) {
 					case closeFEC:
 						ack := sendFrontEndControlsClose(c.GamePID)
 						logf("watchdog: session %d: table exit landed in the VPX editor; sent PinSim::FrontEndControls CLOSE_APP (acknowledged: %v)", c.SessionID, ack)
 					case closeWMClose:
-						ok := sendEditorClose(gameWindowState(c.GamePID).editorHWND)
+						ok := sendEditorClose(gameWindowState(c.GamePID, c.SessionID).editorHWND)
 						logf("watchdog: session %d: VPX still open after the FrontEndControls request; sent WM_CLOSE to the editor window (posted: %v)", c.SessionID, ok)
 					case closeGiveUp:
 						logf("watchdog: session %d: VPX did not close after FrontEndControls + WM_CLOSE; leaving VPX alone", c.SessionID)

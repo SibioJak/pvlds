@@ -31,8 +31,11 @@ package main
 // and closes VPX mid-load (Chris's field failure on the first
 // build with this duty: launch, freeze, flicker, back in the room,
 // no game). So the duty is armed per session: it may fire only
-// after a VPPlayer-class window has been OBSERVED at least once in
-// the session. Player-never-seen + editor-present means "still
+// after a player window has been OBSERVED at least once in the
+// session, under the sighting rule in sighting.go (a VPPlayer-class
+// window, or - class-independently - a substantial non-editor
+// window that persists across two polls; the editor class itself
+// never counts). Player-never-seen + editor-present means "still
 // loading", forever safe - the sustain clock does not even run.
 //
 // Escalation, per the design brief: (1) the PinSim::FrontEndControls
@@ -49,7 +52,7 @@ package main
 // windowState is one snapshot of the game process's top-level
 // windows, classified by the platform leaf.
 type windowState struct {
-	playerPresent bool    // a visible "VPPlayer"-class window exists
+	playerPresent bool    // the sighting rule (sighting.go) counts a player window present
 	editorPresent bool    // a visible "VPinball"-class editor frame exists
 	editorHWND    uintptr // the editor frame (Windows close target); 0 elsewhere
 }

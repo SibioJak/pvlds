@@ -34,6 +34,12 @@ extends Node
 ##                       ready, launch a game (env overrides as
 ##                       above), screenshot the LOADING room to P
 ##                       ~1s into the wait, disarm, quit
+##   --pvlds-shot-pop PREFIX
+##                       room boot; save PREFIX_flush.png with
+##                       every card flush, focus the middle card,
+##                       assert its pop-out transform (offset,
+##                       scale, neighbour untouched), save
+##                       PREFIX_popped.png, print the verdict, quit
 ##   --pvlds-smoke-placard
 ##                       room boot; force XR on, open setup with a
 ##                       message, assert the placard contract (room
@@ -143,6 +149,11 @@ var _scan_db_path: String = "" ## resolved on the main thread in start_scan()
 var _scan_db_kind: String = "" ## "user" | "download" | "sample"
 var _shot_path: String = ""
 var _shot_frames: int = 0
+var _shot_pop_prefix: String = "" ## --pvlds-shot-pop PREFIX: flush + popped room shots with transform assertions
+var _shot_pop_phase: int = -1
+var _shot_pop_frames: int = 0
+var _shot_pop_panel: ClickableQuad = null
+var _shot_pop_since_msec: int = 0
 var _art_bench: bool = false ## --pvlds-art-bench: dev measurement route (cold/warm page-fill timings)
 var _bench_phase: int = -1
 var _bench_t_room: int = 0
@@ -170,6 +181,10 @@ func _ready() -> void:
 	var shot_launch_idx: int = user_args.find("--pvlds-shot-launch")
 	if shot_launch_idx >= 0 and shot_launch_idx + 1 < user_args.size():
 		_shot_launch_path = user_args[shot_launch_idx + 1]
+	var shot_pop_idx: int = user_args.find("--pvlds-shot-pop")
+	if shot_pop_idx >= 0 and shot_pop_idx + 1 < user_args.size():
+		_shot_pop_prefix = user_args[shot_pop_idx + 1]
+		_shot_pop_phase = 0
 	if user_args.has("--pvlds-smoke-placard"):
 		_smoke_placard = true
 	if user_args.has("--pvlds-smoke-desk"):
@@ -195,7 +210,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _shot_pop_prefix != "") and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -324,6 +339,8 @@ func _process(_delta: float) -> void:
 		_drive_quitwarm_smoke()
 	if _art_bench:
 		_drive_art_bench(_delta)
+	if _shot_pop_phase >= 0:
+		_drive_shot_pop()
 	if _shot_path != "" and _shot_ready():
 		_shot_frames += 1
 		if _shot_frames >= 8:
@@ -611,6 +628,72 @@ func _poll_shot_launch() -> void:
 	elif not _launch_pending and Time.get_ticks_msec() - _shot_launch_at_msec >= maxi(3000, delay_ms + 1500):
 		printerr("PVLDS SHOT LAUNCH: FAIL - the launch never entered its wait")
 		get_tree().quit(1)
+
+
+## --pvlds-shot-pop PREFIX: the card pop-out's QA hook. Boots the
+## room, clears focus and lets any pop settle, saves
+## PREFIX_flush.png (every card flush), then focuses the middle
+## card through the room's own focus path, waits for the pop to
+## complete, asserts the transform evidence (the focused card
+## sits POP_OUT_DISTANCE off the wall at POP_OUT_SCALE, its
+## neighbour untouched, the pop target is the focused card),
+## saves PREFIX_popped.png, prints the verdict, quits.
+func _drive_shot_pop() -> void:
+	match _shot_pop_phase:
+		0:
+			if _room == null or not _room.visible or not _room.wall_ready:
+				return
+			_room._set_focused(null)
+			_shot_pop_frames += 1
+			if _shot_pop_frames < 12:
+				return
+			if _room._panels.size() < 3:
+				printerr("PVLDS POP SHOT: FAIL - the wall holds %d panels, need at least 3" % _room._panels.size())
+				get_tree().quit(1)
+				return
+			var flush_err: Error = _save_shot_png(_shot_pop_prefix + "_flush.png")
+			if flush_err != OK:
+				printerr("PVLDS POP SHOT: FAIL - flush shot err=", flush_err)
+				get_tree().quit(1)
+				return
+			var mid: int = _room._panels.size() / 2
+			_shot_pop_panel = _room._panels[mid]
+			_room._set_focused(_shot_pop_panel)
+			_shot_pop_since_msec = Time.get_ticks_msec()
+			_shot_pop_phase = 1
+		1:
+			var amt: float = _room.panel_pop_amount(_shot_pop_panel)
+			var waited: int = Time.get_ticks_msec() - _shot_pop_since_msec
+			if amt < 0.999 and waited < 3000:
+				return
+			var problems: Array[String] = []
+			if amt < 0.999:
+				problems.append("pop amount %.3f after %dms" % [amt, waited])
+			var off: Vector3 = _room.panel_pop_offset(_shot_pop_panel)
+			if absf(off.length() - RoomView.POP_OUT_DISTANCE) > 0.01:
+				problems.append("offset length %.4f, want %.2f" % [off.length(), RoomView.POP_OUT_DISTANCE])
+			if absf(_shot_pop_panel.scale.x - RoomView.POP_OUT_SCALE) > 0.01:
+				problems.append("scale %.3f, want %.2f" % [_shot_pop_panel.scale.x, RoomView.POP_OUT_SCALE])
+			if _room.pop_target() != _shot_pop_panel:
+				problems.append("pop target is not the focused panel")
+			var pidx: int = _room._panels.find(_shot_pop_panel)
+			var neighbour: ClickableQuad = _room._panels[pidx - 1]
+			if _room.panel_pop_amount(neighbour) != 0.0 or _room.panel_pop_offset(neighbour).length() > 0.001:
+				problems.append("neighbour panel is not flush")
+			var pop_err: Error = _save_shot_png(_shot_pop_prefix + "_popped.png")
+			if pop_err != OK:
+				problems.append("popped shot err=%d" % pop_err)
+			if problems.is_empty():
+				print("PVLDS POP SHOT: PASS amount=%.3f offset=%.4f scale=%.3f waited=%dms" % [amt, off.length(), _shot_pop_panel.scale.x, waited])
+				get_tree().quit(0)
+			else:
+				printerr("PVLDS POP SHOT: FAIL - ", "; ".join(PackedStringArray(problems)))
+				get_tree().quit(1)
+
+
+func _save_shot_png(path: String) -> Error:
+	var img: Image = get_viewport().get_texture().get_image()
+	return img.save_png(path)
 
 
 func _fire_shot_launch() -> void:
