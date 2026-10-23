@@ -9,6 +9,14 @@ package main
 // logic-exercising build is Linux; both have real implementations.
 func gameWindowExists(_ int, _ int) (bool, string) { return false, "" }
 
+// gameRuntimeExists off Windows/Linux: no runtime is ever
+// reported, so the contract's runtime stamp never lands here.
+func gameRuntimeExists(_ int, _ int) bool { return false }
+
+// pushFocusToGame off Windows/Linux: there is no foreground to
+// hand over here.
+func pushFocusToGame(_ int) focusPushOutcome { return focusPushDeclined }
+
 // gameWindowState off Windows/Linux: no windows are ever reported,
 // so the session-close duties never fire here.
 func gameWindowState(_ int, _ int) windowState { return windowState{} }

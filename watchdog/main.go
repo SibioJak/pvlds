@@ -21,8 +21,19 @@
 //     in play it is VPX's own Exit Game binding and lands in the
 //     editor, which this duty then closes promptly; in the room
 //     the same press quits the app (the launcher's side),
-//   - stamp the contract when the game's main window first exists
-//     (the resident launcher reads it as its hand-off cue),
+//   - stamp the contract when the game's player window is first
+//     sighted (runtime.go's sibling, sighting.go - the exit
+//     detector arms on it) and again when the game's table
+//     RUNTIME first exists (runtime.go): the runtime stamp is
+//     the resident launcher's hand-off cue, because the
+//     sighting stamps off the editor's own canvas seconds
+//     before a real load finishes,
+//   - at the hand-off (the session live, the supervising
+//     launcher gone), hand the foreground to the game process
+//     ONCE - a single deliberate push, not herding - so the
+//     table does not come up unfocused (no sound, no
+//     controller) behind whatever the launcher's exit left in
+//     front,
 //   - when the game dies: in "live" (the launcher already exited)
 //     relaunch it exactly once; in "loading" the launcher is still
 //     resident and owns the failure, so the session is marked
@@ -71,17 +82,23 @@ type Contract struct {
 	// still carry close_vpx_on_table_exit / hold_exit_enabled /
 	// hold_exit_button; encoding/json ignores unknown keys on
 	// read, and merged writes here simply stop carrying them.
-	SessionID          int      `json:"session_id"`
-	SessionState       string   `json:"session_state"`
-	GameExePath        string   `json:"game_exe_path"`
-	GamePID            int      `json:"game_pid"`
-	GameStartedUnix    int64    `json:"game_started_unix"`
-	GameWindowSeenUnix int64    `json:"game_window_seen_unix"`
-	LauncherPath       string   `json:"launcher_path"`
-	LauncherArgs       []string `json:"launcher_args"`
-	LauncherPID        int      `json:"launcher_pid"`
-	LastCheckinUnix    int64    `json:"last_checkin_unix"`
-	UpdatedUnix        int64    `json:"updated_unix"`
+	SessionID          int    `json:"session_id"`
+	SessionState       string `json:"session_state"`
+	GameExePath        string `json:"game_exe_path"`
+	GamePID            int    `json:"game_pid"`
+	GameStartedUnix    int64  `json:"game_started_unix"`
+	GameWindowSeenUnix int64  `json:"game_window_seen_unix"`
+	// RuntimeSeenUnix is stamped (once per session) when the
+	// game's table RUNTIME first exists (runtime.go) - the
+	// resident launcher's hand-off cue. Absent/0 in contracts
+	// written before the field existed; the launcher treats 0
+	// as "not yet" and its load cap still bounds the wait.
+	RuntimeSeenUnix int64    `json:"runtime_seen_unix"`
+	LauncherPath    string   `json:"launcher_path"`
+	LauncherArgs    []string `json:"launcher_args"`
+	LauncherPID     int      `json:"launcher_pid"`
+	LastCheckinUnix int64    `json:"last_checkin_unix"`
+	UpdatedUnix     int64    `json:"updated_unix"`
 }
 
 const (
@@ -229,6 +246,8 @@ func main() {
 		sessionAtRelaunch int
 		strikes           int
 		sessionCloser     closer
+		focusPushSession  int  // the session the one-shot focus handoff belongs to
+		focusPushed       bool // the handoff has been attempted for focusPushSession
 	)
 
 	relaunch := func(c *Contract, why string) {
@@ -339,10 +358,28 @@ func main() {
 						})
 					}
 				}
+				// The resident launcher's hand-off cue: the
+				// game's table RUNTIME exists (runtime.go).
+				// The sighting above stamps seconds earlier -
+				// off the editor's own canvas - while a real
+				// load is still running, so the launcher waits
+				// for THIS stamp before it leaves the room.
+				// Stamped once per session, sighting-style.
+				if c.RuntimeSeenUnix == 0 {
+					if gameRuntimeExists(c.GamePID, c.SessionID) {
+						logf("watchdog: game runtime up (pid %d), session %d", c.GamePID, c.SessionID)
+						writeContractMerged(func(mc *Contract) {
+							if mc.RuntimeSeenUnix == 0 && (mc.SessionState == "loading" || mc.SessionState == "live") {
+								mc.RuntimeSeenUnix = time.Now().Unix()
+							}
+						})
+					}
+				}
 				// A loading session whose supervising launcher has
 				// died is unsupervised: promote it to live, so the
 				// game's death still brings a launcher back instead
 				// of stranding the player at a desktop.
+				promoted := false
 				if c.SessionState == "loading" && c.LauncherPID > 0 && !processAlive(c.LauncherPID) {
 					logf("watchdog: supervising launcher gone during load, session %d; promoting to live", c.SessionID)
 					writeContractMerged(func(mc *Contract) {
@@ -350,6 +387,39 @@ func main() {
 							mc.SessionState = "live"
 						}
 					})
+					promoted = true
+				}
+				// One-shot focus handoff: the first tick the
+				// session is live with the supervising launcher
+				// observed gone is the hand-off moment, and the
+				// foreground belongs to nobody in particular -
+				// whatever the launcher's exit left in front.
+				// A table that comes up behind that comes up
+				// unfocused (no sound, no controller; the field
+				// fix was the player alt-tabbing). So the
+				// watchdog pushes the foreground to the game
+				// process ONCE - a single deliberate push at
+				// the one moment it is ours to give, not
+				// herding (which never runs live). The attempt
+				// is recorded with the exit detector either
+				// way (notePush): excursions at or before this
+				// tick may be the push's own placement, so
+				// arming waits for a later one (closer.go).
+				if focusPushSession != c.SessionID {
+					focusPushSession = c.SessionID
+					focusPushed = false
+				}
+				if !focusPushed && (c.SessionState == "live" || promoted) && c.LauncherPID > 0 && !processAlive(c.LauncherPID) {
+					focusPushed = true
+					sessionCloser.notePush(c.SessionID, time.Now().UnixMilli())
+					switch pushFocusToGame(c.GamePID) {
+					case focusPushHanded:
+						logf("watchdog: session %d: handed focus to the game (one-shot)", c.SessionID)
+					case focusPushAlready:
+						logf("watchdog: session %d: game already holds the foreground", c.SessionID)
+					default:
+						logf("watchdog: session %d: focus push declined by Windows", c.SessionID)
+					}
 				}
 				// Focus herding serves the loading phase's
 				// spawn settle ONLY (herdingAllowed): once the

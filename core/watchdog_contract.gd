@@ -46,9 +46,21 @@ extends RefCounted
 ##   game_window_seen_unix  stamped by the watchdog when the game's
 ##                    PLAYER window first exists (the watchdog's
 ##                    sighting rule - the editor frame is up from
-##                    app start and must not stamp this); the resident
-##                    launcher reads it (+ a short settle) as its
-##                    hand-off cue
+##                    app start and must not stamp this); feeds the
+##                    watchdog's exit-detector arming and the
+##                    launcher's dead-process grace
+##   runtime_seen_unix  stamped by the watchdog when the game's
+##                    table RUNTIME first exists (the watchdog's
+##                    runtime rule - the runtime windows the load
+##                    brings up once the table is real); the
+##                    resident launcher reads it (+ a short settle)
+##                    as its hand-off cue. The sighting above stamps
+##                    seconds earlier, off the editor's own canvas,
+##                    while the load is still running - handing off
+##                    on it left a desktop gap in the headset and
+##                    an unsettled foreground, so the cue moved to
+##                    the runtime. Absent in contracts written
+##                    before the field existed; loads default 0.
 ##   launcher_path    what the watchdog relaunches
 ##   launcher_args    ...with these arguments
 ##   launcher_pid     pid of the launcher that last checked in
@@ -68,6 +80,7 @@ var game_exe_path: String = ""
 var game_pid: int = 0
 var game_started_unix: int = 0
 var game_window_seen_unix: int = 0
+var runtime_seen_unix: int = 0
 var launcher_path: String = ""
 var launcher_args: Array[String] = []
 var launcher_pid: int = 0
@@ -117,6 +130,7 @@ static func load_from_disk() -> WatchdogContract:
 	c.game_pid = int(d.get("game_pid", 0))
 	c.game_started_unix = int(d.get("game_started_unix", 0))
 	c.game_window_seen_unix = int(d.get("game_window_seen_unix", 0))
+	c.runtime_seen_unix = int(d.get("runtime_seen_unix", 0))
 	c.launcher_path = str(d.get("launcher_path", ""))
 	c.launcher_pid = int(d.get("launcher_pid", 0))
 	c.last_checkin_unix = int(d.get("last_checkin_unix", 0))
@@ -141,6 +155,7 @@ func to_dictionary() -> Dictionary:
 	d["game_pid"] = game_pid
 	d["game_started_unix"] = game_started_unix
 	d["game_window_seen_unix"] = game_window_seen_unix
+	d["runtime_seen_unix"] = runtime_seen_unix
 	d["launcher_path"] = launcher_path
 	var la: Array = []
 	for a: String in launcher_args:

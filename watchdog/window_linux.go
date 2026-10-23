@@ -87,10 +87,29 @@ func stubForegroundMarker(gamePID int) string {
 	return "/tmp/pvlds-stub-foreground-" + strconv.Itoa(gamePID)
 }
 
+// stubRuntimeMarker is the smoke stub's "my table runtime is
+// up" signal: while the file stands, this leaf's snapshot
+// carries a runtime-class observation (a SharpGLRenderWindow -
+// one of the field runtime classes, runtime.go), so the
+// runtime gate and its contract stamp get exercised exactly
+// as the sighting gate is through its markers. The stub's
+// stage 2 raises it on its runtime schedule
+// (STUB_RUNTIME_AFTER_S - see stub_vpx_window.c): at window-up
+// by default (the runtime arrives with play, as on the real
+// rig), seconds later when a scenario models a slow runtime,
+// or never.
+func stubRuntimeMarker(gamePID int) string {
+	return "/tmp/pvlds-stub-runtime-" + strconv.Itoa(gamePID)
+}
+
 // playerSight is this leaf's sighting gate (sighting.go) - the
 // same shared gate the Windows leaf feeds, so the smokes exercise
 // the shipped rule, persistence included.
 var playerSight playerSighting
+
+// runtimeSeen is this leaf's runtime gate (runtime.go) - the
+// same shared gate the Windows leaf feeds.
+var runtimeSeen runtimeGate
 
 // gameWindowExists on Linux: whether a player sighting has
 // STAMPED for this session, and the rule that stamped it - the
@@ -100,6 +119,35 @@ func gameWindowExists(gamePID int, sessionID int) (bool, string) {
 		return false, ""
 	}
 	return playerSight.hasSighted(sessionID)
+}
+
+// gameRuntimeExists on Linux: whether the runtime gate has
+// latched for this session - the same latch the Windows leaf
+// reports, fed by the stub's runtime marker (gameWindowState).
+func gameRuntimeExists(gamePID int, sessionID int) bool {
+	if gamePID <= 0 {
+		return false
+	}
+	return runtimeSeen.hasSeen(sessionID)
+}
+
+// pushFocusToGame on Linux: there is no foreground to raise
+// here; the mirror reports the verdict the scripted facts
+// imply, so main.go's one-shot handoff (its trigger, its
+// exactly-once bookkeeping, its logging, and notePush into the
+// exit detector) runs end to end in the smokes. The foreground
+// marker names the editor - the game process's own window -
+// as the foreground holder, which is the Windows leaf's
+// "already holds" case; anything else reads as a successful
+// push (nothing on this platform can decline it).
+func pushFocusToGame(gamePID int) focusPushOutcome {
+	if gamePID <= 0 {
+		return focusPushDeclined
+	}
+	if b, err := os.ReadFile(stubForegroundMarker(gamePID)); err == nil && strings.TrimSpace(string(b)) == "editor" {
+		return focusPushAlready
+	}
+	return focusPushHanded
 }
 
 // gameWindowState on Linux (smoke build only) gathers the same
@@ -112,16 +160,19 @@ func gameWindowExists(gamePID int, sessionID int) (bool, string) {
 // declared class at the stub window's real size (400x300),
 // with visible=false while the hidden marker stands - the
 // unfiltered gate must count it anyway (see
-// stubPlayerHiddenMarker). The stub drops the editor marker
-// in two situations the smokes keep distinct by session shape:
-// its table-exit-to-editor moment (after a player phase), and
-// - with STUB_EDITOR_FIRST_S - from birth, modelling VPX's
-// startup order (editor frame first, player window only after
-// the table loads), which is the state the detector's sighting
-// half exists for. The foreground fact comes from the
-// foreground marker (stubForegroundMarker): "editor" is the
-// only content that marks the editor as foreground. No editor
-// handle exists off Windows.
+// stubPlayerHiddenMarker). While the runtime marker stands
+// (stubRuntimeMarker), the player branch additionally carries
+// a runtime-class observation, feeding the runtime gate whose
+// stamp is the launcher's hand-off cue. The stub drops the
+// editor marker in two situations the smokes keep distinct by
+// session shape: its table-exit-to-editor moment (after a
+// player phase), and - with STUB_EDITOR_FIRST_S - from birth,
+// modelling VPX's startup order (editor frame first, player
+// window only after the table loads), which is the state the
+// detector's sighting half exists for. The foreground fact
+// comes from the foreground marker (stubForegroundMarker):
+// "editor" is the only content that marks the editor as
+// foreground. No editor handle exists off Windows.
 func gameWindowState(gamePID int, sessionID int) windowState {
 	var ws windowState
 	if gamePID <= 0 {
@@ -136,9 +187,13 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 			visible = false
 		}
 		obs = append(obs, windowObs{class: stubPlayerClass(gamePID), width: 400, height: 300, visible: visible})
+		if _, err := os.Stat(stubRuntimeMarker(gamePID)); err == nil {
+			obs = append(obs, windowObs{class: "SharpGLRenderWindow", width: 307, height: 77, visible: false})
+		}
 	}
 	candidate, rule := classifyPlayerCandidate(obs)
 	playerSight.observe(sessionID, candidate, rule)
+	runtimeSeen.observe(sessionID, classifyRuntime(obs))
 	if b, err := os.ReadFile(stubForegroundMarker(gamePID)); err == nil && strings.TrimSpace(string(b)) == "editor" {
 		ws.fgIsEditor = true
 	}

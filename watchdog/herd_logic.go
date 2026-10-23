@@ -32,6 +32,26 @@ func herdingAllowed(focusHerding bool, sessionState string) bool {
 	return focusHerding && sessionState == "loading"
 }
 
+// focusPushOutcome is the result of the watchdog's ONE-SHOT
+// focus handoff (main.go): at the hand-off moment - the
+// session live, the supervising launcher observed gone - the
+// watchdog pushes the foreground to the game process exactly
+// once, so the table does not come up behind whatever the
+// launcher's exit left in front (the field failure: a table up
+// with no sound and no controller until the player alt-tabbed
+// to it). The push itself is a platform leaf
+// (pushFocusToGame); this is only its verdict vocabulary. It
+// is NOT herding: herding is a repeated, loading-only duty;
+// the handoff is a single deliberate act at a single moment,
+// and it also runs in live sessions, where herding never does.
+type focusPushOutcome int
+
+const (
+	focusPushHanded   focusPushOutcome = iota // the game process holds the foreground now, by our push
+	focusPushAlready                          // the game process already held the foreground; nothing to do
+	focusPushDeclined                         // no target window, or Windows would not give the foreground up
+)
+
 type herdDecision int
 
 const (

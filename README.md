@@ -28,7 +28,16 @@ meanings — in play it is VPX's own Exit Game and the watchdog
 closes the editor it lands in, promptly and unconditionally;
 in the room it quits the app to the desktop. The arbitrator,
 the hold duty, the XInput button watch, and both exit switches
-are gone.** M1's room
+are gone. A fifth round (2026-10-23, after the tap-return
+proved itself in the field) fixes the hand-off's two remaining
+defects: the launcher now waits for the table's **runtime**
+(the old cue — the window sighting — stamps off the editor's
+canvas about a second after spawn, while a real load runs
+several seconds more, leaving a desktop gap in the headset),
+and the watchdog hands the foreground to the game **once** at
+the hand-off, deliberately, ending the focus lottery that
+left one table with sound and controls and the next with
+neither until the player alt-tabbed to it.** M1's room
 plus real launching: card-level Launch, a native watchdog that
 returns you to the room with your place restored, focus herding,
 and Exit-to-desktop. The first session proved the launch and the
@@ -105,10 +114,13 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   is the known suspect — must not dismiss a session mid-handoff);
   outside the wait, a window close disarms and quits as before.
   The launcher exits at the hand-off, the first of: (a) the
-  watchdog's contract reports VPX's player-class window exists,
-  plus a ~1.5s settle; (b) the launcher's own XR session reports
-  it is ending (VPX is taking the headset over); (c) a 45s hard
-  cap, so the room can never hang on a stuck load. As it exits it
+  watchdog's contract reports the table's **runtime** exists
+  (`runtime_seen_unix` — the runtime rule below), plus a ~1.5s
+  settle; (b) the launcher's own XR session reports it is
+  ending (VPX is taking the headset over); (c) a 45s hard cap,
+  so the room can never hang on a stuck load. (The cue used to
+  be the window sighting; it stamps seconds too early — see
+  the runtime bullet under the watchdog.) As it exits it
   marks the session **live**. If VPX dies during the load instead,
   the session is marked **failed**, nobody relaunches anything,
   and the resident launcher flags the panel FAILED and returns to
@@ -139,7 +151,39 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   launcher that died mid-wait must never strand the player at a
   dead desktop). In **live** it waits for the game process to die
   (exit or crash — same handling) and relaunches the launcher
-  **once**. The relaunched launcher restores filter/sort/page with
+  **once**.
+- **The runtime stamp and the one-shot focus handoff.** Alongside
+  the sighting, the watchdog stamps `runtime_seen_unix` when the
+  game's **table runtime** first exists (`runtime.go`): a window
+  of the game process whose class is one of the runtime classes
+  the field inventories showed arriving with the player and
+  vanishing at the exit — PinMAME's `MAME` / `VPINMAMEEVENTWND`,
+  the render windows `SharpGLRenderWindow` / `NVOpenGLPbuffer`,
+  `DIEmWin`, the B2S server's `HwndWrapper…` windows — or an
+  `SDL_app` window that is **visible** (in both field sessions
+  it flipped hidden→visible exactly when the player came up).
+  The editor's canvas (`CVFrame`), the editor class, and the
+  dialog/IME crowd never count. This stamp — not the sighting —
+  is the resident launcher's hand-off cue (above): the sighting
+  stamps ~1s after spawn off the editor canvas while real loads
+  run ~8s, and handing off on it left a 2–3s desktop gap in the
+  headset. The sighting keeps its other jobs (the exit
+  detector's arming precondition; the launcher's dead-process
+  grace). At the hand-off moment itself — the first tick the
+  session is live with the supervising launcher observed gone —
+  the watchdog pushes the foreground to the game process
+  **once**: target its visible SDL window, else its editor
+  frame (same process — the push buys process focus), skipped
+  if the game already holds the foreground, and logged either
+  way (`handed focus to the game (one-shot)` / `game already
+  holds the foreground` / `focus push declined by Windows`).
+  Exactly once per session; it is not herding (herding stays
+  loading-only and never runs live). Because the push can
+  itself place the foreground on a non-editor game window, the
+  exit detector's guard records the push tick: an excursion
+  counts toward arming only if observed at a tick **after**
+  the push — the push must never manufacture the detector's
+  own arming evidence. The relaunched launcher restores filter/sort/page with
   the just-played table selected. It never auto-relaunches a
   table. A log lands beside the contract (`pvlds_watchdog.log`).
 - **Session-close duty** (Windows, user32; decision logic shared
@@ -154,7 +198,11 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   load and play the foreground cycles Virtual Desktop's window,
   the loading dialog, the player, PinMAME; the editor holds it
   only at the spawn instant and when a table exit lands —
-  field sessions 25/26, 2026-10-23). Once armed, the editor
+  field sessions 25/26, 2026-10-23). One guard rides on the
+  excursion: it counts only if observed at a tick after the
+  session's one-shot focus handoff (above) — the push can put
+  the foreground on a game window itself, and the detector
+  must never arm on evidence the watchdog manufactured. Once armed, the editor
   holding the foreground continuously for **1200ms**
   (`editorForegroundSustainMs` — elapsed time, not tick counts)
   is the exit; any tick with a different foreground resets the
@@ -238,6 +286,18 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   frame (the only visible window), and in session 26 it
   actively forced the editor to the foreground mid-play,
   polluting the very signal the detector reads.
+  **The hand-off's two defects** (2026-10-23, the first field
+  session where the tap-return worked end to end): the room
+  left on the sighting cue ~1s after spawn while the table
+  took ~8s to load — a 2–3s desktop gap in the headset and an
+  unsettled foreground — and focus at the hand-off was a
+  lottery between tables: The Getaway won it (sound +
+  controls from the first moment), Godzilla lost it (no
+  sound, no controller) until Chris alt-tabbed to the game,
+  which cured both instantly — the game had simply never held
+  Windows focus. Hence the runtime cue and the one-shot focus
+  handoff above: the room stays until the table is real, and
+  the foreground is given deliberately, once.
 - **The exit model — one BACK button, two rules** (Chris's
   ruling, 2026-10-22, replacing the tap/hold arbitration model
   wholesale): **there is no hold gesture anywhere.** D-pad

@@ -134,7 +134,7 @@ var _lockout_setup_fired: bool = false
 
 # The launch load wait. While _launch_pending, _process polls for
 # the hand-off point and for VPX dying mid-load.
-const LAUNCH_SETTLE_MSEC: int = 1500 ## window up + this long = hand off
+const LAUNCH_SETTLE_MSEC: int = 1500 ## table runtime up + this long = hand off
 const LAUNCH_CAP_MSEC: int = 45000 ## never hold the room hostage to a stuck load
 const LAUNCH_DEAD_GRACE_MSEC: int = 1500 ## a dead spawn pid gets this long for the watchdog's by-path window report before the launch is called failed
 var _launch_pending: bool = false
@@ -142,7 +142,7 @@ var _launch_game: GameEntry = null
 var _launch_pid: int = 0
 var _launch_session_id: int = 0
 var _launch_started_msec: int = 0
-var _launch_window_seen_msec: int = -1
+var _launch_runtime_seen_msec: int = -1
 var _launch_pid_dead_msec: int = -1
 var _xr_session_ending: bool = false ## latched by the OpenXR session_ending signal when present
 
@@ -553,7 +553,7 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 		_launch_pid = int(result.get("pid", -1))
 		_launch_session_id = int(result.get("session_id", 0))
 		_launch_started_msec = Time.get_ticks_msec()
-		_launch_window_seen_msec = -1
+		_launch_runtime_seen_msec = -1
 		_launch_pid_dead_msec = -1
 		print("PVLDS LAUNCH: %s -> build %s (pid %d); staying in the room while it loads" % [
 			game.title, build.file_name, _launch_pid])
@@ -575,7 +575,16 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 ## judged: VPX dying mid-load (failure - unless the watchdog has
 ## already reported the game's window by exe path, in which case the
 ## spawn pid simply was not the whole story), the XR session
-## changing hands, the watchdog's window report + settle, the cap.
+## changing hands, the watchdog's runtime report + settle, the cap.
+## The settle cue is the RUNTIME stamp, not the window sighting:
+## the sighting stamps off the editor's own canvas about a second
+## after spawn, while a real table load takes several seconds
+## more - handing off on it left a desktop gap in the headset
+## between the room leaving and the table arriving. The sighting
+## keeps its other jobs (the dead-pid grace above, the watchdog's
+## exit-detector arming). Every backstop is unchanged: a table
+## whose runtime never shows still rides the cap, the XR cue, or
+## the failure path exactly as before.
 func _poll_launch() -> void:
 	if _shot_launch_path != "":
 		_poll_shot_launch()
@@ -596,11 +605,11 @@ func _poll_launch() -> void:
 		_settle_launch(true, "the XR session changed hands")
 		return
 	var contract: WatchdogContract = WatchdogContract.load_from_disk()
-	if contract.session_id == _launch_session_id and contract.game_window_seen_unix > 0:
-		if _launch_window_seen_msec < 0:
-			_launch_window_seen_msec = now
-		elif now - _launch_window_seen_msec >= LAUNCH_SETTLE_MSEC:
-			_settle_launch(true, "VPX's window is up")
+	if contract.session_id == _launch_session_id and contract.runtime_seen_unix > 0:
+		if _launch_runtime_seen_msec < 0:
+			_launch_runtime_seen_msec = now
+		elif now - _launch_runtime_seen_msec >= LAUNCH_SETTLE_MSEC:
+			_settle_launch(true, "VPX's runtime is up")
 			return
 	if now - _launch_started_msec >= LAUNCH_CAP_MSEC:
 		_settle_launch(true, "the load cap was reached")
@@ -1645,6 +1654,7 @@ func _run_core_test() -> void:
 	contract.game_exe_path = "C:/Visual Pinball/VPinball_GL64.exe"
 	contract.game_pid = 4242
 	contract.game_window_seen_unix = 1234567
+	contract.runtime_seen_unix = 2345678
 	contract.launcher_path = "C:/PVLDS/PVLDS.exe"
 	contract.focus_herding = false
 	contract.disarm_reason = "room Exit"
@@ -1652,9 +1662,10 @@ func _run_core_test() -> void:
 	var contract2: WatchdogContract = WatchdogContract.load_from_disk()
 	_expect(contract2.armed and contract2.session_id == 7 and contract2.game_pid == 4242
 		and contract2.session_state == "live" and contract2.game_window_seen_unix == 1234567
+		and contract2.runtime_seen_unix == 2345678
 		and not contract2.focus_herding
 		and contract2.launcher_path == "C:/PVLDS/PVLDS.exe",
-		"watchdog contract round-trips (incl. the window-seen stamp)", failures)
+		"watchdog contract round-trips (incl. the window-seen and runtime stamps)", failures)
 	_expect(contract2.disarm_reason == "room Exit",
 		"the disarm reason round-trips with the contract", failures)
 	# The simplified exit model writes NO close-duty or hold keys

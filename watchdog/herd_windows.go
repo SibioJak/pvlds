@@ -102,6 +102,12 @@ func gameWindow(gamePID int) uintptr {
 // as present right now.
 var playerSight playerSighting
 
+// runtimeSeen is this leaf's runtime gate (runtime.go): the
+// filtered record of whether the game process's table RUNTIME
+// has been observed this session - the stamp the resident
+// launcher takes as its hand-off cue.
+var runtimeSeen runtimeGate
+
 // obsWindow pairs a window handle with its sighting observation.
 type obsWindow struct {
 	hwnd uintptr
@@ -197,23 +203,29 @@ func logWindowInventory(gamePID int, sessionID int, windows []obsWindow) {
 }
 
 // gameWindowExists reports whether a player sighting has
-// STAMPED for this session - the hand-off cue the resident
-// launcher waits for (plus a short settle) before it exits.
-// Tightened in the diagnostic round: the cue used to accept ANY
-// visible window, and VPX's editor frame is visible from app
-// start while the player window appears only once the table has
-// loaded and play begins - so the launcher could hand off (and
-// mark the session live) while the table was still loading,
-// which then exposed the session-close duty to the load state it
-// must never act on (see closer.go's arming note). The stamp now
-// reads the sighting gate's latch (sighting.go) - the same
-// definition the session-close duties arm on - and reports the
-// rule that stamped it, for the log.
+// STAMPED for this session, and the rule that stamped it. The
+// stamp reads the sighting gate's latch (sighting.go) - the
+// definition the session-close duties arm on. (The resident
+// launcher's hand-off cue used to be this stamp; it now waits
+// for the RUNTIME stamp instead, gameRuntimeExists below -
+// the sighting stamps off the editor's canvas seconds before
+// a real load finishes. See runtime.go.)
 func gameWindowExists(gamePID int, sessionID int) (bool, string) {
 	if gamePID <= 0 {
 		return false, ""
 	}
 	return playerSight.hasSighted(sessionID)
+}
+
+// gameRuntimeExists reports whether the table-runtime gate
+// (runtime.go) has latched for this session - the resident
+// launcher's hand-off cue, stamped into the contract by
+// main.go exactly as the sighting stamp is.
+func gameRuntimeExists(gamePID int, sessionID int) bool {
+	if gamePID <= 0 {
+		return false
+	}
+	return runtimeSeen.hasSeen(sessionID)
 }
 
 // windowClassName reads a window's Win32 class name - "VPPlayer"
@@ -235,9 +247,11 @@ func windowClassName(hwnd uintptr) string {
 //   - The sighting gate (sighting.go), fed the full window set,
 //     hidden windows included: the headset-bound player window
 //     has no desktop visibility, and the gate must see it to
-//     stamp the hand-off cue and arm the exit detector. (The
-//     observation itself is folded in here; the stamp reads
-//     the gate's latch via gameWindowExists.)
+//     feed the exit detector's arming. The same snapshot feeds
+//     the runtime gate (runtime.go), whose stamp is the
+//     resident launcher's hand-off cue. (Both observations are
+//     folded in here; the stamps read the gates' latches via
+//     gameWindowExists / gameRuntimeExists.)
 //
 //   - The exit detector (closer.go), which reads the
 //     FOREGROUND: computing it needs the editor frame first -
@@ -269,6 +283,7 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	}
 	candidate, rule := classifyPlayerCandidate(obs)
 	playerSight.observe(sessionID, candidate, rule)
+	runtimeSeen.observe(sessionID, classifyRuntime(obs))
 	if fg, _, _ := procGetForegroundWindow.Call(); fg != 0 && ws.editorHWND != 0 && fg == ws.editorHWND {
 		ws.fgIsEditor = true
 	}
@@ -308,13 +323,13 @@ func herdTick(gamePID int, sessionID int, now time.Time) {
 	}
 }
 
-// assertForeground hands foreground activation to the game window.
+// raiseForeground hands foreground activation to a window.
 // Windows denies foreground theft to background processes unless
 // the caller briefly shares the current foreground thread's input
 // queue. Attach, assert, detach - windows are never moved or
-// resized. Fire-and-forget: whether it stuck is the brain's next
+// resized. Fire-and-forget: whether it stuck is the caller's next
 // observation.
-func assertForeground(target uintptr, fg uintptr) {
+func raiseForeground(target uintptr, fg uintptr) {
 	fgThread, _, _ := procGetWindowThreadProcID.Call(fg, 0)
 	myThread, _, _ := procGetCurrentThreadID.Call()
 	attached := false
@@ -327,5 +342,71 @@ func assertForeground(target uintptr, fg uintptr) {
 	if attached {
 		procAttachThreadInput.Call(myThread, fgThread, 0)
 	}
+}
+
+// assertForeground is herding's raise: raiseForeground plus the
+// log line the field reads herding by.
+func assertForeground(target uintptr, fg uintptr) {
+	raiseForeground(target, fg)
 	logf("watchdog: focus herded back to the game window (was hwnd %#x)", fg)
+}
+
+// foregroundPID reports the process owning the current
+// foreground window (0 = no foreground window).
+func foregroundPID() int {
+	fg, _, _ := procGetForegroundWindow.Call()
+	if fg == 0 {
+		return 0
+	}
+	var pid uint32
+	procGetWindowThreadProcID.Call(fg, uintptr(unsafe.Pointer(&pid)))
+	return int(pid)
+}
+
+// pushFocusToGame is the one-shot focus handoff's Windows leaf
+// (main.go owns the moment and the logging; herd_logic.go owns
+// the verdict vocabulary). The push buys PROCESS focus: the
+// target is the game pid's visible SDL window if it has one
+// (the player surface), else its editor frame - same process
+// either way, and VPX's own window order takes the foreground
+// from there. Skipped when the foreground already belongs to
+// the game process. The verdict is verified synchronously:
+// after the raise, the foreground's owner is re-read - a push
+// Windows quietly ignored reports as declined, not handed.
+func pushFocusToGame(gamePID int) focusPushOutcome {
+	if gamePID <= 0 {
+		return focusPushDeclined
+	}
+	if foregroundPID() == gamePID {
+		return focusPushAlready
+	}
+	fg, _, _ := procGetForegroundWindow.Call()
+	var sdl, editor uintptr
+	for _, hwnd := range allTopWindows(gamePID) {
+		if r, _, _ := procIsWindowVisible.Call(hwnd); r == 0 {
+			continue
+		}
+		switch windowClassName(hwnd) {
+		case sdlWindowClass:
+			if sdl == 0 {
+				sdl = hwnd
+			}
+		case editorWindowClass:
+			if editor == 0 {
+				editor = hwnd
+			}
+		}
+	}
+	target := sdl
+	if target == 0 {
+		target = editor
+	}
+	if target == 0 {
+		return focusPushDeclined
+	}
+	raiseForeground(target, fg)
+	if foregroundPID() == gamePID {
+		return focusPushHanded
+	}
+	return focusPushDeclined
 }

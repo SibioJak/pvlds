@@ -196,6 +196,62 @@ func TestDetectorEscalatesPausesAndGivesUpOnce(t *testing.T) {
 	}
 }
 
+// The push guard: the watchdog's one-shot focus handoff can
+// itself place the foreground on a non-editor game window, so
+// an excursion manufactured by the push must not arm the
+// detector. Excursions at the push tick (and any latched
+// before it) do not count; the first excursion at a tick AFTER
+// the push arms as usual, and the full sequence then fires.
+func TestDetectorPushGuard(t *testing.T) {
+	c := &closer{}
+	// Arm BEFORE the push (the launcher marked the session
+	// live while still exiting; play's excursion latched on
+	// its own evidence): the push does NOT revoke a latched
+	// arm, and a sustained editor foreground still fires.
+	drive(c, 1, 0, 1, 100, fgPlayer) // excursion -> arm
+	c.notePush(1, 100)
+	if !c.armed {
+		t.Fatalf("the push revoked a latched arm")
+	}
+	if got, _ := drive(c, 1, 200, 13, 100, fgEditor); len(got) != 1 || got[0] != closeFEC {
+		t.Fatalf("pre-push arm did not survive the push: %v", got)
+	}
+
+	// The strict sequence: push recorded first, then the
+	// foreground away at the push's own tick and before it
+	// could be play's doing.
+	c2 := &closer{}
+	c2.notePush(1, 1000)
+	// Tick AT the push time with the foreground away (what
+	// the push itself may have manufactured): no excursion.
+	if _, arms := drive(c2, 1, 1000, 1, 100, fgPlayer); arms != 0 {
+		t.Fatalf("armed on the push tick's own excursion")
+	}
+	// A full editor sustain right after cannot fire - the
+	// detector never armed.
+	if got, _ := drive(c2, 1, 1100, 30, 100, fgEditor); len(got) != 0 {
+		t.Fatalf("fired without a post-push excursion: %v", got)
+	}
+	// Play takes the foreground at a tick after the push:
+	// arms now, and the landing after it fires.
+	arm(t, c2, 1, 4200)
+	if got, _ := drive(c2, 1, 4300, 13, 100, fgEditor); len(got) != 1 || got[0] != closeFEC {
+		t.Fatalf("expected FEC after the post-push arm + sustain, got %v", got)
+	}
+}
+
+// The push guard and session freshness: a push noted for a
+// new session resets the detector like any other session
+// change (no excursion, sighting, or sustain leaks across).
+func TestDetectorPushGuardNewSession(t *testing.T) {
+	c := &closer{}
+	arm(t, c, 1, 0)
+	c.notePush(2, 5000)
+	if got, arms := drive(c, 2, 5100, 30, 100, fgEditor); arms != 0 || len(got) != 0 {
+		t.Fatalf("session 2 inherited state across notePush (arms=%d, actions=%v)", arms, got)
+	}
+}
+
 // Bounds: a dead process never fires (and its ticks do not run
 // the sustain), and a new session starts completely fresh -
 // its own sighting and excursion are required before anything

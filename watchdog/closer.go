@@ -41,6 +41,18 @@ package main
 //   a silent exit inside it is undetectable BY DESIGN - the
 //   detector stays unarmed rather than guess).
 //
+//   THE PUSH GUARD (the one-shot focus handoff, main.go): at
+//   the hand-off the watchdog deliberately pushes the
+//   foreground to the game process once - and if the push
+//   lands on the game's SDL window, the foreground being away
+//   from the editor on the push's own tick is OUR doing, not
+//   play's. An excursion therefore counts only when observed
+//   at a tick strictly AFTER the recorded push tick: play
+//   holding the foreground on its own, one tick later, is the
+//   genuine article. A session with no push counts excursions
+//   from the live transition, exactly as before the handoff
+//   existed (notePush is simply never called for it).
+//
 //   FIRE: the editor window then holds the foreground
 //   continuously for editorForegroundSustainMs. Any tick whose
 //   foreground is not the editor resets the sustain clock -
@@ -104,6 +116,26 @@ type closer struct {
 	editorSinceMs int64 // first tick of the current sustained editor foreground; 0 = not in it
 	stage         int   // 0 watching, 1 FEC sent, 2 WM_CLOSE sent, 3 gave up
 	actionAtMs    int64 // when the current stage's action went out
+	pushMs        int64 // when this session's one-shot focus handoff fired; 0 = no push (yet)
+}
+
+// notePush records the session's one-shot focus handoff (the
+// caller in main.go performs it exactly once per session, at
+// the hand-off). Excursions observed at or before this tick do
+// not count toward arming - see the header's push guard: any
+// excursion latched before the push is cleared, so arming
+// always waits for play to hold the foreground on its own at
+// a tick after the push. If play's foreground genuinely stays
+// away, the very next tick re-latches it - the guard costs
+// one tick, never the arm. (An already-latched ARM is not
+// revoked: the push lands at the hand-off, and a session that
+// armed before it armed on play's own evidence.)
+func (cl *closer) notePush(sessionID int, nowMs int64) {
+	if sessionID != cl.sessionID {
+		*cl = closer{sessionID: sessionID}
+	}
+	cl.pushMs = nowMs
+	cl.excursion = false
 }
 
 // tick advances the detector by one watchdog tick. sighted is
@@ -125,8 +157,11 @@ func (cl *closer) tick(nowMs int64, sessionID int, state string, alive bool, sig
 	}
 	// Arming. The excursion half registers on any live tick
 	// whose foreground is away from the editor - before or
-	// after the sighting stamps; both orders arm.
-	if !ws.fgIsEditor && !cl.excursion {
+	// after the sighting stamps; both orders arm - EXCEPT a
+	// tick at or before the session's recorded focus push:
+	// that foreground may be the push's own placement, not
+	// play's (the push guard, see the header).
+	if !ws.fgIsEditor && !cl.excursion && (cl.pushMs == 0 || nowMs > cl.pushMs) {
 		cl.excursion = true
 	}
 	armedNow := false
