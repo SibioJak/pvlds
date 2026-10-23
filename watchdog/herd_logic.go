@@ -13,6 +13,25 @@ package main
 // - working in that window - and herding stands down for the rest of
 // the session. Deliberate use wins; the next session starts fresh.
 
+// herdingAllowed is the session-state gate on the whole duty:
+// herding runs ONLY while the session is loading (the
+// spawn-settle phase it was built for - the launcher resident,
+// VPX coming up, transient windows stealing focus from a game
+// that is not yet the foreground's owner). Once the session is
+// live, the launcher has handed off and the game owns the
+// foreground story; on Chris's VR rig the player window is not
+// even a desktop window, so the only anchor herding could find
+// there is the editor frame - and in the 2026-10-23 sessions it
+// actively forced the EDITOR to the foreground mid-play, which
+// is also the exact signal the exit detector (closer.go) reads.
+// Herding in a live session is therefore not just useless but
+// signal poison: it never runs there, no exceptions. The desk's
+// focus_herding switch remains the player's outer gate on top of
+// this one.
+func herdingAllowed(focusHerding bool, sessionState string) bool {
+	return focusHerding && sessionState == "loading"
+}
+
 type herdDecision int
 
 const (

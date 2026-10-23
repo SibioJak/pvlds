@@ -9,10 +9,13 @@
 //   - poll the session contract JSON the launcher writes,
 //   - while a session is loading or live, watch the game process
 //     (and, on Windows, herd foreground focus back to the game
-//     window - yielding to deliberate use - and, in a live
-//     session whose table exit landed in the VPX editor, close
-//     VPX orderly so the return trip can finish; see closer.go).
-//     The close duty is unconditional - there is no hold gesture
+//     window during the LOADING phase only - yielding to
+//     deliberate use - and, in a live session, run the exit
+//     detector: when the table exit lands in the VPX editor, the
+//     editor takes and holds the foreground, and the watchdog
+//     closes VPX orderly so the return trip can finish; see
+//     closer.go). The close duty is unconditional - there is no
+//     hold gesture
 //     and no exit switch (both were stricken by the player's
 //     ruling, 2026-10-22): D-pad right is a plain BACK button -
 //     in play it is VPX's own Exit Game binding and lands in the
@@ -315,6 +318,12 @@ func main() {
 					sawGameAlive = true
 					logf("watchdog: game process live (pid %d), session %d", gpid, c.SessionID)
 				}
+				// This tick's window/foreground snapshot
+				// (platform leaf): computing it advances the
+				// sighting gate (sighting.go), logs the window
+				// inventory on change, and yields the facts
+				// the stamp below and the exit detector read.
+				ws := gameWindowState(c.GamePID, c.SessionID)
 				// The hand-off cue for the resident launcher: a
 				// player sighting has stamped for this session
 				// (sighting.go - the editor frame is up from app
@@ -342,23 +351,38 @@ func main() {
 						}
 					})
 				}
-				if c.FocusHerding {
+				// Focus herding serves the loading phase's
+				// spawn settle ONLY (herdingAllowed): once the
+				// session is live it never runs - on the VR rig
+				// its only anchor there is the editor frame,
+				// which it was caught forcing to the foreground
+				// mid-play, polluting the exit detector's
+				// signal below.
+				if herdingAllowed(c.FocusHerding, c.SessionState) {
 					herdTick(c.GamePID, c.SessionID, time.Now())
 				}
 				// Session-close duty (closer.go) - the only exit
-				// path in play, and unconditional: in a live
-				// session whose table exit landed in the VPX
-				// editor, ask VPX to close - orderly, escalating,
-				// never a kill. The decision is shared logic; the
-				// sends are platform leaves. When VPX dies, the
-				// ordinary death path below relaunches the
-				// launcher.
-				switch sessionCloser.tick(time.Now().UnixMilli(), c.SessionID, c.SessionState, true, gameWindowState(c.GamePID, c.SessionID)) {
+				// path in play, and unconditional: the exit
+				// detector watches the foreground (in a live,
+				// sighted session that has seen play take the
+				// foreground away from the editor, the editor
+				// holding the foreground for the sustain means
+				// the table exit landed there) and asks VPX to
+				// close - orderly, escalating, never a kill.
+				// The decision is shared logic; the sends are
+				// platform leaves. When VPX dies, the ordinary
+				// death path below relaunches the launcher.
+				sightedNow, _ := gameWindowExists(c.GamePID, c.SessionID)
+				act, armedNow := sessionCloser.tick(time.Now().UnixMilli(), c.SessionID, c.SessionState, true, sightedNow, ws)
+				if armedNow {
+					logf("watchdog: session %d: exit detector armed", c.SessionID)
+				}
+				switch act {
 				case closeFEC:
 					ack := sendFrontEndControlsClose(c.GamePID)
-					logf("watchdog: session %d: table exit landed in the VPX editor; sent PinSim::FrontEndControls CLOSE_APP (acknowledged: %v)", c.SessionID, ack)
+					logf("watchdog: session %d: editor has held the foreground for %dms - table exit; sent PinSim::FrontEndControls CLOSE_APP (acknowledged: %v)", c.SessionID, editorForegroundSustainMs, ack)
 				case closeWMClose:
-					ok := sendEditorClose(gameWindowState(c.GamePID, c.SessionID).editorHWND)
+					ok := sendEditorClose(ws.editorHWND)
 					logf("watchdog: session %d: VPX still open after the FrontEndControls request; sent WM_CLOSE to the editor window (posted: %v)", c.SessionID, ok)
 				case closeGiveUp:
 					logf("watchdog: session %d: VPX did not close after FrontEndControls + WM_CLOSE; leaving VPX alone", c.SessionID)

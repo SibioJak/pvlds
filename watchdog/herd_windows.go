@@ -228,19 +228,28 @@ func windowClassName(hwnd uintptr) string {
 	return syscall.UTF16ToString(buf[:n])
 }
 
-// gameWindowState classifies the game process's top-level
-// windows for the session-close duties (closer.go), over the
-// UNFILTERED enumeration (enumerateGameWindows): the sighting the
-// player fact comes from must see the headset-bound player
-// window, which has no desktop visibility at all (field
-// forensics in enumerateGameWindows). The editor facts stay on
-// the VISIBLE subset - the editor is a presented desktop frame
-// in practice, and its window is the close target, which wants
-// the real frame, not a hidden namesake. The player fact comes
-// from the sighting gate (sighting.go) fed the full set, hidden
-// windows included: a VPPlayer-class window counts at once; a
-// substantial non-editor window counts once it has persisted
-// across two polls; the editor class never counts.
+// gameWindowState gathers this tick's facts for the session
+// duties, over the UNFILTERED enumeration
+// (enumerateGameWindows). Two consumers:
+//
+//   - The sighting gate (sighting.go), fed the full window set,
+//     hidden windows included: the headset-bound player window
+//     has no desktop visibility, and the gate must see it to
+//     stamp the hand-off cue and arm the exit detector. (The
+//     observation itself is folded in here; the stamp reads
+//     the gate's latch via gameWindowExists.)
+//
+//   - The exit detector (closer.go), which reads the
+//     FOREGROUND: computing it needs the editor frame first -
+//     the largest VISIBLE "VPinball"-class window, exactly the
+//     close target (the editor is a presented desktop frame in
+//     practice, and the target wants the real frame, not a
+//     hidden namesake) - and then whether the current
+//     foreground window IS that frame. Field shape (sessions
+//     25/26, 2026-10-23): the foreground cycles Virtual
+//     Desktop, the loading dialog, the player, PinMAME during
+//     load and play; it is the editor exactly when a table
+//     exit lands.
 func gameWindowState(gamePID int, sessionID int) windowState {
 	var ws windowState
 	if gamePID <= 0 {
@@ -252,7 +261,6 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	for _, w := range windows {
 		obs = append(obs, w.obs)
 		if w.obs.class == editorWindowClass && w.obs.visible {
-			ws.editorPresent = true
 			if area := w.obs.area(); area > bestEditorArea {
 				bestEditorArea = area
 				ws.editorHWND = w.hwnd
@@ -260,8 +268,10 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 		}
 	}
 	candidate, rule := classifyPlayerCandidate(obs)
-	present, _ := playerSight.observe(sessionID, candidate, rule)
-	ws.playerPresent = present
+	playerSight.observe(sessionID, candidate, rule)
+	if fg, _, _ := procGetForegroundWindow.Call(); fg != 0 && ws.editorHWND != 0 && fg == ws.editorHWND {
+		ws.fgIsEditor = true
+	}
 	return ws
 }
 

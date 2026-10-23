@@ -12,6 +12,34 @@ const (
 	otherWin   = uintptr(3000)
 )
 
+// The session-state gate (herdingAllowed): herding exists for
+// the loading phase's spawn settle and NEVER runs in a live
+// session - on the VR rig its only anchor there is the editor
+// frame, which it was caught forcing to the foreground mid-play
+// (field sessions 25/26, 2026-10-23), polluting the exit
+// detector's foreground signal. The desk switch gates on top.
+func TestHerdingAllowedGate(t *testing.T) {
+	cases := []struct {
+		switchOn bool
+		state    string
+		want     bool
+	}{
+		{true, "loading", true},   // the one phase herding serves
+		{true, "live", false},     // handed off: never, no exceptions
+		{true, "idle", false},     // no session at all
+		{true, "returned", false}, // consumed sessions stay quiet
+		{true, "failed", false},
+		{true, "", false},
+		{false, "loading", false}, // the desk switch still wins
+		{false, "live", false},
+	}
+	for _, tc := range cases {
+		if got := herdingAllowed(tc.switchOn, tc.state); got != tc.want {
+			t.Fatalf("herdingAllowed(%v, %q) = %v, want %v", tc.switchOn, tc.state, got, tc.want)
+		}
+	}
+}
+
 func TestHerdGraceAndRateLimit(t *testing.T) {
 	b := &herdBrain{}
 	b.reset(1)

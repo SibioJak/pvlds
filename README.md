@@ -144,73 +144,100 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   table. A log lands beside the contract (`pvlds_watchdog.log`).
 - **Session-close duty** (Windows, user32; decision logic shared
   and unit-tested on Linux): in a **live** session, a table exit
-  leaves VPX sitting in its editor — process alive, player window
-  gone. The watchdog detects exactly that composite state and
-  closes VPX, orderly, so the return trip can finish. The
-  discriminator: player gone AND editor present, sustained
-  ~2.5s (a transient window shuffle is not an exit), fires once
-  per session. The editor's half stays grounded in the vpinball
-  source — the editor frame's class is **`VPinball`**
-  (`WinEditor::PreRegisterClass` in `src/ui/win/WinEditor.cpp`).
-  The player's half is the **sighting rule** (`sighting.go`):
-  the source names the player's SDL class as `VPPlayer`
-  (`SDL_RegisterApp` in `src/core/VPApp.cpp`), and where a build
-  uses it, it still counts at once — but Chris's build's player
-  window never carried that class across whole sessions of live
-  play (the contract's `game_window_seen_unix` stayed 0, so
-  neither close duty ever armed and both exit gestures were
-  inert), so the rule is now class-**independent**: any window
-  of the game process — visible or hidden (see the next
-  bullet) — that is NOT the editor class and is substantial
-  (≥ ~320×240) counts once it persists across two polls; the
-  editor class never counts, at any size, ever. The watchdog
-  logs the game pid's full window inventory (class, size, and
-  visibility of every window) when a session's set is first
-  observed and again whenever it changes, naming the current
-  foreground window each time, and names the rule that stamped
-  the sighting — the field evidence the old rule never
-  produced. **The duty is
-  armed per session**: the editor frame exists from VPX's start
-  while the player window appears only once the table has loaded,
-  so editor-present + player-absent is also the LOAD state — the
-  duty may fire only after a player window has been observed at
-  least once in the session (the first build without arming
-  closed VPX mid-load on slow tables; the hand-off cue is
-  likewise the sighting specifically, not any visible window). Close method,
-  in order: (1) the **PinSim::FrontEndControls** terminate
-  request — the published protocol modern VP implements
-  (registered window message, wParam 2 = CLOSE_APP, reply 1 =
-  acknowledged; PinballY's `Application.cpp` is the reference
-  sender); (2) **WM_CLOSE** to the editor window — which VP's own
-  editor refuses while a player is open (`WinEditor::OnClose`),
-  so it can only land in the state this duty targets. Never a
-  hard kill; if neither lands, the watchdog logs it and leaves
-  VPX alone. The duty is **unconditional** — there is no
-  kill-switch and no desk checkbox for it (both were removed
-  when the exit model was simplified; see the next bullet).
-- **Two field findings the current code is shaped by**
-  (2026-10-22, from Chris's rig logs): **the player window is
-  not a desktop window at all** — under Virtual Desktop the
+  leaves VPX sitting in its editor with the process alive. The
+  watchdog detects the landing by the **foreground** and closes
+  VPX, orderly, so the return trip can finish. The detector
+  (`closer.go`) arms per session on two facts together: the
+  **sighting** has stamped (the table demonstrably loaded), and
+  an **excursion** has been observed — at least one tick with
+  the foreground somewhere other than the editor window (during
+  load and play the foreground cycles Virtual Desktop's window,
+  the loading dialog, the player, PinMAME; the editor holds it
+  only at the spawn instant and when a table exit lands —
+  field sessions 25/26, 2026-10-23). Once armed, the editor
+  holding the foreground continuously for **1200ms**
+  (`editorForegroundSustainMs` — elapsed time, not tick counts)
+  is the exit; any tick with a different foreground resets the
+  sustain clock. The detector replaced the older
+  presence-drop trigger, retired because the window the
+  sighting stamps off on Chris's rig turned out to be VPX's
+  editor canvas, which persists through the editor state (see
+  the field-findings bullet). The sighting rule (`sighting.go`)
+  is unchanged and still supplies the stamp: the source names
+  the player's SDL class as `VPPlayer` (`SDL_RegisterApp` in
+  `src/core/VPApp.cpp`), and where a build uses it, it counts
+  at once — but Chris's build's player window never carried
+  that class across whole sessions of live play (the contract's
+  `game_window_seen_unix` stayed 0, so neither close duty ever
+  armed and both exit gestures were inert), so the rule is
+  class-**independent**: any window of the game process —
+  visible or hidden (see the next bullet) — that is NOT the
+  editor class and is substantial (≥ ~320×240) counts once it
+  persists across two polls; the editor class never counts, at
+  any size, ever. The editor frame's class is **`VPinball`**
+  (`WinEditor::PreRegisterClass` in `src/ui/win/WinEditor.cpp`);
+  it is both the foreground identity and the WM_CLOSE target.
+  The watchdog logs the game pid's full window inventory
+  (class, size, and visibility of every window) when a
+  session's set is first observed and again whenever it
+  changes, naming the current foreground window each time, and
+  names the rule that stamped the sighting — the field
+  evidence the old rule never produced. A session that never
+  leaves the editor can never fire the detector — no excursion,
+  no arm (Chris's field case, 2026-10-22: VPX launched straight
+  into its own editor, then closed from the editor; the first
+  build without a sighting gate likewise closed VPX mid-load
+  on slow tables, which the arming halves now exclude). Close
+  method, in order: (1) the **PinSim::FrontEndControls**
+  terminate request — the published protocol modern VP
+  implements (registered window message, wParam 2 = CLOSE_APP,
+  reply 1 = acknowledged; PinballY's `Application.cpp` is the
+  reference sender); (2) **WM_CLOSE** to the editor window —
+  which VP's own editor refuses while a player is open
+  (`WinEditor::OnClose`), so it can only land in the state this
+  duty targets. Never a hard kill; if neither lands, the
+  watchdog logs it and leaves VPX alone. The duty is
+  **unconditional** — there is no kill-switch and no desk
+  checkbox for it (both were removed when the exit model was
+  simplified; see the next bullet).
+- **Field findings the current code is shaped by** (from
+  Chris's rig logs): **the player window is not a desktop
+  window at all** (2026-10-22) — under Virtual Desktop the
   GL64 player renders into the headset, so the watchdog's
   window inventory listed exactly one window for the game
   process across whole sessions (the editor, 1167×634), and
   every window fact that filtered on visibility (the old
   enumeration skipped `IsWindowVisible == 0`) starved the
   sighting even after the class rule was fixed; the sighting
-  and the closer's transition facts now enumerate ALL of the
-  game pid's top-level windows, visibility recorded but
-  ignored, while herding keeps the visible-only set its anchor
-  needs. **And a relaunched room can be born with the button
-  already down**: after Chris closed the editor by hand, the
-  death → relaunch trip worked — and the fresh room then quit
-  to the desktop uncommanded, its log ending in a "room Exit"
-  disarm, because its controller reconnected mid-relaunch and
-  D-pad right read pressed as the new instance polled. So the
-  room's D-pad exit is baseline-armed: it fires only on a
-  press edge that occurs after that room instance has observed
-  the button released at least once; a button pressed from
-  the instance's first poll can never fire it, however long
-  it sits.
+  now enumerates ALL of the game pid's top-level windows,
+  visibility recorded but ignored, while herding keeps the
+  visible-only set its anchor needs. **A relaunched room can
+  be born with the button already down** (2026-10-22): after
+  Chris closed the editor by hand, the death → relaunch trip
+  worked — and the fresh room then quit to the desktop
+  uncommanded, its log ending in a "room Exit" disarm, because
+  its controller reconnected mid-relaunch and D-pad right read
+  pressed as the new instance polled. So the room's D-pad exit
+  is baseline-armed: it fires only on a press edge that occurs
+  after that room instance has observed the button released at
+  least once; a button pressed from the instance's first poll
+  can never fire it, however long it sits. **The sighting's
+  window is the editor's canvas, not the player** (2026-10-23,
+  sessions 25/26): once the enumeration went unfiltered, the
+  sighting began stamping reliably — off a hidden `CVFrame`
+  window, 1401×809 — but that window **persists in the editor
+  state after a table exits**: `CVFrame` is VPX's editor
+  canvas, so player-presence never drops and the closer's old
+  presence-drop trigger could never fire. (The windows that DO
+  vanish on exit belong to PinMAME and B2S, not the player.)
+  The same sessions showed the signal that IS clean: the
+  foreground is never the editor during load or play, and is
+  exactly the editor the moment a table exit lands — hence
+  the foreground exit detector above, and hence herding being
+  confined to the loading phase: its anchor is the editor
+  frame (the only visible window), and in session 26 it
+  actively forced the editor to the foreground mid-play,
+  polluting the very signal the detector reads.
 - **The exit model — one BACK button, two rules** (Chris's
   ruling, 2026-10-22, replacing the tap/hold arbitration model
   wholesale): **there is no hold gesture anywhere.** D-pad
@@ -218,8 +245,8 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   directional") — is a plain BACK button. **Playing a table:**
   a tap is VPX's own business and lands in the VPX editor, as
   it always has; the watchdog's session-close duty (above)
-  then closes VPX promptly — the landing confirmation is
-  ~400ms (`editorSustainMs`), down from the old 2.5s sustain —
+  then closes VPX once the exit detector confirms the landing
+  — the editor holding the foreground for the 1200ms sustain —
   and the ordinary death → relaunch flow brings the room back.
   The editor is never a resting place. **On the table select
   screen (the room):** a fresh D-pad right press quits the app
@@ -241,17 +268,24 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   in the contract — is deleted, not disabled; contracts and
   configs written by older builds still load (both readers
   ignore the dead keys, and fresh writes stop emitting them).
-- **Focus herding** (Windows, user32): while a session is live, if
-  the foreground leaves the game process and stays away past a 2s
-  grace period, the watchdog hands foreground back to the game's
-  main window (rate-limited; it never moves or resizes windows).
-  **It yields to deliberate use**: if the same foreign window is
-  back in front after 3 re-assertions against it, herding stands
-  down for the rest of that session and logs it — a player working
-  at the desktop (say, clearing an error dialog) is never fought.
-  The decision logic is shared and unit-tested on Linux
-  (`herd_logic.go`); the next session starts fresh. Kill-switch:
-  the **Focus herding** checkbox on the desk pass (config
+- **Focus herding** (Windows, user32): while a session is
+  **loading** — the spawn-settle phase it was built for — if
+  the foreground leaves the game process and stays away past a
+  2s grace period, the watchdog hands foreground back to the
+  game's main window (rate-limited; it never moves or resizes
+  windows). It **never runs once the session is live**: on
+  Chris's VR rig its only anchor there is the editor frame,
+  and it was caught forcing the editor to the foreground
+  mid-play (field session 26, 2026-10-23) — the exact signal
+  the exit detector reads. The gate is the shared, unit-tested
+  `herdingAllowed` (`herd_logic.go`). **It yields to
+  deliberate use**: if the same foreign window is back in
+  front after 3 re-assertions against it, herding stands down
+  for the rest of that session and logs it — a player working
+  at the desktop (say, clearing an error dialog) is never
+  fought. The decision logic is shared and unit-tested on
+  Linux; the next session starts fresh. Kill-switch: the
+  **Focus herding** checkbox on the desk pass (config
   `focus_herding`, default on). If it ever fights you, uncheck
   it.
 - **Exit.** The rail's **EXIT** disarms the watchdog and quits —

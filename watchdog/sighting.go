@@ -49,10 +49,16 @@ import "sync"
 // visible one. What drops "present" is the window going away,
 // which is what a table exit does to it.
 //
-// "Seen" latches per session (it stamps the contract's
-// game_window_seen and arms the closer); "present" is
-// per-observation and drops the moment no candidate is up, which
-// is what lets the editor landing register as an exit.
+// "Seen" latches per session: it stamps the contract's
+// game_window_seen (the resident launcher's hand-off cue) and
+// is one half of the exit detector's arming (closer.go - the
+// other half is a foreground excursion, and the FIRE signal is
+// the editor holding the foreground; the detector no longer
+// reads presence at all, because the window this gate stamps
+// off on Chris's rig - a hidden "CVFrame" - turned out to be
+// VPX's editor canvas and persists through the editor state,
+// so presence never drops there). "Present" remains this
+// gate's per-observation output for the leaves' bookkeeping.
 
 // windowObs is one top-level window of the game process, as a
 // platform leaf observed it. Visibility is recorded for the

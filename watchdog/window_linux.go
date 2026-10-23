@@ -71,6 +71,22 @@ func stubPlayerHiddenMarker(gamePID int) string {
 	return "/tmp/pvlds-stub-player-hidden-" + strconv.Itoa(gamePID)
 }
 
+// stubForegroundMarker scripts the FOREGROUND fact the exit
+// detector (closer.go) reads: the file's contents name who
+// holds the foreground - "editor" (the game pid's editor
+// frame) or "other" (anything else: the player, Virtual
+// Desktop, a dialog). The stub writes it through its phases
+// the way the real rig behaves (editor at the spawn instant,
+// away during play, editor again when the table exit lands -
+// the field shape from sessions 25/26, 2026-10-23), with env
+// knobs for the shapes a scenario needs to force (see
+// stub_vpx_window.c). An absent file reads as "other": the
+// foreground is simply not known to be the editor, which is
+// the detector's safe default.
+func stubForegroundMarker(gamePID int) string {
+	return "/tmp/pvlds-stub-foreground-" + strconv.Itoa(gamePID)
+}
+
 // playerSight is this leaf's sighting gate (sighting.go) - the
 // same shared gate the Windows leaf feeds, so the smokes exercise
 // the shipped rule, persistence included.
@@ -86,23 +102,26 @@ func gameWindowExists(gamePID int, sessionID int) (bool, string) {
 	return playerSight.hasSighted(sessionID)
 }
 
-// gameWindowState on Linux (smoke build only), expressed as
-// sighting observations and folded through the shared gate: the
-// editor marker is a "VPinball"-class observation, VISIBLE (the
-// editor is a presented frame wherever the facts matter; and
-// while the marker stands, the player is gone - the stub's
-// exit-to-editor state); the maps signal is a player-window
-// observation carrying the stub's declared class at the stub
-// window's real size (400x300), with visible=false while the
-// hidden marker stands - the unfiltered sighting gate must
-// count it anyway (see stubPlayerHiddenMarker). The stub drops
-// the editor marker in two situations the smokes keep distinct
-// by session shape: its table-exit-to-editor moment (after a
-// player phase), and - with STUB_EDITOR_FIRST_S - from birth,
-// modelling VPX's startup order (editor frame first, player
-// window only after the table loads), which is the state the
-// closer's arming gate exists for. No editor handle exists off
-// Windows.
+// gameWindowState on Linux (smoke build only) gathers the same
+// two facts the Windows leaf does. The sighting gate is fed
+// sighting observations: the editor marker is a "VPinball"-
+// class observation, VISIBLE (the editor is a presented frame
+// wherever the facts matter; and while the marker stands, the
+// player is gone - the stub's exit-to-editor state); the maps
+// signal is a player-window observation carrying the stub's
+// declared class at the stub window's real size (400x300),
+// with visible=false while the hidden marker stands - the
+// unfiltered gate must count it anyway (see
+// stubPlayerHiddenMarker). The stub drops the editor marker
+// in two situations the smokes keep distinct by session shape:
+// its table-exit-to-editor moment (after a player phase), and
+// - with STUB_EDITOR_FIRST_S - from birth, modelling VPX's
+// startup order (editor frame first, player window only after
+// the table loads), which is the state the detector's sighting
+// half exists for. The foreground fact comes from the
+// foreground marker (stubForegroundMarker): "editor" is the
+// only content that marks the editor as foreground. No editor
+// handle exists off Windows.
 func gameWindowState(gamePID int, sessionID int) windowState {
 	var ws windowState
 	if gamePID <= 0 {
@@ -110,7 +129,6 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	}
 	var obs []windowObs
 	if _, err := os.Stat(stubEditorMarker(gamePID)); err == nil {
-		ws.editorPresent = true
 		obs = append(obs, windowObs{class: editorWindowClass, width: 1280, height: 900, visible: true})
 	} else if gameWindowPresentOnMaps(gamePID) {
 		visible := true
@@ -120,7 +138,9 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 		obs = append(obs, windowObs{class: stubPlayerClass(gamePID), width: 400, height: 300, visible: visible})
 	}
 	candidate, rule := classifyPlayerCandidate(obs)
-	present, _ := playerSight.observe(sessionID, candidate, rule)
-	ws.playerPresent = present
+	playerSight.observe(sessionID, candidate, rule)
+	if b, err := os.ReadFile(stubForegroundMarker(gamePID)); err == nil && strings.TrimSpace(string(b)) == "editor" {
+		ws.fgIsEditor = true
+	}
 	return ws
 }
