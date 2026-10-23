@@ -75,6 +75,20 @@ package main
 type windowState struct {
 	fgIsEditor bool    // the foreground window IS the game pid's editor frame
 	editorHWND uintptr // the editor frame (Windows WM_CLOSE target); 0 elsewhere
+	// The wider foreground facts (activation.go reads them; the
+	// exit detector above reads only fgIsEditor). fgPID is the
+	// foreground window's owner (0 = no foreground window) and
+	// fgClass its Win32 class ("" likewise). fgIsGame says the
+	// owner is the game process - at PROCESS level; session 35
+	// taught the difference between that and the right WINDOW
+	// holding it, which is what fgIsSDL carries: the foreground
+	// window is one of the game pid's SDL_app windows, the
+	// surface that owns input.
+	fgClass  string
+	fgPID    int
+	fgIsGame bool
+	fgIsSDL  bool
+	sdlHWND  uintptr // an SDL window of the game pid (Windows activation target); 0 elsewhere
 }
 
 // closeAction is what one detector tick decided.

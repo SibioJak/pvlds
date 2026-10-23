@@ -102,6 +102,17 @@ func stubRuntimeMarker(gamePID int) string {
 	return "/tmp/pvlds-stub-runtime-" + strconv.Itoa(gamePID)
 }
 
+// stubFGStubbornMarker is the stubborn-foreground signal for
+// the activation sequence's smokes (activation.go): while the
+// file stands, this leaf's activateSDLWindow reports an attempt
+// but the foreground does not move - the mirror of a holder
+// (or Windows) refusing the raise, so the sequence's verify
+// and single retry run their course. The stub raises it under
+// STUB_FG_STUBBORN (see stub_vpx_window.c).
+func stubFGStubbornMarker(gamePID int) string {
+	return "/tmp/pvlds-stub-fg-stubborn-" + strconv.Itoa(gamePID)
+}
+
 // playerSight is this leaf's sighting gate (sighting.go) - the
 // same shared gate the Windows leaf feeds, so the smokes exercise
 // the shipped rule, persistence included.
@@ -150,8 +161,19 @@ func pushFocusToGame(gamePID int) focusPushOutcome {
 	return focusPushHanded
 }
 
+// stubVirtualDesktopPID is the foreground-owner pid the "vd"
+// marker token reports: Virtual Desktop's own process in the
+// field inventories (watchdog-6 log, sessions 25/26/35), used
+// verbatim so the smokes' facts carry the field's shape.
+const stubVirtualDesktopPID = 9932
+
+// stubThirdPartyPID is the foreground-owner pid the "third"
+// marker token reports: some unrelated process - never the
+// game, never Virtual Desktop.
+const stubThirdPartyPID = 424242
+
 // gameWindowState on Linux (smoke build only) gathers the same
-// two facts the Windows leaf does. The sighting gate is fed
+// facts the Windows leaf does. The sighting gate is fed
 // sighting observations: the editor marker is a "VPinball"-
 // class observation, VISIBLE (the editor is a presented frame
 // wherever the facts matter; and while the marker stands, the
@@ -169,17 +191,38 @@ func pushFocusToGame(gamePID int) focusPushOutcome {
 // player phase), and - with STUB_EDITOR_FIRST_S - from birth,
 // modelling VPX's startup order (editor frame first, player
 // window only after the table loads), which is the state the
-// detector's sighting half exists for. The foreground fact
-// comes from the foreground marker (stubForegroundMarker):
-// "editor" is the only content that marks the editor as
-// foreground. No editor handle exists off Windows.
+// detector's sighting half exists for.
+//
+// The foreground facts come from the foreground marker
+// (stubForegroundMarker), whose contents are a holder TOKEN:
+//
+//	"editor"  the game pid's editor frame (fgIsEditor)
+//	"sdl"     the game pid's SDL window (fgIsSDL)
+//	"mame"    PinMAME's window, game pid - session 35's thief
+//	"vd"      Virtual Desktop's window (CabinetWClass)
+//	"third"   an unrelated process's window
+//	"none"    no foreground window at all
+//	"other"   (or an absent file) the stub's player window,
+//	          carrying its declared class (stubPlayerClass)
+//
+// While the editor marker stands, the foreground is reported
+// as the editor regardless of the token: the stub is IN its
+// editor state then, and on the real rig that state is the
+// editor holding the foreground - the invariant the exit
+// detector is built on. (It also keeps this leaf's own
+// activateSDLWindow token write, landing a moment before the
+// stub's editor phase begins, from forging a player
+// foreground the rig could never show.) No editor handle
+// exists off Windows.
 func gameWindowState(gamePID int, sessionID int) windowState {
 	var ws windowState
 	if gamePID <= 0 {
 		return ws
 	}
 	var obs []windowObs
+	editorUp := false
 	if _, err := os.Stat(stubEditorMarker(gamePID)); err == nil {
+		editorUp = true
 		obs = append(obs, windowObs{class: editorWindowClass, width: 1280, height: 900, visible: true})
 	} else if gameWindowPresentOnMaps(gamePID) {
 		visible := true
@@ -194,8 +237,75 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	candidate, rule := classifyPlayerCandidate(obs)
 	playerSight.observe(sessionID, candidate, rule)
 	runtimeSeen.observe(sessionID, classifyRuntime(obs))
-	if b, err := os.ReadFile(stubForegroundMarker(gamePID)); err == nil && strings.TrimSpace(string(b)) == "editor" {
+	if editorUp {
 		ws.fgIsEditor = true
+		ws.fgClass = editorWindowClass
+		ws.fgPID = gamePID
+		ws.fgIsGame = true
+		return ws
+	}
+	token := "other"
+	if b, err := os.ReadFile(stubForegroundMarker(gamePID)); err == nil {
+		if s := strings.TrimSpace(string(b)); s != "" {
+			token = s
+		}
+	}
+	switch token {
+	case "editor":
+		ws.fgIsEditor = true
+		ws.fgClass = editorWindowClass
+		ws.fgPID = gamePID
+		ws.fgIsGame = true
+	case "sdl":
+		ws.fgClass = sdlWindowClass
+		ws.fgPID = gamePID
+		ws.fgIsGame = true
+		ws.fgIsSDL = true
+	case "mame":
+		ws.fgClass = "MAME"
+		ws.fgPID = gamePID
+		ws.fgIsGame = true
+	case "vd":
+		ws.fgClass = vdWindowClass
+		ws.fgPID = stubVirtualDesktopPID
+	case "third":
+		ws.fgClass = "OtherApp"
+		ws.fgPID = stubThirdPartyPID
+	case "none":
+		// No foreground window: the zero facts say exactly that.
+	default: // "other": the stub's player window holds it
+		ws.fgClass = stubPlayerClass(gamePID)
+		ws.fgPID = gamePID
+		ws.fgIsGame = true
+		ws.fgIsSDL = ws.fgClass == sdlWindowClass
 	}
 	return ws
+}
+
+// activateSDLWindow on Linux: the activation sequence's push,
+// mirrored through the foreground marker - a successful
+// attempt moves the scripted foreground to the game's SDL
+// window ("sdl"), which the next gameWindowState reads back
+// as fgIsSDL for the sequence's verify. Two honest failures:
+// the game has no SDL window to raise - reported while the
+// stub is in its editor state (the player, and its SDL
+// window, are gone) or has no window phase at all - and the
+// stubborn case (stubFGStubbornMarker), where the attempt is
+// reported but the foreground does not move, so verify and
+// the single retry run their course.
+func activateSDLWindow(gamePID int) bool {
+	if gamePID <= 0 {
+		return false
+	}
+	if _, err := os.Stat(stubEditorMarker(gamePID)); err == nil {
+		return false
+	}
+	if !gameWindowPresentOnMaps(gamePID) {
+		return false
+	}
+	if _, err := os.Stat(stubFGStubbornMarker(gamePID)); err == nil {
+		return true
+	}
+	os.WriteFile(stubForegroundMarker(gamePID), []byte("sdl\n"), 0644)
+	return true
 }

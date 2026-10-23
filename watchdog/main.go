@@ -34,6 +34,14 @@
 //     table does not come up unfocused (no sound, no
 //     controller) behind whatever the launcher's exit left in
 //     front,
+//   - and once the table's runtime is up in a live session,
+//     run ONE aimed activation (activation.go): when the
+//     startup foreground shuffle settles, put the foreground
+//     on the game's SDL window specifically - the process-level
+//     push above stood down in the field while PinMAME's
+//     window held the foreground and the SDL window, which
+//     owns input, never did (no gamepad, no sound, until the
+//     player alt-tabbed),
 //   - when the game dies: in "live" (the launcher already exited)
 //     relaunch it exactly once; in "loading" the launcher is still
 //     resident and owns the failure, so the session is marked
@@ -248,6 +256,9 @@ func main() {
 		sessionCloser     closer
 		focusPushSession  int  // the session the one-shot focus handoff belongs to
 		focusPushed       bool // the handoff has been attempted for focusPushSession
+		sessionActivator  activator
+		actRuntimeSession int   // the session actRuntimeMs belongs to
+		actRuntimeMs      int64 // first tick the session's runtime stamp was observed (the activation deadline's anchor)
 	)
 
 	relaunch := func(c *Contract, why string) {
@@ -421,6 +432,18 @@ func main() {
 						logf("watchdog: session %d: focus push declined by Windows", c.SessionID)
 					}
 				}
+				// The activation deadline's anchor: the first
+				// tick this watchdog observes the session's
+				// runtime stamp (tracked in either session
+				// state - the stamp lands during loading,
+				// while the sequence itself runs live, below).
+				if actRuntimeSession != c.SessionID {
+					actRuntimeSession = c.SessionID
+					actRuntimeMs = 0
+				}
+				if actRuntimeMs == 0 && gameRuntimeExists(c.GamePID, c.SessionID) {
+					actRuntimeMs = time.Now().UnixMilli()
+				}
 				// Focus herding serves the loading phase's
 				// spawn settle ONLY (herdingAllowed): once the
 				// session is live it never runs - on the VR rig
@@ -430,6 +453,46 @@ func main() {
 				// signal below.
 				if herdingAllowed(c.FocusHerding, c.SessionState) {
 					herdTick(c.GamePID, c.SessionID, time.Now())
+				}
+				// Session activation (activation.go): once the
+				// runtime is up and the session is live, ONE
+				// aimed activation of the game's SDL window
+				// after the startup foreground shuffle settles.
+				// The ef8 focus push above works at PROCESS
+				// level and stood down in the field ("game
+				// already holds the foreground") while the
+				// table had neither gamepad nor sound: the
+				// foreground sat on PinMAME's window, and the
+				// SDL window - the one that owns input - never
+				// held it. This duty works at WINDOW level. A
+				// push it orders is recorded with the exit
+				// detector exactly like the focus push
+				// (notePush: the detector counts excursions
+				// from facts after our last foreground touch),
+				// and it runs BEFORE the detector's tick below,
+				// so the record precedes the reading.
+				if c.SessionState == "live" {
+					nowMs := time.Now().UnixMilli()
+					switch act := sessionActivator.tick(nowMs, c.SessionID, actRuntimeMs, ws); act {
+					case actPushNow:
+						attempted := activateSDLWindow(c.GamePID)
+						if attempted {
+							sessionCloser.notePush(c.SessionID, nowMs)
+						}
+						if sessionActivator.notePushAttempted(nowMs, attempted) == actLogNoTarget {
+							logf("watchdog: session %d: activation - the game has no SDL window to activate; standing down", c.SessionID)
+						}
+					case actLogNotNeeded:
+						logf("watchdog: session %d: activation not needed - the SDL window already holds the foreground", c.SessionID)
+					case actLogStuck:
+						logf("watchdog: session %d: activation - foreground was %q; set to the game's SDL window (stuck)", c.SessionID, sessionActivator.beforeClass())
+					case actLogFailed:
+						logf("watchdog: session %d: activation - foreground was %q; set to the game's SDL window (did not stick after retry)", c.SessionID, sessionActivator.beforeClass())
+					case actLogEditor:
+						logf("watchdog: session %d: activation - the editor holds the foreground; standing down", c.SessionID)
+					case actLogThirdParty:
+						logf("watchdog: session %d: activation - foreground held by %q (another process); standing down", c.SessionID, ws.fgClass)
+					}
 				}
 				// Session-close duty (closer.go) - the only exit
 				// path in play, and unconditional: the exit

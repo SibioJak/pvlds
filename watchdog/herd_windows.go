@@ -264,6 +264,10 @@ func windowClassName(hwnd uintptr) string {
 //     Desktop, the loading dialog, the player, PinMAME during
 //     load and play; it is the editor exactly when a table
 //     exit lands.
+//
+//   - The activation sequence (activation.go), which reads
+//     the wider foreground facts (class, owner, the SDL
+//     identity) from the same snapshot.
 func gameWindowState(gamePID int, sessionID int) windowState {
 	var ws windowState
 	if gamePID <= 0 {
@@ -281,11 +285,38 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 			}
 		}
 	}
+	// The SDL target (activation.go): a visible SDL window of
+	// the game pid if it has one, else any SDL window it has.
+	for _, w := range windows {
+		if w.obs.class != sdlWindowClass {
+			continue
+		}
+		if w.obs.visible {
+			ws.sdlHWND = w.hwnd
+			break
+		}
+		if ws.sdlHWND == 0 {
+			ws.sdlHWND = w.hwnd
+		}
+	}
 	candidate, rule := classifyPlayerCandidate(obs)
 	playerSight.observe(sessionID, candidate, rule)
 	runtimeSeen.observe(sessionID, classifyRuntime(obs))
-	if fg, _, _ := procGetForegroundWindow.Call(); fg != 0 && ws.editorHWND != 0 && fg == ws.editorHWND {
-		ws.fgIsEditor = true
+	// The foreground facts: who holds it (class + owner), and
+	// the two window-level identities the duties key on - the
+	// editor frame (hwnd equality, as the detector has always
+	// read it) and the SDL window (class + owner: the SDL
+	// surface that owns input, activation.go's whole subject).
+	if fg, _, _ := procGetForegroundWindow.Call(); fg != 0 {
+		var fgPID uint32
+		procGetWindowThreadProcID.Call(fg, uintptr(unsafe.Pointer(&fgPID)))
+		ws.fgClass = windowClassName(fg)
+		ws.fgPID = int(fgPID)
+		ws.fgIsGame = ws.fgPID == gamePID
+		if ws.editorHWND != 0 && fg == ws.editorHWND {
+			ws.fgIsEditor = true
+		}
+		ws.fgIsSDL = ws.fgIsGame && ws.fgClass == sdlWindowClass
 	}
 	return ws
 }
@@ -409,4 +440,43 @@ func pushFocusToGame(gamePID int) focusPushOutcome {
 		return focusPushHanded
 	}
 	return focusPushDeclined
+}
+
+// activateSDLWindow is the activation sequence's Windows leaf
+// (activation.go owns the decision; main.go owns the moment
+// and the logging): raise the game pid's SDL window - the
+// visible one if it has one, else any SDL window of the pid.
+// Unlike the focus handoff above there is NO editor fallback:
+// the editor window is the one target this duty must never
+// raise, under any circumstances. Returns false when the game
+// has no SDL window at all (the caller stands the sequence
+// down); a true return says only that the raise was attempted
+// - whether it stuck is the caller's read-back, a tick later.
+func activateSDLWindow(gamePID int) bool {
+	if gamePID <= 0 {
+		return false
+	}
+	var sdlVisible, sdlAny uintptr
+	for _, hwnd := range allTopWindows(gamePID) {
+		if windowClassName(hwnd) != sdlWindowClass {
+			continue
+		}
+		if sdlAny == 0 {
+			sdlAny = hwnd
+		}
+		if r, _, _ := procIsWindowVisible.Call(hwnd); r != 0 {
+			sdlVisible = hwnd
+			break
+		}
+	}
+	target := sdlVisible
+	if target == 0 {
+		target = sdlAny
+	}
+	if target == 0 {
+		return false
+	}
+	fg, _, _ := procGetForegroundWindow.Call()
+	raiseForeground(target, fg)
+	return true
 }

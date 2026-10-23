@@ -17,6 +17,11 @@ func gameRuntimeExists(_ int, _ int) bool { return false }
 // hand over here.
 func pushFocusToGame(_ int) focusPushOutcome { return focusPushDeclined }
 
+// activateSDLWindow off Windows/Linux: no SDL window exists to
+// raise, so the activation sequence stands down on its
+// no-target path if it is ever fed here.
+func activateSDLWindow(_ int) bool { return false }
+
 // gameWindowState off Windows/Linux: no windows are ever reported,
 // so the session-close duties never fire here.
 func gameWindowState(_ int, _ int) windowState { return windowState{} }

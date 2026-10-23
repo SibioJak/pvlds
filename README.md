@@ -37,7 +37,15 @@ several seconds more, leaving a desktop gap in the headset),
 and the watchdog hands the foreground to the game **once** at
 the hand-off, deliberately, ending the focus lottery that
 left one table with sound and controls and the next with
-neither until the player alt-tabbed to it.** M1's room
+neither until the player alt-tabbed to it. A sixth round the
+same day adds the **activation sequence**: the hand-off push
+works at process level and stood down in the field ("game
+already holds the foreground") on a session where the pad and
+the sound were dead anyway — because PinMAME's window held
+the foreground and the game's SDL window, which owns input,
+never did. After the runtime settles, the watchdog now puts
+the foreground on the SDL window specifically, once,
+verified (see "The activation sequence" below).** M1's room
 plus real launching: card-level Launch, a native watchdog that
 returns you to the room with your place restored, focus herding,
 and Exit-to-desktop. The first session proved the launch and the
@@ -186,6 +194,48 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   own arming evidence. The relaunched launcher restores filter/sort/page with
   the just-played table selected. It never auto-relaunches a
   table. A log lands beside the contract (`pvlds_watchdog.log`).
+- **The activation sequence** (`activation.go`, decision logic
+  shared and unit-tested on Linux): the fix for the field case
+  the process-level push above cannot see. In session 35
+  (Godzilla, watchdog-6 log) the push stood down — "game
+  already holds the foreground" — and at process level it was
+  right: the foreground cycled editor → loading dialog →
+  `SDL_app` → `MAME`, all the game pid's own windows, and
+  never left the process — while the table had no gamepad and
+  no sound until the player alt-tabbed (his standing law: no
+  controller ⇒ no sound; alt-tab cures both). The foreground's
+  last internal move before play was PinMAME's `MAME` window
+  taking it ~6s after the runtime came up; the game's
+  `SDL_app` window — the one that owns input — never regained
+  it. (In the good Getaway session it settled on `SDL_app`
+  by itself.) So: per session, once the runtime has stamped
+  and the session is live, the watchdog watches the
+  foreground's identity (class + owner) until it has been
+  unchanged for **2800ms** (`activationSettleMs`), or gives up
+  waiting at runtime-up + **12s** (`activationDeadlineMs`) and
+  resolves on whatever holds it then. At resolution: if the
+  foreground is already the SDL window, it logs `activation
+  not needed` and stands down; if an eligible holder has it —
+  any window of the game process, Virtual Desktop's window,
+  or no window — it foregrounds the game's SDL window (the
+  visible one if any, else any SDL window of the pid; **never
+  the editor window, under any circumstances**), reads the
+  foreground back ~1s later, retries once if it did not
+  stick, and logs the outcome with the prior holder
+  (`activation - foreground was "MAME"; set to the game's SDL
+  window (stuck)` / `(did not stick after retry)`). Two
+  refusals: the editor holding the foreground (that
+  foreground belongs to the exit detector's story — an editor
+  foreground observed at any point before completion aborts
+  the sequence), and an unrelated third process holding it
+  (never steal from a stranger). Exactly one sequence per
+  session; nothing runs after it completes — it is **not**
+  herding, and herding's loading-only gate is untouched. A
+  push the sequence does make is recorded with the exit
+  detector through the same `notePush` bookkeeping as the
+  focus handoff, so the detector's excursion accounting is
+  measured from facts after the watchdog's own last
+  foreground touch.
 - **Session-close duty** (Windows, user32; decision logic shared
   and unit-tested on Linux): in a **live** session, a table exit
   leaves VPX sitting in its editor with the process alive. The
