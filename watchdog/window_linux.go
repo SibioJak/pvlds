@@ -102,6 +102,33 @@ func stubRuntimeMarker(gamePID int) string {
 	return "/tmp/pvlds-stub-runtime-" + strconv.Itoa(gamePID)
 }
 
+// stubFGHWND derives the synthetic foreground-window identity
+// this leaf reports (windowState.fgHWND, fgwatch.go's change
+// identity). There is no real handle to mirror; what the
+// mirror CAN know of a holder is its class + owning pid, so
+// the identity is a deterministic hash of exactly that pair -
+// the same holder facts carry the same identity whichever
+// token or phase produced them (stage 1's "other" and stage
+// 2's scripted holder are one identity when their class and
+// pid agree), and different holders differ. No window at all
+// (empty class, pid 0) keeps identity 0 - fgwatch's "none".
+func stubFGHWND(class string, pid int) uintptr {
+	if class == "" && pid == 0 {
+		return 0
+	}
+	h := uint32(2166136261) // FNV-1a over the class, then the pid
+	for i := 0; i < len(class); i++ {
+		h ^= uint32(class[i])
+		h *= 16777619
+	}
+	h ^= uint32(pid)
+	h *= 16777619
+	if h == 0 {
+		h = 1 // a real holder never carries the no-window identity
+	}
+	return uintptr(h)
+}
+
 // stubFGStubbornMarker is the stubborn-foreground signal for
 // the activation sequence's smokes (activation.go): while the
 // file stands, this leaf's activateSDLWindow reports an attempt
@@ -213,7 +240,9 @@ const stubThirdPartyPID = 424242
 // activateSDLWindow token write, landing a moment before the
 // stub's editor phase begins, from forging a player
 // foreground the rig could never show.) No editor handle
-// exists off Windows.
+// exists off Windows; the foreground identity (fgHWND) is
+// synthesized from the holder's class + pid instead - see
+// stubFGHWND.
 func gameWindowState(gamePID int, sessionID int) windowState {
 	var ws windowState
 	if gamePID <= 0 {
@@ -242,6 +271,7 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 		ws.fgClass = editorWindowClass
 		ws.fgPID = gamePID
 		ws.fgIsGame = true
+		ws.fgHWND = stubFGHWND(ws.fgClass, ws.fgPID)
 		return ws
 	}
 	token := "other"
@@ -279,6 +309,7 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 		ws.fgIsGame = true
 		ws.fgIsSDL = ws.fgClass == sdlWindowClass
 	}
+	ws.fgHWND = stubFGHWND(ws.fgClass, ws.fgPID)
 	return ws
 }
 

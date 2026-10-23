@@ -297,7 +297,19 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   session's set is first observed and again whenever it
   changes, naming the current foreground window each time, and
   names the rule that stamped the sighting — the field
-  evidence the old rule never produced. A session that never
+  evidence the old rule never produced. Separately, in a
+  **live** session the watchdog logs **every foreground
+  identity change** (`session N: foreground changed:
+  "OLDCLASS" (pid X) -> "NEWCLASS" (pid Y)`, `none` for no
+  foreground window) — the inventory lines print only when
+  the window *set* changes, and the set is static mid-play,
+  so a mid-play foreground flicker used to leave no trace at
+  all. That log is the input-loss forensics (2026-10-23:
+  gamepad and keyboard dead in bursts mid-play while the
+  table rendered fine): the next occurrence names its thief
+  in the log, or acquits the foreground for good. Logging
+  only — no decision reads it, and nothing behaves
+  differently because it exists. A session that never
   leaves the editor can never fire the detector — no excursion,
   no arm (Chris's field case, 2026-10-22: VPX launched straight
   into its own editor, then closed from the editor; the first

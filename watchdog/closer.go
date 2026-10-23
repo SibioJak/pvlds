@@ -86,6 +86,7 @@ type windowState struct {
 	// surface that owns input.
 	fgClass  string
 	fgPID    int
+	fgHWND   uintptr // the foreground window itself (0 = no foreground window); fgwatch.go's change identity
 	fgIsGame bool
 	fgIsSDL  bool
 	sdlHWND  uintptr // an SDL window of the game pid (Windows activation target); 0 elsewhere

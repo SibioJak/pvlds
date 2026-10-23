@@ -42,6 +42,12 @@
 //     window held the foreground and the SDL window, which
 //     owns input, never did (no gamepad, no sound, until the
 //     player alt-tabbed),
+//   - in a live session, log EVERY foreground identity change
+//     (fgwatch.go): the mid-play input-loss forensics. The
+//     window inventory lines print only on window-SET changes
+//     and the set is static mid-play, so a foreground flicker
+//     used to leave no trace in this log at all. Logging only -
+//     nothing decides on it,
 //   - when the game dies: in "live" (the launcher already exited)
 //     relaunch it exactly once; in "loading" the launcher is still
 //     resident and owns the failure, so the session is marked
@@ -254,6 +260,7 @@ func main() {
 		sessionAtRelaunch int
 		strikes           int
 		sessionCloser     closer
+		sessionFGTracker  fgTracker
 		focusPushSession  int  // the session the one-shot focus handoff belongs to
 		focusPushed       bool // the handoff has been attempted for focusPushSession
 		sessionActivator  activator
@@ -453,6 +460,24 @@ func main() {
 				// signal below.
 				if herdingAllowed(c.FocusHerding, c.SessionState) {
 					herdTick(c.GamePID, c.SessionID, time.Now())
+				}
+				// Foreground-change forensics (fgwatch.go):
+				// in a live session, log every change of
+				// foreground identity, from this tick's
+				// snapshot - the blind-spot fix for the
+				// mid-play input-loss reports (pad and
+				// keyboard dead in bursts while the table
+				// rendered fine; the inventory lines print
+				// only when the game's window SET changes,
+				// and the set is static mid-play, so a
+				// foreground flicker left no trace). The
+				// tracker is fed live ticks only; the load's
+				// shuffle stays the inventory lines' story.
+				// Logging only: no behavior reads it.
+				if c.SessionState == "live" {
+					if ch, changed := sessionFGTracker.observe(c.SessionID, ws); changed {
+						logf("watchdog: session %d: foreground changed: %s -> %s", c.SessionID, ch.oldSide(), ch.newSide())
+					}
 				}
 				// Session activation (activation.go): once the
 				// runtime is up and the session is live, ONE

@@ -268,6 +268,12 @@ func windowClassName(hwnd uintptr) string {
 //   - The activation sequence (activation.go), which reads
 //     the wider foreground facts (class, owner, the SDL
 //     identity) from the same snapshot.
+//
+//   - The foreground-change log (fgwatch.go), which reads the
+//     foreground window's identity (the handle itself) from
+//     the same snapshot: in a live session every identity
+//     change is written to the log, the mid-play input-loss
+//     forensics the window-SET inventory lines cannot see.
 func gameWindowState(gamePID int, sessionID int) windowState {
 	var ws windowState
 	if gamePID <= 0 {
@@ -310,6 +316,7 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	if fg, _, _ := procGetForegroundWindow.Call(); fg != 0 {
 		var fgPID uint32
 		procGetWindowThreadProcID.Call(fg, uintptr(unsafe.Pointer(&fgPID)))
+		ws.fgHWND = fg
 		ws.fgClass = windowClassName(fg)
 		ws.fgPID = int(fgPID)
 		ws.fgIsGame = ws.fgPID == gamePID
