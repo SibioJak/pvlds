@@ -213,7 +213,23 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   foreground's identity (class + owner) until it has been
   unchanged for **2800ms** (`activationSettleMs`), or gives up
   waiting at runtime-up + **12s** (`activationDeadlineMs`) and
-  resolves on whatever holds it then. At resolution: if the
+  resolves on whatever holds it then. Two patience rules ride
+  on the settle, both from the watchdog-7 sessions (36–39,
+  2026-10-23), where VPX's startup shuffle finished by ~+7s
+  in every session but the bare settle rule could be fooled
+  earlier: the sequence **may not resolve before runtime-up
+  + 8s** (`activationResolveFloorMs`), and stability only
+  accumulates under a real holder — the editor frame and the
+  loading dialog are load-phase placeholders, and time on
+  them is a **lull**, not a settle. Session 39 is the pinned
+  failure: the foreground sat stable on the editor for the
+  full settle constant mid-load, the sequence resolved at
+  runtime +2s ("the editor holds the foreground; standing
+  down") and went home — then VPX's real final moves landed
+  (SDL at +3s, PinMAME's grab at +6s, held through dead
+  play). In session 36 the foreground kept changing, the
+  sequence stayed alive, caught PinMAME holding, pushed the
+  SDL window, and the table worked. At resolution: if the
   foreground is already the SDL window, it logs `activation
   not needed` and stands down; if an eligible holder has it —
   any window of the game process, Virtual Desktop's window,
@@ -224,11 +240,12 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   stick, and logs the outcome with the prior holder
   (`activation - foreground was "MAME"; set to the game's SDL
   window (stuck)` / `(did not stick after retry)`). Two
-  refusals: the editor holding the foreground (that
-  foreground belongs to the exit detector's story — an editor
-  foreground observed at any point before completion aborts
-  the sequence), and an unrelated third process holding it
-  (never steal from a stranger). Exactly one sequence per
+  refusals: the editor holding the foreground at resolution
+  (that foreground belongs to the exit detector's story —
+  during the settle it is only a lull and the sequence waits
+  it out, but an editor grab with a push in flight aborts
+  the sequence outright), and an unrelated third process
+  holding it (never steal from a stranger). Exactly one sequence per
   session; nothing runs after it completes — it is **not**
   herding, and herding's loading-only gate is untouched. A
   push the sequence does make is recorded with the exit

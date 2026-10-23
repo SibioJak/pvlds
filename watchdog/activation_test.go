@@ -73,6 +73,9 @@ func TestActivationSession35Shape(t *testing.T) {
 	if at-(up+800) < activationSettleMs {
 		t.Fatalf("resolved %dms after the last shuffle, want >= the %dms settle", at-(up+800), activationSettleMs)
 	}
+	if at-up < activationResolveFloorMs {
+		t.Fatalf("resolved %dms after runtime-up, before the %dms floor", at-up, activationResolveFloorMs)
+	}
 	if a.beforeClass() != "MAME" {
 		t.Fatalf("beforeClass = %q, want MAME", a.beforeClass())
 	}
@@ -147,31 +150,152 @@ func TestActivationNoTarget(t *testing.T) {
 	}
 }
 
-func TestActivationEditorAtSettleHandsOff(t *testing.T) {
-	// The foreground settles ON the editor: no push is ever
-	// ordered - that foreground is the exit landing's.
+func TestActivationEditorLullResolvesAtDeadline(t *testing.T) {
+	// The editor holds the foreground from runtime-up and
+	// never lets go: a lull, not a settle. NOTHING may resolve
+	// - not at the bare settle constant, not at the floor -
+	// until the deadline, where the sequence stands down on
+	// the editor under the ordinary resolution rules.
 	var a activator
 	up := int64(2000)
-	a.tick(up, 1, up, fgDialog)
-	act, _ := settleTo(t, &a, up+400, up, fgEditorA)
-	if act != actLogEditor {
-		t.Fatalf("settled on editor: got %v, want actLogEditor", act)
+	a.tick(up, 1, up, fgEditorA)
+	for now := up + 400; now < up+activationDeadlineMs; now += 400 {
+		if act := a.tick(now, 1, up, fgEditorA); act != actNone {
+			t.Fatalf("editor lull at +%dms: got %v, want none (no resolution before the deadline)", now-up, act)
+		}
+	}
+	if act := a.tick(up+activationDeadlineMs, 1, up, fgEditorA); act != actLogEditor {
+		t.Fatalf("deadline on the editor: got %v, want actLogEditor", act)
 	}
 }
 
-func TestActivationEditorFlickerAborts(t *testing.T) {
-	// An editor foreground observed mid-settle aborts the
-	// sequence on the spot - even a flicker costs the session
-	// its activation rather than risk fighting the exit path.
+func TestActivationDialogLullResolvesAtDeadline(t *testing.T) {
+	// The loading dialog holding the foreground is a lull the
+	// same way: no stability accumulates under it, no
+	// resolution before the deadline - and at the deadline
+	// the sequence resolves on it under the ordinary rules
+	// (a game-pid holder is eligible: the push is ordered).
+	var a activator
+	up := int64(2000)
+	a.tick(up, 1, up, fgDialog)
+	for now := up + 400; now < up+activationDeadlineMs; now += 400 {
+		if act := a.tick(now, 1, up, fgDialog); act != actNone {
+			t.Fatalf("dialog lull at +%dms: got %v, want none (no resolution before the deadline)", now-up, act)
+		}
+	}
+	if act := a.tick(up+activationDeadlineMs, 1, up, fgDialog); act != actPushNow {
+		t.Fatalf("deadline on the dialog: got %v, want actPushNow", act)
+	}
+	if a.beforeClass() != loadDialogClass {
+		t.Fatalf("beforeClass = %q, want %q", a.beforeClass(), loadDialogClass)
+	}
+}
+
+func TestActivationEditorLullDuringSettlePauses(t *testing.T) {
+	// An editor foreground during settle-tracking is a lull,
+	// NOT an abort: the sequence waits it out, the stability
+	// clock does not accumulate under it, and once a real
+	// holder follows and the floor has passed, the sequence
+	// still fires. (Only an editor grab with a push in
+	// flight aborts - see the verify-phase test.)
 	var a activator
 	up := int64(2000)
 	a.tick(up, 1, up, fgMAME)
 	a.tick(up+400, 1, up, fgMAME)
-	if act := a.tick(up+800, 1, up, fgEditorA); act != actLogEditor {
-		t.Fatalf("editor flicker: got %v, want actLogEditor", act)
+	for now := up + 800; now <= up+2400; now += 400 {
+		if act := a.tick(now, 1, up, fgEditorA); act != actNone {
+			t.Fatalf("editor lull at +%dms: got %v, want none", now-up, act)
+		}
 	}
-	if act := a.tick(up+1200, 1, up, fgMAME); act != actNone {
-		t.Fatalf("after abort: got %v, want none", act)
+	// MAME again from +2800: stable, but the floor has not
+	// passed - nothing may fire before runtime-up + floor.
+	for now := up + 2800; now < up+activationResolveFloorMs; now += 400 {
+		if act := a.tick(now, 1, up, fgMAME); act != actNone {
+			t.Fatalf("pre-floor at +%dms: got %v, want none", now-up, act)
+		}
+	}
+	if act := a.tick(up+activationResolveFloorMs, 1, up, fgMAME); act != actPushNow {
+		t.Fatalf("at the floor: got %v, want actPushNow", act)
+	}
+	if a.beforeClass() != "MAME" {
+		t.Fatalf("beforeClass = %q, want MAME", a.beforeClass())
+	}
+}
+
+func TestActivationSession39Shape(t *testing.T) {
+	// The pinned failure (watchdog-7, session 39, Godzilla):
+	// the foreground sits stable on the editor PAST the bare
+	// settle constant mid-load - the old sequence resolved
+	// there and stood down. VPX's real moves land after: an
+	// SDL blip, then PinMAME's grab at ~+6s, which holds
+	// through dead play. The sequence must NOT stand down
+	// during the lull, must not resolve before the floor, and
+	// must fire once the floor has passed and PinMAME is the
+	// stable holder - then verify stuck, as session 36 did
+	// when the same push saved it.
+	var a activator
+	up := int64(10000)
+	if act := a.tick(up, 1, up, fgEditorA); act != actNone {
+		t.Fatalf("runtime tick: got %v, want none", act)
+	}
+	// The lull: editor stable through and past the old
+	// settle point (+2800) - no stand-down, ever.
+	for now := up + 400; now <= up+2800; now += 400 {
+		if act := a.tick(now, 1, up, fgEditorA); act != actNone {
+			t.Fatalf("editor lull at +%dms: got %v, want none (no stand-down during the lull)", now-up, act)
+		}
+	}
+	// The SDL blip, then PinMAME's grab at +6000.
+	a.tick(up+3200, 1, up, fgSDL)
+	for now := up + 6000; now < up+8800; now += 400 {
+		if act := a.tick(now, 1, up, fgMAME); act != actNone {
+			t.Fatalf("pre-resolution at +%dms: got %v, want none", now-up, act)
+		}
+	}
+	// At +8800 the floor has passed (8000) and MAME has held
+	// for the settle constant (2800): fire.
+	act := a.tick(up+8800, 1, up, fgMAME)
+	if act != actPushNow {
+		t.Fatalf("resolution: got %v, want actPushNow", act)
+	}
+	if a.beforeClass() != "MAME" {
+		t.Fatalf("beforeClass = %q, want MAME", a.beforeClass())
+	}
+	if r := a.notePushAttempted(up+8800, true); r != actNone {
+		t.Fatalf("push report: got %v, want none", r)
+	}
+	if act := a.tick(up+8800+activationVerifyMs, 1, up, fgSDL); act != actLogStuck {
+		t.Fatalf("verify: got %v, want actLogStuck", act)
+	}
+}
+
+func TestActivationSession37Shape(t *testing.T) {
+	// The good-neighbor shape (watchdog-7, session 37, Game
+	// of Thrones): an editor lull early, then the table's own
+	// startup puts the SDL window in front at ~+7s and it
+	// stays. The sequence outlasts the lull and, once the
+	// floor has passed and SDL is stably the holder, resolves
+	// "not needed" - no push is ever ordered.
+	var a activator
+	up := int64(10000)
+	a.tick(up, 1, up, fgEditorA)
+	resolved := actNone
+	var resolvedAt int64
+	for off := int64(400); off <= activationDeadlineMs+800; off += 400 {
+		ws := fgEditorA
+		if off >= 7000 {
+			ws = fgSDL
+		}
+		if act := a.tick(up+off, 1, up, ws); act != actNone {
+			resolved, resolvedAt = act, off
+			break
+		}
+	}
+	if resolved != actLogNotNeeded {
+		t.Fatalf("got %v, want actLogNotNeeded", resolved)
+	}
+	if resolvedAt < activationResolveFloorMs {
+		t.Fatalf("resolved at +%dms, before the %dms floor", resolvedAt, activationResolveFloorMs)
 	}
 }
 
@@ -256,7 +380,7 @@ func TestActivationIdleBeforeRuntime(t *testing.T) {
 	var b activator
 	b.tick(up, 2, up, fgMAME) // a fresh machine, session 2
 	got := actNone
-	for now := up + 400; now < up+activationSettleMs+2000; now += 400 {
+	for now := up + 400; now < up+activationResolveFloorMs+2000; now += 400 {
 		if x := b.tick(now, 2, up, fgMAME); x != actNone {
 			got = x
 			break

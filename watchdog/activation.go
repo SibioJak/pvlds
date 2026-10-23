@@ -34,8 +34,27 @@ package main
 //
 //   SETTLE: watch the foreground's identity (class + owner -
 //   who holds it, not which handle). When it has been unchanged
-//   for activationSettleMs, resolve. If it never settles, the
+//   for activationSettleMs, resolve - but never before
+//   runtime-up + activationResolveFloorMs, and stability only
+//   accumulates under a REAL holder: the editor frame and the
+//   loading dialog are load-phase placeholders, and time spent
+//   on them is a lull, not a settle. If it never settles, the
 //   deadline resolves on whatever the foreground is then.
+//
+// Why the floor and the lull rule (field forensics,
+// watchdog-7 log sessions 36-39, 2026-10-23): the shuffle
+// finishes by ~+7s after runtime-up in every observed session,
+// but the bare settle rule can be fooled earlier. In session
+// 39 the foreground sat stable on the EDITOR for the full
+// settle constant mid-load; the sequence resolved at
+// runtime+2s ("the editor holds the foreground; standing
+// down") and went home - and only then did VPX's real final
+// moves land (SDL at +3s, PinMAME's grab at +6s, held through
+// dead play). In session 36 the foreground kept changing, the
+// sequence stayed alive, caught PinMAME holding, pushed the
+// SDL window, and the table worked. Pass/fail was whether the
+// sequence's patience outlasted the shuffle; the floor makes
+// the patience structural.
 //
 //   RESOLVE (at settle or at the deadline):
 //     - the foreground IS the editor window (class "VPinball",
@@ -66,11 +85,12 @@ package main
 //   once more and verify again; a second miss logs honestly
 //   ("did not stick after retry") and stands down.
 //
-//   Any tick that observes the editor holding the foreground
-//   before the sequence completes aborts it (same stand-down):
+//   An editor foreground during SETTLE is just a lull (see
+//   above) - the sequence waits it out. But once a push is in
+//   flight (ordered, awaiting its report or its verify), an
+//   editor foreground aborts the sequence (same stand-down):
 //   a landing mid-sequence owns the foreground, and the retry
-//   must never fight the exit detector for it. An editor
-//   flicker costs the session its activation - safety over
+//   must never fight the exit detector for it. Safety over
 //   eagerness, and the log line says why.
 
 // vdWindowClass is Virtual Desktop's window class
@@ -80,6 +100,12 @@ package main
 // any way this duty needs to respect.
 const vdWindowClass = "CabinetWClass"
 
+// loadDialogClass is the Win32 class of VPX's loading dialog
+// (the standard "#32770" dialog class, the game pid's own
+// window): a load-phase placeholder like the editor frame -
+// its stability is a lull, not a settle.
+const loadDialogClass = "#32770"
+
 const (
 	// How long the foreground must sit unchanged after the
 	// runtime stamps before the sequence resolves: the startup
@@ -87,6 +113,11 @@ const (
 	// the field rig) has to be OVER, or the act lands on a
 	// foreground that is about to move again.
 	activationSettleMs = 2800
+	// The sequence may not resolve before runtime-up + this,
+	// however stable things look: every field session's
+	// shuffle ran to ~+7s, and a stable editor mid-load is a
+	// lull that fooled the bare settle rule in session 39.
+	activationResolveFloorMs = 8000
 	// The sequence gives up waiting at runtime-up + this: past
 	// it, whatever owns the foreground owns it, and a late grab
 	// (+20s, say) is not ours to chase.
@@ -147,6 +178,18 @@ func eligible(ws windowState) bool {
 	return ws.fgIsGame || ws.fgClass == vdWindowClass || ws.fgPID == 0
 }
 
+// lullHolder reports whether the foreground holder is a
+// load-phase placeholder whose stability must not count
+// toward the settle: the editor frame or the loading dialog,
+// both the game pid's own windows. While either holds, the
+// sequence stays pending and the stability clock does not
+// accumulate (session 39: a stable editor mid-load read as a
+// settle and the sequence went home before the shuffle's real
+// final moves).
+func lullHolder(ws windowState) bool {
+	return ws.fgIsEditor || (ws.fgIsGame && ws.fgClass == loadDialogClass)
+}
+
 // resolve decides a settled (or deadline-reached) foreground.
 func (a *activator) resolve(ws windowState) actAction {
 	switch {
@@ -184,11 +227,13 @@ func (a *activator) tick(nowMs int64, sessionID int, runtimeUpMs int64, ws windo
 		a.fgSinceMs = nowMs
 		return actNone
 	}
-	// The editor holding the foreground ends the sequence in
-	// any phase before completion: that foreground is the exit
-	// landing's (or the player's deliberate visit to it), and
-	// nothing here may fight the exit detector for it.
-	if ws.fgIsEditor {
+	// The editor holding the foreground ends the sequence
+	// once a push is in flight (phases 1-2): that foreground
+	// is the exit landing's (or the player's deliberate visit
+	// to it), and nothing here may fight the exit detector
+	// for it. During settle-tracking (phase 0) the editor is
+	// merely a lull holder - the branch below waits it out.
+	if ws.fgIsEditor && a.phase != 0 {
 		a.phase = 3
 		return actLogEditor
 	}
@@ -198,7 +243,15 @@ func (a *activator) tick(nowMs int64, sessionID int, runtimeUpMs int64, ws windo
 			a.fgClass, a.fgPID = ws.fgClass, ws.fgPID
 			a.fgSinceMs = nowMs
 		}
-		if nowMs-a.fgSinceMs >= activationSettleMs || nowMs-a.runtimeUp >= activationDeadlineMs {
+		if lullHolder(ws) {
+			// No accumulation under a placeholder: the
+			// stability clock restarts from this tick, so a
+			// settle can only ever complete under the real
+			// holder that follows the lull.
+			a.fgSinceMs = nowMs
+		}
+		settled := nowMs-a.fgSinceMs >= activationSettleMs && nowMs-a.runtimeUp >= activationResolveFloorMs
+		if settled || nowMs-a.runtimeUp >= activationDeadlineMs {
 			return a.resolve(ws)
 		}
 	case 2: // verifying the last push
