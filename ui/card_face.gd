@@ -14,6 +14,19 @@ extends Control
 ## a capped label ellipsizes its overrun instead of wrapping without
 ## limit and pushing the rest of the card off its texture.
 
+const FACE_MARGIN_TOP_PX: int = 22 ## the shared face layout's top margin
+
+## Title-card raise (Chris's field note, 2026-10-23): art faces are
+## full-bleed - their content starts at the texture's top row -
+## while a title card's content block started FACE_MARGIN_TOP_PX
+## lower, so on the wall a title card's design registered that far
+## below its art neighbours' (measured on the 512x640 wall faces:
+## art content top row 0, title-card content top row 22). The panel
+## kind's top margin shrinks by this many pixels so the band's top
+## edge registers with the art faces' top edge. One constant: a
+## future nudge is a one-line change here.
+const PANEL_CONTENT_RAISE_PX: int = 22
+
 var _bg: ColorRect
 var _margin: MarginContainer
 var _vbox: VBoxContainer
@@ -60,7 +73,7 @@ func _init() -> void:
 	_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_margin.add_theme_constant_override("margin_left", 26)
 	_margin.add_theme_constant_override("margin_right", 26)
-	_margin.add_theme_constant_override("margin_top", 22)
+	_margin.add_theme_constant_override("margin_top", FACE_MARGIN_TOP_PX)
 	_margin.add_theme_constant_override("margin_bottom", 22)
 	add_child(_margin)
 	_vbox = VBoxContainer.new()
@@ -117,6 +130,15 @@ func _box(color: Color, radius: int) -> StyleBoxFlat:
 
 func apply_spec(spec: Dictionary) -> void:
 	var kind: String = str(spec.get("kind", "panel"))
+	# Per-spec top margin: title cards (panel kind) ride higher so
+	# their content registers with the full-bleed art faces - see
+	# PANEL_CONTENT_RAISE_PX. Re-asserted on every spec because one
+	# CardFace serves all renders, so the raise can never leak into
+	# another kind's layout.
+	var top_margin_px: int = FACE_MARGIN_TOP_PX
+	if kind == "panel":
+		top_margin_px = maxi(0, FACE_MARGIN_TOP_PX - PANEL_CONTENT_RAISE_PX)
+	_margin.add_theme_constant_override("margin_top", top_margin_px)
 	var bg: Color = _color_of(spec, "bg", Color(0.05, 0.05, 0.09))
 	var band: Color = _color_of(spec, "band", Color(0.25, 0.25, 0.38))
 	_bg.color = bg

@@ -510,7 +510,9 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   the backglass extracted from a same-stem `.directb2s` (best-effort,
   cached in `user://art_cache`; any failure falls through) — and
   generated type-forward title cards everywhere else (manufacturer
-  color band, big name, year/designer). Filters: All / VR / Favorites /
+  color band, big name, year/designer; the band sits flush with the
+  card's top edge, registering with the full-bleed art faces -
+  `PANEL_CONTENT_RAISE_PX` in `ui/card_face.gd`). Filters: All / VR / Favorites /
   Recents (VR is the default view). Sorts: name, year, manufacturer,
   designer.
 - **One input model.** VR controller laser, mouse ray, and
