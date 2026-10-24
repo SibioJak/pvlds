@@ -530,6 +530,20 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   plain JSON config, runs the scan, and reports what the scan
   measured — duplicates, match rate, art coverage, unidentified
   titles.
+- **The missing-backglass list.** Every completed scan also
+  regenerates `missing_b2s.txt` in the app data folder (`user://`,
+  beside the state file and the watchdog contract): a short header
+  (scan date, missing count), then one line per `.vpx` file that
+  has no same-stem `.directb2s` beside it — file name plus the
+  folder it lives in, alphabetical by file name. The record comes
+  from the scanner's own pairing pass (a side image does not clear
+  a file; this is about the backglass file itself, per file, so a
+  multi-build game can be listed for one build and not another).
+  The desk shows the count beside the scan summary, with an
+  **Open list** button that hands the file to the OS's default
+  text handler. It is the go-download shopping list: drop the
+  matching backglasses into their folders, rescan, and the
+  entries clear.
 - **SETUP never strands the headset.** The desk is a 2D form and
   cannot render into the headset — so while XR is live, opening
   setup (rail SETUP, or a failed launch routing to the desk) no

@@ -19,6 +19,8 @@ var _folder_rows: VBoxContainer
 var _folder_edits: Array[LineEdit] = []
 var _scan_button: Button
 var _stats_label: Label
+var _b2s_label: Label
+var _b2s_button: Button
 var _enter_button: Button
 var _dialog: FileDialog
 var _dialog_target: String = "" ## "exe" | "db" | "folder:<index>"
@@ -114,6 +116,21 @@ func _build_ui() -> void:
 	_stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_stats_label.text = "Not scanned yet."
 	vbox.add_child(_stats_label)
+
+	var b2s_row: HBoxContainer = HBoxContainer.new()
+	b2s_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(b2s_row)
+	_b2s_label = Label.new()
+	_b2s_label.text = "Missing backglass: not scanned yet - the list is written on every scan."
+	_b2s_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_b2s_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	b2s_row.add_child(_b2s_label)
+	_b2s_button = Button.new()
+	_b2s_button.text = "Open list"
+	_b2s_button.disabled = true
+	_b2s_button.tooltip_text = "Open missing_b2s.txt - the table files with no backglass - from the app data folder"
+	_b2s_button.pressed.connect(_on_open_b2s_list)
+	b2s_row.add_child(_b2s_button)
 
 	_enter_button = Button.new()
 	_enter_button.text = "Enter the Room"
@@ -396,3 +413,20 @@ func apply_scan_summary(summary: String) -> void:
 	_scanned = summary != ""
 	_enter_button.disabled = not _scanned
 	_scan_button.disabled = false
+
+
+## The missing-backglass count from the scan that just landed
+## (Main regenerates missing_b2s.txt in the same pass, from the
+## scanner's pairing record). A zero count says so plainly; the
+## button arms either way - at zero the file itself states that
+## none are missing.
+func apply_missing_b2s(count: int) -> void:
+	if count > 0:
+		_b2s_label.text = "Missing backglass: %d table file(s) have no .directb2s beside them. The full list is missing_b2s.txt in the app data folder." % count
+	else:
+		_b2s_label.text = "Missing backglass: none - every table file has a .directb2s beside it."
+	_b2s_button.disabled = false
+
+
+func _on_open_b2s_list() -> void:
+	OS.shell_open(MissingB2sList.globalized_path())

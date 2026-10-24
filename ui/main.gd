@@ -442,6 +442,17 @@ func _finish_scan() -> void:
 	var summary: String = build_scan_summary()
 	if _desk != null:
 		_desk.apply_scan_summary(summary)
+	# The missing-backglass list (Chris's ask, 2026-10-23): every
+	# completed scan regenerates missing_b2s.txt from the scanner's
+	# own pairing record, so the file on disk is always the current
+	# library's truth - and the desk shows the count beside the
+	# scan's health lines.
+	if _scanner != null:
+		var b2s_err: Error = MissingB2sList.write_file(_scanner.missing_b2s_files)
+		if b2s_err != OK:
+			push_warning("PVLDS: missing_b2s.txt could not be written (error %d)" % b2s_err)
+		if _desk != null:
+			_desk.apply_missing_b2s(_scanner.missing_b2s_files.size())
 	# Scan landed: start warming the whole library's art in the
 	# background (and re-arm on every later scan).
 	if _art_warmer != null and _scanner != null:
@@ -1195,6 +1206,39 @@ func _drive_desk_smoke() -> void:
 				_desk_expect(not raw.contains("close_vpx_on_table_exit"), "the saved config carries no close_vpx_on_table_exit key")
 				_desk_expect(not raw.contains("hold_exit_enabled"), "the saved config carries no hold_exit_enabled key")
 				_desk_expect(not raw.contains("hold_exit_button"), "the saved config carries no hold_exit_button key")
+				# Missing-backglass row (this round): the count
+				# line + Open list button beside the scan summary.
+				# This boot never runs a scan, so the driver feeds
+				# counts through the same apply_missing_b2s call
+				# _finish_scan makes in a real boot, then presses
+				# the REAL button - the emit runs the desk's
+				# pressed -> handler -> OS.shell_open wiring end
+				# to end (the open itself lands outside, on the
+				# OS's default handler, unobservable headless;
+				# reaching _finish_desk_smoke is the proof the
+				# press ran clean).
+				_desk_expect(_desk._b2s_button != null and _desk._b2s_button.text == "Open list",
+					"the desk has an Open list button")
+				_desk_expect(_desk._b2s_button != null and _desk._b2s_button.disabled,
+					"the Open list button starts disabled (no scan yet)")
+				_desk_expect(_desk._b2s_label != null and _desk._b2s_label.text.contains("not scanned yet"),
+					"the missing-backglass line starts unscanned")
+				_desk.apply_missing_b2s(3)
+				_desk_expect(_desk._b2s_label.text.contains("3 table file(s)"),
+					"the missing-backglass line shows the applied count")
+				_desk_expect(not _desk._b2s_button.disabled,
+					"the Open list button arms once a count lands")
+				_desk.apply_missing_b2s(0)
+				_desk_expect(_desk._b2s_label.text.contains("none - every table file"),
+					"a zero count says none plainly")
+				var smoke_paths: Array[String] = ["/tables/Alpha.vpx", "/tables/Beta.vpx", "/other/Gamma.vpx"]
+				_desk_expect(MissingB2sList.write_file(smoke_paths, "2026-10-23") == OK
+					and FileAccess.file_exists(MissingB2sList.FILE_PATH),
+					"the list file exists at the path the button opens")
+				_desk_expect(MissingB2sList.globalized_path().ends_with("missing_b2s.txt"),
+					"the button's open path resolves to missing_b2s.txt")
+				_desk.apply_missing_b2s(3)
+				_desk._b2s_button.pressed.emit()
 				_finish_desk_smoke()
 
 
@@ -1511,6 +1555,20 @@ func _zero_bytes(n: int) -> PackedByteArray:
 	return b
 
 
+## Recursive delete of a core-test fixture tree (absolute OS
+## path). Missing paths are a no-op, so a test can wipe before
+## building its fixtures and again when it is done with them.
+func _wipe_tree(path: String) -> void:
+	var dir: DirAccess = DirAccess.open(path)
+	if dir == null:
+		return
+	for name: String in dir.get_files():
+		DirAccess.remove_absolute(path.path_join(name))
+	for sub: String in dir.get_directories():
+		_wipe_tree(path.path_join(sub))
+	DirAccess.remove_absolute(path)
+
+
 ## A minimal valid 24-bit BMP (BITMAPFILEHEADER + BITMAPINFOHEADER
 ## + bottom-up BGR rows, rows padded to 4 bytes), hand-built the
 ## way an external tool writes one - Godot has no BMP writer, which
@@ -1576,6 +1634,16 @@ func _run_core_test() -> void:
 	_expect(pl != null and pl.ensure_art() != "", "Pharaoh's Ledger art extracted from .directb2s (on demand)", failures)
 	var nh: GameEntry = scanner.game_by_id("dg-neon-harbor")
 	_expect(nh != null and nh.art_path.ends_with(".png"), "Neon Harbor side-image art found", failures)
+
+	# Missing-backglass record (this round): pairing truth from the
+	# same dummy listing. Only Pharaoh's Ledger carries a .directb2s
+	# beside its .vpx - a side image is NOT a backglass and does not
+	# clear a file here.
+	_expect(scanner.missing_b2s_files.size() == 12, "dummy library: 12 of 13 files have no .directb2s beside them", failures)
+	_expect(not scanner.missing_b2s_files.has(dummy_tables.path_join("Pharaoh's Ledger (Vantage 1979) JP v55 DT-FS-VR-MR Ext2k Conversion.vpx")),
+		"the one dummy file with a backglass is not in the missing list", failures)
+	_expect(scanner.missing_b2s_files.has(dummy_tables.path_join("Neon Harbor (Copperline 1989).vpx")),
+		"a side image does not clear a file from the missing list", failures)
 
 	# State round-trip (back up any real state file first, restore after).
 	var state_file: String = StateStore.state_path()
@@ -2042,6 +2110,98 @@ func _run_core_test() -> void:
 	var after_entry: Variant = after_idx.get(mig_key, null)
 	_expect(after_entry is Dictionary and int((after_entry as Dictionary).get("v", 0)) == ArtProvider.EXTRACTOR_VERSION,
 		"the retried entry is stamped with the current extractor version", failures)
+
+	# --- Missing-backglass list (this round): the scanner's
+	# pairing record rendered and written as Chris's go-download
+	# list. The fixture is built so file-name order and folder-path
+	# order DISAGREE (Mango sits in the path-first folder), pinning
+	# the sort to names, and one game (Duo) has two builds of which
+	# only one lacks a backglass - the list is per-FILE truth.
+	var b2s_root_user: String = "user://core_test_b2s"
+	var b2s_root: String = ProjectSettings.globalize_path(b2s_root_user)
+	_wipe_tree(b2s_root)
+	var b2s_user_dir: DirAccess = DirAccess.open("user://")
+	_expect(b2s_user_dir != null, "b2s fixture: user dir opens", failures)
+	if b2s_user_dir != null and not b2s_user_dir.dir_exists("core_test_b2s"):
+		b2s_user_dir.make_dir("core_test_b2s")
+	var b2s_root_dir: DirAccess = DirAccess.open(b2s_root_user)
+	_expect(b2s_root_dir != null, "b2s fixture: root created", failures)
+	if b2s_root_dir != null:
+		var fx_subs: Array[String] = ["aaa_tables", "zzz_tables", "solo"]
+		for sub_name: String in fx_subs:
+			if not b2s_root_dir.dir_exists(sub_name):
+				b2s_root_dir.make_dir(sub_name)
+	var fx_aaa: String = b2s_root_user.path_join("aaa_tables")
+	var fx_zzz: String = b2s_root_user.path_join("zzz_tables")
+	var fx_solo: String = b2s_root_user.path_join("solo")
+	var mango_path: String = fx_aaa.path_join("Mango Table (Maker 1980).vpx")
+	var zebra_path: String = fx_aaa.path_join("Zebra Table (Maker 2000).vpx")
+	var apple_path: String = fx_zzz.path_join("Apple Table (Maker 1990).vpx")
+	var duo10_path: String = fx_zzz.path_join("Duo Game (Maker 1995) v1.0.vpx")
+	var duo11_path: String = fx_zzz.path_join("Duo Game (Maker 1995) v1.1.vpx")
+	_expect(_write_text_file(mango_path, "fixture"), "b2s fixture: Mango written (no backglass)", failures)
+	_expect(_write_text_file(zebra_path, "fixture"), "b2s fixture: Zebra written", failures)
+	_expect(_write_text_file(fx_aaa.path_join("Zebra Table (Maker 2000).directb2s"), "fixture"), "b2s fixture: Zebra backglass written", failures)
+	_expect(_write_text_file(apple_path, "fixture"), "b2s fixture: Apple written (no backglass yet)", failures)
+	_expect(_write_text_file(duo10_path, "fixture"), "b2s fixture: Duo v1.0 written", failures)
+	_expect(_write_text_file(fx_zzz.path_join("Duo Game (Maker 1995) v1.0.directb2s"), "fixture"), "b2s fixture: Duo v1.0 backglass written", failures)
+	_expect(_write_text_file(duo11_path, "fixture"), "b2s fixture: Duo v1.1 written (no backglass)", failures)
+	_expect(_write_text_file(fx_solo.path_join("Solo Table (Maker 1977).vpx"), "fixture"), "b2s fixture: Solo written", failures)
+	_expect(_write_text_file(fx_solo.path_join("Solo Table (Maker 1977).directb2s"), "fixture"), "b2s fixture: Solo backglass written", failures)
+	var fx_folders: Array[String] = [fx_aaa, fx_zzz]
+	var fx_scan: LibraryScanner = LibraryScanner.new()
+	fx_scan.scan(fx_folders, db)
+	_expect(fx_scan.total_files == 5, "b2s fixture: 5 table files scanned", failures)
+	_expect(fx_scan.missing_b2s_files.size() == 3, "b2s fixture: exactly 3 files are missing a backglass", failures)
+	_expect(fx_scan.missing_b2s_files.has(apple_path) and fx_scan.missing_b2s_files.has(duo11_path)
+		and fx_scan.missing_b2s_files.has(mango_path), "b2s fixture: the missing set is Apple, Duo v1.1, Mango", failures)
+	_expect(not fx_scan.missing_b2s_files.has(zebra_path) and not fx_scan.missing_b2s_files.has(duo10_path),
+		"b2s fixture: backglassed files are not listed", failures)
+	var duo_entry: GameEntry = null
+	for g: GameEntry in fx_scan.games:
+		for b: TableBuild in g.builds:
+			if b.file_path == duo11_path:
+				duo_entry = g
+	_expect(duo_entry != null and duo_entry.builds.size() == 2,
+		"b2s fixture: the Duo builds group as one game, and the list still names only the b2s-less build", failures)
+	var expected_list: String = "PVLDS - table files with no backglass file (.directb2s)\nScan date: 2026-10-23\nMissing: 3\n\n"
+	expected_list += "Apple Table (Maker 1990).vpx  (folder: %s)\n" % fx_zzz
+	expected_list += "Duo Game (Maker 1995) v1.1.vpx  (folder: %s)\n" % fx_zzz
+	expected_list += "Mango Table (Maker 1980).vpx  (folder: %s)\n" % fx_aaa
+	_expect(MissingB2sList.render(fx_scan.missing_b2s_files, "2026-10-23") == expected_list,
+		"the rendered list: header with count + date, file-name sort across folders, per-file lines", failures)
+	# The written file (the real list path is backed up + restored,
+	# like the state and contract round-trips above).
+	var list_file: String = MissingB2sList.FILE_PATH
+	var list_backup: String = ""
+	if FileAccess.file_exists(list_file):
+		list_backup = FileAccess.get_file_as_string(list_file)
+	_expect(MissingB2sList.write_file(fx_scan.missing_b2s_files, "2026-10-23") == OK, "the list file writes", failures)
+	_expect(FileAccess.get_file_as_string(list_file) == expected_list, "the written file matches the render byte for byte", failures)
+	# Zero-missing library: the file states it plainly.
+	var solo_folders: Array[String] = [fx_solo]
+	var solo_scan: LibraryScanner = LibraryScanner.new()
+	solo_scan.scan(solo_folders, db)
+	_expect(solo_scan.missing_b2s_files.is_empty(), "b2s fixture: a fully-backglassed library scans zero missing", failures)
+	var zero_render: String = MissingB2sList.render(solo_scan.missing_b2s_files, "2026-10-23")
+	_expect(zero_render.contains("Missing: 0") and zero_render.contains("None missing - every table file has a .directb2s beside it."),
+		"the zero list states none missing plainly", failures)
+	# Regeneration: add Apple's backglass, rescan, rewrite - the
+	# entry is gone from the file, not just from the record.
+	_expect(_write_text_file(fx_zzz.path_join("Apple Table (Maker 1990).directb2s"), "fixture"), "b2s fixture: Apple backglass added", failures)
+	var fx_rescan: LibraryScanner = LibraryScanner.new()
+	fx_rescan.scan(fx_folders, db)
+	_expect(fx_rescan.missing_b2s_files.size() == 2 and not fx_rescan.missing_b2s_files.has(apple_path),
+		"after adding the backglass and rescanning, the record drops the entry", failures)
+	_expect(MissingB2sList.write_file(fx_rescan.missing_b2s_files, "2026-10-23") == OK, "the list regenerates on rescan", failures)
+	var regen_text: String = FileAccess.get_file_as_string(list_file)
+	_expect(regen_text.contains("Missing: 2") and not regen_text.contains("Apple Table"),
+		"the regenerated file drops the cleared entry", failures)
+	if list_backup != "":
+		_write_text_file(list_file, list_backup)
+	elif FileAccess.file_exists(list_file):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(list_file))
+	_wipe_tree(b2s_root)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")

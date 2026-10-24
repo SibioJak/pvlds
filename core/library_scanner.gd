@@ -19,6 +19,7 @@ var total_files: int = 0
 var matched_files: int = 0 ## builds found in the db (exact build match)
 var game_matched_files: int = 0 ## builds whose game is known but build is not in the db
 var art_covered_games: int = 0
+var missing_b2s_files: Array[String] = [] ## .vpx files with no same-stem .directb2s beside them, from this scan's own listing - the missing-backglass list's raw material (see MissingB2sList).
 
 var _version_re: RegEx = null
 
@@ -34,19 +35,28 @@ func scan(folders: Array[String], db: VpsDatabase, progress: ScanProgress = null
 	matched_files = 0
 	game_matched_files = 0
 	art_covered_games = 0
+	missing_b2s_files.clear()
 	if progress != null:
 		progress.begin("collecting", folders.size())
 	var files: Array[String] = []
 	var art_map: Dictionary = {} ## .vpx path -> {"side": path} and/or {"b2s": path}
+	var b2s_by_file: Dictionary = {} ## .vpx path -> true when a same-stem .directb2s was listed beside it
 	var visited: Dictionary = {} ## canonical folder path -> true (cycle guard)
 	var folders_done: int = 0
 	for folder: String in folders:
-		_collect_vpx(folder, files, art_map, visited, 0)
+		_collect_vpx(folder, files, art_map, visited, b2s_by_file, 0)
 		folders_done += 1
 		if progress != null:
 			progress.report_collect(folders_done, files.size())
 	files.sort()
 	total_files = files.size()
+	# The missing-backglass record, derived from the same listing
+	# that produced the art facts - one pass, one truth. (A side
+	# image does not clear a file here: the record is about the
+	# backglass file's presence, not about which art won.)
+	for scanned_path: String in files:
+		if not bool(b2s_by_file.get(scanned_path, false)):
+			missing_b2s_files.append(scanned_path)
 	var by_key: Dictionary = {}
 	for i: int in range(files.size()):
 		var path: String = files[i]
@@ -100,7 +110,7 @@ func game_by_id(game_id: String) -> GameEntry:
 ## paths (junction/symlink cycles), a depth cap as the backstop, and
 ## hidden/system junk folders skipped. Art facts come from this same
 ## listing - no candidate file is ever opened during a scan.
-func _collect_vpx(folder: String, out_files: Array[String], art_map: Dictionary, visited: Dictionary, depth: int) -> void:
+func _collect_vpx(folder: String, out_files: Array[String], art_map: Dictionary, visited: Dictionary, b2s_by_file: Dictionary, depth: int) -> void:
 	if depth > MAX_SCAN_DEPTH:
 		return
 	var dir: DirAccess = DirAccess.open(folder)
@@ -127,6 +137,7 @@ func _collect_vpx(folder: String, out_files: Array[String], art_map: Dictionary,
 			var full: String = folder.path_join(name)
 			out_files.append(full)
 			var stem_key: String = name.get_basename().to_lower()
+			b2s_by_file[full] = b2s_by_stem.has(stem_key)
 			var facts: Dictionary = {}
 			if side_by_stem.has(stem_key):
 				facts["side"] = str(side_by_stem[stem_key])
@@ -139,7 +150,7 @@ func _collect_vpx(folder: String, out_files: Array[String], art_map: Dictionary,
 			continue
 		if JUNK_FOLDERS.has(sub.to_lower()):
 			continue
-		_collect_vpx(folder.path_join(sub), out_files, art_map, visited, depth + 1)
+		_collect_vpx(folder.path_join(sub), out_files, art_map, visited, b2s_by_file, depth + 1)
 
 
 func _make_build(path: String, db: VpsDatabase) -> TableBuild:
