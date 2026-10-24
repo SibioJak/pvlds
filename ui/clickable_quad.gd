@@ -73,6 +73,12 @@ func set_texture(tex: Texture2D) -> void:
 		_mat.albedo_texture = tex
 
 
+## The texture the face currently shows (the nav smoke reads
+## it to prove the rail never falls back to the placeholder).
+func current_texture() -> Texture2D:
+	return _mat.albedo_texture if _mat != null else null
+
+
 ## Fade the quad's face (and its frame) toward transparent via
 ## the materials' albedo alpha (see setup for why the material
 ## route, not the instance fade). The loading marquee's wall

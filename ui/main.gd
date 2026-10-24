@@ -40,6 +40,11 @@ extends Node
 ##                       assert its pop-out transform (offset,
 ##                       scale, neighbour untouched), save
 ##                       PREFIX_popped.png, print the verdict, quit
+##   --pvlds-shot-slide P
+##                       room boot; force the ALL filter, flip a
+##                       page on the bumpers, and capture P at the
+##                       page slide's far point (the old wall at
+##                       full yaw, a frame before the swap)
 ##   --pvlds-smoke-placard
 ##                       room boot; force XR on, open setup with a
 ##                       message, assert the placard contract (room
@@ -139,6 +144,11 @@ var _nav_smoke_phase: int = 0
 var _nav_smoke_wait: int = 0
 var _nav_smoke_failures: int = 0
 var _nav_faces_done: bool = false ## the title-card face check (async render) has reported
+var _nav_bumpers_started: bool = false ## the bumper leg runs async (it waits out each page slide); kicked off once
+var _nav_bumpers_done: bool = false ## the bumper leg (async) has reported
+var _shot_slide_path: String = "" ## --pvlds-shot-slide P: capture the wall at the page slide's far point
+var _shot_slide_phase: int = -1
+var _shot_slide_frames: int = 0
 var _nav_pop_panel: ClickableQuad = null ## bottom-row panel the nav smoke pops for the clearance re-check
 var _seated_cam: bool = false ## --pvlds-seated-cam: shots/nav run from a seated eye height
 var _smoke_lockout: bool = false ## --pvlds-smoke-lockout: attack the load wait's input lockout mid-flight
@@ -228,6 +238,10 @@ func _ready() -> void:
 	if shot_pop_idx >= 0 and shot_pop_idx + 1 < user_args.size():
 		_shot_pop_prefix = user_args[shot_pop_idx + 1]
 		_shot_pop_phase = 0
+	var shot_slide_idx: int = user_args.find("--pvlds-shot-slide")
+	if shot_slide_idx >= 0 and shot_slide_idx + 1 < user_args.size():
+		_shot_slide_path = user_args[shot_slide_idx + 1]
+		_shot_slide_phase = 0
 	if user_args.has("--pvlds-smoke-placard"):
 		_smoke_placard = true
 	if user_args.has("--pvlds-smoke-desk"):
@@ -410,6 +424,8 @@ func _process(_delta: float) -> void:
 		_drive_art_bench(_delta)
 	if _shot_pop_phase >= 0:
 		_drive_shot_pop()
+	if _shot_slide_phase >= 0:
+		_drive_shot_slide()
 	if _shot_path != "" and _shot_ready():
 		_shot_frames += 1
 		if _shot_frames >= 8:
@@ -787,6 +803,50 @@ func _drive_shot_pop() -> void:
 func _save_shot_png(path: String) -> Error:
 	var img: Image = get_viewport().get_texture().get_image()
 	return img.save_png(path)
+
+
+## --pvlds-shot-slide P: the page slide's QA hook (the bumper
+## feel round). Boots the room, forces the ALL filter through
+## the room's own rail handler (the harness library needs its
+## stub pages for a flip to exist), lets the wall settle, then
+## flips a page through the room's bumper path and captures P
+## on the first frame the wall's yaw passes 60% of the slide's
+## far point - the old page at full glide, a frame or two
+## before the swap. Prints the verdict, quits.
+func _drive_shot_slide() -> void:
+	match _shot_slide_phase:
+		0:
+			if _room == null or not _room.visible or not _room.wall_ready:
+				return
+			_room._handle_rail("filter:all")
+			_shot_slide_phase = 1
+		1:
+			if _room == null or not _room.wall_ready:
+				return
+			_shot_slide_frames += 1
+			if _shot_slide_frames < 8:
+				return
+			if _room.page_count() < 2:
+				printerr("PVLDS SLIDE SHOT: FAIL - the library spans one page, nothing to flip")
+				get_tree().quit(1)
+				return
+			_room._bumper_page(1)
+			_shot_slide_phase = 2
+		2:
+			_shot_slide_frames += 1
+			var yaw: float = absf(_room.page_slide_yaw_deg())
+			if yaw >= RoomView.PAGE_SLIDE_YAW_DEG * 0.6:
+				var path: String = _shot_slide_path
+				_shot_slide_phase = -1
+				var err: Error = _save_shot_png(path)
+				print("PVLDS SLIDE SHOT: ", path, " err=", err, " yaw=", snappedf(yaw, 0.01))
+				get_tree().quit(0 if err == OK else 1)
+			elif not _room.page_slide_active():
+				printerr("PVLDS SLIDE SHOT: FAIL - the slide ended before the capture frame (peak yaw %.2f)" % yaw)
+				get_tree().quit(1)
+			elif _shot_slide_frames > 3600:
+				printerr("PVLDS SLIDE SHOT: FAIL - the slide never engaged")
+				get_tree().quit(1)
 
 
 func _fire_shot_launch() -> void:
@@ -1204,7 +1264,14 @@ func _finish_placard_smoke() -> void:
 ##          flip (same grid slot / same rail stop / first panel
 ##          from no focus), and the bumpers are inert in the
 ##          load wait, on the SETUP placard, and in the detail
-##          view.
+##          view. The leg runs async: each flip now rides the
+##          page slide (the feel round), so the leg waits out
+##          each glide and asserts the settle - and on the
+##          first flip, the choreography itself: no swap at
+##          the press, the swap lands mid-glide, the wall
+##          returns to exact rest, and on the first frame after
+##          the swap every rail quad wears a real (non-
+##          placeholder) texture - the bar never pops.
 ## The driver forces the ALL filter through the room's own rail
 ## handler so the wall always holds a full bottom row. Leg 5
 ## needs more pages than the dummy library's ten games give, so
@@ -1257,13 +1324,16 @@ func _drive_nav_smoke() -> void:
 				_nav_smoke_fail("pop leg: the bottom-row panel's pop never completed (amount %.3f)" % amt)
 				_finish_nav_smoke()
 		4:
+			if _nav_bumpers_done:
+				_finish_nav_smoke()
+				return
 			_nav_smoke_wait += 1
-			if _nav_smoke_wait > 3600:
-				_nav_smoke_fail("the bumper leg's wall never settled")
+			if _nav_smoke_wait > 7200:
+				_nav_smoke_fail("the bumper leg never finished")
 				_finish_nav_smoke()
-			elif _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
-				_nav_leg_bumpers()
-				_finish_nav_smoke()
+			elif not _nav_bumpers_started and _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
+				_nav_bumpers_started = true
+				_nav_leg_bumpers_async()
 
 
 func _nav_expect(cond: bool, label: String) -> void:
@@ -1440,28 +1510,83 @@ func _nav_check_faces() -> void:
 	_nav_faces_done = true
 
 
+## Waits out the page slide a flip just started, then asserts
+## the settle: the slide is over and the wall holder is back
+## at EXACT rest - the focus rule's verdicts only mean
+## anything on a settled wall.
+func _nav_await_slide() -> void:
+	var guard: int = 0
+	while _room.page_slide_active() and guard < 2400:
+		await get_tree().process_frame
+		guard += 1
+	_nav_expect(not _room.page_slide_active(), "slide: the wall settles after a flip")
+	_nav_expect(_room.page_slide_yaw_deg() == 0.0,
+		"slide: the wall returns to exact rest (yaw %.4f)" % _room.page_slide_yaw_deg())
+
+
+## The slide's choreography proof, run on the bumper leg's
+## first flip: the press itself does NOT swap the page (the
+## swap waits for the far point); mid-glide the wall is off
+## rest; in the first frame after the swap lands, every rail
+## quad already wears a real (non-placeholder) texture - the
+## bar never pops; and the wall settles at exact rest.
+func _nav_flip_proof(step: int) -> void:
+	var page_before: int = _room._page
+	_room._bumper_page(step)
+	_nav_expect(_room._page == page_before,
+		"slide: the page does not swap at the press - it swaps at the far point")
+	var peak: float = 0.0
+	var swapped: bool = false
+	var guard: int = 0
+	while _room.page_slide_active() and guard < 2400:
+		await get_tree().process_frame
+		guard += 1
+		peak = maxf(peak, absf(_room.page_slide_yaw_deg()))
+		if not swapped and _room._page != page_before:
+			swapped = true
+			for k: Variant in _room._rail_quads.keys():
+				var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
+				var tx: Texture2D = null
+				if rq != null:
+					tx = rq.current_texture()
+				_nav_expect(tx != null and tx.get_width() > 4,
+					"rail: %s wears a real texture on the first frame after the flip" % str(k))
+	_nav_expect(swapped, "slide: the page swapped during the glide")
+	_nav_expect(peak > 1.0, "slide: the wall leaves rest mid-glide (peak yaw %.2f deg)" % peak)
+	_nav_expect(not _room.page_slide_active(), "slide: the wall settles after the proof flip")
+	_nav_expect(_room.page_slide_yaw_deg() == 0.0,
+		"slide: the wall returns to exact rest after the proof flip")
+
+
 ## Leg 5: bumper page travel, driven through RoomView's
 ## _bumper_page - the same call the pad poll makes on a fresh
 ## shoulder edge - so the state gating (load wait, placard,
 ## detail view) is exercised exactly as the room enforces it.
 ## The harness library spans three pages on ALL (full, full,
 ## one-panel short), pinned by run_nav_smoke.sh's stub count.
-func _nav_leg_bumpers() -> void:
+## Async (the feel round): a flip rides the page slide, so
+## each travel press is followed by a settle wait before its
+## verdicts - the gating presses stay synchronous, since a
+## gated press starts no slide at all.
+func _nav_leg_bumpers_async() -> void:
 	var pages: int = _room.page_count()
 	_nav_expect(pages >= 3, "bumpers: the harness library spans at least 3 pages (got %d)" % pages)
 	if pages < 2 or _room._visible_games.is_empty():
+		_nav_bumpers_done = true
 		return
 	var filter0: String = _room._filter
 	var sort0: String = _room._sort
 	var last_page: int = pages - 1
 	_nav_expect(_room._page == 0, "bumpers: the leg starts on page 1")
-	# Travel, with focus keeping its grid slot.
+	# Travel, with focus keeping its grid slot. The first flip
+	# carries the slide's choreography proof.
 	_room._set_focused(_room._panels[5])
-	_room._bumper_page(1)
+	await _nav_flip_proof(1)
 	_nav_expect(_room._page == 1, "bumpers: RB advances to page 2")
 	_nav_expect(_room.focused_quad() == _room._panels[5],
 		"bumpers: focus keeps its grid slot across the flip")
 	_room._bumper_page(1)
+	await _nav_await_slide()
 	_nav_expect(_room._page == last_page, "bumpers: RB advances to the last page")
 	_nav_expect(_room.focused_quad() == _room._panels[_room._panels.size() - 1],
 		"bumpers: the short last page clamps focus to its last panel")
@@ -1471,8 +1596,10 @@ func _nav_leg_bumpers() -> void:
 	_nav_expect(_room._page == last_page, "bumpers: RB clamps on the last page (no wrap)")
 	_nav_expect(_room.focused_quad() == held, "bumpers: a clamped RB leaves focus untouched")
 	_room._bumper_page(-1)
+	await _nav_await_slide()
 	_nav_expect(_room._page == last_page - 1, "bumpers: LB retreats a page")
 	_room._bumper_page(-1)
+	await _nav_await_slide()
 	_nav_expect(_room._page == 0, "bumpers: LB retreats to page 1")
 	held = _room.focused_quad()
 	_room._bumper_page(-1)
@@ -1483,15 +1610,19 @@ func _nav_leg_bumpers() -> void:
 	# Focus on a rail stop carries to the same stop.
 	_room._set_focused(_room.rail_quad("sort"))
 	_room._bumper_page(1)
+	await _nav_await_slide()
 	_nav_expect(_room._page == 1 and _nav_key_of(_room.focused_quad()) == "sort",
 		"bumpers: rail focus carries to the same stop across the flip")
 	_room._bumper_page(-1)
+	await _nav_await_slide()
 	# No focus lands on the first panel.
 	_room._set_focused(null)
 	_room._bumper_page(1)
+	await _nav_await_slide()
 	_nav_expect(_room._page == 1 and _room.focused_quad() == _room._panels[0],
 		"bumpers: no focus lands on the first panel")
 	_room._bumper_page(-1)
+	await _nav_await_slide()
 	# Inert while the SETUP placard stands.
 	_room.show_setup_placard("nav smoke")
 	_room._bumper_page(1)
@@ -1516,6 +1647,7 @@ func _nav_leg_bumpers() -> void:
 	_room.end_launch_failed(game, "nav smoke")
 	_nav_expect(_room._page == 0 and _room._filter == filter0,
 		"bumpers: the leg leaves the wall on page 1, filter untouched")
+	_nav_bumpers_done = true
 
 
 # -------------------------------------------------- desk smoke

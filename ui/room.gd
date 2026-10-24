@@ -56,6 +56,21 @@ const POP_OUT_DISTANCE: float = 0.15 ## metres off the wall at full pop
 const POP_OUT_SCALE: float = 1.08 ## card scale at full pop
 const POP_OUT_SEC: float = 0.15 ## pop in/out travel time, seconds
 
+## Page slide (the bumper feel round, 2026-10-24 - Chris, on the
+## bumper flip: "it snaps to next wall, which is great, its fast,
+## but i need some kind of visual doodad, a quick blur or
+## something"). A page change rides a short out-and-back yaw of
+## the whole wall around the player's vertical axis: the wall
+## glides toward the travel direction (NEXT sweeps the content
+## leftward, PREV the mirror), the page content swaps at the far
+## point, and the wall glides back to exact rest - about a
+## quarter second end to end, the state change itself landing in
+## one frame at the far point. The rail never rides the slide:
+## it is furniture and stands still (see _apply_rail_textures).
+const PAGE_SLIDE_OUT_SEC: float = 0.12 ## glide-out leg, seconds
+const PAGE_SLIDE_BACK_SEC: float = 0.12 ## glide-back leg, seconds
+const PAGE_SLIDE_YAW_DEG: float = 5.0 ## the far point's yaw, degrees (~a third of a column pitch)
+
 ## Wall card geometry (the occlusion round, 2026-10-24 - Chris's
 ## seated screenshot: names behind Launch buttons, the bottom row
 ## behind the control rail). The wall faces render at 512x640, so
@@ -125,6 +140,13 @@ var _placard_gen: int = 0
 var _placard_message: String = "" ## the message the standing placard carries (a launch failure rides it too)
 var _pick_snapshot: Dictionary = {} ## ClickableQuad -> pick_enabled, taken as the placard rises
 var _rail_quads: Dictionary = {} ## key -> ClickableQuad
+var _rail_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: every rail button face ever rendered, so a rebuild re-dresses the rail in its own frame
+var _slide_phase: int = 0 ## the page slide: 0 rest, 1 gliding out, 2 gliding back (see _update_slide)
+var _slide_dir: int = 0 ## the live slide's travel direction: +1 next page, -1 previous
+var _slide_t: float = 0.0 ## seconds into the live slide's current leg
+var _slide_step: int = 0 ## the pending page delta, applied at the far point
+var _slide_after: Callable = Callable() ## the pending swap's focus landing (the bumper rule), run at the far point
+var _slide_swapping: bool = false ## the far-point rebuild is in flight: _rebuild_wall must not cancel the slide for it
 var _focusables: Array[ClickableQuad] = []
 var _focused: ClickableQuad = null
 var _joy_cooldown: float = 0.0
@@ -380,11 +402,18 @@ func _rebuild_wall() -> void:
 	_gen += 1
 	var gen: int = _gen
 	wall_ready = false
+	if _slide_phase != 0 and not _slide_swapping:
+		# A rebuild that is not the slide's own far-point swap (a
+		# filter change, a detail close, a launch failure) cancels
+		# any live slide outright: the pending travel is forgotten
+		# and the holder snaps back to exact rest rather than
+		# swapping pages under a wall the player already replaced.
+		_slide_phase = 0
+		_slide_after = Callable()
+		if _wall != null:
+			_wall.rotation.y = 0.0
 	for child: Node in _wall.get_children():
 		_wall.remove_child(child)
-		child.queue_free()
-	for child: Node in _rail.get_children():
-		_rail.remove_child(child)
 		child.queue_free()
 	_panels.clear()
 	_panel_launches.clear()
@@ -392,7 +421,6 @@ func _rebuild_wall() -> void:
 	_panel_pop_dir.clear()
 	_panel_pop.clear()
 	_panel_pop_applied.clear()
-	_rail_quads.clear()
 	_wall_alpha_applied = 1.0 ## fresh quads start opaque; the marquee fade re-applies from there
 	_set_focused(null)
 
@@ -435,8 +463,25 @@ func _rebuild_wall() -> void:
 		lq.position = Vector3(0.0, PANEL_LAUNCH_Y, 0.032)
 		q.add_child(lq)
 		_panel_launches.append(lq)
-	# Rail.
-	_build_rail(placeholder)
+	# Rail: built ONCE and persistent across rebuilds (the feel
+	# round, 2026-10-24). Destroying and recreating it on every
+	# page flip made every button pop back into existence as its
+	# texture streamed in - Chris: "the lower filter bar
+	# refreshes itself every time, every button." The bar is
+	# furniture: it stands while the wall moves. A rebuild just
+	# resets the standing quads' pick/alpha state to the fresh-
+	# build defaults the recreate used to provide (the placard
+	# branch below re-inerts them when it has to) and re-dresses
+	# them from the texture cache in this same frame.
+	if _rail_quads.is_empty():
+		_build_rail(placeholder)
+	else:
+		for k: Variant in _rail_quads.keys():
+			var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
+			if rq != null:
+				rq.pick_enabled = str(k) != "page_label"
+				rq.set_content_alpha(1.0)
+	_apply_rail_textures()
 	_refresh_focusables()
 	_fill_wall_textures(gen)
 	if _placard_up:
@@ -506,12 +551,77 @@ func _refresh_banner() -> void:
 		_banner_quad.set_texture(tex)
 
 
+## A rail stop's [label, accent] under the room's current
+## state - the one place that knows what each button says.
+func _rail_label_accent(key: String) -> Array:
+	var label: String = ""
+	var accent: bool = false
+	if key.begins_with("filter:"):
+		var f: String = key.trim_prefix("filter:")
+		label = str(FILTER_LABELS[f])
+		accent = f == _filter
+	elif key == "sort":
+		label = "SORT: " + str(SORT_LABELS[_sort])
+	elif key == "page_prev":
+		label = "<"
+	elif key == "page_next":
+		label = ">"
+	elif key == "page_label":
+		label = "%d / %d" % [_page + 1, page_count()]
+	elif key == "desk":
+		label = "SETUP"
+	elif key == "exit":
+		label = "EXIT"
+	return [label, accent]
+
+
+func _rail_cache_key(label: String, accent: bool) -> String:
+	return label + ("|a" if accent else "|p")
+
+
+## Dress every rail quad from the texture cache, in this call -
+## no awaits. A cache hit is the button's real rendered face,
+## so the rail is fully dressed in the rebuild's own frame. A
+## miss keeps whatever face the quad already wears (the
+## standing rail never falls back to the placeholder again)
+## until the async fill renders that label - once, ever.
+func _apply_rail_textures() -> void:
+	for k: Variant in _rail_quads.keys():
+		var la: Array = _rail_label_accent(str(k))
+		var ck: String = _rail_cache_key(str(la[0]), bool(la[1]))
+		if _rail_tex_cache.has(ck):
+			var quad: ClickableQuad = _rail_quads[k] as ClickableQuad
+			if quad != null:
+				quad.set_texture(_rail_tex_cache[ck] as Texture2D)
+
+
 func _fill_wall_textures(gen: int) -> void:
 	# Banner first: it carries the library summary line.
 	var banner_tex: Texture2D = await _factory.render_texture(RoomSpecs.banner_spec(_banner_line()), Vector2i(1024, 262))
 	if gen != _gen or _banner_quad == null:
 		return
 	_banner_quad.set_texture(banner_tex)
+	# Rail buttons SECOND - they used to render last, after a
+	# dozen panels and their Launch buttons, which is exactly
+	# why the bar reassembled itself piece by piece on every
+	# flip. Cache hits dress instantly; a label that has never
+	# rendered (a first-ever page count) renders now, ahead of
+	# the panels, and joins the cache for every later wall.
+	for key: Variant in _rail_quads.keys():
+		var k: String = str(key)
+		var quad: ClickableQuad = _rail_quads[k]
+		var la: Array = _rail_label_accent(k)
+		var label: String = str(la[0])
+		var accent: bool = bool(la[1])
+		var ck: String = _rail_cache_key(label, accent)
+		if _rail_tex_cache.has(ck):
+			quad.set_texture(_rail_tex_cache[ck] as Texture2D)
+			continue
+		var btex: Texture2D = await _factory.render_texture(RoomSpecs.button_spec(label, accent), Vector2i(512, 150))
+		if gen != _gen:
+			return
+		_rail_tex_cache[ck] = btex
+		quad.set_texture(btex)
 	# Panels.
 	var start: int = _page * PAGE_SIZE
 	for i: int in range(_panels.size()):
@@ -535,32 +645,6 @@ func _fill_wall_textures(gen: int) -> void:
 			if gen != _gen:
 				return
 			_panel_launches[i].set_texture(ltex)
-	# Rail buttons.
-	for key: Variant in _rail_quads.keys():
-		var k: String = str(key)
-		var quad: ClickableQuad = _rail_quads[k]
-		var label: String = ""
-		var accent: bool = false
-		if k.begins_with("filter:"):
-			var f: String = k.trim_prefix("filter:")
-			label = str(FILTER_LABELS[f])
-			accent = f == _filter
-		elif k == "sort":
-			label = "SORT: " + str(SORT_LABELS[_sort])
-		elif k == "page_prev":
-			label = "<"
-		elif k == "page_next":
-			label = ">"
-		elif k == "page_label":
-			label = "%d / %d" % [_page + 1, page_count()]
-		elif k == "desk":
-			label = "SETUP"
-		elif k == "exit":
-			label = "EXIT"
-		var btex: Texture2D = await _factory.render_texture(RoomSpecs.button_spec(label, accent), Vector2i(512, 150))
-		if gen != _gen:
-			return
-		quad.set_texture(btex)
 	if gen == _gen:
 		wall_ready = true
 		# The page is settled: ask Main's warmer to bring the
@@ -742,7 +826,13 @@ func _activate(quad: ClickableQuad) -> void:
 			_handle_rail(quad.payload)
 
 
-func _handle_rail(key: String) -> void:
+## Rail handling. Page travel (page_prev / page_next) is the
+## one branch that does not rebuild on the spot: it starts the
+## page slide, and the page delta, rebuild, and view persist
+## land together at the slide's far point (see _begin_page_slide).
+## after_swap is the bumper path's focus landing, run in the
+## far-point frame; pointer and keyboard travel pass none.
+func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 	if key.begins_with("filter:") or key == "sort" or key == "page_prev" or key == "page_next":
 		# Browsing onward retires the last launch's marks.
 		_failed_game_id = ""
@@ -762,18 +852,93 @@ func _handle_rail(key: String) -> void:
 		_persist_view()
 	elif key == "page_prev":
 		if _page > 0:
-			_page -= 1
-			_rebuild_wall()
-			_persist_view()
+			_begin_page_slide(-1, after_swap)
 	elif key == "page_next":
 		if _page < page_count() - 1:
-			_page += 1
-			_rebuild_wall()
-			_persist_view()
+			_begin_page_slide(1, after_swap)
 	elif key == "desk":
 		setup_requested.emit()
 	elif key == "exit":
 		exit_requested.emit()
+
+
+## A page change's ride (see PAGE_SLIDE_*): the press commits
+## to the travel at once, but the wall glides out over
+## PAGE_SLIDE_OUT_SEC, the page delta + rebuild + persist land
+## in ONE frame at the far point, and the wall glides back to
+## exact rest over PAGE_SLIDE_BACK_SEC. A press that lands
+## mid-slide fast-forwards the live slide first (its swap
+## lands, the holder snaps to rest) and starts fresh, so
+## presses never queue, stack, or corrupt. If the room has
+## left plain wall browsing by the far point (detail opened,
+## placard up, a launch begun), the pending travel is dropped
+## whole: the wall just glides home wearing its old page.
+func _begin_page_slide(step: int, after_swap: Callable) -> void:
+	_slide_finish_now()
+	_slide_dir = step
+	_slide_step = step
+	_slide_after = after_swap
+	_slide_t = 0.0
+	_slide_phase = 1
+
+
+## Complete a live slide on the spot: a pending far-point
+## swap lands now (subject to the same drop rule), and the
+## holder returns to exact rest.
+func _slide_finish_now() -> void:
+	if _slide_phase == 0:
+		return
+	if _slide_phase == 1:
+		_slide_do_swap()
+	_slide_phase = 0
+	_slide_t = 0.0
+	if _wall != null:
+		_wall.rotation.y = 0.0
+
+
+## The far point: page delta, rebuild, and persist in one
+## frame, then the press's focus landing. Dropped whole when
+## the room is no longer plain wall browsing - a rebuild
+## forced through here mid-load-wait would resurrect pickable
+## quads in a room that must stay deaf.
+func _slide_do_swap() -> void:
+	if _mode != "wall" or _placard_up or _launching_game_id != "":
+		_slide_after = Callable()
+		return
+	_slide_swapping = true
+	_page += _slide_step
+	_rebuild_wall()
+	_persist_view()
+	_slide_swapping = false
+	var after: Callable = _slide_after
+	_slide_after = Callable()
+	if after.is_valid():
+		after.call()
+
+
+## Per-frame slide drive, from _process: eased yaw out, swap
+## at the far point, eased yaw home to EXACTLY zero.
+func _update_slide(delta: float) -> void:
+	if _slide_phase == 0 or _wall == null:
+		return
+	_slide_t += delta
+	if _slide_phase == 1:
+		var p: float = clampf(_slide_t / PAGE_SLIDE_OUT_SEC, 0.0, 1.0)
+		_wall.rotation.y = deg_to_rad(float(_slide_dir) * PAGE_SLIDE_YAW_DEG * _slide_ease(p))
+		if p >= 1.0:
+			_slide_do_swap()
+			_slide_phase = 2
+			_slide_t = 0.0
+	elif _slide_phase == 2:
+		var p2: float = clampf(_slide_t / PAGE_SLIDE_BACK_SEC, 0.0, 1.0)
+		_wall.rotation.y = deg_to_rad(float(_slide_dir) * PAGE_SLIDE_YAW_DEG * (1.0 - _slide_ease(p2)))
+		if p2 >= 1.0:
+			_wall.rotation.y = 0.0
+			_slide_phase = 0
+
+
+func _slide_ease(p: float) -> float:
+	return p * p * (3.0 - 2.0 * p)
 
 
 ## A bumper press's page travel: the whole section shifts one
@@ -793,9 +958,11 @@ func _handle_rail(key: String) -> void:
 ## a follow-up A press browses instead of firing a load),
 ## clamped to the new page's last panel when the page runs
 ## short; a focused rail stop hands focus to the same stop on
-## the rebuilt rail; no focus lands on the first panel. A
-## clamped press changes nothing at all - no rebuild happened,
-## so focus keeps even its instance.
+## the rebuilt rail; no focus lands on the first panel. The
+## landing runs at the slide's far point, in the swap frame -
+## until then the old wall (and its focus) rides the glide. A
+## clamped press changes nothing at all - no slide, no
+## rebuild, so focus keeps even its instance.
 func _bumper_page(step: int) -> void:
 	if _launching_game_id != "" or _placard_up or _mode != "wall":
 		return
@@ -811,17 +978,23 @@ func _bumper_page(step: int) -> void:
 				if _rail_quads[k] == _focused:
 					rail_key = str(k)
 					break
-	var before: int = _page
-	_handle_rail("page_next" if step > 0 else "page_prev")
-	if _page == before:
-		return ## clamped: the pager never moved, focus neither
-	if rail_key != "":
-		var rq: ClickableQuad = _rail_quads.get(rail_key) as ClickableQuad
-		if rq != null:
-			_set_focused(rq)
-	elif not _panels.is_empty():
-		var target: int = 0 if slot < 0 else mini(slot, _panels.size() - 1)
-		_set_focused(_panels[target])
+	_handle_rail("page_next" if step > 0 else "page_prev", _flip_focus_landing(slot, rail_key))
+
+
+## The bumper rule's landing, packaged for the far point: when
+## the slide's swap lands, focus takes the same PLACE on the
+## new wall - the same rail stop, or the panel in the same
+## grid slot, clamped to a short page's last panel; from no
+## focus, the first panel.
+func _flip_focus_landing(slot: int, rail_key: String) -> Callable:
+	return func() -> void:
+		if rail_key != "":
+			var rq: ClickableQuad = _rail_quads.get(rail_key) as ClickableQuad
+			if rq != null:
+				_set_focused(rq)
+		elif not _panels.is_empty():
+			var target: int = 0 if slot < 0 else mini(slot, _panels.size() - 1)
+			_set_focused(_panels[target])
 
 
 func _open_detail(game: GameEntry) -> void:
@@ -1227,6 +1400,20 @@ func pop_target() -> ClickableQuad:
 	return _pop_target_panel()
 
 
+## Page-slide queries (the nav smoke and the slide shot read
+## the slide the way the other smokes read their subjects):
+## the wall holder's current yaw in degrees - 0.0 is exact
+## rest - and whether a slide is live.
+func page_slide_yaw_deg() -> float:
+	if _wall == null:
+		return 0.0
+	return rad_to_deg(_wall.rotation.y)
+
+
+func page_slide_active() -> bool:
+	return _slide_phase != 0
+
+
 func _swap_launch_textures() -> void:
 	var gen: int = _gen
 	var start: int = _page * PAGE_SIZE
@@ -1310,6 +1497,7 @@ func _process(delta: float) -> void:
 	if _marquee_up:
 		_update_marquee(delta)
 	_update_pop(delta)
+	_update_slide(delta)
 	var deaf: bool = _launching_game_id != ""
 	_joy_cooldown = maxf(0.0, _joy_cooldown - delta)
 	var ax: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)
