@@ -89,6 +89,20 @@ extends Node
 ##                       way. Guards the exit-hang fault: an
 ##                       unstoppable warm pass made quit wait out
 ##                       the whole queue.
+##   --pvlds-smoke-nav   room boot; force the ALL filter, drop the
+##                       desk camera to a seated eye, then assert
+##                       the focus graph (sideways travel walks the
+##                       control rail's own order end to end and
+##                       never lands on a card; UP from the rail
+##                       enters the grid, DOWN returns) and the
+##                       wall's clearance geometry (every Launch
+##                       button clear of its card's name strip;
+##                       the bottom row - flush and popped - clear
+##                       of the rail in screen space), print the
+##                       verdict, quit
+##   --pvlds-seated-cam  with --pvlds-shot: take the shot from a
+##                       seated eye height (RoomView.SEATED_EYE_Y)
+##                       instead of the standing desk eye
 
 var _config: PvldsConfig
 var _state: StateStore
@@ -120,6 +134,13 @@ var _dpadexit_smoke_wait: int = 0
 var _desk_smoke_phase: int = 0
 var _desk_smoke_wait: int = 0
 var _desk_smoke_failures: int = 0
+var _smoke_nav: bool = false ## --pvlds-smoke-nav: the focus graph + seated wall clearance contract
+var _nav_smoke_phase: int = 0
+var _nav_smoke_wait: int = 0
+var _nav_smoke_failures: int = 0
+var _nav_faces_done: bool = false ## the title-card face check (async render) has reported
+var _nav_pop_panel: ClickableQuad = null ## bottom-row panel the nav smoke pops for the clearance re-check
+var _seated_cam: bool = false ## --pvlds-seated-cam: shots/nav run from a seated eye height
 var _smoke_lockout: bool = false ## --pvlds-smoke-lockout: attack the load wait's input lockout mid-flight
 var _lockout_smoke_pending: bool = false ## a launch fired by the lockout smoke is in its wait; _settle_launch prints its verdict
 var _smoke_quitwarm: bool = false ## --pvlds-smoke-quitwarm: exit mid-warm-pass through the real Exit path (mode via PVLDS_QUITWARM_MODE)
@@ -218,6 +239,10 @@ func _ready() -> void:
 		_dpadexit_held_leg = true
 	if user_args.has("--pvlds-smoke-lockout"):
 		_smoke_lockout = true
+	if user_args.has("--pvlds-smoke-nav"):
+		_smoke_nav = true
+	if user_args.has("--pvlds-seated-cam"):
+		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
 		_smoke_quitwarm = true
 	if user_args.has("--pvlds-art-bench"):
@@ -250,7 +275,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _shot_pop_prefix != "") and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _shot_pop_prefix != "") and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -377,6 +402,8 @@ func _process(_delta: float) -> void:
 		_drive_dpadexit_smoke()
 	if _smoke_lockout:
 		_drive_lockout_smoke()
+	if _smoke_nav:
+		_drive_nav_smoke()
 	if _smoke_quitwarm:
 		_drive_quitwarm_smoke()
 	if _art_bench:
@@ -539,6 +566,10 @@ func _enter_room() -> void:
 		# placard stood in the headset) never leaves a stale placard.
 		_room.clear_setup_placard()
 	_room.visible = true
+	if _seated_cam:
+		# Dev hooks only (--pvlds-seated-cam, --pvlds-smoke-nav):
+		# the flat camera works from a seated player's eye height.
+		_room.set_desk_camera_height(RoomView.SEATED_EYE_Y)
 	# Room entry with a cold cache (e.g. back from the desk without a
 	# rescan): make sure a warm pass is queued.
 	if _art_warmer != null and _scanner != null:
@@ -1147,6 +1178,247 @@ func _finish_placard_smoke() -> void:
 	else:
 		printerr("PVLDS PLACARD SMOKE: FAIL (%d)" % _placard_smoke_failures)
 		get_tree().quit(1)
+
+
+# ---------------------------------------------------- nav smoke
+
+## --pvlds-smoke-nav: the focus graph + wall clearance contract
+## (Chris's field reports, 2026-10-24, from his seated headset
+## view):
+##   leg 1: sideways travel along the control rail walks the
+##          rail's own order end to end, both directions, and
+##          never lands on a wall card;
+##   leg 2: UP from the rail enters the card grid; DOWN from
+##          the grid's bottom row returns to the rail;
+##   leg 3: from a seated eye, every Launch button clears its
+##          card's name strip (panel-local arithmetic and the
+##          screen projection agree), and the bottom row -
+##          cards and buttons, flush and popped - clears the
+##          rail in screen space;
+##   leg 4: a title card's face still registers its content at
+##          texture row 0 (the 71877f4 raise, undisturbed).
+## The driver forces the ALL filter through the room's own rail
+## handler so the wall always holds a full bottom row.
+func _drive_nav_smoke() -> void:
+	match _nav_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_room.set_desk_camera_height(RoomView.SEATED_EYE_Y)
+				_room._handle_rail("filter:all")
+				_nav_smoke_wait = 0
+				_nav_smoke_phase = 1
+			else:
+				_nav_smoke_wait += 1
+				if _nav_smoke_wait > 3600:
+					_nav_smoke_fail("the room never came up")
+					_finish_nav_smoke()
+		1:
+			_nav_smoke_wait += 1
+			if _nav_smoke_wait > 3600:
+				_nav_smoke_fail("the ALL-filter wall never settled")
+				_finish_nav_smoke()
+			elif _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
+				_nav_leg_rail_walk()
+				_nav_leg_up_down()
+				_nav_leg_clearance(false)
+				_nav_check_faces()
+				_nav_smoke_wait = 0
+				_nav_smoke_phase = 2
+		2:
+			if not _nav_faces_done:
+				return
+			var panel: ClickableQuad = _nav_bottom_row_panel()
+			if panel == null:
+				_nav_smoke_fail("pop leg: the wall has no bottom-row panel to pop")
+				_finish_nav_smoke()
+				return
+			_nav_pop_panel = panel
+			_room._set_focused(panel)
+			_nav_smoke_wait = 0
+			_nav_smoke_phase = 3
+		3:
+			_nav_smoke_wait += 1
+			var amt: float = _room.panel_pop_amount(_nav_pop_panel)
+			if amt >= 0.999:
+				_nav_leg_clearance(true)
+				_finish_nav_smoke()
+			elif _nav_smoke_wait > 240:
+				_nav_smoke_fail("pop leg: the bottom-row panel's pop never completed (amount %.3f)" % amt)
+				_finish_nav_smoke()
+
+
+func _nav_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - nav smoke: ", label)
+	else:
+		_nav_smoke_fail(label)
+
+
+func _nav_smoke_fail(label: String) -> void:
+	_nav_smoke_failures += 1
+	printerr("  FAIL - nav smoke: ", label)
+
+
+func _finish_nav_smoke() -> void:
+	if _nav_smoke_failures == 0:
+		print("PVLDS NAV SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS NAV SMOKE: FAIL (%d)" % _nav_smoke_failures)
+		get_tree().quit(1)
+
+
+## The rail key a quad answers to, or "" when it is not a rail
+## quad (a wall panel, a Launch button, anything else).
+func _nav_key_of(q: ClickableQuad) -> String:
+	if q == null or _room == null:
+		return ""
+	for k: Variant in _room._rail_quads.keys():
+		if _room._rail_quads[k] == q:
+			return str(k)
+	return ""
+
+
+func _nav_leg_rail_walk() -> void:
+	var order: Array[String] = [
+		"filter:all", "filter:vr", "filter:favorites", "filter:recents",
+		"sort", "page_prev", "page_next", "desk", "exit"]
+	_room._set_focused(_room.rail_quad(order[0]))
+	for i: int in range(1, order.size()):
+		_room._move_focus(Vector2(1.0, 0.0))
+		_nav_expect(_nav_key_of(_room.focused_quad()) == order[i],
+			"rail walk right: step %d lands on %s (got '%s')" % [i, order[i], _nav_key_of(_room.focused_quad())])
+	_room._move_focus(Vector2(1.0, 0.0))
+	_nav_expect(_nav_key_of(_room.focused_quad()) == order[order.size() - 1],
+		"rail walk right: the end of the rail holds focus")
+	for i: int in range(order.size() - 2, -1, -1):
+		_room._move_focus(Vector2(-1.0, 0.0))
+		_nav_expect(_nav_key_of(_room.focused_quad()) == order[i],
+			"rail walk left: step lands on %s (got '%s')" % [order[i], _nav_key_of(_room.focused_quad())])
+	_room._move_focus(Vector2(-1.0, 0.0))
+	_nav_expect(_nav_key_of(_room.focused_quad()) == order[0],
+		"rail walk left: the start of the rail holds focus")
+
+
+func _nav_leg_up_down() -> void:
+	for key: String in ["sort", "filter:favorites", "desk"]:
+		_room._set_focused(_room.rail_quad(key))
+		_room._move_focus(Vector2(0.0, -1.0))
+		var up: ClickableQuad = _room.focused_quad()
+		_nav_expect(up != null and (_room._panels.has(up) or _room._panel_launches.has(up)),
+			"up from %s enters the card grid" % key)
+		var back: bool = false
+		for press: int in range(3):
+			_room._move_focus(Vector2(0.0, 1.0))
+			var f: ClickableQuad = _room.focused_quad()
+			if f != null and _nav_key_of(f) != "":
+				back = true
+				break
+			_nav_expect(f != null and (_room._panels.has(f) or _room._panel_launches.has(f)),
+				"down from the grid stays in the grid until the rail (from %s)" % key)
+		_nav_expect(back, "down from the grid's bottom row returns to the rail (from %s)" % key)
+
+
+func _nav_bottom_row_panel() -> ClickableQuad:
+	if _room == null or _room._panels.is_empty():
+		return null
+	var rows: int = int(ceil(float(_room._panels.size()) / float(RoomView.PAGE_COLS)))
+	var first_bottom: int = (rows - 1) * RoomView.PAGE_COLS
+	var mid: int = mini(first_bottom + 1, _room._panels.size() - 1)
+	return _room._panels[mid]
+
+
+## A quad's screen-space rect from its collision box's corners,
+## projected through the given camera.
+func _nav_screen_rect(q: ClickableQuad, cam: Camera3D) -> Rect2:
+	var size: Vector2 = Vector2.ZERO
+	for child: Node in q.get_children():
+		var cs: CollisionShape3D = child as CollisionShape3D
+		if cs != null and cs.shape is BoxShape3D:
+			var bs: BoxShape3D = cs.shape as BoxShape3D
+			size = Vector2(bs.size.x, bs.size.y)
+			break
+	var half: Vector2 = size * 0.5
+	var corners: Array[Vector3] = [
+		Vector3(-half.x, -half.y, 0.0), Vector3(half.x, -half.y, 0.0),
+		Vector3(-half.x, half.y, 0.0), Vector3(half.x, half.y, 0.0)]
+	var rect: Rect2 = Rect2(cam.unproject_position(q.global_transform * corners[0]), Vector2.ZERO)
+	for c: int in range(1, corners.size()):
+		rect = rect.expand(cam.unproject_position(q.global_transform * corners[c]))
+	return rect
+
+
+func _nav_leg_clearance(popped_only: bool) -> void:
+	var cam: Camera3D = _room._desk_camera
+	if cam == null:
+		_nav_smoke_fail("clearance: no desk camera")
+		return
+	var rail_rects: Array[Rect2] = []
+	for k: Variant in _room._rail_quads.keys():
+		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
+		if rq != null:
+			rail_rects.append(_nav_screen_rect(rq, cam))
+	var rows: int = int(ceil(float(_room._panels.size()) / float(RoomView.PAGE_COLS)))
+	var first_bottom: int = (rows - 1) * RoomView.PAGE_COLS
+	for i: int in range(_room._panels.size()):
+		var panel: ClickableQuad = _room._panels[i]
+		var launch: ClickableQuad = _room._panel_launches[i] if i < _room._panel_launches.size() else null
+		if not popped_only:
+			# The name strip: panel-local arithmetic first (exact,
+			# camera-free), then the projected midpoints agree.
+			var strip_top: float = -RoomView.PANEL_SIZE.y * 0.5 \
+				+ RoomView.PANEL_SIZE.y * (float(CardFace.ART_STRIP_HEIGHT_PX) / 640.0)
+			if launch != null:
+				var btn_bottom: float = launch.position.y - RoomView.PANEL_LAUNCH_SIZE.y * 0.5
+				_nav_expect(btn_bottom >= strip_top + 0.01,
+					"panel %d: Launch button clears the name strip in panel space (bottom %.4f, strip top %.4f)" % [i, btn_bottom, strip_top])
+				var btn_mid: Vector2 = cam.unproject_position(
+					launch.global_transform * Vector3(0.0, -RoomView.PANEL_LAUNCH_SIZE.y * 0.5, 0.0))
+				var strip_mid: Vector2 = cam.unproject_position(
+					panel.global_transform * Vector3(0.0, strip_top, 0.0))
+				_nav_expect(btn_mid.y < strip_mid.y,
+					"panel %d: Launch button projects above the name strip (%.1f over %.1f)" % [i, btn_mid.y, strip_mid.y])
+		if i < first_bottom:
+			continue
+		if popped_only and panel != _nav_pop_panel:
+			continue
+		var targets: Array[ClickableQuad] = [panel]
+		if launch != null:
+			targets.append(launch)
+		for t: ClickableQuad in targets:
+			var rect: Rect2 = _nav_screen_rect(t, cam)
+			for r: int in range(rail_rects.size()):
+				_nav_expect(not rect.intersects(rail_rects[r]),
+					"bottom row panel %d (%s) clears rail quad %d in screen space" % [i, t.action_id, r])
+
+
+## Leg 4 (async - the face render awaits a frame): a title
+## card's content still starts at the texture's top row.
+func _nav_check_faces() -> void:
+	_nav_faces_done = false
+	if _scanner == null or _scanner.games.is_empty():
+		_nav_smoke_fail("faces: no scanned games to render")
+		_nav_faces_done = true
+		return
+	var game: GameEntry = _scanner.games[0]
+	var tex: Texture2D = await _factory.render_texture(RoomSpecs.panel_spec(game, _state), Vector2i(512, 640))
+	var img: Image = tex.get_image() if tex != null else null
+	if img == null or img.is_empty():
+		_nav_smoke_fail("faces: the title-card render came back empty")
+		_nav_faces_done = true
+		return
+	var bg: Color = RoomSpecs.CARD_BG
+	var first_row: int = -1
+	for y: int in range(img.get_height()):
+		for x: int in range(0, img.get_width(), 8):
+			var px: Color = img.get_pixel(x, y)
+			if absf(px.r - bg.r) > 0.02 or absf(px.g - bg.g) > 0.02 or absf(px.b - bg.b) > 0.02:
+				first_row = y
+				break
+		if first_row >= 0:
+			break
+	_nav_expect(first_row == 0, "faces: title card content registers at texture row 0 (got %d)" % first_row)
+	_nav_faces_done = true
 
 
 # -------------------------------------------------- desk smoke

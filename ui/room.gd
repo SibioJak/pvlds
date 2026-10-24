@@ -56,6 +56,29 @@ const POP_OUT_DISTANCE: float = 0.15 ## metres off the wall at full pop
 const POP_OUT_SCALE: float = 1.08 ## card scale at full pop
 const POP_OUT_SEC: float = 0.15 ## pop in/out travel time, seconds
 
+## Wall card geometry (the occlusion round, 2026-10-24 - Chris's
+## seated screenshot: names behind Launch buttons, the bottom row
+## behind the control rail). The wall faces render at 512x640, so
+## the art face's name strip (CardFace.ART_STRIP_HEIGHT_PX) owns
+## the panel's bottom 92/640 of its height: with PANEL_SIZE.y =
+## 0.64 the strip's top edge sits at panel-local y = -0.228. The
+## Launch button used to centre at y = -0.242 - square over the
+## name ("El D ... 1...", "Ele ..."). PANEL_LAUNCH_Y puts the
+## button's lower edge at -0.2125: clear of the strip's top edge
+## with ~15mm to spare, still riding the card's lower third as a
+## distinct, unmissable target.
+const PANEL_SIZE: Vector2 = Vector2(0.54, 0.64)
+const PANEL_LAUNCH_SIZE: Vector2 = Vector2(0.36, 0.115)
+const PANEL_LAUNCH_Y: float = -0.155
+## Panel rows' centre heights. Raised 0.05 (with the banner) and
+## the rail lowered 0.10 in the same round: from a seated eye at
+## SEATED_EYE_Y the bottom row's lower edge - Launch buttons
+## included - now clears the rail's top edge by ~4.4 degrees of
+## view; before, the rail's top edge sat ~0.9 degrees BELOW the
+## row's lower edge in projection and swallowed it.
+const WALL_ROW_YS: Array[float] = [1.95, 1.30, 0.65]
+const SEATED_EYE_Y: float = 1.2 ## a seated player's eye height - the clearance QA camera
+
 var _factory: TextureFactory
 var _scanner: LibraryScanner
 var _store: StateStore
@@ -76,6 +99,7 @@ var _banner_quad: ClickableQuad
 var _detail: DetailView
 var _rig: PointerRig
 var _xr_camera: Camera3D
+var _desk_rig: Node3D
 var _desk_camera: Camera3D
 var _panels: Array[ClickableQuad] = []
 var _panel_launches: Array[ClickableQuad] = [] ## per-panel Launch button, parallel to _panels
@@ -181,13 +205,13 @@ func _build_rigs() -> void:
 		var ctrl: XRController3D = XRController3D.new()
 		ctrl.tracker = StringName("/user/hand/" + side)
 		origin.add_child(ctrl)
-	var desk_rig: Node3D = Node3D.new()
-	desk_rig.position = EYE
-	add_child(desk_rig)
+	_desk_rig = Node3D.new()
+	_desk_rig.position = EYE
+	add_child(_desk_rig)
 	_desk_camera = Camera3D.new()
 	_desk_camera.fov = 70.0
 	_desk_camera.current = not _xr_enabled
-	desk_rig.add_child(_desk_camera)
+	_desk_rig.add_child(_desk_camera)
 	_rig = PointerRig.new()
 	add_child(_rig)
 	_rig.xr_active = _xr_enabled
@@ -199,6 +223,15 @@ func _build_rigs() -> void:
 
 func _active_camera() -> Camera3D:
 	return _xr_camera if _xr_enabled else _desk_camera
+
+
+## QA seam (the seated wall shots, the nav smoke): drop the flat
+## camera to a seated player's eye height. The room's geometry is
+## tuned around EYE (the face_point target); this moves only the
+## desk rig, exactly what a shorter player changes in the headset.
+func set_desk_camera_height(y: float) -> void:
+	if _desk_rig != null:
+		_desk_rig.position.y = y
 
 
 # ---------------------------------------------------------- environment
@@ -365,13 +398,14 @@ func _rebuild_wall() -> void:
 	# Banner: above the eye line (~+23 degrees) with clear air between
 	# its lower edge and the top row of panels - it sits closer than
 	# the wall, so any angular overlap hides the middle panels' tops.
-	_banner_quad = _make_quad(_wall, "banner", "", placeholder, Vector2(1.8, 0.46), Vector3(0.0, 2.48, -2.9))
+	# It rose with the rows in the occlusion round (see WALL_ROW_YS),
+	# keeping that clear air the same size.
+	_banner_quad = _make_quad(_wall, "banner", "", placeholder, Vector2(1.8, 0.46), Vector3(0.0, 2.53, -2.9))
 	_banner_quad.pick_enabled = false
 	# Panels for this page: rows hugging the eye line (+12 / 0 / -12
 	# degrees). Panel height (0.64) stays under the row pitch (0.65) -
 	# a taller panel than the pitch makes rows overlap in projection.
 	var start: int = _page * PAGE_SIZE
-	var row_ys: Array[float] = [1.90, 1.25, 0.60]
 	for i: int in range(PAGE_SIZE):
 		var idx: int = start + i
 		if idx >= _visible_games.size():
@@ -380,21 +414,23 @@ func _rebuild_wall() -> void:
 		var col: int = i % PAGE_COLS
 		var row: int = i / PAGE_COLS
 		var angle: float = deg_to_rad(float(col - 1) - 0.5) * 14.0
-		var pos: Vector3 = Vector3(sin(angle) * WALL_RADIUS, row_ys[row], -cos(angle) * WALL_RADIUS)
-		var q: ClickableQuad = _make_quad(_wall, "panel", game.game_id, placeholder, Vector2(0.54, 0.64), pos)
+		var pos: Vector3 = Vector3(sin(angle) * WALL_RADIUS, WALL_ROW_YS[row], -cos(angle) * WALL_RADIUS)
+		var q: ClickableQuad = _make_quad(_wall, "panel", game.game_id, placeholder, PANEL_SIZE, pos)
 		_panels.append(q)
 		_panel_base_pos.append(pos)
 		_panel_pop_dir.append((EYE - pos).normalized())
 		_panel_pop.append(0.0)
 		_panel_pop_applied.append(0.0)
 		# The card's Launch button (Chris, 2026-10-21): a distinct
-		# quad riding the panel's lower edge - pointing at the card
+		# quad riding the panel's lower third - pointing at the card
 		# browses (opens More Info); only the button commits to the
 		# ~20s VPX load. It inherits the panel's orientation and its
 		# pulse, sits proud of the card face so rays hit it first.
+		# Its height on the panel is PANEL_LAUNCH_Y: clear of the
+		# art face's name strip, never over the name.
 		var lq: ClickableQuad = ClickableQuad.new()
-		lq.setup("panel_launch", game.game_id, placeholder, Vector2(0.36, 0.115))
-		lq.position = Vector3(0.0, -0.242, 0.032)
+		lq.setup("panel_launch", game.game_id, placeholder, PANEL_LAUNCH_SIZE)
+		lq.position = Vector3(0.0, PANEL_LAUNCH_Y, 0.032)
 		q.add_child(lq)
 		_panel_launches.append(lq)
 	# Rail.
@@ -412,7 +448,11 @@ func _build_rail(placeholder: Texture2D) -> void:
 	# ~22 degrees below the eye line and far enough out that the full
 	# rail width sits inside a 16:9 frustum (it was clipped at the
 	# bottom edge of the flat view when it hugged the player).
-	var y: float = 0.55
+	# Lowered from 0.55 in the occlusion round: from a seated eye
+	# the rail's top edge projected BELOW the wall's bottom row and
+	# swallowed its lower edge (see WALL_ROW_YS) - at 0.45 the top
+	# edge clears the row by ~4.4 degrees.
+	var y: float = 0.45
 	var z: float = -1.85
 	var defs: Array = [
 		["filter:all", 0.30], ["filter:vr", 0.24], ["filter:favorites", 0.44], ["filter:recents", 0.40],
@@ -1261,21 +1301,78 @@ func _cycle_focus(step: int) -> void:
 	_set_focused(_focusables[idx])
 
 
+## The control rail's focus stops in their left-to-right build
+## order (see _build_rail's defs). page_label builds too but is
+## not pickable, so it is not a stop. Sideways travel along the
+## rail walks THIS order and nothing else.
+const RAIL_FOCUS_ORDER: Array[String] = [
+	"filter:all", "filter:vr", "filter:favorites", "filter:recents",
+	"sort", "page_prev", "page_next", "desk", "exit",
+]
+
+
+func _is_rail_quad(q: ClickableQuad) -> bool:
+	return q != null and _rail_quads.values().has(q)
+
+
+## The next focus stop along the rail from the focused quad, in
+## RAIL_FOCUS_ORDER, skipping stops that are not focusable right
+## now. Null at the rail's end - focus stays put there.
+func _rail_focus_neighbour(step: int) -> ClickableQuad:
+	if _focused == null:
+		return null
+	var idx: int = -1
+	for i: int in range(RAIL_FOCUS_ORDER.size()):
+		var cand: ClickableQuad = _rail_quads.get(RAIL_FOCUS_ORDER[i]) as ClickableQuad
+		if cand != null and cand == _focused:
+			idx = i
+			break
+	if idx < 0:
+		return null
+	var j: int = idx + step
+	while j >= 0 and j < RAIL_FOCUS_ORDER.size():
+		var q: ClickableQuad = _rail_quads.get(RAIL_FOCUS_ORDER[j]) as ClickableQuad
+		if q != null and q.pick_enabled and _focusables.has(q):
+			return q
+		j += step
+	return null
+
+
 func _move_focus(dir: Vector2) -> void:
 	if _focusables.is_empty():
 		return
 	if _focused == null or not _focusables.has(_focused):
 		_set_focused(_focusables[0])
 		return
+	# The rail is its own navigation country (Chris's field
+	# report, 2026-10-24): a sideways step along the control rail
+	# used to be scored against every quad in the room, and the
+	# nearest "sideways" quad was as often a bottom-row card as
+	# the next placard - filter, up to a title, next filter, up
+	# to a title. Sideways travel with the rail focused walks
+	# the rail's own order; the card grid is entered from the
+	# rail only by stepping UP, and DOWN from the grid's bottom
+	# row returns to the rail. A sideways step anywhere else
+	# never lands on the rail either.
+	var horizontal: bool = absf(dir.x) > 0.5
+	if horizontal and _is_rail_quad(_focused):
+		var step: int = 1 if dir.x > 0.0 else -1
+		var nq: ClickableQuad = _rail_focus_neighbour(step)
+		if nq != null:
+			_set_focused(nq)
+		return
 	var cam: Camera3D = _active_camera()
 	if cam == null:
 		return
 	var from: Vector2 = cam.unproject_position(_focused.global_position)
+	var focused_rail: bool = _is_rail_quad(_focused)
 	var best: ClickableQuad = null
 	var best_score: float = INF
 	for q: ClickableQuad in _focusables:
 		if q == _focused or not q.pick_enabled:
 			continue
+		if horizontal and _is_rail_quad(q) != focused_rail:
+			continue ## a sideways step never crosses between rail and wall
 		var p: Vector2 = cam.unproject_position(q.global_position)
 		var delta_v: Vector2 = p - from
 		if delta_v.length() < 4.0:

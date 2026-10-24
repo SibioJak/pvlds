@@ -27,6 +27,12 @@ const FACE_MARGIN_TOP_PX: int = 22 ## the shared face layout's top margin
 ## future nudge is a one-line change here.
 const PANEL_CONTENT_RAISE_PX: int = 22
 
+## The art face's name strip: a fixed-height band across the
+## texture's bottom edge. Named because the room's Launch-button
+## placement (ui/room.gd, PANEL_LAUNCH_Y) is derived from it - the
+## button must clear this strip, never cover the name it carries.
+const ART_STRIP_HEIGHT_PX: int = 92
+
 var _bg: ColorRect
 var _margin: MarginContainer
 var _vbox: VBoxContainer
@@ -56,7 +62,7 @@ func _init() -> void:
 	add_child(_art_rect)
 	_art_strip = PanelContainer.new()
 	_art_strip.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	_art_strip.offset_top = -92.0
+	_art_strip.offset_top = -float(ART_STRIP_HEIGHT_PX)
 	_art_strip.add_theme_stylebox_override("panel", _box(Color(0.02, 0.02, 0.04, 0.88), 0))
 	_art_label = Label.new()
 	_art_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

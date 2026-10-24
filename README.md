@@ -514,12 +514,22 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   card's top edge, registering with the full-bleed art faces -
   `PANEL_CONTENT_RAISE_PX` in `ui/card_face.gd`). Filters: All / VR / Favorites /
   Recents (VR is the default view). Sorts: name, year, manufacturer,
-  designer.
+  designer. An art card's name strip owns the card's bottom edge and
+  the Launch button rides clear above it (`PANEL_LAUNCH_Y` in
+  `ui/room.gd`) - the name is never under the button. The wall's
+  rows and the control rail are spaced so the whole bottom row,
+  buttons included, clears the rail from a seated eye
+  (`WALL_ROW_YS`, the rail's height in `_build_rail`).
 - **One input model.** VR controller laser, mouse ray, and
   gamepad/keyboard focus all pick from the same surfaces. Mouse can
   drive the whole UI flat at the desk — the flat camera is static at
   the seated viewpoint and the mouse is a pure pointer (round-2 field
   fix: a view that drifts with the cursor makes click targets swim).
+  Focus travel treats the control rail as its own country: sideways
+  steps along the rail walk its stops in order and never detour up
+  to a card; the grid is entered from the rail only by stepping up,
+  and down from the grid's bottom row returns to the rail
+  (`RAIL_FOCUS_ORDER` in `ui/room.gd`).
 - **First-run desk pass.** A flat 2D setup (never in-headset): point
   at the VPX executable (`VPinball_GL64.exe` expected) and the table
   folder(s), optionally a cached `vpsdb.json`. Its **Download VPS
