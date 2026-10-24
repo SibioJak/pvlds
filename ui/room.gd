@@ -130,6 +130,8 @@ var _focused: ClickableQuad = null
 var _joy_cooldown: float = 0.0
 var _joy_prev_a: bool = false
 var _joy_prev_b: bool = false
+var _joy_prev_lb: bool = false ## bumper edge tracking: the section slide's page travel (see _process)
+var _joy_prev_rb: bool = false
 var _joy_prev_right: bool = false ## D-pad Right edge tracking: the room's BACK-out press (see _process)
 var _joy_right_armed: bool = false ## baseline-release arming: set once THIS room instance has observed D-pad Right released; until then no right-press edge can exit (see _process)
 
@@ -774,6 +776,54 @@ func _handle_rail(key: String) -> void:
 		exit_requested.emit()
 
 
+## A bumper press's page travel: the whole section shifts one
+## page over (Chris's clarification, 2026-10-24 - the bumpers
+## flip PAGES, never filters; the filters change only via the
+## rail). Routed through the rail pager's own handling, so the
+## bounds are the pager's bounds - CLAMPED at both ends, no
+## wrap - and page state persists exactly as a rail press's
+## does. Inert under the room's standing input law: the load
+## wait is deaf, the SETUP placard owns the room, and the
+## detail view is not the wall.
+##
+## Focus rule (stated for the smoke to assert): focus keeps its
+## PLACE across the flip. A focused panel - or its Launch
+## button - hands focus to the panel in the same grid slot on
+## the new page (the panel itself, never its Launch button, so
+## a follow-up A press browses instead of firing a load),
+## clamped to the new page's last panel when the page runs
+## short; a focused rail stop hands focus to the same stop on
+## the rebuilt rail; no focus lands on the first panel. A
+## clamped press changes nothing at all - no rebuild happened,
+## so focus keeps even its instance.
+func _bumper_page(step: int) -> void:
+	if _launching_game_id != "" or _placard_up or _mode != "wall":
+		return
+	var slot: int = -1
+	var rail_key: String = ""
+	if _focused != null:
+		if _panels.has(_focused):
+			slot = _panels.find(_focused)
+		elif _panel_launches.has(_focused):
+			slot = _panel_launches.find(_focused)
+		elif _is_rail_quad(_focused):
+			for k: Variant in _rail_quads.keys():
+				if _rail_quads[k] == _focused:
+					rail_key = str(k)
+					break
+	var before: int = _page
+	_handle_rail("page_next" if step > 0 else "page_prev")
+	if _page == before:
+		return ## clamped: the pager never moved, focus neither
+	if rail_key != "":
+		var rq: ClickableQuad = _rail_quads.get(rail_key) as ClickableQuad
+		if rq != null:
+			_set_focused(rq)
+	elif not _panels.is_empty():
+		var target: int = 0 if slot < 0 else mini(slot, _panels.size() - 1)
+		_set_focused(_panels[target])
+
+
 func _open_detail(game: GameEntry) -> void:
 	_mode = "detail"
 	_selected_game_id = game.game_id
@@ -1285,6 +1335,23 @@ func _process(delta: float) -> void:
 	if b_now and not _joy_prev_b and _mode == "detail" and not deaf:
 		_detail.handle_escape()
 	_joy_prev_b = b_now
+	# Bumpers (LB/RB): page travel, the section slide (Chris's
+	# banked note, 2026-10-23; his clarification, 2026-10-24:
+	# "my intention for bumpers was for the entire section to
+	# shift left or right, one page to other"). One page per
+	# fresh press - edge only, no held repeat - and the gating
+	# (load wait, placard, detail view) lives in _bumper_page.
+	# The prev-state updates run even while gated, so a bumper
+	# held through a gated stretch can't resurface as a phantom
+	# edge on the other side.
+	var lb_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_LEFT_SHOULDER)
+	var rb_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_RIGHT_SHOULDER)
+	if lb_now and not _joy_prev_lb:
+		_bumper_page(-1)
+	elif rb_now and not _joy_prev_rb:
+		_bumper_page(1)
+	_joy_prev_lb = lb_now
+	_joy_prev_rb = rb_now
 	var right_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_RIGHT)
 	if not right_now:
 		_joy_right_armed = true ## a witnessed released poll: fresh press edges count from here on

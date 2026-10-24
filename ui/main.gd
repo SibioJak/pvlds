@@ -1196,9 +1196,19 @@ func _finish_placard_smoke() -> void:
 ##          cards and buttons, flush and popped - clears the
 ##          rail in screen space;
 ##   leg 4: a title card's face still registers its content at
-##          texture row 0 (the 71877f4 raise, undisturbed).
+##          texture row 0 (the 71877f4 raise, undisturbed);
+##   leg 5: the bumpers flip PAGES (Chris's clarification,
+##          2026-10-24 - sections shift one page over, never
+##          cycle filters): RB advances, LB retreats, both
+##          clamp at the ends, focus keeps its place across a
+##          flip (same grid slot / same rail stop / first panel
+##          from no focus), and the bumpers are inert in the
+##          load wait, on the SETUP placard, and in the detail
+##          view.
 ## The driver forces the ALL filter through the room's own rail
-## handler so the wall always holds a full bottom row.
+## handler so the wall always holds a full bottom row. Leg 5
+## needs more pages than the dummy library's ten games give, so
+## the harness adds a scratch folder of stub tables beside it.
 func _drive_nav_smoke() -> void:
 	match _nav_smoke_phase:
 		0:
@@ -1241,9 +1251,18 @@ func _drive_nav_smoke() -> void:
 			var amt: float = _room.panel_pop_amount(_nav_pop_panel)
 			if amt >= 0.999:
 				_nav_leg_clearance(true)
-				_finish_nav_smoke()
+				_nav_smoke_wait = 0
+				_nav_smoke_phase = 4
 			elif _nav_smoke_wait > 240:
 				_nav_smoke_fail("pop leg: the bottom-row panel's pop never completed (amount %.3f)" % amt)
+				_finish_nav_smoke()
+		4:
+			_nav_smoke_wait += 1
+			if _nav_smoke_wait > 3600:
+				_nav_smoke_fail("the bumper leg's wall never settled")
+				_finish_nav_smoke()
+			elif _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
+				_nav_leg_bumpers()
 				_finish_nav_smoke()
 
 
@@ -1419,6 +1438,84 @@ func _nav_check_faces() -> void:
 			break
 	_nav_expect(first_row == 0, "faces: title card content registers at texture row 0 (got %d)" % first_row)
 	_nav_faces_done = true
+
+
+## Leg 5: bumper page travel, driven through RoomView's
+## _bumper_page - the same call the pad poll makes on a fresh
+## shoulder edge - so the state gating (load wait, placard,
+## detail view) is exercised exactly as the room enforces it.
+## The harness library spans three pages on ALL (full, full,
+## one-panel short), pinned by run_nav_smoke.sh's stub count.
+func _nav_leg_bumpers() -> void:
+	var pages: int = _room.page_count()
+	_nav_expect(pages >= 3, "bumpers: the harness library spans at least 3 pages (got %d)" % pages)
+	if pages < 2 or _room._visible_games.is_empty():
+		return
+	var filter0: String = _room._filter
+	var sort0: String = _room._sort
+	var last_page: int = pages - 1
+	_nav_expect(_room._page == 0, "bumpers: the leg starts on page 1")
+	# Travel, with focus keeping its grid slot.
+	_room._set_focused(_room._panels[5])
+	_room._bumper_page(1)
+	_nav_expect(_room._page == 1, "bumpers: RB advances to page 2")
+	_nav_expect(_room.focused_quad() == _room._panels[5],
+		"bumpers: focus keeps its grid slot across the flip")
+	_room._bumper_page(1)
+	_nav_expect(_room._page == last_page, "bumpers: RB advances to the last page")
+	_nav_expect(_room.focused_quad() == _room._panels[_room._panels.size() - 1],
+		"bumpers: the short last page clamps focus to its last panel")
+	# Clamped at the far end: no wrap, focus instance untouched.
+	var held: ClickableQuad = _room.focused_quad()
+	_room._bumper_page(1)
+	_nav_expect(_room._page == last_page, "bumpers: RB clamps on the last page (no wrap)")
+	_nav_expect(_room.focused_quad() == held, "bumpers: a clamped RB leaves focus untouched")
+	_room._bumper_page(-1)
+	_nav_expect(_room._page == last_page - 1, "bumpers: LB retreats a page")
+	_room._bumper_page(-1)
+	_nav_expect(_room._page == 0, "bumpers: LB retreats to page 1")
+	held = _room.focused_quad()
+	_room._bumper_page(-1)
+	_nav_expect(_room._page == 0, "bumpers: LB clamps on page 1 (no wrap)")
+	_nav_expect(_room.focused_quad() == held, "bumpers: a clamped LB leaves focus untouched")
+	_nav_expect(_room._filter == filter0 and _room._sort == sort0,
+		"bumpers: page travel leaves filter and sort alone")
+	# Focus on a rail stop carries to the same stop.
+	_room._set_focused(_room.rail_quad("sort"))
+	_room._bumper_page(1)
+	_nav_expect(_room._page == 1 and _nav_key_of(_room.focused_quad()) == "sort",
+		"bumpers: rail focus carries to the same stop across the flip")
+	_room._bumper_page(-1)
+	# No focus lands on the first panel.
+	_room._set_focused(null)
+	_room._bumper_page(1)
+	_nav_expect(_room._page == 1 and _room.focused_quad() == _room._panels[0],
+		"bumpers: no focus lands on the first panel")
+	_room._bumper_page(-1)
+	# Inert while the SETUP placard stands.
+	_room.show_setup_placard("nav smoke")
+	_room._bumper_page(1)
+	_room._bumper_page(-1)
+	_nav_expect(_room._page == 0, "bumpers: inert while the SETUP placard stands")
+	_room.clear_setup_placard()
+	# Inert in the detail view.
+	var game: GameEntry = _room._visible_games[0]
+	_room._open_detail(game)
+	_room._bumper_page(1)
+	_nav_expect(_room._mode == "detail" and _room._page == 0,
+		"bumpers: inert in the detail view")
+	_room._on_detail_closed()
+	# Inert during the load wait. begin_launch is driven
+	# directly: no launch was requested, so Main's hand-off
+	# poll (which keys off a real spawn) never engages.
+	_room.begin_launch(game)
+	_room._bumper_page(1)
+	_room._bumper_page(-1)
+	_nav_expect(_room._page == 0 and _room.is_launch_in_wait(),
+		"bumpers: inert during the load wait")
+	_room.end_launch_failed(game, "nav smoke")
+	_nav_expect(_room._page == 0 and _room._filter == filter0,
+		"bumpers: the leg leaves the wall on page 1, filter untouched")
 
 
 # -------------------------------------------------- desk smoke
