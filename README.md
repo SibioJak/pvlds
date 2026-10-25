@@ -395,7 +395,9 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   move focus (the stick moves it rightward too); during the
   load wait the room stays deaf and swallows the press like
   everything else, and on the SETUP placard it does nothing —
-  BACK remains the only way off the placard. Neither side
+  BACK remains the only way off the placard. On the SETUP panel
+  it goes BACK instead — the panel never exits the app (B does
+  the same there). Neither side
   reads the button for the other: PVLDS never sees the
   in-play press at all (the watchdog no longer contains a
   gamepad watch of any kind), and the room's press is an
@@ -547,7 +549,9 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   at the VPX executable (`VPinball_GL64.exe` expected) and the table
   folder(s), optionally a cached `vpsdb.json`. Its **Download VPS
   database** button fetches the real `vpsdb.json` from the Virtual
-  Pinball Spreadsheet project and caches it in `user://`. Database
+  Pinball Spreadsheet project and caches it in `user://` (the
+  room's SETUP panel runs the same download — one shared service,
+  `core/vps_downloader.gd`). Database
   selection order for a scan: your chosen path, then the downloaded
   cache, then — last resort — the bundled sample; if the sample is
   what a scan used, the summary says so in plain language, because
@@ -569,16 +573,32 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   text handler. It is the go-download shopping list: drop the
   matching backglasses into their folders, rescan, and the
   entries clear.
-- **SETUP never strands the headset.** The desk is a 2D form and
-  cannot render into the headset — so while XR is live, opening
-  setup (rail SETUP, or a failed launch routing to the desk) no
-  longer hides the room (that blacked out the player's view with
-  no way back — field fault, 2026-10-21). The desk still opens on
-  the monitor; in the room a placard stands instead — "Setup is
-  open on your desktop," any failure message riding on it, and a
-  BACK control. While it stands, every other room control is
-  inert; BACK (or Enter the Room on the desk) closes the desk and
-  hands the room back.
+- **SETUP lives in the room.** The desk is a 2D form and cannot
+  render into the headset, and dropping to a desktop surface
+  mid-session breaks the player's view (the standing VR law:
+  the view may bend, it may not break) — so while XR is live,
+  the rail's SETUP raises a panel in the room itself: **Scan
+  library** (the same threaded scan the desk runs), the
+  library's health in words on its face (table files found,
+  database matches, the missing-backglass count and where its
+  list lives), **Download VPS database** (the desk's download,
+  one shared service), a message line carrying the last
+  action's outcome in plain words, and **BACK**. The panel is
+  modal like the detail view: the wall behind it is inert,
+  focus stays on its three buttons, launching is unreachable
+  while it stands, and B / D-pad Right act as BACK (never as
+  exit) — closing it lands focus on the rail's SETUP stop. A
+  scan started there lands in the same room: the wall behind
+  the panel adopts the new scan and the panel's numbers
+  update. Path editing and first-run configuration stay on
+  the desktop desk pass, where the keyboard is — flat
+  launches route SETUP to the desk exactly as before. The
+  panel never shell-opens anything: no desktop trips from
+  inside VR, ever. The old placard survives for one job only:
+  a **failed launch** in XR, whose fix genuinely is desk work
+  — the room stays up, the placard carries the failure's
+  reason, the desk opens on the monitor, and BACK (or Enter
+  the Room on the desk) dismisses both.
 - **No empty rooms.** If the active filter matches nothing in a
   non-empty library, the wall falls back to ALL and the banner says
   why. VR remains the default filter only when VR-tagged games
@@ -655,6 +675,23 @@ cached `vpsdb.json` and the same code runs your actual library.
   focus confined to BACK), then BACK restores the room and closes
   the desk; a second leg with the flag off asserts the flat path
   is the legacy one. Prints ok/FAIL lines, exits 0/1.
+- `--pvlds-smoke-setup-panel` — room boot; force the room's XR
+  flag on, open SETUP through the rail, and assert the panel
+  contract: a visible 3D panel in the room (not a CanvasLayer),
+  its rows present, focus confined to its three buttons, the
+  wall inert behind it; then SCAN runs the real scan and its
+  landing lands on the panel (health, message, the room
+  adopting the new scan), and DOWNLOAD runs against a stub
+  database served over local HTTP (env `PVLDS_VPSDB_URL`,
+  which the harness's `run_setup_panel_smoke.sh` sets); B and
+  D-pad Right act as BACK, landing focus on the rail's SETUP
+  stop, and the flat leg asserts the desk path is the legacy
+  one. Prints ok/FAIL lines, exits 0/1.
+- `--pvlds-shot-setup-panel <path.png>` — room boot; force the
+  room's XR flag on, open the SETUP panel, and save a
+  screenshot of it once its textures land (the clean/CLEAR QA
+  capture; the harness's `run_setup_panel_shot.sh`). Needs a
+  real rendering driver, like `--pvlds-shot`.
 - `--pvlds-smoke-desk` — desk boot (the flag keeps the boot on
   the desk: no scan, no room); flip the desk's session switch
   (focus herding — the only one left) through its real signal
@@ -687,7 +724,8 @@ cached `vpsdb.json` and the same code runs your actual library.
 
 ```
 core/   UI-independent: config, database, scanner, art, state, data,
-        launch plan, watchdog contract, launch service
+        launch plan, watchdog contract, launch service, the shared
+        VPS download service
 ui/     the faces: main routing, room, detail view, desk pass,
         texture factory (renders every text surface once, to texture),
         pointer rig, clickable quads, card specs

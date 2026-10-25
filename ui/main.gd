@@ -51,6 +51,19 @@ extends Node
 ##                       stays up, wall inert, BACK restores), then
 ##                       assert the flat path is the legacy one,
 ##                       print the verdict, quit
+##   --pvlds-smoke-setup-panel
+##                       room boot; force the room's XR flag on,
+##                       open SETUP through the rail, assert the
+##                       in-room panel contract (a real 3D surface,
+##                       modal focus, scan + stub-download legs
+##                       land on it), B and D-pad Right act as
+##                       BACK, BACK lands on the SETUP stop, and
+##                       the flat path is still the desk, print
+##                       the verdict, quit
+##   --pvlds-shot-setup-panel P
+##                       room boot; force the room's XR flag on,
+##                       open the SETUP panel, save a screenshot
+##                       of it to P once its textures land, quit
 ##   --pvlds-smoke-desk  desk boot (stays on the desk); flip the
 ##                       session switch through its real signal and
 ##                       assert the config FILE on disk changed;
@@ -131,6 +144,14 @@ var _smoke_placard: bool = false ## --pvlds-smoke-placard: drive the setup-placa
 var _placard_smoke_phase: int = 0
 var _placard_smoke_wait: int = 0
 var _placard_smoke_failures: int = 0
+var _smoke_setup_panel: bool = false ## --pvlds-smoke-setup-panel: drive the in-room SETUP panel contract once the room is up
+var _setup_panel_smoke_phase: int = 0
+var _setup_panel_smoke_wait: int = 0
+var _setup_panel_smoke_failures: int = 0
+var _setup_panel_smoke_deadline_msec: int = 0
+var _shot_setup_panel_path: String = "" ## --pvlds-shot-setup-panel P: capture the open SETUP panel
+var _shot_setup_panel_phase: int = -1
+var _shot_setup_panel_frames: int = 0
 var _smoke_desk: bool = false ## --pvlds-smoke-desk: drive the desk's live session switch, assert the config file follows
 var _smoke_dpadexit: bool = false ## --pvlds-smoke-dpadexit: a fresh D-pad Right in the room must exit the app
 var _dpadexit_held_leg: bool = false ## --pvlds-smoke-dpadexit-held: the button is pinned from boot; no exit until a witnessed release, then a fresh press exits
@@ -250,6 +271,12 @@ func _ready() -> void:
 		_shot_slide_phase = 0
 	if user_args.has("--pvlds-smoke-placard"):
 		_smoke_placard = true
+	if user_args.has("--pvlds-smoke-setup-panel"):
+		_smoke_setup_panel = true
+	var shot_sp_idx: int = user_args.find("--pvlds-shot-setup-panel")
+	if shot_sp_idx >= 0 and shot_sp_idx + 1 < user_args.size():
+		_shot_setup_panel_path = user_args[shot_sp_idx + 1]
+		_shot_setup_panel_phase = 0
 	if user_args.has("--pvlds-smoke-desk"):
 		_smoke_desk = true
 	if user_args.has("--pvlds-smoke-dpadexit"):
@@ -295,7 +322,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _shot_pop_prefix != "") and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _shot_pop_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "") and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -416,6 +443,10 @@ func _process(_delta: float) -> void:
 	_poll_launch()
 	if _smoke_placard:
 		_drive_placard_smoke()
+	if _smoke_setup_panel:
+		_drive_setup_panel_smoke()
+	if _shot_setup_panel_phase >= 0:
+		_drive_shot_setup_panel()
 	if _smoke_desk:
 		_drive_desk_smoke()
 	if _smoke_dpadexit:
@@ -446,6 +477,8 @@ func _process(_delta: float) -> void:
 		return
 	if _desk != null and _desk.visible:
 		_desk.set_scan_progress(_scan_progress_text())
+	if _room != null and _room.is_setup_panel_up():
+		_room.set_setup_panel_message(_scan_progress_text())
 	if _scan_task_id >= 0 and WorkerThreadPool.is_task_completed(_scan_task_id):
 		WorkerThreadPool.wait_for_task_completion(_scan_task_id)
 		_scan_task_id = -1
@@ -506,6 +539,22 @@ func _finish_scan() -> void:
 	# background (and re-arm on every later scan).
 	if _art_warmer != null and _scanner != null:
 		_art_warmer.warm_library(_scanner.games)
+	# The room eats from the same landing (the SETUP panel): the
+	# wall adopts the new scan - a panel-started scan must change
+	# the room it was started from - the panel's health numbers
+	# refresh, and a standing panel shows the outcome on its
+	# message line. During a load wait the wait owns the room;
+	# no adoption then (the wait's settle path rebuilds nothing).
+	if _room != null and _scanner != null:
+		if not _launch_pending:
+			_room.adopt_library(_scanner)
+		var done_msg: String
+		if _scanner.missing_b2s_files.is_empty():
+			done_msg = "Scan done - %d tables, none missing a backglass" % _scanner.total_files
+		else:
+			done_msg = "Scan done - %d tables, %d missing a backglass" % [
+				_scanner.total_files, _scanner.missing_b2s_files.size()]
+		_room.apply_setup_panel_scan(_setup_panel_health(), done_msg)
 	if _smoke_launch_game != "":
 		var gid: String = _smoke_launch_game
 		_smoke_launch_game = ""
@@ -522,6 +571,34 @@ func _finish_scan() -> void:
 			_show_desk()
 			return
 		_enter_room()
+
+
+## The room SETUP panel's SCAN LIBRARY: the same threaded scan
+## the desk's Save & Scan runs - start_scan is the one path.
+## Progress paints into the panel from _process; the landing
+## feeds the panel in _finish_scan.
+func _on_setup_panel_scan_requested() -> void:
+	if start_scan():
+		if _room != null:
+			_room.set_setup_panel_scanning(true)
+	elif _room != null:
+		_room.set_setup_panel_message("A scan is already running - one moment.")
+
+
+## The SETUP panel's health numbers from the last completed
+## scan - the desk summary's facts, minus the prose.
+func _setup_panel_health() -> Dictionary:
+	if _scanner == null:
+		return {}
+	return {
+		"files": _scanner.total_files,
+		"games": _scanner.games.size(),
+		"matched": _scanner.matched_files,
+		"game_matched": _scanner.game_matched_files,
+		"db_ok": _last_db_ok,
+		"db_kind": _last_db_kind,
+		"missing": _scanner.missing_b2s_files.size(),
+	}
 
 
 ## Human-readable summary of the last completed scan, for the desk pass.
@@ -579,14 +656,19 @@ func _enter_room() -> void:
 		_room.setup(_factory, _scanner, _state, _xr_enabled)
 		_room.setup_requested.connect(_show_desk)
 		_room.setup_placard_dismissed.connect(_on_setup_placard_dismissed)
+		_room.setup_panel_scan_requested.connect(_on_setup_panel_scan_requested)
 		_room.launch_requested.connect(_on_launch_requested)
 		_room.exit_requested.connect(_on_exit_requested)
 		_room.art_prefetch_requested.connect(_on_art_prefetch)
 	else:
-		_room.refresh_library()
+		_room.adopt_library(_scanner)
 		# Entering the room (e.g. Enter the Room on the desk while a
 		# placard stood in the headset) never leaves a stale placard.
 		_room.clear_setup_placard()
+		_room.clear_setup_panel()
+	# The SETUP panel's health rows start from the last scan's
+	# numbers, whichever route built the room.
+	_room.set_setup_health(_setup_panel_health())
 	_room.visible = true
 	if _seated_cam:
 		# Dev hooks only (--pvlds-seated-cam, --pvlds-smoke-nav):
@@ -1244,6 +1326,259 @@ func _finish_placard_smoke() -> void:
 	else:
 		printerr("PVLDS PLACARD SMOKE: FAIL (%d)" % _placard_smoke_failures)
 		get_tree().quit(1)
+
+
+# --------------------------------------------- setup panel smoke
+
+## --pvlds-smoke-setup-panel: the in-room SETUP panel contract.
+## The old failure this guards: a smoke once proved a FLAG (the
+## desk object existed, its visible flag set) while no surface
+## ever reached the player's eyes. So this driver proves the
+## SURFACE: SETUP through the rail raises a visible 3D panel in
+## the room (not a CanvasLayer), its rows present, focus
+## confined to its three buttons, the wall inert behind it -
+## then drives its operations for real: SCAN runs Main's scan
+## and the landing lands on the panel (health + message + the
+## room adopting the new scan), and the download runs against
+## the harness's local stub database (PVLDS_VPSDB_URL) with
+## its verdict on the message line. B and D-pad Right both act
+## as BACK (never exit), BACK lands focus on the rail's SETUP
+## stop, and the flat route still opens the desk.
+func _drive_setup_panel_smoke() -> void:
+	match _setup_panel_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_room._xr_enabled = true
+				_room._activate(_room.rail_quad("desk"))
+				_setup_panel_smoke_wait = 0
+				_setup_panel_smoke_phase = 1
+			else:
+				_setup_panel_smoke_wait += 1
+				if _setup_panel_smoke_wait > 3600:
+					_setup_panel_smoke_fail("the room never came up")
+					_finish_setup_panel_smoke()
+		1:
+			_setup_panel_smoke_wait += 1
+			var face: ClickableQuad = _room.setup_panel_face_quad() if _room != null else null
+			var dressed: bool = face != null and face.current_texture() != null \
+				and face.current_texture().get_size() == Vector2(1024, 546)
+			if _setup_panel_smoke_wait >= 3 and dressed:
+				_setup_panel_surface_assertions()
+				_setup_panel_smoke_wait = 0
+				_setup_panel_smoke_phase = 2
+			elif _setup_panel_smoke_wait > 1200:
+				_setup_panel_smoke_fail("the panel's face never rendered")
+				_finish_setup_panel_smoke()
+		2:
+			# The scan leg: fire SCAN through the real funnel.
+			_room._activate(_room.setup_panel_scan_quad())
+			_setup_panel_smoke_deadline_msec = Time.get_ticks_msec() + 30000
+			_setup_panel_smoke_phase = 3
+		3:
+			if _room.setup_panel_message().begins_with("Scan done"):
+				_setup_panel_expect(not _scan_active, "scan leg: the scan has landed")
+				var health: Dictionary = _room.setup_panel_health()
+				_setup_panel_expect(int(health.get("files", -1)) == _scanner.total_files,
+					"scan leg: the panel's health counts the new scan's tables")
+				_setup_panel_expect(int(health.get("missing", -1)) == _scanner.missing_b2s_files.size(),
+					"scan leg: the panel's missing-backglass count matches the scan")
+				_setup_panel_expect(_room.setup_panel_message().contains(str(_scanner.total_files)),
+					"scan leg: the message line states the outcome in words")
+				_setup_panel_expect(_room._scanner == _scanner,
+					"scan leg: the room adopted the new scan (the wall behind refreshed)")
+				_setup_panel_expect(_room.is_setup_panel_up(), "scan leg: the panel stands through its scan")
+				_setup_panel_expect(not _room._setup_scanning, "scan leg: the working state cleared")
+				var f: ClickableQuad = _room.focused_quad()
+				_setup_panel_expect(f == _room.setup_panel_scan_quad() or f == _room.setup_panel_download_quad() or f == _room.setup_panel_back_quad(),
+					"scan leg: focus stayed on the panel through the landing")
+				# The download leg: the harness's stub database
+				# over local HTTP (PVLDS_VPSDB_URL).
+				_room._activate(_room.setup_panel_download_quad())
+				_setup_panel_smoke_deadline_msec = Time.get_ticks_msec() + 60000
+				_setup_panel_smoke_phase = 4
+			elif Time.get_ticks_msec() > _setup_panel_smoke_deadline_msec:
+				_setup_panel_smoke_fail("scan leg: the scan never landed on the panel")
+				_finish_setup_panel_smoke()
+		4:
+			var msg: String = _room.setup_panel_message()
+			if msg.contains("downloaded"):
+				_setup_panel_expect(FileAccess.file_exists(VpsDatabase.CACHE_PATH),
+					"download leg: the cache file exists - the next scan resolves to it")
+				var cache_len: int = -1
+				var cf: FileAccess = FileAccess.open(VpsDatabase.CACHE_PATH, FileAccess.READ)
+				if cf != null:
+					cache_len = int(cf.get_length())
+					cf.close()
+				_setup_panel_expect(cache_len > 1000000,
+					"download leg: the stored database is the stub's full payload")
+				_setup_panel_expect(msg.contains("next scan"),
+					"download leg: the message line states the outcome in words")
+				_setup_panel_expect(_room._setup_downloader != null and not _room._setup_downloader.is_downloading(),
+					"download leg: the downloader is idle at the verdict")
+				_setup_panel_smoke_inject(JOY_BUTTON_B, true)
+				_setup_panel_smoke_wait = 0
+				_setup_panel_smoke_phase = 5
+			elif msg.contains("failed") or msg.contains("Could not") or msg.contains("does not look"):
+				_setup_panel_smoke_fail("download leg: the download failed on the panel: " + msg)
+				_finish_setup_panel_smoke()
+			elif Time.get_ticks_msec() > _setup_panel_smoke_deadline_msec:
+				_setup_panel_smoke_fail("download leg: the download never landed on the panel")
+				_finish_setup_panel_smoke()
+		5:
+			_setup_panel_smoke_wait += 1
+			if _setup_panel_smoke_wait >= 4:
+				_setup_panel_smoke_inject(JOY_BUTTON_B, false)
+				_setup_panel_expect(not _room.is_setup_panel_up(), "B: the panel closes")
+				_setup_panel_expect(_room._focused == _room.rail_quad("desk"),
+					"B: focus lands on the rail's SETUP stop")
+				var live: bool = true
+				for q: ClickableQuad in _room._panels:
+					if not q.pick_enabled:
+						live = false
+				_setup_panel_expect(live, "B: the wall's controls are live again")
+				_setup_panel_expect(_room.visible, "B: the room is still up (no exit)")
+				# Reopen and leave by D-pad Right instead.
+				_room._activate(_room.rail_quad("desk"))
+				_setup_panel_smoke_wait = 0
+				_setup_panel_smoke_phase = 6
+		6:
+			_setup_panel_smoke_wait += 1
+			if _setup_panel_smoke_wait >= 3:
+				_setup_panel_expect(_room.is_setup_panel_up(), "reopen: the panel stands again")
+				_setup_panel_smoke_inject(JOY_BUTTON_DPAD_RIGHT, true)
+				_setup_panel_smoke_wait = 0
+				_setup_panel_smoke_phase = 7
+		7:
+			_setup_panel_smoke_wait += 1
+			if _setup_panel_smoke_wait >= 4:
+				_setup_panel_smoke_inject(JOY_BUTTON_DPAD_RIGHT, false)
+				_setup_panel_expect(not _room.is_setup_panel_up(), "D-pad Right: the panel closes (BACK, not exit)")
+				_setup_panel_expect(_room.visible, "D-pad Right: the room is still up (no exit)")
+				_setup_panel_expect(_room._focused == _room.rail_quad("desk"),
+					"D-pad Right: focus lands on the rail's SETUP stop")
+				# Legacy leg: no XR - SETUP opens the desk.
+				_room._xr_enabled = false
+				_room._activate(_room.rail_quad("desk"))
+				_setup_panel_smoke_wait = 0
+				_setup_panel_smoke_phase = 8
+		8:
+			_setup_panel_smoke_wait += 1
+			if _setup_panel_smoke_wait >= 3:
+				_setup_panel_expect(not _room.visible, "flat setup: the room hides for the desk, as before")
+				_setup_panel_expect(_desk != null and _desk.visible, "flat setup: the desk shows")
+				_finish_setup_panel_smoke()
+
+
+func _setup_panel_surface_assertions() -> void:
+	_setup_panel_expect(_room.is_setup_panel_up(), "XR setup: the panel is up")
+	var holder: Node3D = _room.setup_panel_holder()
+	_setup_panel_expect(holder != null, "XR setup: the panel holder exists")
+	_setup_panel_expect(holder != null and holder.get_parent() == _room,
+		"XR setup: the panel lives in the room's own tree (a 3D surface, not a CanvasLayer)")
+	_setup_panel_expect(holder != null and holder.visible, "XR setup: the panel holder is visible")
+	_setup_panel_expect(_room.setup_panel_face_quad() != null, "XR setup: the panel has its face (health + message)")
+	_setup_panel_expect(_room.setup_panel_scan_quad() != null, "XR setup: the panel has SCAN LIBRARY")
+	_setup_panel_expect(_room.setup_panel_download_quad() != null, "XR setup: the panel has DOWNLOAD VPS DATABASE")
+	_setup_panel_expect(_room.setup_panel_back_quad() != null, "XR setup: the panel has BACK")
+	_setup_panel_expect(_room.visible, "XR setup: the room stays visible")
+	_setup_panel_expect(not _room.is_setup_placard_up(), "XR setup: no placard - the desktop route is retired")
+	_setup_panel_expect(_desk == null or not _desk.visible, "XR setup: the desk never opens - no desktop trip")
+	var health: Dictionary = _room.setup_panel_health()
+	_setup_panel_expect(int(health.get("files", -1)) == _scanner.total_files,
+		"XR setup: the panel opens knowing the last scan's numbers")
+	var inert: bool = true
+	for q: ClickableQuad in _room._panels:
+		if q.pick_enabled:
+			inert = false
+	for q: ClickableQuad in _room._panel_launches:
+		if q.pick_enabled:
+			inert = false
+	for k: Variant in _room._rail_quads.keys():
+		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
+		if rq != null and rq.pick_enabled:
+			inert = false
+	_setup_panel_expect(inert, "XR setup: every wall/rail control is inert behind the panel")
+	_setup_panel_expect(_room.setup_panel_scan_quad().pick_enabled
+		and _room.setup_panel_download_quad().pick_enabled
+		and _room.setup_panel_back_quad().pick_enabled,
+		"XR setup: the panel's own buttons are live")
+	_setup_panel_expect(_room._focusables.size() == 3
+		and _room._focusables.has(_room.setup_panel_scan_quad())
+		and _room._focusables.has(_room.setup_panel_download_quad())
+		and _room._focusables.has(_room.setup_panel_back_quad()),
+		"XR setup: focus navigation is confined to the panel's three buttons")
+	_setup_panel_expect(_room._focused == _room.setup_panel_scan_quad(),
+		"XR setup: focus opens on SCAN LIBRARY")
+	# Confinement under travel: TAB around the stops and
+	# focus never leaves the panel.
+	for i: int in range(4):
+		_room._cycle_focus(1)
+		_setup_panel_expect(_room._focusables.has(_room._focused),
+			"XR setup: TAB travel stays on the panel (stop %d)" % (i + 1))
+	# Refusal: a wall card handed to the funnel does nothing.
+	if not _room._panels.is_empty():
+		_room._activate(_room._panels[0])
+		_setup_panel_expect(_room._mode == "wall" and _room.is_setup_panel_up(),
+			"XR setup: a wall activation behind the panel is refused")
+
+
+func _setup_panel_smoke_inject(button: JoyButton, pressed: bool) -> void:
+	var ev: InputEventJoypadButton = InputEventJoypadButton.new()
+	ev.device = 0
+	ev.button_index = button
+	ev.pressed = pressed
+	Input.parse_input_event(ev)
+
+
+func _setup_panel_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - setup panel smoke: ", label)
+	else:
+		_setup_panel_smoke_fail(label)
+
+
+func _setup_panel_smoke_fail(label: String) -> void:
+	_setup_panel_smoke_failures += 1
+	printerr("  FAIL - setup panel smoke: ", label)
+
+
+func _finish_setup_panel_smoke() -> void:
+	if _setup_panel_smoke_failures == 0:
+		print("PVLDS SETUP PANEL SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS SETUP PANEL SMOKE: FAIL (%d)" % _setup_panel_smoke_failures)
+		get_tree().quit(1)
+
+
+## --pvlds-shot-setup-panel P: open the SETUP panel in the
+## room (the room's XR flag forced - the surface the headset
+## gets) and capture it once its textures land: the
+## clean/CLEAR QA picture.
+func _drive_shot_setup_panel() -> void:
+	match _shot_setup_panel_phase:
+		0:
+			if _room == null or not _room.visible or not _room.wall_ready:
+				return
+			_room._xr_enabled = true
+			_room._activate(_room.rail_quad("desk"))
+			_shot_setup_panel_phase = 1
+		1:
+			if _room == null or not _room.is_setup_panel_up():
+				return
+			_shot_setup_panel_frames += 1
+			var face: ClickableQuad = _room.setup_panel_face_quad()
+			var dressed: bool = face != null and face.current_texture() != null \
+				and face.current_texture().get_size() == Vector2(1024, 546)
+			if _shot_setup_panel_frames >= 12 and dressed:
+				var path: String = _shot_setup_panel_path
+				_shot_setup_panel_phase = -1
+				var err: Error = _save_shot_png(path)
+				print("PVLDS SETUP PANEL SHOT: ", path, " err=", err)
+				get_tree().quit(0 if err == OK else 1)
+			elif _shot_setup_panel_frames > 3600:
+				printerr("PVLDS SETUP PANEL SHOT: FAIL - the panel never dressed")
+				get_tree().quit(1)
 
 
 # ---------------------------------------------------- nav smoke

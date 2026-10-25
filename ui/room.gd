@@ -8,6 +8,7 @@ extends Node3D
 
 signal setup_requested
 signal setup_placard_dismissed ## the setup placard's BACK: Main closes the desk it opened alongside
+signal setup_panel_scan_requested ## the SETUP panel's SCAN LIBRARY: Main owns the scan machinery
 signal launch_requested(game: GameEntry, build: TableBuild) ## card Launch / detail Play - Main owns the launch + exit
 signal exit_requested ## rail EXIT: Main disarms the watchdog and quits
 signal art_prefetch_requested(games: Array) ## a page settled: Main's warmer should bring the neighbouring pages' art forward
@@ -138,6 +139,20 @@ var _placard_back: ClickableQuad = null
 var _placard_up: bool = false
 var _placard_gen: int = 0
 var _placard_message: String = "" ## the message the standing placard carries (a launch failure rides it too)
+var _setup_panel: Node3D = null ## the in-room SETUP panel's holder; in the tree only while the panel stands
+var _setup_panel_face: ClickableQuad = null
+var _setup_panel_scan_btn: ClickableQuad = null
+var _setup_panel_dl_btn: ClickableQuad = null
+var _setup_panel_back_btn: ClickableQuad = null
+var _setup_panel_up: bool = false
+var _setup_panel_gen: int = 0
+var _setup_health: Dictionary = {} ## the last completed scan's numbers, fed by Main (see set_setup_health)
+var _setup_message: String = "" ## the panel's message line: the last action's outcome, in plain words
+var _setup_scanning: bool = false ## a scan Main started for the panel is running (its progress feeds the message line)
+var _setup_downloader: VpsDownloader = null ## the panel's handle on the shared download service (created with the panel, kept for the room's life)
+var _setup_render_in_flight: bool = false ## a panel render is awaiting the factory (the factory takes one render at a time)
+var _setup_render_pending: bool = false ## state changed mid-render or inside the progress throttle: render again after
+var _setup_render_msec: int = 0 ## when the last panel render started (the progress throttle's clock)
 var _pick_snapshot: Dictionary = {} ## ClickableQuad -> pick_enabled, taken as the placard rises
 var _rail_quads: Dictionary = {} ## key -> ClickableQuad
 var _rail_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: every rail button face ever rendered, so a rebuild re-dresses the rail in its own frame
@@ -192,6 +207,17 @@ func refresh_library() -> void:
 	_recompute_visible()
 	_page = 0
 	_rebuild_wall()
+
+
+## Take a fresh scanner as the room's library and rebuild
+## (Main, when a scan lands). Until this existed the room
+## kept the scanner it was built with, so a rescan's results
+## only reached the wall through a process relaunch; the
+## SETUP panel's scan lands HERE, in the room it was started
+## from.
+func adopt_library(scanner: LibraryScanner) -> void:
+	_scanner = scanner
+	refresh_library()
 
 
 ## After a restore, put the wall on the selected game's page and the
@@ -401,6 +427,11 @@ func _sort_visible() -> void:
 # ---------------------------------------------------------------- wall
 
 func _rebuild_wall() -> void:
+	# The SETUP panel's focus, remembered across the rebuild:
+	# a scan landing refreshes the wall behind the standing
+	# panel, and the player's place on the panel must survive
+	# it (the tail below hands it back).
+	var panel_focus: ClickableQuad = _focused if _setup_panel_up else null
 	_gen += 1
 	var gen: int = _gen
 	wall_ready = false
@@ -491,6 +522,12 @@ func _rebuild_wall() -> void:
 		# path) must not resurrect live controls behind it.
 		_inert_room_quads()
 		_set_focused(_placard_back)
+	if _setup_panel_up:
+		# The same law behind the SETUP panel: the scan-landing
+		# refresh must not resurrect live controls behind it,
+		# and focus stays on the panel button it was on.
+		_inert_room_quads()
+		_set_focused(panel_focus if panel_focus != null else _setup_panel_scan_btn)
 
 
 func _build_rail(placeholder: Texture2D) -> void:
@@ -681,6 +718,15 @@ func _refresh_focusables() -> void:
 		# The placard owns the room: BACK is the only focus stop.
 		if _placard_back != null:
 			_focusables.append(_placard_back)
+	elif _setup_panel_up:
+		# The SETUP panel owns the room: its three buttons are
+		# the only focus stops (see show_setup_panel).
+		if _setup_panel_scan_btn != null:
+			_focusables.append(_setup_panel_scan_btn)
+		if _setup_panel_dl_btn != null:
+			_focusables.append(_setup_panel_dl_btn)
+		if _setup_panel_back_btn != null:
+			_focusables.append(_setup_panel_back_btn)
 	elif _mode == "detail" and _detail != null:
 		_focusables = _detail.get_clickables()
 	else:
@@ -724,6 +770,14 @@ func _refresh_quad_states() -> void:
 		all.append(_placard_face)
 	if _placard_back != null:
 		all.append(_placard_back)
+	if _setup_panel_face != null:
+		all.append(_setup_panel_face)
+	if _setup_panel_scan_btn != null:
+		all.append(_setup_panel_scan_btn)
+	if _setup_panel_dl_btn != null:
+		all.append(_setup_panel_dl_btn)
+	if _setup_panel_back_btn != null:
+		all.append(_setup_panel_back_btn)
 	for q: ClickableQuad in all:
 		q.set_visual_state(q == hovered, q == _focused)
 
@@ -753,7 +807,7 @@ func _panel_for(q: ClickableQuad) -> ClickableQuad:
 ## the placard owns the room, and none during the load wait - the
 ## wall is frozen behind the marquee there.
 func _pop_target_panel() -> ClickableQuad:
-	if _mode != "wall" or _placard_up or _launching_game_id != "":
+	if _mode != "wall" or _placard_up or _setup_panel_up or _launching_game_id != "":
 		return null
 	var hovered: ClickableQuad = _rig.hovered if _rig != null else null
 	var p: ClickableQuad = _panel_for(hovered)
@@ -795,6 +849,25 @@ func _on_select(quad: ClickableQuad) -> void:
 
 
 func _activate(quad: ClickableQuad) -> void:
+	if _setup_panel_up:
+		# While the SETUP panel stands, its three buttons are
+		# the room: everything else refuses. The pick flags
+		# already say so for the pointer; this is the lock for
+		# the keyboard/gamepad paths, which activate the
+		# focused quad directly.
+		match quad.action_id:
+			"setup_panel_back":
+				quad.pulse()
+				hide_setup_panel()
+			"setup_panel_scan":
+				if not _setup_scanning:
+					quad.pulse()
+					setup_panel_scan_requested.emit()
+			"setup_panel_download":
+				if _setup_downloader != null and not _setup_downloader.is_downloading():
+					quad.pulse()
+					_start_setup_panel_download()
+		return
 	if _placard_up:
 		# While the placard stands, everything else is inert. The
 		# pick flags already say so for the pointer; this is the
@@ -849,7 +922,7 @@ func _activate(quad: ClickableQuad) -> void:
 ## focus still sits on (the page on screen); the slide's pending
 ## travel then drops whole at its far point, by its own rule.
 func _launch_focused_card() -> void:
-	if _mode != "wall" or _placard_up or _focused == null:
+	if _mode != "wall" or _placard_up or _setup_panel_up or _focused == null:
 		return
 	var idx: int = _panels.find(_focused)
 	if idx < 0 or idx >= _panel_launches.size():
@@ -890,7 +963,14 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 		if _page < page_count() - 1:
 			_begin_page_slide(1, after_swap)
 	elif key == "desk":
-		setup_requested.emit()
+		# SETUP: in the headset the operations live in the room
+		# now (the SETUP panel - the view may bend, it may not
+		# break); flat, the desk pass takes the viewport as
+		# always (Main routes the signal).
+		if _xr_enabled:
+			show_setup_panel()
+		else:
+			setup_requested.emit()
 	elif key == "exit":
 		exit_requested.emit()
 
@@ -933,7 +1013,7 @@ func _land_on_rail_stop(key: String) -> void:
 ## empty-filter guard has already fallen back to ALL, whose
 ## first panel takes the focus.
 func _toggle_focused_favorite() -> void:
-	if _mode != "wall" or _placard_up or _launching_game_id != "" or _focused == null:
+	if _mode != "wall" or _placard_up or _setup_panel_up or _launching_game_id != "" or _focused == null:
 		return
 	var idx: int = _panels.find(_focused)
 	if idx < 0:
@@ -1019,7 +1099,7 @@ func _slide_finish_now() -> void:
 ## forced through here mid-load-wait would resurrect pickable
 ## quads in a room that must stay deaf.
 func _slide_do_swap() -> void:
-	if _mode != "wall" or _placard_up or _launching_game_id != "":
+	if _mode != "wall" or _placard_up or _setup_panel_up or _launching_game_id != "":
 		_slide_after = Callable()
 		return
 	_slide_swapping = true
@@ -1082,7 +1162,7 @@ func _slide_ease(p: float) -> float:
 ## clamped press changes nothing at all - no slide, no
 ## rebuild, so focus keeps even its instance.
 func _bumper_page(step: int) -> void:
-	if _launching_game_id != "" or _placard_up or _mode != "wall":
+	if _launching_game_id != "" or _placard_up or _setup_panel_up or _mode != "wall":
 		return
 	var slot: int = -1
 	var rail_key: String = ""
@@ -1291,6 +1371,282 @@ func _restore_room_pick_states() -> void:
 				rq.pick_enabled = false ## the load wait is deaf: no rail quad picks, EXIT/SETUP included
 			else:
 				rq.pick_enabled = str(k) != "page_label"
+
+
+# ------------------------------------------------------- setup panel
+
+## SETUP while XR is live (the rail routes here): the desk
+## pass cannot reach the headset, and the old answer - a
+## placard sending the player to the desktop - broke the
+## room's standing law (the view may bend, it may not break;
+## Chris's ruling, 2026-10-24). The operations live in the
+## room now, on one panel in the placard's presentation
+## family, front and center at reading distance:
+##   SCAN LIBRARY - Main's scan, the desk's own machinery
+##     (setup_panel_scan_requested), with its progress on the
+##     message line and its landing refreshing the wall
+##     behind the panel;
+##   the library's health in words on the face - tables
+##     found, database matches, the missing-backglass count
+##     (the list itself is regenerated by the scan as always;
+##     the panel names where it lives and NEVER shell-opens
+##     anything - no desktop trips from inside VR);
+##   DOWNLOAD VPS DATABASE - the desk's download, shared
+##     (VpsDownloader);
+##   a message line carrying the last action's outcome in
+##     plain words;
+##   BACK - closes the panel, focus returns to the rail's
+##     SETUP stop.
+## Clean and CLEAR (Chris, 2026-10-25 - "make it look clean,
+## and CLEAR. People are dumb... though by its nature, VPX
+## people are not quite as dumb"): one action per row,
+## generous spacing, every row saying what it does and
+## showing its state, working faces while work runs - and
+## the hobby's own words (VPS, backglass, .vpx) stay.
+## Path editing and first-run configuration stay on the
+## desktop desk - set-once typing that wants a keyboard -
+## and the flat route to it is untouched.
+##
+## While the panel stands, the room behind it is inert,
+## exactly as behind the placard: pick flags down (the
+## snapshot restores them on the way out), focus confined
+## to the panel's three buttons, _activate refusing
+## everything else, launching unreachable, and B / D-pad
+## Right acting as BACK - the panel never exits the app.
+func show_setup_panel() -> void:
+	if _setup_panel == null:
+		_build_setup_panel()
+	if not _setup_panel_up:
+		_pick_snapshot.clear()
+		for q: ClickableQuad in _room_pickables():
+			_pick_snapshot[q] = q.pick_enabled
+		_setup_panel_up = true
+		add_child(_setup_panel)
+		ClickableQuad.face_point(_setup_panel, EYE)
+		_inert_room_quads()
+	_refresh_focusables()
+	_set_focused(_setup_panel_scan_btn)
+	_request_setup_panel_render(true)
+
+
+## The panel's BACK: tear it down, hand the room back, and
+## land focus on the rail's SETUP stop - the stop that
+## opened it (the rail-landing rule).
+func hide_setup_panel() -> void:
+	if not _setup_panel_up:
+		return
+	clear_setup_panel()
+	_land_on_rail_stop("desk")
+
+
+## Silent teardown for Main's own routes (a fresh room
+## entry): no landing - Main is already driving, and
+## entering the room must never find a stale panel standing.
+func clear_setup_panel() -> void:
+	if not _setup_panel_up:
+		return
+	_setup_panel_up = false
+	_setup_panel_gen += 1
+	if _setup_panel != null:
+		# Freed, not parked - the placard's rule (see
+		# clear_setup_placard): parked holders orphan their
+		# meshes at renderer teardown.
+		if _setup_panel.get_parent() != null:
+			remove_child(_setup_panel)
+		_setup_panel.queue_free()
+		_setup_panel = null
+		_setup_panel_face = null
+		_setup_panel_scan_btn = null
+		_setup_panel_dl_btn = null
+		_setup_panel_back_btn = null
+	_restore_room_pick_states()
+	_set_focused(null)
+	_refresh_focusables()
+
+
+## Panel queries (Main's feeds and the smokes read the panel
+## the way the other smokes read their subjects).
+func is_setup_panel_up() -> bool:
+	return _setup_panel_up
+
+
+func setup_panel_holder() -> Node3D:
+	return _setup_panel
+
+
+func setup_panel_face_quad() -> ClickableQuad:
+	return _setup_panel_face
+
+
+func setup_panel_scan_quad() -> ClickableQuad:
+	return _setup_panel_scan_btn
+
+
+func setup_panel_download_quad() -> ClickableQuad:
+	return _setup_panel_dl_btn
+
+
+func setup_panel_back_quad() -> ClickableQuad:
+	return _setup_panel_back_btn
+
+
+func setup_panel_message() -> String:
+	return _setup_message
+
+
+func setup_panel_health() -> Dictionary:
+	return _setup_health
+
+
+## The last completed scan's numbers (Main feeds these on
+## every scan landing, panel or not): the face renders its
+## health rows from them, so a panel opened later already
+## knows the library's state.
+func set_setup_health(health: Dictionary) -> void:
+	_setup_health = health
+	if _setup_panel_up:
+		_request_setup_panel_render(true)
+
+
+## The message line. Scan progress ticks arrive once per
+## frame from Main's poll - the change guard plus the render
+## throttle keep the line fresh without flooding the shared
+## factory.
+func set_setup_panel_message(text: String) -> void:
+	if text == _setup_message:
+		return
+	_setup_message = text
+	if _setup_panel_up:
+		_request_setup_panel_render(false)
+
+
+## Main started the panel's scan (or could not - the caller
+## says why on the message line instead).
+func set_setup_panel_scanning(on: bool) -> void:
+	_setup_scanning = on
+	if _setup_panel_up:
+		_request_setup_panel_render(true)
+
+
+## A scan has landed: the health numbers and the outcome
+## line land together, and the working state clears. Called
+## on every scan landing (the desk's Save & Scan included) -
+## the message is simply the last thing that happened.
+func apply_setup_panel_scan(health: Dictionary, message: String) -> void:
+	_setup_scanning = false
+	_setup_health = health
+	_setup_message = message
+	if _setup_panel_up:
+		_request_setup_panel_render(true)
+
+
+func _start_setup_panel_download() -> void:
+	if _setup_downloader == null:
+		return
+	if _setup_downloader.start_download():
+		set_setup_panel_message("Downloading VPS database...")
+		_request_setup_panel_render(true)
+
+
+func _on_setup_panel_download_finished(ok: bool, message: String, _downloaded_path: String) -> void:
+	if ok:
+		# The bare fact plus this surface's tail - the cache
+		# the download stored is the database the next scan
+		# resolves to (VpsDatabase.resolve_path).
+		set_setup_panel_message(message + " It will be used by the next scan.")
+	else:
+		set_setup_panel_message(message)
+	_request_setup_panel_render(true)
+
+
+func _build_setup_panel() -> void:
+	_setup_panel = Node3D.new()
+	_setup_panel.name = "SetupPanel"
+	_setup_panel.position = Vector3(0.0, 1.32, -1.72)
+	var placeholder: Texture2D = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
+	_setup_panel_face = ClickableQuad.new()
+	_setup_panel_face.setup("setup_panel_face", "", placeholder, Vector2(1.5, 0.8))
+	_setup_panel_face.position = Vector3(0.0, 0.38, 0.0)
+	_setup_panel_face.pick_enabled = false
+	_setup_panel.add_child(_setup_panel_face)
+	_setup_panel_scan_btn = ClickableQuad.new()
+	_setup_panel_scan_btn.setup("setup_panel_scan", "", placeholder, Vector2(0.66, 0.16))
+	_setup_panel_scan_btn.position = Vector3(-0.375, -0.24, 0.0)
+	_setup_panel.add_child(_setup_panel_scan_btn)
+	_setup_panel_dl_btn = ClickableQuad.new()
+	_setup_panel_dl_btn.setup("setup_panel_download", "", placeholder, Vector2(0.66, 0.16))
+	_setup_panel_dl_btn.position = Vector3(0.375, -0.24, 0.0)
+	_setup_panel.add_child(_setup_panel_dl_btn)
+	_setup_panel_back_btn = ClickableQuad.new()
+	_setup_panel_back_btn.setup("setup_panel_back", "", placeholder, Vector2(0.5, 0.16))
+	_setup_panel_back_btn.position = Vector3(0.0, -0.5, 0.0)
+	_setup_panel.add_child(_setup_panel_back_btn)
+	if _setup_downloader == null:
+		_setup_downloader = VpsDownloader.new()
+		add_child(_setup_downloader)
+		_setup_downloader.progress.connect(func(text: String) -> void: set_setup_panel_message(text))
+		_setup_downloader.finished.connect(_on_setup_panel_download_finished)
+	# No face_point here: the holder is oriented in
+	# show_setup_panel, once it is inside the tree (the
+	# placard's lesson).
+
+
+## Panel textures - face plus the three buttons - render
+## from current state, generation-guarded like the
+## placard's. Renders serialize (the shared factory takes
+## one at a time): a state change during a render, or
+## inside the 250ms progress throttle, marks pending and
+## the follow-up render runs when the live one lands.
+func _request_setup_panel_render(immediate: bool) -> void:
+	if not _setup_panel_up:
+		return
+	if _setup_render_in_flight or (not immediate and Time.get_ticks_msec() - _setup_render_msec < 250):
+		_setup_render_pending = true
+		return
+	_setup_render_pending = false
+	_setup_render_in_flight = true
+	_setup_render_msec = Time.get_ticks_msec()
+	_setup_panel_gen += 1
+	_fill_setup_panel_textures(_setup_panel_gen)
+
+
+func _after_setup_render() -> void:
+	_setup_render_in_flight = false
+	if _setup_render_pending and _setup_panel_up:
+		_setup_render_pending = false
+		_setup_render_in_flight = true
+		_setup_render_msec = Time.get_ticks_msec()
+		_setup_panel_gen += 1
+		_fill_setup_panel_textures(_setup_panel_gen)
+
+
+func _fill_setup_panel_textures(gen: int) -> void:
+	var face_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.setup_panel_spec(_setup_health, _setup_message), Vector2i(1024, 546))
+	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_face == null:
+		_after_setup_render()
+		return
+	_setup_panel_face.set_texture(face_tex)
+	var scan_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.button_spec("SCANNING..." if _setup_scanning else "SCAN LIBRARY", _setup_scanning), Vector2i(512, 124))
+	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_scan_btn == null:
+		_after_setup_render()
+		return
+	_setup_panel_scan_btn.set_texture(scan_tex)
+	var dl_busy: bool = _setup_downloader != null and _setup_downloader.is_downloading()
+	var dl_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.button_spec("DOWNLOADING..." if dl_busy else "DOWNLOAD VPS DATABASE", dl_busy), Vector2i(512, 124))
+	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_dl_btn == null:
+		_after_setup_render()
+		return
+	_setup_panel_dl_btn.set_texture(dl_tex)
+	var back_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.button_spec("BACK", true), Vector2i(512, 164))
+	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_back_btn == null:
+		_after_setup_render()
+		return
+	_setup_panel_back_btn.set_texture(back_tex)
+	_after_setup_render()
 
 
 # ------------------------------------------------------- launch states
@@ -1618,6 +1974,11 @@ func _process(delta: float) -> void:
 	# The loading marquee animates on this same per-frame beat.
 	if _marquee_up:
 		_update_marquee(delta)
+	if _setup_render_pending and not _setup_render_in_flight and _setup_panel_up:
+		# A throttled progress render whose state stopped
+		# changing inside its window: run it now (the clock
+		# inside _request_setup_panel_render still applies).
+		_request_setup_panel_render(false)
 	_update_pop(delta)
 	_update_slide(delta)
 	var deaf: bool = _launching_game_id != ""
@@ -1642,8 +2003,11 @@ func _process(delta: float) -> void:
 		_activate(_focused)
 	_joy_prev_a = a_now
 	var b_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_B)
-	if b_now and not _joy_prev_b and _mode == "detail" and not deaf:
-		_detail.handle_escape()
+	if b_now and not _joy_prev_b and not deaf:
+		if _mode == "detail":
+			_detail.handle_escape()
+		elif _setup_panel_up:
+			hide_setup_panel() ## B is BACK on the SETUP panel too
 	_joy_prev_b = b_now
 	# Y: launch the focused card's default build (Chris's
 	# cards-only focus ruling, 2026-10-24 - launching is a key
@@ -1687,8 +2051,11 @@ func _process(delta: float) -> void:
 	var right_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_RIGHT)
 	if not right_now:
 		_joy_right_armed = true ## a witnessed released poll: fresh press edges count from here on
-	if right_now and not _joy_prev_right and _joy_right_armed and not deaf and not _placard_up:
-		_handle_rail("exit")
+	if right_now and not _joy_prev_right and _joy_right_armed and not deaf:
+		if _setup_panel_up:
+			hide_setup_panel() ## on the SETUP panel the BACK button goes back - it never exits
+		elif not _placard_up:
+			_handle_rail("exit")
 	_joy_prev_right = right_now
 
 

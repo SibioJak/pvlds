@@ -158,6 +158,47 @@ static func placard_spec(message: String) -> Dictionary:
 	}
 
 
+## The in-room SETUP panel's face: the library's health in
+## words, with the last action's outcome riding as the sub
+## line. Health is a plain dictionary of the last completed
+## scan's numbers (Main builds it in _setup_panel_health);
+## an empty one means no scan has landed yet. Plain words,
+## one fact per line - the panel's whole job is to be read at
+## a glance in the headset.
+static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
+	var lines: Array[String] = []
+	if health.is_empty():
+		lines.append("Not scanned yet - press SCAN LIBRARY below.")
+	else:
+		var files: int = int(health.get("files", 0))
+		lines.append("%d table files - %d games" % [files, int(health.get("games", 0))])
+		if bool(health.get("db_ok", false)):
+			var matched_line: String = "Database matched %d of %d builds" % [int(health.get("matched", 0)), files]
+			var by_game: int = int(health.get("game_matched", 0))
+			if by_game > 0:
+				matched_line += " (%d more by game only)" % by_game
+			lines.append(matched_line)
+		else:
+			lines.append("No database loaded - games are named from their file names alone.")
+		if str(health.get("db_kind", "")) == "sample":
+			lines.append("That database is the bundled SAMPLE - it cannot identify real tables. Download the VPS database below.")
+		var missing: int = int(health.get("missing", 0))
+		if missing > 0:
+			lines.append("Missing backglass: %d table files have no .directb2s beside them. The list is missing_b2s.txt in the app data folder." % missing)
+		else:
+			lines.append("Missing backglass: none - every table file has a .directb2s beside it.")
+	return {
+		"kind": "banner",
+		"bg": Color(0.05, 0.05, 0.09),
+		"title": "SETUP",
+		"title_size": 76,
+		"sub": message if message != "" else "Scan the library and fetch the database - right here, no desktop trip.",
+		"sub_size": 38,
+		"body": "\n".join(lines),
+		"body_size": 34,
+	}
+
+
 static func banner_spec(line: String) -> Dictionary:
 	return {
 		"kind": "banner",
