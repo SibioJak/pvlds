@@ -15,6 +15,9 @@ var pick_enabled: bool = true
 var _mat: StandardMaterial3D
 var _frame_mat: StandardMaterial3D
 var _frame: MeshInstance3D
+var _content_alpha: float = 1.0 ## the face's current fade (set_content_alpha): the frame's ceiling too
+var _hovered: bool = false ## the last visual state the room asked for; the frame's showing is derived, never stored raw
+var _focused: bool = false
 
 const HOVER_COLOR: Color = Color(0.9, 0.66, 0.18)
 const FOCUS_COLOR: Color = Color(0.35, 0.75, 1.0)
@@ -87,6 +90,7 @@ func current_texture() -> Texture2D:
 ## hover/focus colour and the face's white tint are preserved.
 func set_content_alpha(a: float) -> void:
 	var alpha: float = clampf(a, 0.0, 1.0)
+	_content_alpha = alpha
 	if _mat != null:
 		var c: Color = _mat.albedo_color
 		c.a = alpha
@@ -95,16 +99,49 @@ func set_content_alpha(a: float) -> void:
 		var fc: Color = _frame_mat.albedo_color
 		fc.a = alpha
 		_frame_mat.albedo_color = fc
+	_apply_frame_state()
 
 
 func set_visual_state(hovered: bool, focused: bool) -> void:
-	if _frame == null:
+	_hovered = hovered
+	_focused = focused
+	_apply_frame_state()
+
+
+## The frame's one showing rule, derived fresh at every change
+## (state, fade, visibility): a highlight may show only while
+## its quad's FACE shows - hovered or focused, not faded away,
+## and visible in the tree. It used to be a raw stored flag
+## (visible = hovered or focused, colour slammed to full
+## alpha), so a focused quad whose face was faded or wearing
+## a broken texture stood in the room as a bare cyan bar - an
+## invisible highlighted button (Chris, 2026-10-25). A frame
+## with no visible face behind it is now impossible by
+## construction, not by callers remembering to hide it.
+func _apply_frame_state() -> void:
+	if _frame == null or _frame_mat == null:
 		return
-	_frame.visible = hovered or focused
-	if focused:
-		_frame_mat.albedo_color = FOCUS_COLOR
-	elif hovered:
-		_frame_mat.albedo_color = HOVER_COLOR
+	var show: bool = (_hovered or _focused) and _content_alpha > 0.01 and is_visible_in_tree()
+	_frame.visible = show
+	if _focused:
+		_frame_mat.albedo_color = Color(FOCUS_COLOR, _content_alpha)
+	elif _hovered:
+		_frame_mat.albedo_color = Color(HOVER_COLOR, _content_alpha)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED:
+		_apply_frame_state()
+
+
+## Smoke seams: is the highlight frame flagged showing, and
+## how faded is the face it would frame?
+func highlight_visible() -> bool:
+	return _frame != null and _frame.visible
+
+
+func content_alpha() -> float:
+	return _content_alpha
 
 
 func pulse() -> void:

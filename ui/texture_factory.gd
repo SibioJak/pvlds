@@ -2,12 +2,22 @@ class_name TextureFactory
 extends Node
 
 ## Renders CardFace specs to textures through one shared SubViewport.
-## Callers must serialize renders (await each call) - the room does.
+## Renders SERIALIZE inside the factory (a queue, below): the
+## viewport and its CardFace are shared state, so two renders in
+## flight at once cross their captures - the second caller's spec
+## overwrites the first's before its frame is captured, and the
+## first caller walks away wearing the second's texture (or a
+## blank one). That is exactly how a scan landing once dressed
+## the wall's banner in the SETUP panel's face, a wall card in
+## the panel's BACK button, and a panel button in nothing at all
+## (Chris's after-scan strays, 2026-10-25). Callers just call;
+## the queue keeps each capture honest.
 ## In headless/dummy rendering a capture can come back empty; callers
 ## always get a usable texture (a dark solid) rather than null.
 
 var _viewport: SubViewport
 var _face: CardFace
+var _render_in_flight: bool = false ## the serialization queue's lock: one capture at a time, ever
 
 
 func _ready() -> void:
@@ -22,6 +32,20 @@ func _ready() -> void:
 
 
 func render_texture(spec: Dictionary, px_size: Vector2i) -> Texture2D:
+	# Wait for the shared viewport to be free, then hold it for
+	# the whole capture. The check-and-set is atomic between
+	# awaits (GDScript is single-threaded), and a waiter resumes
+	# one frame later to re-check - so renders land in call
+	# order and no capture ever sees another call's spec.
+	while _render_in_flight:
+		await get_tree().process_frame
+	_render_in_flight = true
+	var result: Texture2D = await _render_now(spec, px_size)
+	_render_in_flight = false
+	return result
+
+
+func _render_now(spec: Dictionary, px_size: Vector2i) -> Texture2D:
 	_viewport.size = px_size
 	_face.apply_spec(spec)
 	await get_tree().process_frame

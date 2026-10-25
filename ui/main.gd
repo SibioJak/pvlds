@@ -149,9 +149,15 @@ var _setup_panel_smoke_phase: int = 0
 var _setup_panel_smoke_wait: int = 0
 var _setup_panel_smoke_failures: int = 0
 var _setup_panel_smoke_deadline_msec: int = 0
+var _setup_panel_smoke_wall_before: Array[ClickableQuad] = [] ## the wall's quad instances before the panel's scan (the deferral snapshot)
+var _setup_panel_smoke_tex_before: Dictionary = {} ## ClickableQuad -> the texture it wore before the scan (the cross-talk snapshot)
+var _setup_panel_smoke_scan_seen: bool = false ## the scan's landing message has been seen; texture assertions wait a few frames for the landing renders to settle
 var _shot_setup_panel_path: String = "" ## --pvlds-shot-setup-panel P: capture the open SETUP panel
 var _shot_setup_panel_phase: int = -1
 var _shot_setup_panel_frames: int = 0
+var _shot_setup_panel_after_scan: bool = false ## --pvlds-shot-setup-panel-scan: run the panel's scan first, capture the post-scan room (Chris's stray framing)
+var _shot_setup_panel_scan_fired: bool = false
+var _shot_setup_panel_scanned: bool = false
 var _smoke_desk: bool = false ## --pvlds-smoke-desk: drive the desk's live session switch, assert the config file follows
 var _smoke_dpadexit: bool = false ## --pvlds-smoke-dpadexit: a fresh D-pad Right in the room must exit the app
 var _dpadexit_held_leg: bool = false ## --pvlds-smoke-dpadexit-held: the button is pinned from boot; no exit until a witnessed release, then a fresh press exits
@@ -277,6 +283,8 @@ func _ready() -> void:
 	if shot_sp_idx >= 0 and shot_sp_idx + 1 < user_args.size():
 		_shot_setup_panel_path = user_args[shot_sp_idx + 1]
 		_shot_setup_panel_phase = 0
+	if user_args.has("--pvlds-shot-setup-panel-scan"):
+		_shot_setup_panel_after_scan = true
 	if user_args.has("--pvlds-smoke-desk"):
 		_smoke_desk = true
 	if user_args.has("--pvlds-smoke-dpadexit"):
@@ -541,10 +549,12 @@ func _finish_scan() -> void:
 		_art_warmer.warm_library(_scanner.games)
 	# The room eats from the same landing (the SETUP panel): the
 	# wall adopts the new scan - a panel-started scan must change
-	# the room it was started from - the panel's health numbers
-	# refresh, and a standing panel shows the outcome on its
-	# message line. During a load wait the wait owns the room;
-	# no adoption then (the wait's settle path rebuilds nothing).
+	# the room it was started from. While the panel stands, the
+	# room DEFERS that adoption to the panel's close (see
+	# RoomView.adopt_library) - behind the panel only the
+	# panel's own health numbers and message line move. During
+	# a load wait the wait owns the room; no adoption then
+	# (the wait's settle path rebuilds nothing).
 	if _room != null and _scanner != null:
 		if not _launch_pending:
 			_room.adopt_library(_scanner)
@@ -1338,8 +1348,10 @@ func _finish_placard_smoke() -> void:
 ## the room (not a CanvasLayer), its rows present, focus
 ## confined to its three buttons, the wall inert behind it -
 ## then drives its operations for real: SCAN runs Main's scan
-## and the landing lands on the panel (health + message + the
-## room adopting the new scan), and the download runs against
+## and the landing lands on the panel ONLY (health + message;
+## the wall behind keeps its instances and textures, the
+## room adopts the scan when the panel closes - the
+## after-scan strays contract), and the download runs against
 ## the harness's local stub database (PVLDS_VPSDB_URL) with
 ## its verdict on the message line. B and D-pad Right both act
 ## as BACK (never exit), BACK lands focus on the rail's SETUP
@@ -1370,12 +1382,28 @@ func _drive_setup_panel_smoke() -> void:
 				_setup_panel_smoke_fail("the panel's face never rendered")
 				_finish_setup_panel_smoke()
 		2:
+			# Snapshot the wall as it stands behind the open
+			# panel: instances and textures. The scan leg's
+			# verdict (phase 3) is that NONE of it moved - the
+			# after-scan strays were wall quads re-dressed in
+			# the panel's textures and bare highlight frames,
+			# so identity, not resemblance, is the standard.
+			_setup_panel_smoke_snapshot_wall()
+			_setup_panel_smoke_scan_seen = false
 			# The scan leg: fire SCAN through the real funnel.
 			_room._activate(_room.setup_panel_scan_quad())
 			_setup_panel_smoke_deadline_msec = Time.get_ticks_msec() + 30000
 			_setup_panel_smoke_phase = 3
 		3:
-			if _room.setup_panel_message().begins_with("Scan done"):
+			if _room.setup_panel_message().begins_with("Scan done") and not _setup_panel_smoke_scan_seen:
+				# The landing's renders are still in flight for
+				# a few frames; the stray hunt below reads
+				# textures, so it waits for them to settle.
+				_setup_panel_smoke_scan_seen = true
+				_setup_panel_smoke_wait = 0
+			elif _setup_panel_smoke_scan_seen:
+				_setup_panel_smoke_wait += 1
+			if _setup_panel_smoke_scan_seen and _setup_panel_smoke_wait >= 10:
 				_setup_panel_expect(not _scan_active, "scan leg: the scan has landed")
 				var health: Dictionary = _room.setup_panel_health()
 				_setup_panel_expect(int(health.get("files", -1)) == _scanner.total_files,
@@ -1384,8 +1412,33 @@ func _drive_setup_panel_smoke() -> void:
 					"scan leg: the panel's missing-backglass count matches the scan")
 				_setup_panel_expect(_room.setup_panel_message().contains(str(_scanner.total_files)),
 					"scan leg: the message line states the outcome in words")
-				_setup_panel_expect(_room._scanner == _scanner,
-					"scan leg: the room adopted the new scan (the wall behind refreshed)")
+				# The deferral (Chris's after-scan strays,
+				# 2026-10-25): behind the standing panel the
+				# room does NOT adopt the scan - it is held for
+				# the panel's close, and the wall the player
+				# left is the wall still standing there.
+				_setup_panel_expect(_room._pending_library == _scanner,
+					"scan leg: the room holds the new scan for the panel's close (no adoption behind the panel)")
+				_setup_panel_expect(_room._scanner != _scanner,
+					"scan leg: the wall still runs on the library it had when the panel opened")
+				_setup_panel_expect(_setup_panel_smoke_wall_untouched(),
+					"scan leg: every wall quad kept its instance and its texture through the landing (no strays, no crossed textures)")
+				_setup_panel_expect(_setup_panel_smoke_panel_holders() == 1,
+					"scan leg: exactly one SETUP panel stands (no duplicate header behind it)")
+				_setup_panel_expect(not _setup_panel_smoke_orphan_highlight(),
+					"scan leg: no highlight frame shows without a visible quad behind it (no invisible highlighted buttons)")
+				_setup_panel_expect(_room.setup_panel_face_quad().current_texture() != null
+					and _room.setup_panel_face_quad().current_texture().get_size() == Vector2(1024, 546),
+					"scan leg: the panel's face wears its own texture (not a wall texture)")
+				_setup_panel_expect(_room.setup_panel_scan_quad().current_texture() != null
+					and _room.setup_panel_scan_quad().current_texture().get_size() == Vector2(512, 124),
+					"scan leg: SCAN LIBRARY wears its own button face")
+				_setup_panel_expect(_room.setup_panel_download_quad().current_texture() != null
+					and _room.setup_panel_download_quad().current_texture().get_size() == Vector2(512, 124),
+					"scan leg: DOWNLOAD VPS DATABASE wears its own button face")
+				_setup_panel_expect(_room.setup_panel_back_quad().current_texture() != null
+					and _room.setup_panel_back_quad().current_texture().get_size() == Vector2(512, 164),
+					"scan leg: BACK wears its own button face")
 				_setup_panel_expect(_room.is_setup_panel_up(), "scan leg: the panel stands through its scan")
 				_setup_panel_expect(not _room._setup_scanning, "scan leg: the working state cleared")
 				var f: ClickableQuad = _room.focused_quad()
@@ -1396,7 +1449,7 @@ func _drive_setup_panel_smoke() -> void:
 				_room._activate(_room.setup_panel_download_quad())
 				_setup_panel_smoke_deadline_msec = Time.get_ticks_msec() + 60000
 				_setup_panel_smoke_phase = 4
-			elif Time.get_ticks_msec() > _setup_panel_smoke_deadline_msec:
+			elif not _setup_panel_smoke_scan_seen and Time.get_ticks_msec() > _setup_panel_smoke_deadline_msec:
 				_setup_panel_smoke_fail("scan leg: the scan never landed on the panel")
 				_finish_setup_panel_smoke()
 		4:
@@ -1415,6 +1468,15 @@ func _drive_setup_panel_smoke() -> void:
 					"download leg: the message line states the outcome in words")
 				_setup_panel_expect(_room._setup_downloader != null and not _room._setup_downloader.is_downloading(),
 					"download leg: the downloader is idle at the verdict")
+				# The download's landing is panel-only too:
+				# it shares the scan's refresh shape, so it
+				# proves it did not touch the wall either.
+				_setup_panel_expect(_setup_panel_smoke_wall_untouched(),
+					"download leg: the wall is still untouched behind the panel (no rebuild, no crossed textures)")
+				_setup_panel_expect(not _setup_panel_smoke_orphan_highlight(),
+					"download leg: no highlight frame shows without a visible quad behind it")
+				_setup_panel_expect(_setup_panel_smoke_panel_holders() == 1,
+					"download leg: exactly one SETUP panel stands")
 				_setup_panel_smoke_inject(JOY_BUTTON_B, true)
 				_setup_panel_smoke_wait = 0
 				_setup_panel_smoke_phase = 5
@@ -1437,6 +1499,32 @@ func _drive_setup_panel_smoke() -> void:
 						live = false
 				_setup_panel_expect(live, "B: the wall's controls are live again")
 				_setup_panel_expect(_room.visible, "B: the room is still up (no exit)")
+				# The close contract (Chris, 2026-10-25):
+				# exiting setup lands on the Table Select
+				# wall - the held scan adopted ONCE at close,
+				# the wall a fresh build from it, no panel
+				# holder left standing, and the visible
+				# scene is cards + rail and nothing else.
+				_setup_panel_expect(_room._scanner == _scanner,
+					"B: closing the panel adopts the held scan (the room now runs on the new library)")
+				_setup_panel_expect(_room._pending_library == null,
+					"B: no scan is left held after the close")
+				_setup_panel_expect(_room.setup_panel_holder() == null and _setup_panel_smoke_panel_holders() == 0,
+					"B: no SETUP panel is left standing (no leftover panel arrangement)")
+				var rebuilt: bool = not _room._panels.is_empty() and not _setup_panel_smoke_wall_before.is_empty() \
+					and _room._panels[0] != _setup_panel_smoke_wall_before[0]
+				_setup_panel_expect(rebuilt,
+					"B: the wall is a fresh build from the new scan (rebuilt once, at close - not the pre-scan wall)")
+				var wall_scene: bool = _room._mode == "wall" and not _room._panels.is_empty()
+				for q2: ClickableQuad in _room._panels:
+					if not q2.is_visible_in_tree():
+						wall_scene = false
+				for k2: Variant in _room._rail_quads.keys():
+					var rq2: ClickableQuad = _room._rail_quads[k2] as ClickableQuad
+					if rq2 != null and not rq2.is_visible_in_tree():
+						wall_scene = false
+				_setup_panel_expect(wall_scene,
+					"B: the visible scene is the Table Select wall (cards + rail visible, panel gone)")
 				# Reopen and leave by D-pad Right instead.
 				_room._activate(_room.rail_quad("desk"))
 				_setup_panel_smoke_wait = 0
@@ -1467,6 +1555,85 @@ func _drive_setup_panel_smoke() -> void:
 				_setup_panel_expect(not _room.visible, "flat setup: the room hides for the desk, as before")
 				_setup_panel_expect(_desk != null and _desk.visible, "flat setup: the desk shows")
 				_finish_setup_panel_smoke()
+
+
+## The deferral snapshot: every wall quad (cards, their
+## Launch buttons, the banner, the rail) with the texture it
+## wears as the panel's scan starts.
+func _setup_panel_smoke_snapshot_wall() -> void:
+	_setup_panel_smoke_wall_before.clear()
+	_setup_panel_smoke_tex_before.clear()
+	var quads: Array[ClickableQuad] = []
+	quads.append_array(_room._panels)
+	quads.append_array(_room._panel_launches)
+	if _room._banner_quad != null:
+		quads.append(_room._banner_quad)
+	for k: Variant in _room._rail_quads.keys():
+		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
+		if rq != null:
+			quads.append(rq)
+	_setup_panel_smoke_wall_before = quads
+	for q: ClickableQuad in quads:
+		_setup_panel_smoke_tex_before[q] = q.current_texture()
+
+
+## True while every snapshotted wall quad is still the room's
+## quad, wearing the texture it wore in the snapshot.
+func _setup_panel_smoke_wall_untouched() -> bool:
+	var now: Array[ClickableQuad] = []
+	now.append_array(_room._panels)
+	now.append_array(_room._panel_launches)
+	if _room._banner_quad != null:
+		now.append(_room._banner_quad)
+	for k: Variant in _room._rail_quads.keys():
+		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
+		if rq != null:
+			now.append(rq)
+	if now.size() != _setup_panel_smoke_wall_before.size():
+		return false
+	for i: int in range(now.size()):
+		if now[i] != _setup_panel_smoke_wall_before[i]:
+			return false
+		if now[i].current_texture() != _setup_panel_smoke_tex_before.get(now[i], null):
+			return false
+	return true
+
+
+## How many SETUP panel holders stand in the room's tree.
+func _setup_panel_smoke_panel_holders() -> int:
+	var n: int = 0
+	for child: Node in _room.get_children():
+		if child.name == "SetupPanel":
+			n += 1
+	return n
+
+
+## True when any quad's highlight frame is flagged showing
+## while its quad's face cannot be seen (not visible in the
+## tree, or faded to nothing): the invisible highlighted
+## button, as a scene fact.
+func _setup_panel_smoke_orphan_highlight() -> bool:
+	var quads: Array[ClickableQuad] = []
+	quads.append_array(_room._panels)
+	quads.append_array(_room._panel_launches)
+	if _room._banner_quad != null:
+		quads.append(_room._banner_quad)
+	for k: Variant in _room._rail_quads.keys():
+		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
+		if rq != null:
+			quads.append(rq)
+	if _room.setup_panel_face_quad() != null:
+		quads.append(_room.setup_panel_face_quad())
+	if _room.setup_panel_scan_quad() != null:
+		quads.append(_room.setup_panel_scan_quad())
+	if _room.setup_panel_download_quad() != null:
+		quads.append(_room.setup_panel_download_quad())
+	if _room.setup_panel_back_quad() != null:
+		quads.append(_room.setup_panel_back_quad())
+	for q: ClickableQuad in quads:
+		if q.highlight_visible() and (not q.is_visible_in_tree() or q.content_alpha() <= 0.01):
+			return true
+	return false
 
 
 func _setup_panel_surface_assertions() -> void:
@@ -1570,6 +1737,21 @@ func _drive_shot_setup_panel() -> void:
 			var face: ClickableQuad = _room.setup_panel_face_quad()
 			var dressed: bool = face != null and face.current_texture() != null \
 				and face.current_texture().get_size() == Vector2(1024, 546)
+			if _shot_setup_panel_after_scan and not _shot_setup_panel_scanned:
+				# The after-scan variant (the after-scan strays'
+				# framing): fire SCAN through the panel, wait
+				# for its landing, then let the room settle
+				# before the capture below.
+				if dressed and not _shot_setup_panel_scan_fired:
+					_shot_setup_panel_scan_fired = true
+					_room._activate(_room.setup_panel_scan_quad())
+				if _shot_setup_panel_scan_fired and _room.setup_panel_message().begins_with("Scan done"):
+					_shot_setup_panel_scanned = true
+					_shot_setup_panel_frames = 0
+				if _shot_setup_panel_frames > 3600:
+					printerr("PVLDS SETUP PANEL SHOT: FAIL - the after-scan capture never landed")
+					get_tree().quit(1)
+				return
 			if _shot_setup_panel_frames >= 12 and dressed:
 				var path: String = _shot_setup_panel_path
 				_shot_setup_panel_phase = -1

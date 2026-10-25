@@ -588,9 +588,13 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   focus stays on its three buttons, launching is unreachable
   while it stands, and B / D-pad Right act as BACK (never as
   exit) — closing it lands focus on the rail's SETUP stop. A
-  scan started there lands in the same room: the wall behind
-  the panel adopts the new scan and the panel's numbers
-  update. Path editing and first-run configuration stay on
+  scan started there lands in the same room: while the panel
+  stands, the landing updates only the panel (its numbers and
+  message) — the wall behind it is not rebuilt and keeps its
+  faces — and closing the panel adopts the new scan once, so
+  exiting setup always lands on a Table Select wall built
+  cleanly from the latest scan, focus on the rail's SETUP
+  stop. Path editing and first-run configuration stay on
   the desktop desk pass, where the keyboard is — flat
   launches route SETUP to the desk exactly as before. The
   panel never shell-opens anything: no desktop trips from
@@ -680,8 +684,10 @@ cached `vpsdb.json` and the same code runs your actual library.
   contract: a visible 3D panel in the room (not a CanvasLayer),
   its rows present, focus confined to its three buttons, the
   wall inert behind it; then SCAN runs the real scan and its
-  landing lands on the panel (health, message, the room
-  adopting the new scan), and DOWNLOAD runs against a stub
+  landing lands on the panel only (health, message; the wall
+  keeps its instances and textures, the room holds the scan
+  and adopts it once when the panel closes onto the Table
+  Select wall), and DOWNLOAD runs against a stub
   database served over local HTTP (env `PVLDS_VPSDB_URL`,
   which the harness's `run_setup_panel_smoke.sh` sets); B and
   D-pad Right act as BACK, landing focus on the rail's SETUP
@@ -690,8 +696,12 @@ cached `vpsdb.json` and the same code runs your actual library.
 - `--pvlds-shot-setup-panel <path.png>` — room boot; force the
   room's XR flag on, open the SETUP panel, and save a
   screenshot of it once its textures land (the clean/CLEAR QA
-  capture; the harness's `run_setup_panel_shot.sh`). Needs a
-  real rendering driver, like `--pvlds-shot`.
+  capture; the harness's `run_setup_panel_shot.sh`). With
+  `--pvlds-shot-setup-panel-scan` added, the capture waits
+  for a panel-driven scan to land first — the post-scan room,
+  for eyeballing against field reports of stray quads and
+  bare highlight bars. Needs a real rendering driver, like
+  `--pvlds-shot`.
 - `--pvlds-smoke-desk` — desk boot (the flag keeps the boot on
   the desk: no scan, no room); flip the desk's session switch
   (focus herding — the only one left) through its real signal

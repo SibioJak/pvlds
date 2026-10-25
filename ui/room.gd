@@ -153,6 +153,7 @@ var _setup_downloader: VpsDownloader = null ## the panel's handle on the shared 
 var _setup_render_in_flight: bool = false ## a panel render is awaiting the factory (the factory takes one render at a time)
 var _setup_render_pending: bool = false ## state changed mid-render or inside the progress throttle: render again after
 var _setup_render_msec: int = 0 ## when the last panel render started (the progress throttle's clock)
+var _pending_library: LibraryScanner = null ## a scan that landed while the SETUP panel stands: held, and adopted ONCE when the panel closes (see adopt_library)
 var _pick_snapshot: Dictionary = {} ## ClickableQuad -> pick_enabled, taken as the placard rises
 var _rail_quads: Dictionary = {} ## key -> ClickableQuad
 var _rail_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: every rail button face ever rendered, so a rebuild re-dresses the rail in its own frame
@@ -215,7 +216,23 @@ func refresh_library() -> void:
 ## only reached the wall through a process relaunch; the
 ## SETUP panel's scan lands HERE, in the room it was started
 ## from.
+##
+## While the SETUP panel stands, the adoption DEFERS: the
+## landing used to rebuild the wall behind the open panel in
+## the same moment the panel re-rendered its own face, and
+## the two texture streams crossed (see TextureFactory) -
+## the room woke wearing the panel's textures and bare
+## highlight bars (Chris's after-scan strays, 2026-10-25).
+## Behind a modal panel a scan changes NOTHING in the room:
+## the scanner is held here, the panel alone shows the
+## landing (its health and message are Main-fed), and the
+## wall adopts the held library ONCE, when the panel closes
+## (clear_setup_panel) - the player returns to a Table
+## Select wall built cleanly from the new scan.
 func adopt_library(scanner: LibraryScanner) -> void:
+	if _setup_panel_up:
+		_pending_library = scanner
+		return
 	_scanner = scanner
 	refresh_library()
 
@@ -428,9 +445,11 @@ func _sort_visible() -> void:
 
 func _rebuild_wall() -> void:
 	# The SETUP panel's focus, remembered across the rebuild:
-	# a scan landing refreshes the wall behind the standing
-	# panel, and the player's place on the panel must survive
-	# it (the tail below hands it back).
+	# if a rebuild ever runs while the panel stands, the
+	# player's place on the panel must survive it (the tail
+	# below hands it back). Scan landings no longer rebuild
+	# here at all - they defer to the panel's close (see
+	# adopt_library) - but the confinement law is general.
 	var panel_focus: ClickableQuad = _focused if _setup_panel_up else null
 	_gen += 1
 	var gen: int = _gen
@@ -1431,7 +1450,12 @@ func show_setup_panel() -> void:
 
 ## The panel's BACK: tear it down, hand the room back, and
 ## land focus on the rail's SETUP stop - the stop that
-## opened it (the rail-landing rule).
+## opened it (the rail-landing rule). The close contract
+## (Chris, 2026-10-25): exiting setup ALWAYS lands on the
+## Table Select wall - if a scan landed while the panel
+## stood, clear_setup_panel has just rebuilt that wall once
+## from the new scan; the player never returns to a leftover
+## panel, marquee, or placard arrangement.
 func hide_setup_panel() -> void:
 	if not _setup_panel_up:
 		return
@@ -1462,6 +1486,17 @@ func clear_setup_panel() -> void:
 	_restore_room_pick_states()
 	_set_focused(null)
 	_refresh_focusables()
+	if _pending_library != null:
+		# The deferred adoption lands exactly once, here, with
+		# the panel already down: the wall the player returns
+		# to is built from the scan that landed behind the
+		# panel - never rebuilt piecemeal behind it while it
+		# stood. hide_setup_panel lands the focus on the
+		# rail's SETUP stop right after this.
+		var pending: LibraryScanner = _pending_library
+		_pending_library = null
+		_scanner = pending
+		refresh_library()
 
 
 ## Panel queries (Main's feeds and the smokes read the panel
