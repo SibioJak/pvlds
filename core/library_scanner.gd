@@ -18,6 +18,7 @@ var games: Array[GameEntry] = []
 var total_files: int = 0
 var matched_files: int = 0 ## builds found in the db (exact build match)
 var game_matched_files: int = 0 ## builds whose game is known but build is not in the db
+var match_tier_counts: Dictionary = {} ## match tier -> files resolved through it (every scanned file counted once, "local" included)
 var art_covered_games: int = 0
 var missing_b2s_files: Array[String] = [] ## .vpx files with no same-stem .directb2s beside them, from this scan's own listing - the missing-backglass list's raw material (see MissingB2sList).
 
@@ -34,6 +35,7 @@ func scan(folders: Array[String], db: VpsDatabase, progress: ScanProgress = null
 	total_files = 0
 	matched_files = 0
 	game_matched_files = 0
+	match_tier_counts.clear()
 	art_covered_games = 0
 	missing_b2s_files.clear()
 	if progress != null:
@@ -67,6 +69,8 @@ func scan(folders: Array[String], db: VpsDatabase, progress: ScanProgress = null
 			matched_files += 1
 		elif build.game_key != "" and db != null and db.games_by_id.has(build.game_key):
 			game_matched_files += 1
+		var tier_key: String = build.match_tier if build.match_tier != "" else "local"
+		match_tier_counts[tier_key] = int(match_tier_counts.get(tier_key, 0)) + 1
 		var entry: GameEntry = null
 		var existing: Variant = by_key.get(build.game_key, null)
 		if existing is GameEntry:
@@ -158,42 +162,125 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 	b.file_path = path
 	b.file_name = path.get_file()
 	b.date_unix = int(FileAccess.get_modified_time(path))
+	b.match_tier = "local"
 	var title_guess: String = _guess_title(b.file_name)
 	var version_guess: String = _guess_version(b.file_name)
 	if db != null and db.loaded:
-		# 1) Strong match: a db table file naming this exact file.
+		# 1) Exact: a db table file naming this exact file.
 		var strong: Dictionary = db.find_by_table_filename(b.file_name)
 		if not strong.is_empty():
 			_apply_table_file(b, str(strong["game_id"]), strong["table_file"])
+			b.match_tier = "exact"
 			return b
-		# 2) Game match by normalized title (with/without a leading "The").
-		var game_id: String = _match_game_id(db, title_guess)
+		# 2) Cleaned file name: the file's decoration-scrubbed name
+		# equals a db table file's equally scrubbed fileName. The
+		# key must belong to ONE game - two games claiming it makes
+		# it ambiguous, and an ambiguous key matches nothing (a
+		# false match is worse than a miss: wrong metadata, wrong
+		# VR flag). A single claimant whose stated version the file
+		# contradicts does not claim the BUILD either; the game is
+		# still certain, so the within-game ladder decides.
+		var claimants: Array = db.find_by_scrubbed_filename(b.file_name)
+		var claimant_games: Dictionary = {}
+		for item: Variant in claimants:
+			if item is Dictionary:
+				var cd: Dictionary = item
+				var cg: String = str(cd.get("game_id", ""))
+				if cg != "":
+					claimant_games[cg] = true
+		if claimant_games.size() == 1:
+			var file_game_id: String = str(claimant_games.keys()[0])
+			var only_tf: Dictionary = {}
+			if claimants.size() == 1:
+				for item2: Variant in claimants:
+					if item2 is Dictionary:
+						var cd2: Dictionary = item2
+						var tfv: Variant = cd2.get("table_file", {})
+						if tfv is Dictionary:
+							only_tf = tfv
+			if not only_tf.is_empty() and (version_guess == "" or version_guess == str(only_tf.get("version", ""))):
+				_apply_table_file(b, file_game_id, only_tf)
+				b.match_tier = "file"
+				return b
+			return _finish_game_match(b, db, file_game_id, "file", version_guess)
+		# 3) Game by title (with/without a leading "The").
+		var game_id: String = _match_game_id(db, title_guess, b.file_name)
 		if game_id != "":
-			b.game_key = game_id
-			# 2a) Build match inside the game by version token.
-			if version_guess != "":
-				for item: Variant in db.vpx_table_files_of(game_id):
-					if item is Dictionary:
-						var tf: Dictionary = item
-						if str(tf.get("version", "")) == version_guess:
-							_apply_table_file(b, game_id, tf)
-							return b
-			# 2b) No version in the file name, and the db knows a single
-			# VPX build of this game: it is this one. (If the file name
-			# DOES state a version and it matched nothing above, the
-			# build is local-only - never relabel it as the db's build.)
-			if version_guess == "":
-				var vpx_files: Array = db.vpx_table_files_of(game_id)
-				if vpx_files.size() == 1 and vpx_files[0] is Dictionary:
-					_apply_table_file(b, game_id, vpx_files[0])
-					return b
-			# 2c) Game known, build not in the db: keep filename facts.
-			b.version = version_guess
-			return b
-	# 3) Unknown to the db: group by normalized title from the filename.
+			return _finish_game_match(b, db, game_id, "name", version_guess)
+		# 4) Cleaned game name: the file's scrubbed name equals a
+		# db game's scrubbed name - for tables the db lists no
+		# fileName for. Refereed by the file's own (Maker Year)
+		# parens: exactly one consistent game, or no match.
+		var scrub_ids: Array[String] = db.find_game_ids_by_scrubbed_name(b.file_name)
+		var survivors: Array[String] = []
+		for sid: String in scrub_ids:
+			if _meta_consistent(db, sid, b.file_name):
+				survivors.append(sid)
+		if survivors.size() == 1:
+			return _finish_game_match(b, db, survivors[0], "scrubbed", version_guess)
+	# 5) Unknown to the db: group by normalized title from the filename.
 	b.game_key = "local:" + VpsDatabase.normalize_name(title_guess)
 	b.version = version_guess
 	return b
+
+
+## The within-game ladder once a tier has identified the game:
+## build by stated version token; when the file states no version
+## and the db knows a single VPX build of the game, that build;
+## otherwise the game is known and the build stays local - a
+## stated version that matches nothing is NEVER relabeled as a
+## db build.
+func _finish_game_match(b: TableBuild, db: VpsDatabase, game_id: String, tier: String, version_guess: String) -> TableBuild:
+	b.game_key = game_id
+	b.match_tier = tier
+	if version_guess != "":
+		for item: Variant in db.vpx_table_files_of(game_id):
+			if item is Dictionary:
+				var tf: Dictionary = item
+				if str(tf.get("version", "")) == version_guess:
+					_apply_table_file(b, game_id, tf)
+					return b
+	else:
+		var vpx_files: Array = db.vpx_table_files_of(game_id)
+		if vpx_files.size() == 1 and vpx_files[0] is Dictionary:
+			_apply_table_file(b, game_id, vpx_files[0])
+			return b
+	b.version = version_guess
+	return b
+
+
+## Whether the file name's own "(Manufacturer Year)" parens agree
+## with a db game. Constraints exist only inside that convention:
+## a paren without a year ("(Remake)", "(Special Edition)") is
+## not maker evidence and vetoes nothing. With a year present,
+## the year must agree (when the db carries one) and the maker
+## tokens must overlap the db's (either side may carry the fuller
+## form: "Northlight" against "Northlight Amusements").
+func _meta_consistent(db: VpsDatabase, game_id: String, file_name: String) -> bool:
+	var meta: Dictionary = _parse_paren_meta(file_name)
+	var file_year: int = int(meta.get("year", 0))
+	if file_year <= 0:
+		return true
+	var g: Dictionary = db.game_dict(game_id)
+	var game_year: int = int(g.get("year", 0))
+	if game_year > 0 and game_year != file_year:
+		return false
+	var file_maker: String = str(meta.get("manufacturer", ""))
+	var game_maker: String = str(g.get("manufacturer", ""))
+	if file_maker != "" and game_maker != "":
+		var ft: PackedStringArray = VpsDatabase.scrub_tokens(file_maker)
+		var gt: PackedStringArray = VpsDatabase.scrub_tokens(game_maker)
+		if not ft.is_empty() and not gt.is_empty():
+			if not _tokens_subset(ft, gt) and not _tokens_subset(gt, ft):
+				return false
+	return true
+
+
+static func _tokens_subset(a: PackedStringArray, b: PackedStringArray) -> bool:
+	for t: String in a:
+		if not b.has(t):
+			return false
+	return true
 
 
 func _apply_table_file(b: TableBuild, game_id: String, tf: Dictionary) -> void:
@@ -209,17 +296,24 @@ func _apply_table_file(b: TableBuild, game_id: String, tf: Dictionary) -> void:
 		b.date_unix = release
 
 
-func _match_game_id(db: VpsDatabase, title_guess: String) -> String:
+func _match_game_id(db: VpsDatabase, title_guess: String, file_name: String) -> String:
 	var names: Array[String] = [title_guess]
 	if title_guess.to_lower().begins_with("the "):
 		names.append(title_guess.substr(4))
 	for candidate: String in names:
 		var ids: Array[String] = db.find_game_ids_by_name(VpsDatabase.normalize_name(candidate))
-		if not ids.is_empty():
-			# Several db games can share a normalized name (remakes across
-			# makers/years). M1 takes the first; telling twins apart is
-			# what the correction pass in a later milestone is for.
-			return ids[0]
+		var survivors: Array[String] = []
+		for gid: String in ids:
+			if _meta_consistent(db, gid, file_name):
+				survivors.append(gid)
+		if survivors.size() == 1:
+			return survivors[0]
+		# Zero survivors: the name exists but the file's own
+		# (Maker Year) parens contradict every bearer - a false
+		# match refused. Several: same-name twins (remakes) the
+		# parens cannot separate - ambiguous, also refused. (M1
+		# took the first twin; a coin-flip identity presented as
+		# fact is worse than an honest filename-only record.)
 	return ""
 
 
@@ -233,7 +327,12 @@ func _make_entry(build: TableBuild, db: VpsDatabase) -> GameEntry:
 		entry.year = int(g.get("year", 0))
 		entry.designers = VpsDatabase.str_array(g.get("designers", []))
 	else:
-		entry.title = _guess_title(build.file_name)
+		# Filename-only game: the title it shows everywhere (wall
+		# cards, detail view, the loading marquee) is the file
+		# name decoration-scrubbed - not the raw stem with author
+		# tags, version tokens and feature shouts riding along.
+		var clean: String = VpsDatabase.clean_display_title(build.file_name)
+		entry.title = clean if clean != "" else _guess_title(build.file_name)
 		var meta: Dictionary = _parse_paren_meta(build.file_name)
 		entry.manufacturer = str(meta.get("manufacturer", ""))
 		entry.year = int(meta.get("year", 0))

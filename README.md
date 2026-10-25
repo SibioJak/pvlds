@@ -451,12 +451,27 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
 - **Library core (UI-independent).** Scans the configured table folders
   recursively for `.vpx` files, groups duplicate builds of the same
   game, and matches them against a cached VPS database (`vpsdb.json`,
-  Virtual Pinball Spreadsheet format). Matching ladder: exact file name
-  in the db → game by normalized title + build by version token →
-  single-build shortcut (only when the file name states no version) →
-  game-only → filename-only. A build whose stated version matches
-  nothing in the db stays local-only; it is **never** relabeled as a db
-  build.
+  Virtual Pinball Spreadsheet format). Matching ladder (conservative
+  tiers, strongest first; every file records which tier identified
+  it, and the desk's scan summary prints the route counts): exact
+  file name in the db → cleaned file name (both sides scrubbed of
+  bracketed/parenthesized segments, version tokens, MOD/VR/FSS-
+  style tags and the db's own author names) → game by normalized
+  title → cleaned title (the scrubbed file name equals a db game's
+  scrubbed name, for games the db lists no file name for). Within a
+  game: build by version token → single-build shortcut (only when
+  the file name states no version) → game-only → filename-only. A
+  build whose stated version matches nothing in the db stays
+  game-known-but-local; it is **never** relabeled as a db build.
+  Safety rule: a tier that can land on two different games matches
+  nothing — same-name twins (remakes) are refereed by the file
+  name's own `(Maker Year)` parens, and a file whose parens
+  contradict every twin, or fail to separate them, stays
+  filename-only rather than wearing the wrong game's metadata and
+  VR flag. A filename-only game displays a decoration-scrubbed
+  title (author tails, version tokens and shouted feature tags
+  removed) on its cards, in its detail view and on the loading
+  marquee.
 - **Scans never block the UI, and art warms in the background.**
   The scan (db load + folder walk + matching) runs on a
   WorkerThreadPool task with live progress in both routes that
@@ -751,5 +766,6 @@ dummy_data/  placeholder tables for the dummy flow
 - One shared hover across both controllers (right hand preferred).
 - The bundled database is invented; real-library match quality is a
   verdict item for Chris's machine.
-- Ambiguous same-name db games (remakes) resolve to the first match;
-  a correction UI is later work.
+- Ambiguous same-name db games (remakes) stay unmatched unless the
+  file name's `(Maker Year)` parens single one out; a correction UI
+  is later work.

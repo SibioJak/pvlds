@@ -626,6 +626,9 @@ func build_scan_summary() -> String:
 	if _last_db_ok:
 		lines.append("Database (%s): %d games known. Matched %d of %d builds exactly; %d more by game only." % [
 			_last_db_path, _db.game_count(), s.matched_files, s.total_files, s.game_matched_files])
+		var tc: Dictionary = s.match_tier_counts
+		lines.append("Match routes: %d exact, %d by cleaned file name, %d by title, %d by cleaned title, %d unmatched (file name only)." % [
+			int(tc.get("exact", 0)), int(tc.get("file", 0)), int(tc.get("name", 0)), int(tc.get("scrubbed", 0)), int(tc.get("local", 0))])
 	else:
 		lines.append("No database loaded - every game is identified from its file name alone.")
 	lines.append("Panel art: %d of %d games have art (side image or backglass); the rest get title cards." % [
@@ -826,6 +829,10 @@ func _poll_shot_launch() -> void:
 	if _launch_pending and Time.get_ticks_msec() - _shot_launch_at_msec >= delay_ms:
 		var path: String = _shot_launch_path
 		_shot_launch_path = ""
+		if _room != null:
+			var marquee_lines: Array[String] = _room.marquee_text()
+			if marquee_lines.size() == 2:
+				print("PVLDS SHOT LAUNCH MARQUEE top=\"%s\" bottom=\"%s\"" % [marquee_lines[0], marquee_lines[1]])
 		var img: Image = get_viewport().get_texture().get_image()
 		var err: Error = img.save_png(path)
 		print("PVLDS SHOT LAUNCH: ", path, " err=", err, " size=", img.get_size())
@@ -3655,6 +3662,148 @@ func _run_core_test() -> void:
 	elif FileAccess.file_exists(list_file):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(list_file))
 	_wipe_tree(b2s_root)
+
+	# --- Matcher round: decorated file names. Its own fixture db
+	# (four games: one whose builds carry fileNames, one the db
+	# lists NO fileName for, and same-name twins from two makers)
+	# and eleven files: previously-matchable shapes (the regression
+	# identities), decorated shapes the old ladder filed as
+	# filename-only, an ambiguity that must stay unmatched, and a
+	# plain unknown. Old ladder on this fixture: 3 builds matched,
+	# 1 by game only, 7 filename-only.
+	var mt_root_user: String = "user://core_test_matcher"
+	var mt_root: String = ProjectSettings.globalize_path(mt_root_user)
+	_wipe_tree(mt_root)
+	var mt_user_dir: DirAccess = DirAccess.open("user://")
+	if mt_user_dir != null and not mt_user_dir.dir_exists("core_test_matcher"):
+		mt_user_dir.make_dir("core_test_matcher")
+	var mt_root_dir: DirAccess = DirAccess.open(mt_root_user)
+	if mt_root_dir != null and not mt_root_dir.dir_exists("tables"):
+		mt_root_dir.make_dir("tables")
+	var mt_tables: String = mt_root_user.path_join("tables")
+	var mt_db_data: Array = [
+		{
+			"id": "fx-quasar-queen", "name": "Quasar Queen", "manufacturer": "Starlite",
+			"year": 1982, "designers": ["D. Zed"],
+			"tableFiles": [
+				{"id": "fx-qq-1", "fileName": "Quasar Queen (Starlite 1982).vpx", "version": "1.0", "tableFormat": "VPX", "authors": ["Zippy"], "createdAt": 1700000000, "features": ["VR"]},
+				{"id": "fx-qq-2", "fileName": "", "version": "2.0", "tableFormat": "VPX", "authors": ["Zippy"], "createdAt": 1710000000, "features": []},
+			],
+		},
+		{
+			"id": "fx-lunar-tide", "name": "Lunar Tide", "manufacturer": "Marlin",
+			"year": 1975, "designers": ["K. Ito"],
+			"tableFiles": [
+				{"id": "fx-lt-1", "fileName": "", "version": "1.0", "tableFormat": "VPX", "authors": ["Marlin Works"], "createdAt": 1700000000, "features": ["VR"]},
+			],
+		},
+		{
+			"id": "fx-star-voyage-a", "name": "Star Voyage", "manufacturer": "Marlin",
+			"year": 1977, "designers": ["A. One"],
+			"tableFiles": [
+				{"id": "fx-sva-1", "fileName": "Star Voyage (Marlin 1977).vpx", "version": "1.0", "tableFormat": "VPX", "authors": ["A. One"], "createdAt": 1700000000, "features": []},
+			],
+		},
+		{
+			"id": "fx-star-voyage-b", "name": "Star Voyage", "manufacturer": "Orbital Works",
+			"year": 1991, "designers": ["B. Two"],
+			"tableFiles": [
+				{"id": "fx-svb-1", "fileName": "Star Voyage (Orbital 1991).vpx", "version": "1.0", "tableFormat": "VPX", "authors": ["B. Two"], "createdAt": 1700000000, "features": ["VR"]},
+			],
+		},
+	]
+	_expect(_write_text_file(mt_root_user.path_join("vpsdb.json"), JSON.stringify(mt_db_data)), "matcher fixture: db written", failures)
+	var mt_db: VpsDatabase = VpsDatabase.new()
+	_expect(mt_db.load_db(mt_root_user.path_join("vpsdb.json")), "matcher fixture: db loads", failures)
+	var mt_names: Array[String] = [
+		"Quasar Queen (Starlite 1982).vpx",
+		"Quasar Queen (Starlite 1982) v2.0.vpx",
+		"Lunar Tide (Marlin 1975).vpx",
+		"[VPW] Quasar Queen (Starlite 1982) v1.0 [Zippy].vpx",
+		"Quasar Queen - Zippy (Starlite 1982) v2.0.vpx",
+		"Lunar Tide FSS (Marlin 1975).vpx",
+		"Lunar Tide (Marlin 1975) Zippy.vpx",
+		"Star Voyage (Orbital 1991) FSS.vpx",
+		"Star Voyage (Unknown 1980) FSS.vpx",
+		"Nonexistent Table (Nobody 2001) v1.0.vpx",
+		"Quasar Queen (Starlite 1982) v9.9.vpx",
+	]
+	for mt_name: String in mt_names:
+		_expect(_write_text_file(mt_tables.path_join(mt_name), "fixture"), "matcher fixture: file written (%s)" % mt_name, failures)
+	var mt_folders: Array[String] = [mt_tables]
+	var mt_scan: LibraryScanner = LibraryScanner.new()
+	mt_scan.scan(mt_folders, mt_db)
+	print("  matcher fixture distribution: ", mt_scan.match_tier_counts,
+		" (builds ", mt_scan.matched_files, ", game-only ", mt_scan.game_matched_files, ")")
+	_expect(mt_scan.total_files == 11, "matcher fixture: 11 files scanned", failures)
+	_expect(mt_scan.matched_files == 8, "matcher fixture: 8 builds matched (old ladder: 3)", failures)
+	_expect(mt_scan.game_matched_files == 1, "matcher fixture: 1 by game only", failures)
+	_expect(mt_scan.games.size() == 5, "matcher fixture: grouped into 5 games", failures)
+	_expect(int(mt_scan.match_tier_counts.get("exact", 0)) == 1
+		and int(mt_scan.match_tier_counts.get("file", 0)) == 4
+		and int(mt_scan.match_tier_counts.get("name", 0)) == 1
+		and int(mt_scan.match_tier_counts.get("scrubbed", 0)) == 3
+		and int(mt_scan.match_tier_counts.get("local", 0)) == 2,
+		"matcher fixture: tiers resolve exact 1 / file 4 / name 1 / scrubbed 3 / local 2", failures)
+	var mt_qq: GameEntry = mt_scan.game_by_id("fx-quasar-queen")
+	_expect(mt_qq != null and mt_qq.builds.size() == 5, "matcher fixture: Quasar Queen groups its 5 files", failures)
+	if mt_qq != null:
+		# Regression identities: these three resolved to these very
+		# builds under the old ladder too.
+		var reg1: TableBuild = mt_qq.build_by_path(mt_tables.path_join("Quasar Queen (Starlite 1982).vpx"))
+		_expect(reg1 != null and reg1.table_file_id == "fx-qq-1" and reg1.match_tier == "exact",
+			"regression: the plain file is still the exact build fx-qq-1", failures)
+		var reg2: TableBuild = mt_qq.build_by_path(mt_tables.path_join("Quasar Queen (Starlite 1982) v2.0.vpx"))
+		_expect(reg2 != null and reg2.table_file_id == "fx-qq-2",
+			"regression: the v2.0 file still resolves to build fx-qq-2", failures)
+		var reg3: TableBuild = mt_qq.build_by_path(mt_tables.path_join("Quasar Queen (Starlite 1982) v9.9.vpx"))
+		_expect(reg3 != null and not reg3.matched_db and reg3.version == "9.9",
+			"regression: the unstated-in-db v9.9 is still game-only, never relabeled", failures)
+		# New reach: decorations the old ladder filed as local.
+		var dec1: TableBuild = mt_qq.build_by_path(mt_tables.path_join("[VPW] Quasar Queen (Starlite 1982) v1.0 [Zippy].vpx"))
+		_expect(dec1 != null and dec1.table_file_id == "fx-qq-1" and dec1.match_tier == "file" and dec1.has_vr_tag(),
+			"bracketed decorations scrub to the VR build fx-qq-1 (it can now appear in the VR view)", failures)
+		var dec2: TableBuild = mt_qq.build_by_path(mt_tables.path_join("Quasar Queen - Zippy (Starlite 1982) v2.0.vpx"))
+		_expect(dec2 != null and dec2.table_file_id == "fx-qq-2" and dec2.match_tier == "file",
+			"the ' - Author' tail scrubs off; the stated version picks build fx-qq-2", failures)
+	var mt_lt: GameEntry = mt_scan.game_by_id("fx-lunar-tide")
+	_expect(mt_lt != null and mt_lt.builds.size() == 3, "matcher fixture: Lunar Tide groups its 3 files", failures)
+	if mt_lt != null:
+		var reg4: TableBuild = mt_lt.build_by_path(mt_tables.path_join("Lunar Tide (Marlin 1975).vpx"))
+		_expect(reg4 != null and reg4.table_file_id == "fx-lt-1" and reg4.match_tier == "name",
+			"regression: the plain Lunar Tide file still resolves by title to fx-lt-1", failures)
+		var dec3: TableBuild = mt_lt.build_by_path(mt_tables.path_join("Lunar Tide FSS (Marlin 1975).vpx"))
+		_expect(dec3 != null and dec3.table_file_id == "fx-lt-1" and dec3.match_tier == "scrubbed",
+			"a shouted feature tag mid-name scrubs to the game (no db fileName exists to claim it)", failures)
+		var dec4: TableBuild = mt_lt.build_by_path(mt_tables.path_join("Lunar Tide (Marlin 1975) Zippy.vpx"))
+		_expect(dec4 != null and dec4.table_file_id == "fx-lt-1" and dec4.match_tier == "scrubbed",
+			"a trailing author name scrubs off the cleaned-title match", failures)
+	var mt_svb: GameEntry = mt_scan.game_by_id("fx-star-voyage-b")
+	_expect(mt_svb != null and mt_svb.builds.size() == 1, "matcher fixture: the Orbital Star Voyage holds the disambiguated file", failures)
+	if mt_svb != null:
+		var twin: TableBuild = mt_svb.builds[0]
+		_expect(twin.table_file_id == "fx-svb-1" and twin.match_tier == "scrubbed",
+			"same-name twins: the (Orbital 1991) parens pick the Orbital game, not the Marlin one", failures)
+	_expect(mt_scan.game_by_id("fx-star-voyage-a") == null,
+		"same-name twins: nothing lands on the Marlin Star Voyage by accident", failures)
+	var mt_amb: GameEntry = mt_scan.game_by_id("local:starvoyageunknown1980fss")
+	_expect(mt_amb != null and mt_amb.title == "Star Voyage",
+		"the unrefereeable twin file stays filename-only - and shows a cleaned title", failures)
+	# The seeded dummy library's own distribution, for the record:
+	# the cleaned-file tier re-routes three files whose identities
+	# the assertions above already pinned as unchanged.
+	_expect(int(scanner.match_tier_counts.get("exact", 0)) == 3
+		and int(scanner.match_tier_counts.get("file", 0)) == 3
+		and int(scanner.match_tier_counts.get("name", 0)) == 7,
+		"dummy library tier distribution: exact 3 / file 3 / name 7", failures)
+	# Clean display titles (Part 2): the scrubber's display face.
+	_expect(VpsDatabase.clean_display_title("Quasar Queen - Zippy (Starlite 1982) [VR Room] v1.0.4.vpx") == "Quasar Queen",
+		"display title: author tail, tag block and version all scrub away", failures)
+	_expect(VpsDatabase.clean_display_title("Mr. Do! (Pinnacle 1983).vpx") == "Mr. Do!",
+		"display title: 'Mr.' is a title word, not the MR feature tag", failures)
+	_expect(VpsDatabase.clean_display_title("Pharaoh's Ledger (Vantage 1979) JP v55 DT-FS-VR-MR Ext2k Conversion.vpx") == "Pharaoh's Ledger JP Ext2k Conversion",
+		"display title: the shouted DT-FS-VR-MR chain scrubs; unknowable words stay", failures)
+	_wipe_tree(mt_root)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")

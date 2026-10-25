@@ -1803,6 +1803,16 @@ func _build_marquee() -> void:
 ## teardown choked on parked holders at exit). On a successful
 ## hand-off this never runs: the process exits with the marquee
 ## standing, which is the point - it holds until the wait settles.
+## The marquee's current lines, [top, bottom] - the shot hook
+## prints them so a harness can assert what the marquee actually
+## SAYS (the clean-name rule) instead of eyeballing pixels alone.
+## [] while no marquee stands.
+func marquee_text() -> Array[String]:
+	if not _marquee_up or _marquee_year == null or _marquee_name == null:
+		return []
+	return [_marquee_year.text, _marquee_name.text]
+
+
 func _dismiss_marquee() -> void:
 	_marquee_up = false
 	if _marquee != null:
