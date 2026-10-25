@@ -15,9 +15,8 @@ const SAMPLE_PATH: String = "res://data/vpsdb.json" ## bundled sample: 10 invent
 
 var games_by_id: Dictionary = {}
 var _games_by_norm_name: Dictionary = {} ## normalized title -> Array of game ids
-var _by_table_filename: Dictionary = {} ## lowercased table fileName -> first {game_id, table_file} claiming it
 var _author_tokens: Dictionary = {} ## token -> true, from every db table file's authors (the matcher's author vocabulary)
-var _files_by_scrub_key: Dictionary = {} ## match key of a db table fileName -> Array of {game_id, table_file} claiming it
+var _files_by_slug_key: Dictionary = {} ## slug match key of a VPX table file's download URL -> Array of {game_id, table_file} claiming it
 var _games_by_scrub_name: Dictionary = {} ## match key of a db game name -> Array of game ids
 var loaded: bool = false
 var source_path: String = ""
@@ -30,7 +29,16 @@ var source_path: String = ""
 const DECORATION_TOKENS: Dictionary = {
 	"vpx": true, "vp": true, "mod": true, "vr": true, "fss": true,
 	"fs": true, "dt": true, "mr": true, "b2s": true, "hybrid": true,
-	"fullscreen": true,
+	"fullscreen": true, "pinemhi": true,
+}
+
+## Extra words a download-page slug carries that a local file name
+## never does in the same place: VPS download slugs bake the VR-room
+## and conversion tags straight into the title run ("vr-room-<title>",
+## "<title>-<maker>-<year>-ext2k-conversion"). Dropped from the SLUG
+## side only, on top of the shared decoration vocabulary.
+const SLUG_EXTRA_TOKENS: Dictionary = {
+	"conversion": true, "room": true, "vrroom": true,
 }
 
 
@@ -102,7 +110,13 @@ static func string_scrub(s: String) -> String:
 
 ## The matcher's token view of a name: string-scrubbed, tokenized,
 ## decoration words dropped, a leading "The" dropped (both sides
-## get the same treatment, so equality survives it).
+## get the same treatment, so equality survives it). A trailing
+## VR-room suffix drops too - "Apollo 13 w Room" and plain
+## "Apollo 13" are the same table - narrowly, at the very end of
+## the name only, so a "Room" inside a title is never eaten; a
+## genuine title ENDING in "Room" still meets itself because the
+## game's own name gets the identical treatment, and a collision
+## with a room-less twin is refused by the ambiguity rules.
 static func scrub_tokens(s: String) -> PackedStringArray:
 	var out: PackedStringArray = PackedStringArray()
 	for tok: String in raw_tokens(string_scrub(s)):
@@ -111,6 +125,10 @@ static func scrub_tokens(s: String) -> PackedStringArray:
 		out.append(tok)
 	if not out.is_empty() and out[0] == "the":
 		out.remove_at(0)
+	if out.size() >= 2 and out[out.size() - 1] == "room":
+		out.remove_at(out.size() - 1)
+		if not out.is_empty() and out[out.size() - 1] == "w":
+			out.remove_at(out.size() - 1)
 	return out
 
 
@@ -127,6 +145,66 @@ func match_key(s: String) -> String:
 	for tok: String in toks:
 		if not _author_tokens.has(tok):
 			kept.append(tok)
+	if kept.is_empty():
+		kept = toks
+	return "".join(kept)
+
+
+## The slug of a VPS download URL: vpuniverse file pages are
+## ".../files/file/<numeric-id>-<slug>/", and the slug bakes in
+## title + maker + year + authors ("quasar-queen-starlite-1982-
+## zippy"). "" when the URL carries no slug (a vpforums showfile
+## link names nothing) - such a table file simply has no slug key.
+static func slug_from_url(url: String) -> String:
+	var marker: String = "/files/file/"
+	var at: int = url.find(marker)
+	if at < 0:
+		return ""
+	var rest: String = url.substr(at + marker.length())
+	var slash: int = rest.find("/")
+	var segment: String = rest if slash < 0 else rest.substr(0, slash)
+	segment = segment.uri_decode()
+	var dash: int = segment.find("-")
+	if dash <= 0 or not segment.substr(0, dash).is_valid_int():
+		return ""
+	return segment.substr(dash + 1)
+
+
+## A table file's slug match key: its download slug reduced like a
+## file name, plus the slug-specific shedding - the game's own
+## maker tokens and year token (the local side's scrub removes
+## the file's "(Maker Year)" parens wholesale, so the slug side
+## must shed the same facts to meet it), the slug-extra words,
+## and author tokens. "" when the file has no slug URL.
+func slug_match_key(game: Dictionary, tf: Dictionary) -> String:
+	var slug: String = ""
+	var urls_v: Variant = tf.get("urls", [])
+	if urls_v is Array:
+		var url_list: Array = urls_v
+		for entry: Variant in url_list:
+			var u: String = ""
+			if entry is Dictionary:
+				var ed: Dictionary = entry
+				u = str(ed.get("url", ""))
+			elif entry is String:
+				u = entry
+			slug = slug_from_url(u)
+			if slug != "":
+				break
+	if slug == "":
+		return ""
+	var drop: Dictionary = {}
+	for tok: String in raw_tokens(str(game.get("manufacturer", ""))):
+		drop[tok] = true
+	var yr: int = int(game.get("year", 0))
+	if yr > 0:
+		drop[str(yr)] = true
+	var toks: PackedStringArray = scrub_tokens(slug)
+	var kept: PackedStringArray = PackedStringArray()
+	for tok: String in toks:
+		if drop.has(tok) or SLUG_EXTRA_TOKENS.has(tok) or _author_tokens.has(tok):
+			continue
+		kept.append(tok)
 	if kept.is_empty():
 		kept = toks
 	return "".join(kept)
@@ -219,9 +297,8 @@ func load_db(path: String) -> bool:
 	loaded = false
 	games_by_id.clear()
 	_games_by_norm_name.clear()
-	_by_table_filename.clear()
 	_author_tokens.clear()
-	_files_by_scrub_key.clear()
+	_files_by_slug_key.clear()
 	_games_by_scrub_name.clear()
 	if path == "" or not FileAccess.file_exists(path):
 		return false
@@ -258,18 +335,6 @@ func load_db(path: String) -> bool:
 				ids = existing
 			ids.append(gid)
 			_games_by_norm_name[norm] = ids
-	# Filename index, built once here: the scanner asks once per local
-	# file, and a linear walk of every game x every table file per ask
-	# cost ~12 s at real db scale. First claimant wins, exactly like
-	# the old linear walk's early return (same iteration order).
-	for gid: Variant in games_by_id.keys():
-		var game_id: String = str(gid)
-		for item: Variant in vpx_table_files_of(game_id):
-			if item is Dictionary:
-				var tf: Dictionary = item
-				var named: String = str(tf.get("fileName", tf.get("filename", ""))).to_lower()
-				if named != "" and not _by_table_filename.has(named):
-					_by_table_filename[named] = {"game_id": game_id, "table_file": tf}
 	# Author vocabulary: every author token the db itself names,
 	# from every table file (any format - the vocabulary describes
 	# people, not files). Built BEFORE the scrub indexes, whose
@@ -282,13 +347,16 @@ func load_db(path: String) -> bool:
 				for author: String in str_array(atf.get("authors", [])):
 					for tok: String in raw_tokens(author):
 						_author_tokens[tok] = true
-	# Scrub indexes (matcher round): game names and VPX table
-	# fileNames reduced to match keys. Unlike the exact filename
-	# index these keep EVERY claimant - the matcher reads the
+	# Scrub indexes: game names reduced to match keys, and VPX
+	# table files indexed by the slug key of their download URL
+	# (the real db names no table files - its download pages are
+	# the filename-shaped evidence it actually carries). Both
+	# indexes keep EVERY claimant - the matcher reads the
 	# claimant set to refuse keys two games share.
 	for sgid: Variant in games_by_id.keys():
 		var scrub_game_id: String = str(sgid)
-		var name_key: String = match_key(str(game_dict(scrub_game_id).get("name", "")))
+		var sgame: Dictionary = game_dict(scrub_game_id)
+		var name_key: String = match_key(str(sgame.get("name", "")))
 		if name_key != "":
 			var ids: Array = []
 			var existing_ids: Variant = _games_by_scrub_name.get(name_key, [])
@@ -299,18 +367,15 @@ func load_db(path: String) -> bool:
 		for item: Variant in vpx_table_files_of(scrub_game_id):
 			if item is Dictionary:
 				var stf: Dictionary = item
-				var sname: String = str(stf.get("fileName", stf.get("filename", "")))
-				if sname == "":
-					continue
-				var file_key: String = match_key(sname)
-				if file_key == "":
+				var slug_key: String = slug_match_key(sgame, stf)
+				if slug_key == "":
 					continue
 				var claimants: Array = []
-				var existing_claims: Variant = _files_by_scrub_key.get(file_key, [])
+				var existing_claims: Variant = _files_by_slug_key.get(slug_key, [])
 				if existing_claims is Array:
 					claimants = existing_claims
 				claimants.append({"game_id": scrub_game_id, "table_file": stf})
-				_files_by_scrub_key[file_key] = claimants
+				_files_by_slug_key[slug_key] = claimants
 	source_path = path
 	loaded = not games_by_id.is_empty()
 	return loaded
@@ -380,32 +445,23 @@ func vpx_table_files_of(game_id: String) -> Array:
 	return out
 
 
-## Strong match: a db table file that names this exact .vpx file name
-## (some db entries carry one; many do not). Returns {} on no match.
-func find_by_table_filename(file_name: String) -> Dictionary:
-	var hit: Variant = _by_table_filename.get(file_name.to_lower(), null)
-	if hit is Dictionary:
-		return hit
-	return {}
-
-
-## Every db table file whose fileName reduces to the same match
-## key as this file name - the decorated-filename matcher's raw
-## material. The caller decides what the claimant set means: one
-## claimant (or several of ONE game) identifies a game; claimants
-## from two games make the key ambiguous and unusable.
-func find_by_scrubbed_filename(file_name: String) -> Array:
+## Every db table file whose download slug reduces to the same
+## match key as this file name - the slug road's raw material.
+## The caller decides what the claimant set means: one claimant
+## (or several of ONE game) identifies a game; claimants from
+## two games make the key ambiguous and unusable.
+func find_by_slug(file_name: String) -> Array:
 	var key: String = match_key(file_name)
 	if key == "":
 		return []
-	var v: Variant = _files_by_scrub_key.get(key, [])
+	var v: Variant = _files_by_slug_key.get(key, [])
 	if v is Array:
 		return v
 	return []
 
 
 ## Db games whose NAME reduces to the same match key as this
-## file name - for tables the db lists no fileName for at all.
+## file name - for tables the db lists no usable download slug.
 func find_game_ids_by_scrubbed_name(file_name: String) -> Array[String]:
 	var out: Array[String] = []
 	var key: String = match_key(file_name)

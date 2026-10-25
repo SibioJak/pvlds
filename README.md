@@ -453,12 +453,20 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   game, and matches them against a cached VPS database (`vpsdb.json`,
   Virtual Pinball Spreadsheet format). Matching ladder (conservative
   tiers, strongest first; every file records which tier identified
-  it, and the desk's scan summary prints the route counts): exact
-  file name in the db → cleaned file name (both sides scrubbed of
-  bracketed/parenthesized segments, version tokens, MOD/VR/FSS-
-  style tags and the db's own author names) → game by normalized
+  it, and the desk's scan summary prints the route counts): download
+  slug (the db's download page for a build bakes title+maker+year+
+  authors into its URL slug; the file's scrubbed name — bracketed/
+  parenthesized segments, version tokens, MOD/VR/FSS/PINEMHI-style
+  tags, a trailing VR-room suffix, and the db's own author names
+  removed — equals that slug's key, the slug side shedding the
+  game's own maker/year tokens to meet it) → game by normalized
   title → cleaned title (the scrubbed file name equals a db game's
-  scrubbed name, for games the db lists no file name for). Within a
+  scrubbed name, for tables whose db entries carry no usable
+  download slug). An earlier ladder matched on db table-file names;
+  the real VPS database carries none on VPX entries (field finding,
+  2026-10-25: those routes scored 0 of 383 in the field while
+  passing against a fixture that had invented the field), so those
+  roads are deleted, not dormant. Within a
   game: build by version token → single-build shortcut (only when
   the file name states no version) → game-only → filename-only. A
   build whose stated version matches nothing in the db stays

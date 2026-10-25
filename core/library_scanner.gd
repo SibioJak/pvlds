@@ -166,21 +166,17 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 	var title_guess: String = _guess_title(b.file_name)
 	var version_guess: String = _guess_version(b.file_name)
 	if db != null and db.loaded:
-		# 1) Exact: a db table file naming this exact file.
-		var strong: Dictionary = db.find_by_table_filename(b.file_name)
-		if not strong.is_empty():
-			_apply_table_file(b, str(strong["game_id"]), strong["table_file"])
-			b.match_tier = "exact"
-			return b
-		# 2) Cleaned file name: the file's decoration-scrubbed name
-		# equals a db table file's equally scrubbed fileName. The
-		# key must belong to ONE game - two games claiming it makes
-		# it ambiguous, and an ambiguous key matches nothing (a
+		# 1) Download slug: the db's download page for a build bakes
+		# title+maker+year+authors into its URL slug, and the file's
+		# scrubbed name equals that slug's key. The key must belong
+		# to ONE game - two games claiming it makes it ambiguous,
+		# and an ambiguous key falls through to the next tier (a
 		# false match is worse than a miss: wrong metadata, wrong
-		# VR flag). A single claimant whose stated version the file
-		# contradicts does not claim the BUILD either; the game is
-		# still certain, so the within-game ladder decides.
-		var claimants: Array = db.find_by_scrubbed_filename(b.file_name)
+		# VR flag). Exactly one claimant file whose stated version
+		# the file does not contradict claims the BUILD; otherwise
+		# the game is still certain, so the within-game ladder
+		# decides.
+		var claimants: Array = db.find_by_slug(b.file_name)
 		var claimant_games: Dictionary = {}
 		for item: Variant in claimants:
 			if item is Dictionary:
@@ -189,7 +185,7 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 				if cg != "":
 					claimant_games[cg] = true
 		if claimant_games.size() == 1:
-			var file_game_id: String = str(claimant_games.keys()[0])
+			var slug_game_id: String = str(claimant_games.keys()[0])
 			var only_tf: Dictionary = {}
 			if claimants.size() == 1:
 				for item2: Variant in claimants:
@@ -199,18 +195,19 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 						if tfv is Dictionary:
 							only_tf = tfv
 			if not only_tf.is_empty() and (version_guess == "" or version_guess == str(only_tf.get("version", ""))):
-				_apply_table_file(b, file_game_id, only_tf)
-				b.match_tier = "file"
+				_apply_table_file(b, slug_game_id, only_tf)
+				b.match_tier = "slug"
 				return b
-			return _finish_game_match(b, db, file_game_id, "file", version_guess)
-		# 3) Game by title (with/without a leading "The").
+			return _finish_game_match(b, db, slug_game_id, "slug", version_guess)
+		# 2) Game by title (with/without a leading "The").
 		var game_id: String = _match_game_id(db, title_guess, b.file_name)
 		if game_id != "":
 			return _finish_game_match(b, db, game_id, "name", version_guess)
-		# 4) Cleaned game name: the file's scrubbed name equals a
-		# db game's scrubbed name - for tables the db lists no
-		# fileName for. Refereed by the file's own (Maker Year)
-		# parens: exactly one consistent game, or no match.
+		# 3) Cleaned game name: the file's scrubbed name equals a
+		# db game's scrubbed name - for tables whose db entries
+		# carry no usable download slug. Refereed by the file's
+		# own (Maker Year) parens: exactly one consistent game,
+		# or no match.
 		var scrub_ids: Array[String] = db.find_game_ids_by_scrubbed_name(b.file_name)
 		var survivors: Array[String] = []
 		for sid: String in scrub_ids:
@@ -218,7 +215,7 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 				survivors.append(sid)
 		if survivors.size() == 1:
 			return _finish_game_match(b, db, survivors[0], "scrubbed", version_guess)
-	# 5) Unknown to the db: group by normalized title from the filename.
+	# 4) Unknown to the db: group by normalized title from the filename.
 	b.game_key = "local:" + VpsDatabase.normalize_name(title_guess)
 	b.version = version_guess
 	return b
