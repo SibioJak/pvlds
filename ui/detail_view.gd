@@ -215,7 +215,7 @@ func _fill_textures(gen: int, game: GameEntry) -> void:
 		var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
 		if art_tex != null:
 			var full_tex: Texture2D = await _factory.render_texture(
-				RoomSpecs.art_spec(game, art_tex), Vector2i(640, 800))
+				RoomSpecs.art_spec(game, art_tex, _store), Vector2i(640, 800))
 			if gen == _gen and _big_quad != null:
 				_big_quad.set_texture(full_tex)
 				art_done = true

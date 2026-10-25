@@ -33,6 +33,14 @@ const PANEL_CONTENT_RAISE_PX: int = 22
 ## button must clear this strip, never cover the name it carries.
 const ART_STRIP_HEIGHT_PX: int = 92
 
+## The art face's favorite mark: a star badge in the face's top
+## right corner (the panel face carries the same fact as a
+## FAVORITE chip). Marquee amber so the mark reads as one family
+## with the chips; the top corner keeps it clear of the name
+## strip (bottom edge) and the card's Launch button (lower
+## third) at wall distance.
+const FAVORITE_STAR_COLOR: Color = Color(1.0, 0.78, 0.25)
+
 var _bg: ColorRect
 var _margin: MarginContainer
 var _vbox: VBoxContainer
@@ -45,6 +53,8 @@ var _chips_row: HBoxContainer
 var _art_rect: TextureRect
 var _art_strip: PanelContainer
 var _art_label: Label
+var _art_fav: PanelContainer
+var _art_fav_label: Label
 var _label_stock: Array = [] ## [label, autowrap, max_lines, overrun] per text label, for per-spec restore
 
 
@@ -74,6 +84,23 @@ func _init() -> void:
 	_art_strip.add_child(_art_label)
 	_art_strip.visible = false
 	add_child(_art_strip)
+
+	_art_fav = PanelContainer.new()
+	_art_fav.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_art_fav.offset_left = -76.0
+	_art_fav.offset_top = 14.0
+	_art_fav.offset_right = -14.0
+	_art_fav.offset_bottom = 76.0
+	_art_fav.add_theme_stylebox_override("panel", _box(Color(0.03, 0.03, 0.05, 0.82), 10))
+	_art_fav_label = Label.new()
+	_art_fav_label.text = "★"
+	_art_fav_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_art_fav_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_art_fav_label.add_theme_font_size_override("font_size", 44)
+	_art_fav_label.add_theme_color_override("font_color", FAVORITE_STAR_COLOR)
+	_art_fav.add_child(_art_fav_label)
+	_art_fav.visible = false
+	add_child(_art_fav)
 
 	_margin = MarginContainer.new()
 	_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -150,6 +177,7 @@ func apply_spec(spec: Dictionary) -> void:
 	_bg.color = bg
 	_art_rect.visible = kind == "art"
 	_art_strip.visible = kind == "art"
+	_art_fav.visible = kind == "art" and bool(spec.get("favorite", false))
 	_margin.visible = kind != "art"
 	if kind == "art":
 		var tex: Variant = spec.get("art_texture", null)

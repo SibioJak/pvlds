@@ -148,6 +148,10 @@ var _nav_bumpers_started: bool = false ## the bumper leg runs async (it waits ou
 var _nav_bumpers_done: bool = false ## the bumper leg (async) has reported
 var _nav_y_started: bool = false ## the Y-launch leg runs async (it rides a real launch wait); kicked off once
 var _nav_y_done: bool = false ## the Y-launch leg (async) has reported
+var _nav_rail_started: bool = false ## the rail-focus leg runs async (it waits out each rebuild); kicked off once
+var _nav_rail_done: bool = false ## the rail-focus leg (async) has reported
+var _nav_fav_started: bool = false ## the X-favorites leg runs async (feeds + re-renders); kicked off once
+var _nav_fav_done: bool = false ## the X-favorites leg (async) has reported
 var _shot_slide_path: String = "" ## --pvlds-shot-slide P: capture the wall at the page slide's far point
 var _shot_slide_phase: int = -1
 var _shot_slide_frames: int = 0
@@ -1285,6 +1289,22 @@ func _finish_placard_smoke() -> void:
 ##          against the harness's never-window stub with a
 ##          zero-length life: the spawn lands in the load wait
 ##          and the dead pid settles it FAILED, browsing resumes.
+##   leg 7: a rail activation keeps focus on the bar (Chris's
+##          field report, 2026-10-25): A on a filter stop or
+##          the sort stop rebuilds the wall, and focus is still
+##          that stop once the rebuild settles - pad path and
+##          pointer path alike;
+##   leg 8: X flags favorites (Chris's proposal, 2026-10-25):
+##          X on a focused card toggles the favorite in the
+##          store and the persisted file, the card's face
+##          re-renders in place carrying the mark (the panel
+##          face's FAVORITE chip; the art face's star badge,
+##          pixel-proven through the factory), X is inert on a
+##          rail stop and in the load wait, and X-ing OFF
+##          inside the FAVORITES filter removes the card with
+##          the stated landing - the panel that took its slot,
+##          or the ALL fallback's first panel when the set
+##          empties.
 ## The driver forces the ALL filter through the room's own rail
 ## handler so the wall always holds a full bottom row. Leg 5
 ## needs more pages than the dummy library's ten games give, so
@@ -1351,7 +1371,8 @@ func _drive_nav_smoke() -> void:
 				_nav_leg_bumpers_async()
 		5:
 			if _nav_y_done:
-				_finish_nav_smoke()
+				_nav_smoke_wait = 0
+				_nav_smoke_phase = 6
 				return
 			_nav_smoke_wait += 1
 			if _nav_smoke_wait > 7200:
@@ -1360,6 +1381,29 @@ func _drive_nav_smoke() -> void:
 			elif not _nav_y_started and _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
 				_nav_y_started = true
 				_nav_leg_y_launch_async()
+		6:
+			if _nav_rail_done:
+				_nav_smoke_wait = 0
+				_nav_smoke_phase = 7
+				return
+			_nav_smoke_wait += 1
+			if _nav_smoke_wait > 7200:
+				_nav_smoke_fail("the rail-focus leg never finished")
+				_finish_nav_smoke()
+			elif not _nav_rail_started and _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
+				_nav_rail_started = true
+				_nav_leg_rail_focus_async()
+		7:
+			if _nav_fav_done:
+				_finish_nav_smoke()
+				return
+			_nav_smoke_wait += 1
+			if _nav_smoke_wait > 7200:
+				_nav_smoke_fail("the X-favorites leg never finished")
+				_finish_nav_smoke()
+			elif not _nav_fav_started and _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
+				_nav_fav_started = true
+				_nav_leg_favorites_async()
 
 
 func _nav_expect(cond: bool, label: String) -> void:
@@ -1787,6 +1831,258 @@ func _nav_leg_y_launch_async() -> void:
 		"Y: the settled failure marks the focused card's game FAILED")
 	_nav_expect(_room.focusable_count() > 0, "Y: the focus walk is restored after the settle")
 	_nav_y_done = true
+
+
+## Waits for the wall's textures to settle after a rebuild
+## (a filter/sort activation, a favorite-driven rebuild), so
+## a leg's verdicts read the settled wall, then lets a few
+## frames pass for good measure.
+func _nav_await_ready() -> void:
+	var guard: int = 0
+	while _room != null and not _room.wall_ready and guard < 3600:
+		await get_tree().process_frame
+		guard += 1
+	if guard >= 3600:
+		_nav_smoke_fail("settle: the wall never became ready")
+	for i: int in range(3):
+		await get_tree().process_frame
+
+
+## Leg 7: a rail activation keeps focus on the bar (Chris's
+## field report, 2026-10-25: "When I click a filter, the
+## active cursor jumps back up to top of windows... Needs to
+## stay on filter bar."). Driven through the room's real
+## input poll with synthetic pad presses: A on a focused
+## filter stop changes the filter AND focus is still that
+## stop once the rebuild settles; A on the sort stop cycles
+## the sort with focus unmoved; and a POINTER activation of
+## a filter (pad focus parked on a card) lands focus on the
+## activated stop too.
+func _nav_leg_rail_focus_async() -> void:
+	# Pad path, filter: RECENTS (the Y leg opened a detail
+	# view on the way, so recents is non-empty and the
+	# empty-filter guard stays out of this leg).
+	_room._set_focused(_room.rail_quad("filter:recents"))
+	await _nav_feed_button(JOY_BUTTON_A)
+	await _nav_await_ready()
+	_nav_expect(_room._filter == "recents",
+		"rail focus: A on RECENTS activates the recents filter")
+	_nav_expect(_nav_key_of(_room.focused_quad()) == "filter:recents",
+		"rail focus: focus stays on the activated filter stop (got '%s')" % _nav_key_of(_room.focused_quad()))
+	# Pad path, back to ALL.
+	_room._set_focused(_room.rail_quad("filter:all"))
+	await _nav_feed_button(JOY_BUTTON_A)
+	await _nav_await_ready()
+	_nav_expect(_room._filter == "all", "rail focus: A on ALL restores the all filter")
+	_nav_expect(_nav_key_of(_room.focused_quad()) == "filter:all",
+		"rail focus: focus stays on ALL after the rebuild")
+	# Pad path, sort: the cycle advances, focus stays on SORT.
+	var sort0: String = _room._sort
+	_room._set_focused(_room.rail_quad("sort"))
+	await _nav_feed_button(JOY_BUTTON_A)
+	await _nav_await_ready()
+	_nav_expect(_room._sort != sort0, "rail focus: A on SORT cycles the sort")
+	_nav_expect(_nav_key_of(_room.focused_quad()) == "sort",
+		"rail focus: focus stays on SORT after the rebuild")
+	# Cycle the sort home (four stops in the cycle) - focus
+	# rides the same stop through every rebuild.
+	for i: int in range(3):
+		await _nav_feed_button(JOY_BUTTON_A)
+		await _nav_await_ready()
+	_nav_expect(_room._sort == sort0, "rail focus: the sort cycle returns home")
+	_nav_expect(_nav_key_of(_room.focused_quad()) == "sort",
+		"rail focus: focus is still on SORT after the full cycle")
+	# Pointer path: pad focus parked on a card, the pointer
+	# fires the VR filter stop - focus lands on the stop.
+	_room._set_focused(_room._panels[0])
+	_room._on_select(_room.rail_quad("filter:vr"))
+	await _nav_await_ready()
+	_nav_expect(_nav_key_of(_room.focused_quad()) == "filter:vr",
+		"rail focus: a pointer filter activation lands focus on the activated stop")
+	_room._on_select(_room.rail_quad("filter:all"))
+	await _nav_await_ready()
+	_nav_expect(_room._filter == "all" and _nav_key_of(_room.focused_quad()) == "filter:all",
+		"rail focus: the pointer path home lands on ALL, focused")
+	_nav_rail_done = true
+
+
+## Whether a face spec's chips carry the given text.
+func _nav_spec_has_chip(spec: Dictionary, text: String) -> bool:
+	var chips: Variant = spec.get("chips", [])
+	if chips is Array:
+		var arr: Array = chips
+		for item: Variant in arr:
+			if item is Dictionary and str((item as Dictionary).get("text", "")) == text:
+				return true
+	return false
+
+
+## Pixel-proves the art face's favorite star: renders the
+## game's art spec (with a flat stand-in art texture, so the
+## only star-coloured pixels anywhere are the badge's) and
+## counts them in the badge's top-right corner.
+func _nav_star_pixels(game: GameEntry, art_tex: Texture2D) -> int:
+	var tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.art_spec(game, art_tex, _state), Vector2i(512, 640))
+	var img: Image = tex.get_image() if tex != null else null
+	if img == null or img.is_empty():
+		return -1
+	var star: Color = CardFace.FAVORITE_STAR_COLOR
+	var count: int = 0
+	for y: int in range(0, 110):
+		for x: int in range(img.get_width() - 110, img.get_width()):
+			var px: Color = img.get_pixel(x, y)
+			if absf(px.r - star.r) < 0.04 and absf(px.g - star.g) < 0.04 and absf(px.b - star.b) < 0.04:
+				count += 1
+	return count
+
+
+## Restores the favorites the X leg found on entry (the
+## state file is shared with every other harness run) and
+## leaves the room browsing ALL.
+func _nav_restore_favorites(saved: Array) -> void:
+	_state.favorites.clear()
+	for k: Variant in saved:
+		_state.favorites[str(k)] = true
+	_state.save_to_disk()
+	if _room != null and _room._filter != "all":
+		_room._handle_rail("filter:all")
+
+
+## Leg 8: X flags favorites (Chris's proposal, 2026-10-25).
+## Driven through the real input poll: X on a focused card
+## toggles the favorite in the store AND the persisted file,
+## and the card's face re-renders in place carrying the mark
+## (the panel face's FAVORITE chip in its spec; the art
+## face's star badge, pixel-proven through the factory). X
+## on a rail stop and X during the load wait are inert. The
+## favorites-filter edge: X-ing OFF removes the card - focus
+## lands on the panel that took its slot; X-ing off the last
+## one empties the set, the guard falls back to ALL, and
+## focus lands on its first panel.
+func _nav_leg_favorites_async() -> void:
+	var saved_favs: Array = _state.favorites.keys()
+	# A clean slate for the edge cases: the FAVORITES wall
+	# must hold exactly what this leg puts in it.
+	_state.favorites.clear()
+	_state.save_to_disk()
+	_room._handle_rail("filter:all")
+	await _nav_await_ready()
+	var base: int = _room._page * RoomView.PAGE_SIZE
+	var panel_idx: int = -1
+	var art_idx: int = -1
+	for i: int in range(_room._panels.size()):
+		var g: GameEntry = _room._visible_games[base + i]
+		if g.ensure_art() != "":
+			if art_idx < 0:
+				art_idx = i
+		elif panel_idx < 0:
+			panel_idx = i
+	_nav_expect(panel_idx >= 0 and art_idx >= 0,
+		"X: the wall offers both a panel-faced and an art-faced card")
+	if panel_idx < 0 or art_idx < 0:
+		_nav_restore_favorites(saved_favs)
+		_nav_fav_done = true
+		return
+	var panel_game: GameEntry = _room._visible_games[base + panel_idx]
+	var art_game: GameEntry = _room._visible_games[base + art_idx]
+	# X on a rail stop is inert.
+	_room._set_focused(_room.rail_quad("sort"))
+	await _nav_feed_button(JOY_BUTTON_X)
+	_nav_expect(_state.favorites.is_empty(),
+		"X: a rail-focused X press flags nothing")
+	# Panel card: X on - store, disk, spec chip, in-place face.
+	_room._set_focused(_room._panels[panel_idx])
+	var face_before: Texture2D = _room._panels[panel_idx].current_texture()
+	await _nav_feed_button(JOY_BUTTON_X)
+	_nav_expect(_state.is_favorite(panel_game.game_id),
+		"X: the focused panel card's favorite is set in the store")
+	var disk: StateStore = StateStore.new()
+	disk.load_from_disk()
+	_nav_expect(disk.is_favorite(panel_game.game_id),
+		"X: the persisted state file agrees")
+	_nav_expect(_nav_spec_has_chip(RoomSpecs.panel_spec(panel_game, _state), "FAVORITE"),
+		"X: the panel spec carries the FAVORITE chip")
+	var guard: int = 0
+	while _room._panels[panel_idx].current_texture() == face_before and guard < 600:
+		await get_tree().process_frame
+		guard += 1
+	_nav_expect(_room._panels[panel_idx].current_texture() != face_before,
+		"X: the panel card's face re-renders in place")
+	# X off again.
+	await _nav_feed_button(JOY_BUTTON_X)
+	_nav_expect(not _state.is_favorite(panel_game.game_id),
+		"X: a second X press clears the favorite")
+	_nav_expect(not _nav_spec_has_chip(RoomSpecs.panel_spec(panel_game, _state), "FAVORITE"),
+		"X: the panel spec drops the chip with the favorite")
+	# Art card: the star badge, pixel-proven through the
+	# factory against a flat stand-in art texture.
+	var flat: Texture2D = TextureFactory.make_solid(Color(0.2, 0.3, 0.5))
+	var star_off: int = await _nav_star_pixels(art_game, flat)
+	_nav_expect(star_off == 0,
+		"X: the art face shows no star while the game is unfavorited (got %d)" % star_off)
+	_room._set_focused(_room._panels[art_idx])
+	var art_face_before: Texture2D = _room._panels[art_idx].current_texture()
+	await _nav_feed_button(JOY_BUTTON_X)
+	_nav_expect(_state.is_favorite(art_game.game_id),
+		"X: the focused art card's favorite is set")
+	var star_on: int = await _nav_star_pixels(art_game, flat)
+	_nav_expect(star_on > 100,
+		"X: the art face wears the star badge while favorited (got %d px)" % star_on)
+	guard = 0
+	while _room._panels[art_idx].current_texture() == art_face_before and guard < 600:
+		await get_tree().process_frame
+		guard += 1
+	_nav_expect(_room._panels[art_idx].current_texture() != art_face_before,
+		"X: the art card's face re-renders in place")
+	await _nav_feed_button(JOY_BUTTON_X)
+	_nav_expect(not _state.is_favorite(art_game.game_id),
+		"X: the art card's favorite clears")
+	var star_cleared: int = await _nav_star_pixels(art_game, flat)
+	_nav_expect(star_cleared == 0,
+		"X: clearing the art card's favorite clears its star (got %d)" % star_cleared)
+	# The FAVORITES edge: stage two, walk the filter in,
+	# then X them off one at a time.
+	_room._set_focused(_room._panels[panel_idx])
+	await _nav_feed_button(JOY_BUTTON_X)
+	_room._set_focused(_room._panels[art_idx])
+	await _nav_feed_button(JOY_BUTTON_X)
+	_nav_expect(_state.favorites.size() == 2, "X edge: two favorites staged")
+	_room._handle_rail("filter:favorites")
+	await _nav_await_ready()
+	_nav_expect(_room._filter == "favorites" and _room._visible_games.size() == 2,
+		"X edge: the favorites wall holds exactly the two")
+	var first_game: GameEntry = _room._visible_games[0]
+	var second_game: GameEntry = _room._visible_games[1]
+	_room._set_focused(_room._panels[0])
+	await _nav_feed_button(JOY_BUTTON_X)
+	await _nav_await_ready()
+	_nav_expect(not _state.is_favorite(first_game.game_id) and _state.is_favorite(second_game.game_id),
+		"X edge: the focused card's favorite cleared, the other stands")
+	_nav_expect(_room._visible_games.size() == 1 and _room._visible_games[0] == second_game,
+		"X edge: the wall now holds the remaining favorite")
+	_nav_expect(_room.focused_quad() == _room._panels[0],
+		"X edge: focus lands on the panel that took the slot")
+	# Inert during the load wait, with a favorite at stake:
+	# the press must not clear it on its way past.
+	_room.begin_launch(second_game)
+	await _nav_feed_button(JOY_BUTTON_X)
+	_nav_expect(_state.is_favorite(second_game.game_id) and _room.is_launch_in_wait(),
+		"X edge: an X press inside the load wait toggles nothing")
+	_room.end_launch_failed(second_game, "nav smoke")
+	await _nav_await_ready()
+	# The last favorite goes off: the set empties, the
+	# guard falls back to ALL, focus on its first panel.
+	_room._set_focused(_room._panels[0])
+	await _nav_feed_button(JOY_BUTTON_X)
+	await _nav_await_ready()
+	_nav_expect(_state.favorites.is_empty(), "X edge: the last favorite cleared")
+	_nav_expect(_room._filter == "all",
+		"X edge: the emptied favorites filter falls back to ALL")
+	_nav_expect(not _room._panels.is_empty() and _room.focused_quad() == _room._panels[0],
+		"X edge: focus lands on the ALL wall's first panel")
+	_nav_restore_favorites(saved_favs)
+	_nav_fav_done = true
 
 
 # -------------------------------------------------- desk smoke

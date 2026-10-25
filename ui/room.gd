@@ -153,6 +153,7 @@ var _joy_cooldown: float = 0.0
 var _joy_prev_a: bool = false
 var _joy_prev_b: bool = false
 var _joy_prev_y: bool = false ## Y edge tracking: launch the focused card (see _process)
+var _joy_prev_x: bool = false ## X edge tracking: favorite the focused card (see _process)
 var _joy_prev_lb: bool = false ## bumper edge tracking: the section slide's page travel (see _process)
 var _joy_prev_rb: bool = false
 var _joy_prev_right: bool = false ## D-pad Right edge tracking: the room's BACK-out press (see _process)
@@ -633,7 +634,7 @@ func _fill_wall_textures(gen: int) -> void:
 		if art_file != "":
 			var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
 			if art_tex != null:
-				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex), Vector2i(512, 640))
+				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store), Vector2i(512, 640))
 		if tex == null:
 			tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), Vector2i(512, 640))
 		if gen != _gen:
@@ -873,6 +874,7 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 		_recompute_visible()
 		_rebuild_wall()
 		_persist_view()
+		_land_on_rail_stop(key)
 	elif key == "sort":
 		var idx: int = SORTS.find(_sort)
 		_sort = SORTS[(idx + 1) % SORTS.size()]
@@ -880,6 +882,7 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 		_recompute_visible()
 		_rebuild_wall()
 		_persist_view()
+		_land_on_rail_stop(key)
 	elif key == "page_prev":
 		if _page > 0:
 			_begin_page_slide(-1, after_swap)
@@ -890,6 +893,90 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 		setup_requested.emit()
 	elif key == "exit":
 		exit_requested.emit()
+
+
+## A rail activation keeps focus on the bar (Chris's field
+## report, 2026-10-25): a filter or sort press rebuilds the
+## wall, and the rebuild drops focus - the next step then
+## landed on the first card at the top of the window, and the
+## player had to tap tap tap back down to the bar they were
+## just using. The landing rule for rail-caused rebuilds:
+## focus takes the SAME stop that was activated (the rail is
+## persistent furniture, so the quad is the same instance),
+## whether the press came from the pad's focus or the pointer.
+## Page travel keeps its own landing (the bumper rule), and
+## rebuilds with other causes - detail close, launch failure,
+## library refresh - keep the landings they already had.
+func _land_on_rail_stop(key: String) -> void:
+	var rq: ClickableQuad = _rail_quads.get(key) as ClickableQuad
+	if rq != null:
+		_set_focused(rq)
+
+
+## X on the pad (and KEY_X on the keyboard): toggle the
+## focused card's favorite, through the same store the detail
+## view's Favorite quad writes - so the wall, the detail view,
+## and the file on disk never disagree - persisted on the
+## spot, like the detail toggle. Only a PANEL focused in plain
+## wall mode counts: rail focus, the detail view (its own
+## Favorite quad owns the toggle there), the SETUP placard,
+## and the load wait all leave X inert.
+##
+## The card's face re-renders in place so the favorite mark
+## (the panel face's FAVORITE chip, the art face's star badge)
+## appears or clears where the player is looking. The one
+## structural case: X-ing OFF a card while browsing the
+## FAVORITES filter removes the card from the visible set, so
+## the wall recomputes and rebuilds; the landing rule there is
+## the panel that took the removed card's slot, clamped to the
+## wall's last panel - and if the set emptied, the recompute's
+## empty-filter guard has already fallen back to ALL, whose
+## first panel takes the focus.
+func _toggle_focused_favorite() -> void:
+	if _mode != "wall" or _placard_up or _launching_game_id != "" or _focused == null:
+		return
+	var idx: int = _panels.find(_focused)
+	if idx < 0:
+		return
+	var start: int = _page * PAGE_SIZE
+	if start + idx >= _visible_games.size():
+		return
+	var game: GameEntry = _visible_games[start + idx]
+	var now_on: bool = not _store.is_favorite(game.game_id)
+	_store.set_favorite(game.game_id, now_on)
+	_store.save_to_disk()
+	if _filter == "favorites" and not now_on:
+		_recompute_visible()
+		_rebuild_wall()
+		_persist_view()
+		if not _panels.is_empty():
+			_set_focused(_panels[mini(idx, _panels.size() - 1)])
+		return
+	_rerender_panel_face(idx)
+
+
+## Re-render one wall panel's face in place (the X favorite
+## toggle's feedback): the same art-then-panel path
+## _fill_wall_textures walks for the slot, generation-guarded
+## so a rebuild landing mid-render retires the stale write.
+func _rerender_panel_face(idx: int) -> void:
+	var gen: int = _gen
+	var start: int = _page * PAGE_SIZE
+	if idx < 0 or idx >= _panels.size() or start + idx >= _visible_games.size():
+		return
+	var game: GameEntry = _visible_games[start + idx]
+	var quad: ClickableQuad = _panels[idx]
+	var tex: Texture2D = null
+	var art_file: String = game.ensure_art()
+	if art_file != "":
+		var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
+		if art_tex != null:
+			tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store), Vector2i(512, 640))
+	if tex == null:
+		tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), Vector2i(512, 640))
+	if gen != _gen or idx >= _panels.size() or _panels[idx] != quad:
+		return
+	quad.set_texture(tex)
 
 
 ## A page change's ride (see PAGE_SLIDE_*): the press commits
@@ -1483,6 +1570,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_cycle_focus(1)
 			KEY_Y:
 				_launch_focused_card() ## keyboard parity with the pad's Y (see _process)
+			KEY_X:
+				_toggle_focused_favorite() ## keyboard parity with the pad's X (see _process)
 			KEY_ENTER, KEY_KP_ENTER, KEY_SPACE:
 				if _focused != null:
 					_activate(_focused)
@@ -1497,7 +1586,8 @@ func _process(delta: float) -> void:
 	# drifts with the cursor makes every click target swim (field
 	# finding, round 2). XR head tracking owns the view in XR only.
 	# Gamepad: left stick / d-pad moves focus, A selects, B goes
-	# back in the detail view, Y launches the focused card.
+	# back in the detail view, Y launches the focused card, X
+	# toggles the focused card's favorite.
 	# D-pad Right is NOT a focus direction: it is the BACK button,
 	# with exactly two meanings in the whole app (the player's
 	# ruling, 2026-10-22 - no hold gesture exists anywhere). In
@@ -1566,6 +1656,17 @@ func _process(delta: float) -> void:
 	if y_now and not _joy_prev_y and not deaf:
 		_launch_focused_card()
 	_joy_prev_y = y_now
+	# X: favorite the focused card (Chris's proposal,
+	# 2026-10-25 - flagging a favorite must not cost a trip
+	# into the detail view). Same discipline as Y: edge only,
+	# the prev-state update runs even while deaf so a press
+	# held through the load wait can't resurface as a phantom
+	# toggle afterwards; the mode/focus gating lives in
+	# _toggle_focused_favorite.
+	var x_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_X)
+	if x_now and not _joy_prev_x and not deaf:
+		_toggle_focused_favorite()
+	_joy_prev_x = x_now
 	# Bumpers (LB/RB): page travel, the section slide (Chris's
 	# banked note, 2026-10-23; his clarification, 2026-10-24:
 	# "my intention for bumpers was for the entire section to

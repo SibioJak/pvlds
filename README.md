@@ -533,10 +533,16 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   a card's Launch button is not a focus stop (it is the pointer's
   target and the card's state label), so Down travels row to row
   and Right card to card. With a card focused, **A** opens More
-  Info and **Y** launches the card's default build (keyboard:
-  arrows/Tab to move, Enter for the focused surface, Y to launch);
-  Y does nothing with the rail focused, in the detail view, or
-  during a load.
+  Info, **Y** launches the card's default build, and **X** toggles
+  the card's favorite (keyboard: arrows/Tab to move, Enter for the
+  focused surface, Y to launch, X to favorite); Y and X do nothing
+  with the rail focused, in the detail view, or during a load.
+  Activating a filter or the sort from the rail keeps focus on
+  that rail stop after the wall rebuilds — the bar keeps you.
+  A favorite shows on the card's face: a FAVORITE chip on a title
+  card, a star badge in the art face's top-right corner; X-ing a
+  card off while browsing the Favorites filter removes it from
+  the wall, focus landing on the card that took its slot.
 - **First-run desk pass.** A flat 2D setup (never in-headset): point
   at the VPX executable (`VPinball_GL64.exe` expected) and the table
   folder(s), optionally a cached `vpsdb.json`. Its **Download VPS
