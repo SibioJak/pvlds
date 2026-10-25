@@ -529,7 +529,14 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   steps along the rail walk its stops in order and never detour up
   to a card; the grid is entered from the rail only by stepping up,
   and down from the grid's bottom row returns to the rail
-  (`RAIL_FOCUS_ORDER` in `ui/room.gd`).
+  (`RAIL_FOCUS_ORDER` in `ui/room.gd`). Focus walks **cards only**:
+  a card's Launch button is not a focus stop (it is the pointer's
+  target and the card's state label), so Down travels row to row
+  and Right card to card. With a card focused, **A** opens More
+  Info and **Y** launches the card's default build (keyboard:
+  arrows/Tab to move, Enter for the focused surface, Y to launch);
+  Y does nothing with the rail focused, in the detail view, or
+  during a load.
 - **First-run desk pass.** A flat 2D setup (never in-headset): point
   at the VPX executable (`VPinball_GL64.exe` expected) and the table
   folder(s), optionally a cached `vpsdb.json`. Its **Download VPS

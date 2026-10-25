@@ -146,6 +146,8 @@ var _nav_smoke_failures: int = 0
 var _nav_faces_done: bool = false ## the title-card face check (async render) has reported
 var _nav_bumpers_started: bool = false ## the bumper leg runs async (it waits out each page slide); kicked off once
 var _nav_bumpers_done: bool = false ## the bumper leg (async) has reported
+var _nav_y_started: bool = false ## the Y-launch leg runs async (it rides a real launch wait); kicked off once
+var _nav_y_done: bool = false ## the Y-launch leg (async) has reported
 var _shot_slide_path: String = "" ## --pvlds-shot-slide P: capture the wall at the page slide's far point
 var _shot_slide_phase: int = -1
 var _shot_slide_frames: int = 0
@@ -1271,7 +1273,18 @@ func _finish_placard_smoke() -> void:
 ##          the press, the swap lands mid-glide, the wall
 ##          returns to exact rest, and on the first frame after
 ##          the swap every rail quad wears a real (non-
-##          placeholder) texture - the bar never pops.
+##          placeholder) texture - the bar never pops;
+##   leg 6: the cards-only focus contract (Chris's ruling,
+##          2026-10-24): the wall-mode focusable set holds no
+##          Launch button, a DOWN walk down one column visits
+##          exactly its three row panels in order, and Y on the
+##          pad launches the focused card's default build
+##          through the Launch button's own path - inert on a
+##          rail stop and in the detail view, while A on a card
+##          still opens More Info. The launch half runs async
+##          against the harness's never-window stub with a
+##          zero-length life: the spawn lands in the load wait
+##          and the dead pid settles it FAILED, browsing resumes.
 ## The driver forces the ALL filter through the room's own rail
 ## handler so the wall always holds a full bottom row. Leg 5
 ## needs more pages than the dummy library's ten games give, so
@@ -1297,6 +1310,7 @@ func _drive_nav_smoke() -> void:
 			elif _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
 				_nav_leg_rail_walk()
 				_nav_leg_up_down()
+				_nav_leg_cards_only()
 				_nav_leg_clearance(false)
 				_nav_check_faces()
 				_nav_smoke_wait = 0
@@ -1325,7 +1339,8 @@ func _drive_nav_smoke() -> void:
 				_finish_nav_smoke()
 		4:
 			if _nav_bumpers_done:
-				_finish_nav_smoke()
+				_nav_smoke_wait = 0
+				_nav_smoke_phase = 5
 				return
 			_nav_smoke_wait += 1
 			if _nav_smoke_wait > 7200:
@@ -1334,6 +1349,17 @@ func _drive_nav_smoke() -> void:
 			elif not _nav_bumpers_started and _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
 				_nav_bumpers_started = true
 				_nav_leg_bumpers_async()
+		5:
+			if _nav_y_done:
+				_finish_nav_smoke()
+				return
+			_nav_smoke_wait += 1
+			if _nav_smoke_wait > 7200:
+				_nav_smoke_fail("the Y-launch leg never finished")
+				_finish_nav_smoke()
+			elif not _nav_y_started and _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
+				_nav_y_started = true
+				_nav_leg_y_launch_async()
 
 
 func _nav_expect(cond: bool, label: String) -> void:
@@ -1406,6 +1432,35 @@ func _nav_leg_up_down() -> void:
 			_nav_expect(f != null and (_room._panels.has(f) or _room._panel_launches.has(f)),
 				"down from the grid stays in the grid until the rail (from %s)" % key)
 		_nav_expect(back, "down from the grid's bottom row returns to the rail (from %s)" % key)
+
+
+## Leg 6a (the cards-only focus contract): the wall-mode
+## focusable set holds NO Launch button - focus visits cards
+## and rail stops only - and a DOWN walk down one column
+## visits exactly that column's three row panels in order
+## before the next DOWN lands on the rail. (The launch half
+## of the leg is async; see _nav_leg_y_launch_async.)
+func _nav_leg_cards_only() -> void:
+	_room._refresh_focusables()
+	for q: ClickableQuad in _room._focusables:
+		_nav_expect(not _room._panel_launches.has(q),
+			"cards-only: no Launch button is a focus stop")
+	var stops: int = _room._panels.size()
+	for k: Variant in _room._rail_quads.keys():
+		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
+		if rq != null and rq.pick_enabled:
+			stops += 1
+	_nav_expect(_room._focusables.size() == stops,
+		"cards-only: the focus walk is exactly the %d cards + rail stops (got %d)" % [_room._panels.size(), _room._focusables.size()])
+	# Column 1 (slots 1, 5, 9): DOWN walks the rows in order.
+	_room._set_focused(_room._panels[1])
+	for slot: int in [5, 9]:
+		_room._move_focus(Vector2(0.0, 1.0))
+		_nav_expect(_room.focused_quad() == _room._panels[slot],
+			"cards-only: DOWN walks the column - slot %d next" % slot)
+	_room._move_focus(Vector2(0.0, 1.0))
+	_nav_expect(_nav_key_of(_room.focused_quad()) != "",
+		"cards-only: DOWN from the bottom row lands on the rail, never a Launch button")
 
 
 func _nav_bottom_row_panel() -> ClickableQuad:
@@ -1648,6 +1703,90 @@ func _nav_leg_bumpers_async() -> void:
 	_nav_expect(_room._page == 0 and _room._filter == filter0,
 		"bumpers: the leg leaves the wall on page 1, filter untouched")
 	_nav_bumpers_done = true
+
+
+## Feeds one synthetic gamepad press through the Input
+## singleton (the dpadexit smoke's feed), so the room's own
+## _process poll reads the edge - the shipping input path is
+## what the Y leg exercises, not a direct call. Press, two
+## frames, release, two frames: the release matters, because
+## the room's edge tracking keys off the poll seeing the
+## button up again before the next press can count.
+func _nav_feed_button(btn: JoyButton) -> void:
+	var press: InputEventJoypadButton = InputEventJoypadButton.new()
+	press.device = 0
+	press.button_index = btn
+	press.pressed = true
+	Input.parse_input_event(press)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var rel: InputEventJoypadButton = InputEventJoypadButton.new()
+	rel.device = 0
+	rel.button_index = btn
+	rel.pressed = false
+	Input.parse_input_event(rel)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+
+## Leg 6b (async - it rides a real launch wait): Y on the pad
+## launches the focused card's default build through the
+## Launch button's own path. The harness's stub VPX is the
+## never-window build with a zero-length life: the spawn
+## lands in the load wait (the room deaf, the focusable set
+## empty), then the dead pid settles the launch FAILED after
+## its grace - Main's own failure path, no hand-off, browsing
+## resumes. Y on a rail stop and Y in the detail view must
+## start nothing; A on a card must still open More Info.
+func _nav_leg_y_launch_async() -> void:
+	# Y on a rail stop is inert.
+	_room._set_focused(_room.rail_quad("sort"))
+	await _nav_feed_button(JOY_BUTTON_Y)
+	_nav_expect(not _launch_pending and _room._mode == "wall",
+		"Y: a rail-focused Y press launches nothing")
+	_nav_expect(_nav_key_of(_room.focused_quad()) == "sort",
+		"Y: focus stays on the rail stop after the inert press")
+	# A on a focused card still opens More Info.
+	_room._set_focused(_room._panels[2])
+	await _nav_feed_button(JOY_BUTTON_A)
+	_nav_expect(_room._mode == "detail", "A: a card-focused A press opens More Info")
+	# Y in the detail view is inert.
+	await _nav_feed_button(JOY_BUTTON_Y)
+	_nav_expect(not _launch_pending and _room._mode == "detail",
+		"Y: a detail-view Y press launches nothing")
+	_room._on_detail_closed()
+	_nav_expect(_room._mode == "wall", "Y: the detail view closes back to the wall")
+	# Y on a focused card fires its default build.
+	var game: GameEntry = _room._visible_games[2]
+	_room._set_focused(_room._panels[2])
+	await _nav_feed_button(JOY_BUTTON_Y)
+	var guard: int = 0
+	while not _launch_pending and guard < 600:
+		await get_tree().process_frame
+		guard += 1
+	_nav_expect(_launch_pending, "Y: a card-focused Y press starts a launch")
+	_nav_expect(_launch_game != null and _launch_game.game_id == game.game_id,
+		"Y: the launch is the focused card's game")
+	_nav_expect(_room.is_launch_in_wait(), "Y: the room is in the load wait")
+	_nav_expect(_room.focusable_count() == 0, "Y: the wait's focusable set is empty")
+	# A second Y inside the wait fires nothing.
+	var session: int = _launch_session_id
+	await _nav_feed_button(JOY_BUTTON_Y)
+	_nav_expect(_launch_pending and _launch_session_id == session,
+		"Y: a Y press inside the load wait fires nothing")
+	# The dead stub settles the launch as a failure; browsing
+	# resumes on the wall with the game marked FAILED.
+	guard = 0
+	while _launch_pending and guard < 3600:
+		await get_tree().process_frame
+		guard += 1
+	_nav_expect(not _launch_pending, "Y: the dead-stub launch settles")
+	_nav_expect(not _room.is_launch_in_wait() and _room._mode == "wall",
+		"Y: the room browses again after the failed settle")
+	_nav_expect(_room._failed_game_id == game.game_id,
+		"Y: the settled failure marks the focused card's game FAILED")
+	_nav_expect(_room.focusable_count() > 0, "Y: the focus walk is restored after the settle")
+	_nav_y_done = true
 
 
 # -------------------------------------------------- desk smoke

@@ -152,6 +152,7 @@ var _focused: ClickableQuad = null
 var _joy_cooldown: float = 0.0
 var _joy_prev_a: bool = false
 var _joy_prev_b: bool = false
+var _joy_prev_y: bool = false ## Y edge tracking: launch the focused card (see _process)
 var _joy_prev_lb: bool = false ## bumper edge tracking: the section slide's page travel (see _process)
 var _joy_prev_rb: bool = false
 var _joy_prev_right: bool = false ## D-pad Right edge tracking: the room's BACK-out press (see _process)
@@ -682,10 +683,17 @@ func _refresh_focusables() -> void:
 	elif _mode == "detail" and _detail != null:
 		_focusables = _detail.get_clickables()
 	else:
+		# Cards only (Chris's ruling, 2026-10-24): the per-card
+		# Launch buttons are NOT focus stops. When they were, a
+		# column descent cost two presses per row - card, button,
+		# card, button - because the button sits directly below
+		# its card in the focus walk. Focus now visits cards and
+		# rail stops only: DOWN travels row to row, RIGHT card to
+		# card, and the pad launches the focused card with Y
+		# (see _launch_focused_card). The button remains the
+		# pointer's target and the card's state label.
 		for i: int in range(_panels.size()):
 			_focusables.append(_panels[i])
-			if i < _panel_launches.size() and _panel_launches[i].pick_enabled:
-				_focusables.append(_panel_launches[i])
 		for k: Variant in _rail_quads.keys():
 			var q: ClickableQuad = _rail_quads[k]
 			if q.pick_enabled:
@@ -826,6 +834,28 @@ func _activate(quad: ClickableQuad) -> void:
 			_handle_rail(quad.payload)
 
 
+## Y on the pad (and KEY_Y on the keyboard): launch the focused
+## card's default build. This is the pad's answer to the Launch
+## button now that the button is no longer a focus stop - the
+## press routes through _activate on the card's own Launch quad,
+## so the path is literally the button's: the button pulses, the
+## default build resolves, the selection persists, and
+## launch_requested fires. Only a PANEL focused in plain wall
+## mode counts: rail focus, the detail view, and the SETUP
+## placard all leave Y inert, and the load wait refuses twice
+## over - the poll's deaf gate at the call site, then _activate's
+## own refusal. A press that lands mid page-slide fires the card
+## focus still sits on (the page on screen); the slide's pending
+## travel then drops whole at its far point, by its own rule.
+func _launch_focused_card() -> void:
+	if _mode != "wall" or _placard_up or _focused == null:
+		return
+	var idx: int = _panels.find(_focused)
+	if idx < 0 or idx >= _panel_launches.size():
+		return
+	_activate(_panel_launches[idx])
+
+
 ## Rail handling. Page travel (page_prev / page_next) is the
 ## one branch that does not rebuild on the spot: it starts the
 ## page slide, and the page delta, rebuild, and view persist
@@ -952,10 +982,11 @@ func _slide_ease(p: float) -> float:
 ## detail view is not the wall.
 ##
 ## Focus rule (stated for the smoke to assert): focus keeps its
-## PLACE across the flip. A focused panel - or its Launch
-## button - hands focus to the panel in the same grid slot on
-## the new page (the panel itself, never its Launch button, so
-## a follow-up A press browses instead of firing a load),
+## PLACE across the flip. A focused panel hands focus to the
+## panel in the same grid slot on the new page (the panel
+## itself, so a follow-up A press browses instead of firing a
+## load - a Launch button can never hold focus at all since
+## the cards-only focus round),
 ## clamped to the new page's last panel when the page runs
 ## short; a focused rail stop hands focus to the same stop on
 ## the rebuilt rail; no focus lands on the first panel. The
@@ -971,8 +1002,6 @@ func _bumper_page(step: int) -> void:
 	if _focused != null:
 		if _panels.has(_focused):
 			slot = _panels.find(_focused)
-		elif _panel_launches.has(_focused):
-			slot = _panel_launches.find(_focused)
 		elif _is_rail_quad(_focused):
 			for k: Variant in _rail_quads.keys():
 				if _rail_quads[k] == _focused:
@@ -1452,6 +1481,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_move_focus(Vector2(0.0, 1.0))
 			KEY_TAB:
 				_cycle_focus(1)
+			KEY_Y:
+				_launch_focused_card() ## keyboard parity with the pad's Y (see _process)
 			KEY_ENTER, KEY_KP_ENTER, KEY_SPACE:
 				if _focused != null:
 					_activate(_focused)
@@ -1465,7 +1496,8 @@ func _process(delta: float) -> void:
 	# mouse is a pure pointer there, never a look control. A view that
 	# drifts with the cursor makes every click target swim (field
 	# finding, round 2). XR head tracking owns the view in XR only.
-	# Gamepad: left stick / d-pad moves focus, A selects, B goes back.
+	# Gamepad: left stick / d-pad moves focus, A selects, B goes
+	# back in the detail view, Y launches the focused card.
 	# D-pad Right is NOT a focus direction: it is the BACK button,
 	# with exactly two meanings in the whole app (the player's
 	# ruling, 2026-10-22 - no hold gesture exists anywhere). In
@@ -1523,6 +1555,17 @@ func _process(delta: float) -> void:
 	if b_now and not _joy_prev_b and _mode == "detail" and not deaf:
 		_detail.handle_escape()
 	_joy_prev_b = b_now
+	# Y: launch the focused card's default build (Chris's
+	# cards-only focus ruling, 2026-10-24 - launching is a key
+	# now, not a focus destination). Edge only, like A and B;
+	# the prev-state update runs even while deaf, so a press
+	# held through the load wait can't resurface as a phantom
+	# launch on the other side. The mode/focus gating lives in
+	# _launch_focused_card.
+	var y_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_Y)
+	if y_now and not _joy_prev_y and not deaf:
+		_launch_focused_card()
+	_joy_prev_y = y_now
 	# Bumpers (LB/RB): page travel, the section slide (Chris's
 	# banked note, 2026-10-23; his clarification, 2026-10-24:
 	# "my intention for bumpers was for the entire section to
