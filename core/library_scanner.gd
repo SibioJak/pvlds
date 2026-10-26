@@ -6,10 +6,13 @@ extends RefCounted
 ## Read-only: the scan never writes, moves, or touches anything in the
 ## table folders - table .ini files included.
 ## Art is LAZY: the scan records only facts visible in a directory
-## listing (a same-stem image or .directb2s exists). Extracting a
-## backglass out of a .directb2s costs ~200 ms per file at real-world
-## sizes, so it happens on demand via GameEntry.ensure_art(), never
-## here. Safe to run on a worker thread: pure data in, pure data out.
+## listing (a same-stem image or .directb2s exists) plus each
+## game's own .vpx as the embedded-image source. Extracting a
+## backglass out of a .directb2s costs ~200 ms per file at
+## real-world sizes, and opening a .vpx to read its embedded image
+## is real work too, so both happen on demand via
+## GameEntry.ensure_art(), never here. Safe to run on a worker
+## thread: pure data in, pure data out.
 
 const MAX_SCAN_DEPTH: int = 12 ## Recursion cap - also the cycle backstop.
 const JUNK_FOLDERS: Array[String] = ["$recycle.bin", "system volume information", "recycler"]
@@ -80,19 +83,50 @@ func scan(folders: Array[String], db: VpsDatabase, progress: ScanProgress = null
 			by_key[build.game_key] = entry
 			games.append(entry)
 		entry.builds.append(build)
-		if entry.art_path == "" and entry.art_source_path == "":
-			var facts: Variant = art_map.get(path, null)
-			if facts is Dictionary:
-				var fd: Dictionary = facts
-				entry.art_path = str(fd.get("side", ""))
-				entry.art_source_path = str(fd.get("b2s", ""))
 	for entry: GameEntry in games:
 		_sort_builds(entry)
-		if entry.has_art_available():
+		_resolve_art(entry, art_map)
+		# Covered = the listing proved art exists: a side image or
+		# a backglass. A game whose only source is the image inside
+		# its .vpx is NOT counted here - that art is real but
+		# unproven until an extraction succeeds, and this count is
+		# the scan summary's pre-extraction baseline.
+		if entry.art_path != "" or entry.art_source_path.get_extension().to_lower() == "directb2s":
 			art_covered_games += 1
 	if progress != null:
 		progress.report_match(files.size())
 		progress.finish()
+
+
+## Art-source resolution for one grouped game, from the listing's
+## facts. Runs once per game after grouping (never in the per-file
+## loop), so a game's art does not depend on which build the scan
+## met first. The order is the art order: a side image beside ANY
+## build wins the face outright; else the first backglass found is
+## the primary extraction source; else the first build's own .vpx
+## is the primary - its embedded image is a real source, opened
+## lazily by GameEntry.ensure_art, never by the scan. The first
+## build's .vpx is ALWAYS recorded as art_vpx_path too: the
+## embedded fallback behind a backglass primary.
+func _resolve_art(entry: GameEntry, art_map: Dictionary) -> void:
+	var first_side: String = ""
+	var first_b2s: String = ""
+	for b: TableBuild in entry.builds:
+		var facts: Variant = art_map.get(b.file_path, null)
+		if facts is Dictionary:
+			var fd: Dictionary = facts
+			if first_side == "":
+				first_side = str(fd.get("side", ""))
+			if first_b2s == "":
+				first_b2s = str(fd.get("b2s", ""))
+	if not entry.builds.is_empty():
+		entry.art_vpx_path = entry.builds[0].file_path
+	if first_side != "":
+		entry.art_path = first_side
+	elif first_b2s != "":
+		entry.art_source_path = first_b2s
+	elif entry.art_vpx_path != "":
+		entry.art_source_path = entry.art_vpx_path
 
 
 func duplicate_group_count() -> int:

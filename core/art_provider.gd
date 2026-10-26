@@ -4,10 +4,16 @@ extends RefCounted
 ## Resolves a display image for a table file. Order:
 ##   1. an image sitting beside the .vpx with the same stem
 ##      (.png / .jpg / .jpeg / .webp)
-##   2. the backglass image extracted from a same-stem .directb2s file,
-##      cached under user:// - extraction is best-effort and any
-##      failure just falls through to the generated title card.
+##   2. the backglass image extracted from a same-stem .directb2s file
+##   3. an image extracted from inside the .vpx file itself (its
+##      OLE/CFB storage holds the table's embedded images - see
+##      extract_vpx_image), cached under user:// like the backglass
+##      art - extraction is best-effort and any failure just falls
+##      through to the generated title card.
 ## Returns "" when no art exists. Never writes anywhere near the tables.
+## The designated .directb2s stays ahead of the embedded image on
+## purpose: it is the game's chosen backglass, while the embedded
+## art is incidental - real, but whatever the author saved last.
 ##
 ## The extraction targets the format as the B2S backglass server
 ## (the format's reference reader, github.com/vpinball/b2s-backglass)
@@ -288,6 +294,281 @@ static func extract_directb2s_image(b2s_path: String) -> String:
 	return str(result["path"])
 
 
+## Extract art from any extraction source, by file kind: a
+## .directb2s gives its designated backglass; a .vpx gives an
+## image from inside the table file. Anything else is not an
+## extraction source and returns "".
+static func extract_art_image(source_path: String) -> String:
+	match source_path.get_extension().to_lower():
+		"directb2s":
+			return extract_directb2s_image(source_path)
+		"vpx":
+			return extract_vpx_image(source_path)
+	return ""
+
+
+## Extract an image from inside a .vpx table file, with the same
+## cache and outcome discipline as the backglass extraction: a
+## cache hit serves in microseconds, a stamped negative is never
+## re-attempted until the file's stamp changes, and the result is
+## stored at panel size through the same _fit_to_panel pipeline.
+static func extract_vpx_image(vpx_path: String) -> String:
+	var cache_path: String = cache_path_for(vpx_path)
+	if FileAccess.file_exists(cache_path):
+		if outcome_for(vpx_path) != STATUS_OK:
+			_record_outcome(vpx_path, STATUS_OK)
+		return cache_path
+	var result: Dictionary = _extract_vpx_uncached(vpx_path, cache_path)
+	_record_outcome(vpx_path, str(result["status"]))
+	return str(result["path"])
+
+
+## How much of a stream to read just to identify it: enough for
+## every supported format's header dimensions (the JPEG marker
+## scan included), far less than any real image.
+const VPX_PROBE_BYTES: int = 65536
+## The largest embedded image stream worth decoding at all. Real
+## art tops out at a few megabytes; this only refuses pathology.
+const VPX_MAX_IMAGE_BYTES: int = 96 * 1024 * 1024
+## The class-(c) fallback's "not obviously a small sprite/ramp
+## decal" floor: a stream with no telling name only qualifies as
+## card art at 200x200 and 60,000 pixels or better. Named
+## backglass/playfield streams are exempt - the author named
+## them, so their size is their own business.
+const VPX_FALLBACK_MIN_W: int = 200
+const VPX_FALLBACK_MIN_H: int = 200
+const VPX_FALLBACK_MIN_AREA: int = 60000
+
+
+## One real embedded extraction attempt. The image pick, in order:
+##   (a) a stream whose name suggests backglass/backdrop art
+##   (b) the playfield image
+##   (c) the largest decodable image over the sprite floor above
+## Within a class, the largest pixel area wins (equal areas: the
+## larger stream). Ranked candidates are decoded in order and the
+## first that decodes is the art - a named stream whose bytes are
+## corrupt does not veto the next candidate.
+## Outcomes: the file is not a readable compound file, or image
+## candidates existed but none decoded -> failed; the file parsed
+## but holds no image candidate at all -> no_image.
+static func _extract_vpx_uncached(vpx_path: String, cache_path: String) -> Dictionary:
+	var reader: CfbReader = CfbReader.new()
+	if not reader.open(vpx_path):
+		reader.close()
+		return {"path": "", "status": STATUS_FAILED}
+	var candidates: Array = []
+	for entry: Variant in reader.stream_entries():
+		if not (entry is Dictionary):
+			continue
+		var e: Dictionary = entry as Dictionary
+		var size: int = int(e.get("size", 0))
+		if size < 100:
+			continue ## too small to hold a panel image in any format
+		var probe: PackedByteArray = reader.read_prefix(e, VPX_PROBE_BYTES)
+		if probe.size() < 8:
+			continue
+		var dims: Vector2i = _image_dimensions(probe)
+		if dims == Vector2i.ZERO and not _has_image_magic(probe):
+			continue ## not image bytes by header or by magic
+		var cls: int = _vpx_name_class(str(e.get("name", "")))
+		if cls == 2 and (dims.x < VPX_FALLBACK_MIN_W or dims.y < VPX_FALLBACK_MIN_H \
+				or dims.x * dims.y < VPX_FALLBACK_MIN_AREA):
+			continue ## nameless and small: a sprite or decal, not card art
+		candidates.append({
+			"entry": e, "cls": cls,
+			"area": dims.x * dims.y, "size": size,
+		})
+	if candidates.is_empty():
+		reader.close()
+		return {"path": "", "status": STATUS_NO_IMAGE}
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if int(a["cls"]) != int(b["cls"]):
+			return int(a["cls"]) < int(b["cls"])
+		if int(a["area"]) != int(b["area"]):
+			return int(a["area"]) > int(b["area"])
+		return int(a["size"]) > int(b["size"]))
+	for cand: Variant in candidates:
+		var c: Dictionary = cand as Dictionary
+		var bytes: PackedByteArray = reader.read_stream(c["entry"] as Dictionary, VPX_MAX_IMAGE_BYTES)
+		if bytes.is_empty():
+			continue
+		var img: Image = _decode_image_bytes(bytes)
+		if img != null:
+			reader.close()
+			return _store_extracted(img, cache_path)
+	reader.close()
+	return {"path": "", "status": STATUS_FAILED}
+
+
+## The art class a stream's NAME claims: 0 = backglass/backdrop,
+## 1 = playfield, 2 = unnamed. VPX authors name the streams after
+## what they hold ("Backglass", "Playfield" and kin), so the name
+## is the strongest signal in the file.
+static func _vpx_name_class(stream_name: String) -> int:
+	var n: String = stream_name.to_lower()
+	if n.contains("backglass") or n.contains("backdrop") or n.contains("back glass"):
+		return 0
+	if n.contains("playfield"):
+		return 1
+	return 2
+
+
+## An image's pixel dimensions from its header bytes alone -
+## Vector2i.ZERO when the header carries none or the format is
+## unrecognized. Covers PNG, JPEG, BMP, bare DIB, GIF and WebP.
+static func _image_dimensions(bytes: PackedByteArray) -> Vector2i:
+	if bytes.size() >= 24 and bytes[0] == 0x89 and bytes[1] == 0x50 and bytes[2] == 0x4E and bytes[3] == 0x47:
+		return Vector2i(_be_u32(bytes, 16), _be_u32(bytes, 20)) # PNG IHDR
+	if bytes.size() >= 4 and bytes[0] == 0xFF and bytes[1] == 0xD8:
+		return _jpeg_dimensions(bytes)
+	if bytes.size() >= 26 and bytes[0] == 0x42 and bytes[1] == 0x4D:
+		return Vector2i(absi(_le_i32(bytes, 18)), absi(_le_i32(bytes, 22))) # BMP info header
+	if bytes.size() >= 10 and bytes[0] == 0x47 and bytes[1] == 0x49 and bytes[2] == 0x46 and bytes[3] == 0x38:
+		return Vector2i(_le_u16(bytes, 6), _le_u16(bytes, 8)) # GIF logical screen
+	if bytes.size() >= 30 and bytes[0] == 0x52 and bytes[1] == 0x49 and bytes[2] == 0x46 and bytes[3] == 0x46 \
+			and bytes[8] == 0x57 and bytes[9] == 0x45 and bytes[10] == 0x42 and bytes[11] == 0x50:
+		var chunk: String = bytes.slice(12, 16).get_string_from_ascii()
+		if chunk == "VP8X":
+			return Vector2i(_le_u24(bytes, 24) + 1, _le_u24(bytes, 27) + 1)
+		if chunk == "VP8L" and bytes[20] == 0x2F:
+			var b1: int = bytes[21]
+			var b2: int = bytes[22]
+			var b3: int = bytes[23]
+			var b4: int = bytes[24]
+			return Vector2i(1 + (b1 | ((b2 & 0x3F) << 8)), 1 + ((b2 >> 6) | (b3 << 2) | ((b4 & 0x0F) << 10)))
+		if chunk == "VP8 " and bytes[23] == 0x9D and bytes[24] == 0x01 and bytes[25] == 0x2A:
+			return Vector2i(_le_u16(bytes, 26) & 0x3FFF, _le_u16(bytes, 28) & 0x3FFF)
+		return Vector2i.ZERO
+	return _dib_dimensions(bytes)
+
+
+## A bare BITMAPINFOHEADER (a DIB - how VPX-era BMP data can sit
+## in a stream with no file header around it). Deliberately
+## stricter than the magic probe: a plausible header size, one
+## plane, a real bit depth, sane extents.
+static func _dib_dimensions(bytes: PackedByteArray) -> Vector2i:
+	if bytes.size() < 40:
+		return Vector2i.ZERO
+	var header_size: int = _le_u32(bytes, 0)
+	if header_size != 40 and header_size != 108 and header_size != 124:
+		return Vector2i.ZERO
+	if _le_u16(bytes, 12) != 1:
+		return Vector2i.ZERO
+	var bpp: int = _le_u16(bytes, 14)
+	if bpp != 1 and bpp != 4 and bpp != 8 and bpp != 16 and bpp != 24 and bpp != 32:
+		return Vector2i.ZERO
+	var w: int = _le_i32(bytes, 4)
+	var h: int = absi(_le_i32(bytes, 8))
+	if w <= 0 or w > 32768 or h <= 0 or h > 32768:
+		return Vector2i.ZERO
+	return Vector2i(w, h)
+
+
+## JPEG dimensions: walk the marker segments to the first
+## start-of-frame. Bounded by the probe the caller supplies.
+static func _jpeg_dimensions(bytes: PackedByteArray) -> Vector2i:
+	var i: int = 2
+	while i + 9 < bytes.size():
+		if bytes[i] != 0xFF:
+			i += 1
+			continue
+		var marker: int = bytes[i + 1]
+		if marker == 0xC0 or marker == 0xC1 or marker == 0xC2:
+			return Vector2i(_be_u16(bytes, i + 7), _be_u16(bytes, i + 5))
+		if marker == 0xD8 or marker == 0xD9 or marker == 0x01 or (marker >= 0xD0 and marker <= 0xD7):
+			i += 2
+			continue
+		var seg_len: int = _be_u16(bytes, i + 2)
+		if seg_len < 2:
+			return Vector2i.ZERO
+		i += 2 + seg_len
+	return Vector2i.ZERO
+
+
+## Decode raw image bytes (already out of whatever container held
+## them) to an Image, or null. The format-specific buffer loaders
+## plus a rescue for a bare DIB: prefix the BITMAPFILEHEADER the
+## stream never had and let the BMP loader do the rest.
+static func _decode_image_bytes(bytes: PackedByteArray) -> Image:
+	if bytes.size() < 8:
+		return null
+	var img: Image = Image.new()
+	if img.load_png_from_buffer(bytes) == OK:
+		return img
+	if img.load_jpg_from_buffer(bytes) == OK:
+		return img
+	if img.load_bmp_from_buffer(bytes) == OK:
+		return img
+	if img.load_webp_from_buffer(bytes) == OK:
+		return img
+	if img.load_tga_from_buffer(bytes) == OK:
+		return img
+	var wrapped: PackedByteArray = _dib_to_bmp(bytes)
+	if not wrapped.is_empty():
+		var img2: Image = Image.new()
+		if img2.load_bmp_from_buffer(wrapped) == OK:
+			return img2
+	return null
+
+
+## Wrap a bare DIB in a constructed BITMAPFILEHEADER. Empty when
+## the bytes are not a plausible uncompressed DIB.
+static func _dib_to_bmp(dib: PackedByteArray) -> PackedByteArray:
+	if _dib_dimensions(dib) == Vector2i.ZERO:
+		return PackedByteArray()
+	var header_size: int = _le_u32(dib, 0)
+	var compression: int = _le_u32(dib, 16)
+	if compression != 0 and compression != 3:
+		return PackedByteArray()
+	var bpp: int = _le_u16(dib, 14)
+	var palette_bytes: int = 0
+	if bpp <= 8:
+		var colors_used: int = _le_u32(dib, 32)
+		palette_bytes = (colors_used if colors_used > 0 else 1 << bpp) * 4
+	var masks_bytes: int = 12 if compression == 3 and header_size == 40 else 0
+	var data_offset: int = 14 + header_size + palette_bytes + masks_bytes
+	if data_offset >= 14 + dib.size():
+		return PackedByteArray()
+	var out: PackedByteArray = PackedByteArray()
+	out.resize(14)
+	out[0] = 0x42 # 'B'
+	out[1] = 0x4D # 'M'
+	out.encode_u32(2, 14 + dib.size())
+	out.encode_u32(10, data_offset)
+	out.append_array(dib)
+	return out
+
+
+static func _le_u16(bytes: PackedByteArray, off: int) -> int:
+	return int(bytes.decode_u16(off)) if off >= 0 and off + 2 <= bytes.size() else 0
+
+
+static func _le_u24(bytes: PackedByteArray, off: int) -> int:
+	if off < 0 or off + 3 > bytes.size():
+		return 0
+	return int(bytes[off]) | (int(bytes[off + 1]) << 8) | (int(bytes[off + 2]) << 16)
+
+
+static func _le_u32(bytes: PackedByteArray, off: int) -> int:
+	return int(bytes.decode_u32(off)) & 0xFFFFFFFF if off >= 0 and off + 4 <= bytes.size() else 0
+
+
+static func _le_i32(bytes: PackedByteArray, off: int) -> int:
+	return int(bytes.decode_s32(off)) if off >= 0 and off + 4 <= bytes.size() else 0
+
+
+static func _be_u16(bytes: PackedByteArray, off: int) -> int:
+	if off < 0 or off + 2 > bytes.size():
+		return 0
+	return (int(bytes[off]) << 8) | int(bytes[off + 1])
+
+
+static func _be_u32(bytes: PackedByteArray, off: int) -> int:
+	if off < 0 or off + 4 > bytes.size():
+		return 0
+	return (int(bytes[off]) << 24) | (int(bytes[off + 1]) << 16) | (int(bytes[off + 2]) << 8) | int(bytes[off + 3])
+
+
 ## One real extraction attempt. Returns {"path", "status"}.
 static func _extract_uncached(b2s_path: String, cache_path: String) -> Dictionary:
 	var bytes: PackedByteArray = FileAccess.get_file_as_bytes(b2s_path)
@@ -472,18 +753,7 @@ static func _decode_blob_image(blob: String) -> Image:
 	# The format-specific buffer loaders (Godot 4.7 has no generic
 	# load_from_buffer): between them they cover what the designer
 	# embeds - PNG and JPEG predominantly, BMP in older files.
-	var img: Image = Image.new()
-	if img.load_png_from_buffer(bytes) == OK:
-		return img
-	if img.load_jpg_from_buffer(bytes) == OK:
-		return img
-	if img.load_bmp_from_buffer(bytes) == OK:
-		return img
-	if img.load_webp_from_buffer(bytes) == OK:
-		return img
-	if img.load_tga_from_buffer(bytes) == OK:
-		return img
-	return null
+	return _decode_image_bytes(bytes)
 
 
 ## Downscale an extracted image to panel size (never upscale). The

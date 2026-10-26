@@ -488,7 +488,8 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   land). Extracting a backglass from a `.directb2s` costs ~200 ms
   per file at real-world sizes, so the scan records only
   directory-listing facts (a same-stem image or `.directb2s`
-  exists) — then `ArtWarmer` pre-extracts the whole library on a
+  exists) plus each game's own `.vpx` as its embedded-image
+  source — then `ArtWarmer` pre-extracts the whole library on a
   background worker into `user://art_cache`, neighbouring pages
   first as they are browsed to. Cache entries are stamped by the
   source's size + modified time (a replaced backglass invalidates
@@ -519,7 +520,28 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   largest image blob anywhere — and decodes PNG/JPEG/BMP/WebP/TGA
   from UTF-8 or UTF-16LE files. The desk summary reports the
   index's exact ok / no-image / failed / untried counts for the
-  library. (History: the original eager, main-thread scan
+  library. A third art source sits between the backglass and the
+  title card: the image inside the `.vpx` itself. A table file is
+  an OLE/CFB compound file whose storage holds the table's
+  embedded images as named streams; `core/cfb_reader.gd` reads
+  that structure read-only (header, FAT, directory, mini-stream
+  chains — bounded range reads only, never the whole file) and
+  `ArtProvider.extract_vpx_image` picks, in order, a stream named
+  for backglass/backdrop art, the playfield image, or the largest
+  image over a small-sprite floor (200x200 / 60,000 pixels),
+  decoding PNG/JPEG/BMP/WebP/TGA plus bare DIB streams. A
+  same-stem `.directb2s` still outranks it — the designated
+  backglass beats incidental embedded art — and a backglass that
+  holds no usable image falls through to it. Embedded extractions
+  share the backglass pipeline exactly: same stamp-keyed cache,
+  same panel-size fit, same outcome index, same claim registry;
+  the warmer queues a game's `.vpx` up front when it has no
+  backglass, and as a fallback once its backglass is known to
+  hold no usable image. The desk summary's panel-art count and a
+  sibling "Embedded art health" line report the new source's
+  reach. The missing-backglass list is unaffected: it records
+  `.directb2s` FILES, and a game whose art now comes from inside
+  its `.vpx` still lacks one. (History: the original eager, main-thread scan
   froze the app for over a minute at 300 tables, 2026-10-20; the
   lazy-only fix that followed moved the cost onto first page
   visits, which is what the warmer retired, 2026-10-21.)
@@ -532,8 +554,9 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   (or the armed once-build) — never a silently different twin.
 - **The room.** Seated-first curved panel wall (12 panels per page),
   art where an image exists — side image beside the `.vpx` first, then
-  the backglass extracted from a same-stem `.directb2s` (best-effort,
-  cached in `user://art_cache`; any failure falls through) — and
+  the backglass extracted from a same-stem `.directb2s`, then an image
+  extracted from inside the `.vpx` itself (best-effort, cached in
+  `user://art_cache`; any failure falls through) — and
   generated type-forward title cards everywhere else (manufacturer
   color band, big name, year/designer; the band sits flush with the
   card's top edge, registering with the full-bleed art faces -

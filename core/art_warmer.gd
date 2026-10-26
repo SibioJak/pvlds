@@ -1,10 +1,14 @@
 class_name ArtWarmer
 extends RefCounted
 
-## Background pre-extraction of backglass art into ArtProvider's
+## Background pre-extraction of panel art into ArtProvider's
 ## cache, so browsing never pays the extraction cost. Runs as ONE
 ## WorkerThreadPool task (the library scan's proven pattern - never
-## the UI thread), walking a queue of .directb2s paths. Visible
+## the UI thread), walking a queue of extraction sources (.directb2s
+## files and, since the embedded-art round, .vpx files themselves -
+## a game's .vpx is queued as its primary source when it has no
+## backglass, and as a fallback only once its backglass is already
+## known to hold no usable image; see warm_library). Visible
 ## panels outrank it structurally: GameEntry.ensure_art claims its
 ## own extraction synchronously, and the claim registry means the
 ## warmer skips anything a panel is doing - the two never extract
@@ -36,36 +40,56 @@ var _pass_items: int = 0
 func warm_library(games: Array[GameEntry]) -> void:
 	var keep: Dictionary = {}
 	for g: GameEntry in games:
-		if g.art_source_path != "":
-			keep[ArtProvider.cache_path_for(g.art_source_path)] = true
+		for src: String in g.art_sources():
+			keep[ArtProvider.cache_path_for(src)] = true
 	ArtProvider.prune_cache(keep)
 	_mutex.lock()
 	_queue.clear()
 	_queued.clear()
 	for g: GameEntry in games:
-		var src: String = g.art_source_path
-		if src == "" or _queued.has(src) or ArtProvider.is_cached(src):
-			continue
-		# A stamped negative (no usable image / failed, for this
-		# exact file version) is never re-queued: retrying failures
-		# on every pass was the no-art pages' recurring tax.
-		if ArtProvider.is_negative_outcome(ArtProvider.outcome_for(src)):
-			continue
-		_queue.append(src)
-		_queued[src] = true
+		var sources: Array[String] = g.art_sources()
+		for i: int in range(sources.size()):
+			var src: String = sources[i]
+			if _queued.has(src) or ArtProvider.is_cached(src):
+				continue
+			# A stamped negative (no usable image / failed, for
+			# this exact file version) is never re-queued:
+			# retrying failures on every pass was the no-art
+			# pages' recurring tax.
+			if ArtProvider.is_negative_outcome(ArtProvider.outcome_for(src)):
+				continue
+			if i > 0:
+				# A fallback (the .vpx behind a .directb2s) is
+				# pre-extracted only when the primary is ALREADY
+				# known to hold no usable image - queuing every
+				# table file behind an untried backglass would
+				# double the pass for art most games never need.
+				# A backglass that fails later is covered the
+				# moment it matters: the panel showing that game
+				# falls through to the fallback itself
+				# (GameEntry.ensure_art), and the next pass
+				# queues it.
+				var primary: String = sources[0]
+				if primary.get_extension().to_lower() != "directb2s":
+					continue
+				if not ArtProvider.is_negative_outcome(ArtProvider.outcome_for(primary)):
+					continue
+			_queue.append(src)
+			_queued[src] = true
 	_start_locked()
 	_mutex.unlock()
 
 
-## Move these games' backglasses to the front of the queue (order
-## preserved) so a page flip lands on warm art. Paths not yet queued
-## are added; cached or panel-claimed ones are skipped by the worker.
+## Move these games' art sources to the front of the queue
+## (order preserved) so a page flip lands on warm art. Paths not
+## yet queued are added; cached or panel-claimed ones are skipped
+## by the worker.
 func prioritize(games: Array[GameEntry]) -> void:
 	var front: Array[String] = []
 	for g: GameEntry in games:
-		var src: String = g.art_source_path
-		if src != "" and not front.has(src):
-			front.append(src)
+		for src: String in g.art_sources():
+			if not front.has(src):
+				front.append(src)
 	if front.is_empty():
 		return
 	_mutex.lock()
@@ -101,9 +125,10 @@ func request_stop() -> void:
 	_mutex.unlock()
 
 
-## Art health for a library, from the persisted outcome index -
-## the desk's diagnostic breakdown. Counts are over games with a
-## .directb2s source (side-image games need no extraction):
+## Backglass health for a library, from the persisted outcome
+## index - the desk's diagnostic breakdown. Counts are over games
+## whose PRIMARY source is a .directb2s (games the embedded source
+## serves instead are embedded_health's subject):
 ##   ok       - extracted; the cache serves the image instantly
 ##   no_image - extracted once; the file holds no usable image
 ##   failed   - extracted once; read/parse/decode failed
@@ -114,7 +139,7 @@ func request_stop() -> void:
 static func art_health(games: Array[GameEntry]) -> Dictionary:
 	var health: Dictionary = {"ok": 0, "no_image": 0, "failed": 0, "untried": 0, "total": 0}
 	for g: GameEntry in games:
-		if g.art_source_path == "":
+		if g.art_source_path == "" or g.art_source_path.get_extension().to_lower() != "directb2s":
 			continue
 		health["total"] = int(health["total"]) + 1
 		if ArtProvider.is_cached(g.art_source_path):
@@ -132,9 +157,44 @@ static func art_health(games: Array[GameEntry]) -> Dictionary:
 	return health
 
 
+## Embedded-art health: the same breakdown for the image inside
+## the .vpx, over the games where that source is actually in play
+## - the game has no side image, and either the .vpx IS its
+## primary source or its backglass is already known to hold no
+## usable image. A game whose backglass serves (or has yet to be
+## tried) is not counted: its embedded art is a fallback that may
+## never be needed.
+static func embedded_health(games: Array[GameEntry]) -> Dictionary:
+	var health: Dictionary = {"ok": 0, "no_image": 0, "failed": 0, "untried": 0, "total": 0}
+	for g: GameEntry in games:
+		if g.art_path != "" or g.art_vpx_path == "":
+			continue
+		var primary: String = g.art_source_path
+		var in_play: bool = primary == g.art_vpx_path
+		if not in_play and primary != "" \
+				and ArtProvider.is_negative_outcome(ArtProvider.outcome_for(primary)):
+			in_play = true
+		if not in_play:
+			continue
+		health["total"] = int(health["total"]) + 1
+		if ArtProvider.is_cached(g.art_vpx_path):
+			health["ok"] = int(health["ok"]) + 1
+			continue
+		match ArtProvider.outcome_for(g.art_vpx_path):
+			ArtProvider.STATUS_OK:
+				health["ok"] = int(health["ok"]) + 1
+			ArtProvider.STATUS_NO_IMAGE:
+				health["no_image"] = int(health["no_image"]) + 1
+			ArtProvider.STATUS_FAILED:
+				health["failed"] = int(health["failed"]) + 1
+			_:
+				health["untried"] = int(health["untried"]) + 1
+	return health
+
+
 ## Art-cache coverage for a library: x = games whose art is ready
-## instantly (side image on disk or backglass extracted), y = games
-## that have any art at all.
+## instantly (side image on disk or an extraction cached), y =
+## games that have any art source at all.
 static func cache_coverage(games: Array[GameEntry]) -> Vector2i:
 	var have: int = 0
 	var want: int = 0
@@ -142,8 +202,13 @@ static func cache_coverage(games: Array[GameEntry]) -> Vector2i:
 		if not g.has_art_available():
 			continue
 		want += 1
-		if g.art_path != "" or (g.art_source_path != "" and ArtProvider.is_cached(g.art_source_path)):
+		if g.art_path != "":
 			have += 1
+			continue
+		for src: String in g.art_sources():
+			if ArtProvider.is_cached(src):
+				have += 1
+				break
 	return Vector2i(have, want)
 
 
@@ -200,7 +265,7 @@ func _run_pass() -> void:
 			# A visible panel is extracting this one itself - its
 			# result lands in the same cache. Never duplicate it.
 			continue
-		ArtProvider.extract_directb2s_image(src)
+		ArtProvider.extract_art_image(src)
 		ArtProvider.release_extract(src)
 		_mutex.lock()
 		_pass_items += 1
