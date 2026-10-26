@@ -56,7 +56,7 @@ func warm_library(games: Array[GameEntry]) -> void:
 			# this exact file version) is never re-queued:
 			# retrying failures on every pass was the no-art
 			# pages' recurring tax.
-			if ArtProvider.is_negative_outcome(ArtProvider.outcome_for(src)):
+			if ArtProvider.is_negative_outcome(ArtProvider.outcome_for_source(src)):
 				continue
 			if i > 0:
 				# A fallback (the .vpx behind a .directb2s) is
@@ -72,7 +72,7 @@ func warm_library(games: Array[GameEntry]) -> void:
 				var primary: String = sources[0]
 				if primary.get_extension().to_lower() != "directb2s":
 					continue
-				if not ArtProvider.is_negative_outcome(ArtProvider.outcome_for(primary)):
+				if not ArtProvider.is_negative_outcome(ArtProvider.outcome_for_source(primary)):
 					continue
 			_queue.append(src)
 			_queued[src] = true
@@ -145,7 +145,7 @@ static func art_health(games: Array[GameEntry]) -> Dictionary:
 		if ArtProvider.is_cached(g.art_source_path):
 			health["ok"] = int(health["ok"]) + 1
 			continue
-		match ArtProvider.outcome_for(g.art_source_path):
+		match ArtProvider.outcome_for_source(g.art_source_path):
 			ArtProvider.STATUS_OK:
 				health["ok"] = int(health["ok"]) + 1
 			ArtProvider.STATUS_NO_IMAGE:
@@ -163,16 +163,21 @@ static func art_health(games: Array[GameEntry]) -> Dictionary:
 ## primary source or its backglass is already known to hold no
 ## usable image. A game whose backglass serves (or has yet to be
 ## tried) is not counted: its embedded art is a fallback that may
-## never be needed.
+## never be needed. One extra bucket over the backglass
+## breakdown: legacy - the game's art exists only as pre-10.8.1
+## BITS records (the census count that decides whether an LZW
+## decoder is ever worth building). Outcomes are read through
+## the embedded gate, so a stamp from an older embedded reader
+## counts as untried here, never as its stale verdict.
 static func embedded_health(games: Array[GameEntry]) -> Dictionary:
-	var health: Dictionary = {"ok": 0, "no_image": 0, "failed": 0, "untried": 0, "total": 0}
+	var health: Dictionary = {"ok": 0, "no_image": 0, "legacy": 0, "failed": 0, "untried": 0, "total": 0}
 	for g: GameEntry in games:
 		if g.art_path != "" or g.art_vpx_path == "":
 			continue
 		var primary: String = g.art_source_path
 		var in_play: bool = primary == g.art_vpx_path
 		if not in_play and primary != "" \
-				and ArtProvider.is_negative_outcome(ArtProvider.outcome_for(primary)):
+				and ArtProvider.is_negative_outcome(ArtProvider.outcome_for_source(primary)):
 			in_play = true
 		if not in_play:
 			continue
@@ -180,11 +185,13 @@ static func embedded_health(games: Array[GameEntry]) -> Dictionary:
 		if ArtProvider.is_cached(g.art_vpx_path):
 			health["ok"] = int(health["ok"]) + 1
 			continue
-		match ArtProvider.outcome_for(g.art_vpx_path):
+		match ArtProvider.outcome_for_embedded(g.art_vpx_path):
 			ArtProvider.STATUS_OK:
 				health["ok"] = int(health["ok"]) + 1
 			ArtProvider.STATUS_NO_IMAGE:
 				health["no_image"] = int(health["no_image"]) + 1
+			ArtProvider.STATUS_LEGACY:
+				health["legacy"] = int(health["legacy"]) + 1
 			ArtProvider.STATUS_FAILED:
 				health["failed"] = int(health["failed"]) + 1
 			_:
@@ -257,7 +264,7 @@ func _run_pass() -> void:
 		_mutex.unlock()
 		if ArtProvider.is_cached(src):
 			continue
-		if ArtProvider.is_negative_outcome(ArtProvider.outcome_for(src)):
+		if ArtProvider.is_negative_outcome(ArtProvider.outcome_for_source(src)):
 			# Recorded (by a panel, most likely) after this pass
 			# was queued: the outcome stands, do not re-extract.
 			continue

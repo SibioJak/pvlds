@@ -206,6 +206,65 @@ func read_stream(entry: Dictionary, max_bytes: int) -> PackedByteArray:
 	return _read_regular(entry, size)
 
 
+## Bytes from the middle of a stream: [offset, offset + count),
+## clamped to the stream's claimed size. Same refusal discipline
+## as read_stream - a corrupt claimed size or an over-cap span
+## reads empty, never a giant allocation, and only the sectors
+## the span touches are read. The .vpx art extractor locates one
+## embedded image's record span inside its stream and reads
+## exactly that span, never the whole stream around it.
+func read_stream_range(entry: Dictionary, offset: int, count: int, max_total: int) -> PackedByteArray:
+	if _file == null or offset < 0 or count <= 0 or count > max_total:
+		return PackedByteArray()
+	var size: int = int(entry.get("size", 0))
+	if size <= 0 or size > MAX_STREAM_BYTES:
+		return PackedByteArray()
+	var want: int = mini(count, size - offset)
+	if want <= 0:
+		return PackedByteArray()
+	if bool(entry.get("mini", false)):
+		return _read_mini_range(entry, offset, want)
+	return _read_regular_range(entry, offset, want)
+
+
+func _read_regular_range(entry: Dictionary, offset: int, want: int) -> PackedByteArray:
+	var chain: Array[int] = _chain(int(entry.get("start", ENDOFCHAIN)), _fat)
+	var out: PackedByteArray = PackedByteArray()
+	var logical: int = 0
+	for sid: int in chain:
+		if logical >= offset + want:
+			break
+		if logical + _sector_size > offset:
+			var sec: PackedByteArray = _sector_bytes(sid)
+			if sec.is_empty():
+				break
+			var from: int = maxi(0, offset - logical)
+			var to: int = mini(sec.size(), offset + want - logical)
+			if to > from:
+				out.append_array(sec.slice(from, to))
+		logical += _sector_size
+	return out
+
+
+func _read_mini_range(entry: Dictionary, offset: int, want: int) -> PackedByteArray:
+	var chain: Array[int] = _chain(int(entry.get("start", ENDOFCHAIN)), _minifat)
+	var out: PackedByteArray = PackedByteArray()
+	var logical: int = 0
+	for msid: int in chain:
+		if logical >= offset + want:
+			break
+		if logical + _mini_sector_size > offset:
+			var chunk: PackedByteArray = _container_range(msid * _mini_sector_size, _mini_sector_size)
+			if chunk.is_empty():
+				break
+			var from: int = maxi(0, offset - logical)
+			var to: int = mini(chunk.size(), offset + want - logical)
+			if to > from:
+				out.append_array(chunk.slice(from, to))
+		logical += _mini_sector_size
+	return out
+
+
 func _read_regular(entry: Dictionary, want: int) -> PackedByteArray:
 	var chain: Array[int] = _chain(int(entry.get("start", ENDOFCHAIN)), _fat)
 	var out: PackedByteArray = PackedByteArray()

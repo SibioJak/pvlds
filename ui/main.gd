@@ -643,7 +643,7 @@ func build_scan_summary() -> String:
 			art_have += 1
 			continue
 		for src: String in g.art_sources():
-			if ArtProvider.is_cached(src) or ArtProvider.outcome_for(src) == ArtProvider.STATUS_OK:
+			if ArtProvider.is_cached(src) or ArtProvider.outcome_for_source(src) == ArtProvider.STATUS_OK:
 				art_have += 1
 				break
 	lines.append("Panel art: %d of %d games have art (side image, backglass, or image inside the .vpx); the rest get title cards." % [
@@ -657,8 +657,8 @@ func build_scan_summary() -> String:
 			int(health["ok"]), int(health["no_image"]), int(health["failed"]), int(health["untried"])])
 	var ehealth: Dictionary = ArtWarmer.embedded_health(s.games)
 	if int(ehealth["total"]) > 0:
-		lines.append("Embedded art health (images inside the .vpx files, from the art cache's outcome index): %d extracted OK, %d no image in file, %d failed to read or parse, %d not tried yet." % [
-			int(ehealth["ok"]), int(ehealth["no_image"]), int(ehealth["failed"]), int(ehealth["untried"])])
+		lines.append("Embedded art health (images inside the .vpx files, from the art cache's outcome index): %d extracted OK, %d no image in file, %d in a legacy format, %d failed to read or parse, %d not tried yet." % [
+			int(ehealth["ok"]), int(ehealth["no_image"]), int(ehealth["legacy"]), int(ehealth["failed"]), int(ehealth["untried"])])
 	var unknown: Array[String] = []
 	for g: GameEntry in s.games:
 		if g.game_id.begins_with("local:"):
@@ -3250,6 +3250,72 @@ func _cfb_file_bytes(streams: Array) -> PackedByteArray:
 	return out
 
 
+## One BIFF record, framed the way BiffWriter frames it:
+## [int32 size][4-char tag][payload], the size counting tag +
+## payload - so a bare object header (BeginObject) is a record
+## of size 4 with no payload at all, its fields following flat.
+func _biff_record(tag: String, payload: PackedByteArray) -> PackedByteArray:
+	var out: PackedByteArray = PackedByteArray()
+	out.resize(4)
+	out.encode_s32(0, 4 + payload.size())
+	out.append_array(tag.to_ascii_buffer())
+	out.append_array(payload)
+	return out
+
+
+func _biff_string_record(tag: String, value: String) -> PackedByteArray:
+	var utf: PackedByteArray = value.to_utf8_buffer()
+	var payload: PackedByteArray = PackedByteArray()
+	payload.resize(4)
+	payload.encode_s32(0, utf.size())
+	payload.append_array(utf)
+	return _biff_record(tag, payload)
+
+
+func _biff_int_record(tag: String, value: int) -> PackedByteArray:
+	var payload: PackedByteArray = PackedByteArray()
+	payload.resize(4)
+	payload.encode_s32(0, value)
+	return _biff_record(tag, payload)
+
+
+## One GameStg Image<n> stream's bytes: a BIFF record sequence
+## in Texture::Save's exact order - NAME, PATH, WDTH, HGHT, then
+## LINK or the JPEG PinBinary object (NAME, PATH, SIZE, DATA,
+## ENDB) or a legacy BITS record, then ALTV, MD5H, OPAQ, ENDB.
+## This is the real .vpx layout the embedded extractor walks,
+## written by hand here so the fixtures model the format VPX
+## writes today, not the raw-stream shape the first embedded
+## round imagined. data is the imported image file's bytes,
+## stored verbatim in the DATA record (empty = no payload);
+## extra holds additional records inserted before the payload
+## (unknown-record tolerance probes, e.g. a legacy INME).
+func _biff_texture_bytes(tex_name: String, w: int, h: int, data: PackedByteArray, link: bool = false, bits: bool = false, extra: Array = []) -> PackedByteArray:
+	var out: PackedByteArray = PackedByteArray()
+	out.append_array(_biff_string_record("NAME", tex_name))
+	out.append_array(_biff_string_record("PATH", "C:\\tables\\art\\" + tex_name + ".png"))
+	out.append_array(_biff_int_record("WDTH", w))
+	out.append_array(_biff_int_record("HGHT", h))
+	for r: Variant in extra:
+		out.append_array(r as PackedByteArray)
+	if link:
+		out.append_array(_biff_int_record("LINK", 1))
+	elif bits:
+		out.append_array(_biff_record("BITS", _zero_bytes(2048)))
+	elif not data.is_empty():
+		out.append_array(_biff_record("JPEG", PackedByteArray()))
+		out.append_array(_biff_string_record("NAME", tex_name))
+		out.append_array(_biff_string_record("PATH", "C:\\tables\\art\\" + tex_name + ".png"))
+		out.append_array(_biff_int_record("SIZE", data.size()))
+		out.append_array(_biff_record("DATA", data))
+		out.append_array(_biff_record("ENDB", PackedByteArray()))
+	out.append_array(_biff_record("ALTV", _zero_bytes(4)))
+	out.append_array(_biff_record("MD5H", _zero_bytes(16)))
+	out.append_array(_biff_int_record("OPAQ", 1))
+	out.append_array(_biff_record("ENDB", PackedByteArray()))
+	return out
+
+
 func _expect(cond: bool, label: String, failures: Array[String]) -> void:
 	if cond:
 		print("  ok - ", label)
@@ -3767,62 +3833,109 @@ func _run_core_test() -> void:
 	_expect(after_entry is Dictionary and int((after_entry as Dictionary).get("v", 0)) == ArtProvider.EXTRACTOR_VERSION,
 		"the retried entry is stamped with the current extractor version", failures)
 
-	# --- Embedded art (this round): images extracted from inside
-	# .vpx files. The fixtures are REAL compound files written by
-	# _cfb_file_bytes (the harness mirrors that writer in Python
-	# and the two are cross-checked), so the reader meets the
-	# format, not a stub. Order proven here: sidecar > backglass >
-	# embedded > title card; extraction is lazy, cached, and its
-	# outcomes are remembered like every other source's.
+	# --- Embedded art: images extracted from inside .vpx files.
+	# The fixtures are REAL compound files written by
+	# _cfb_file_bytes whose GameStg Image<n> streams carry BIFF
+	# record sequences written by _biff_texture_bytes in
+	# Texture::Save's record order - the layout VPX actually
+	# writes. (The first embedded round's fixtures held raw image
+	# streams, a shape no real .vpx has, and its offset-0 reader
+	# found art in only 11 of Chris's 81 real files; this
+	# section's fixtures model the real format, and the harness
+	# cross-checks the walker against real VPX files.) Order
+	# proven here: sidecar > backglass > embedded > title card;
+	# extraction is lazy, cached, and its outcomes are remembered
+	# like every other source's.
 	var solid_img: Callable = func(w: int, h: int) -> Image:
 		var im: Image = Image.create(w, h, false, Image.FORMAT_RGBA8)
 		im.fill(Color(0.25, 0.4, 0.6))
 		return im
-	var fx_glass: String = art_dir.path_join("Embedded Glass.vpx")
-	_expect(_write_bytes_file(fx_glass, _cfb_file_bytes([
-		{"name": "Playfield", "data": (mk_img.call(600, 600) as Image).save_png_to_buffer()},
-		{"name": "Backglass", "data": (mk_img.call(400, 500) as Image).save_png_to_buffer()},
-		{"name": "insertcoin", "data": (mk_img.call(64, 64) as Image).save_png_to_buffer()},
-	])), "embedded fixture: glass table written", failures)
-	var fx_field: String = art_dir.path_join("Embedded Field.vpx")
-	_expect(_write_bytes_file(fx_field, _cfb_file_bytes([
-		{"name": "cabart", "data": (mk_img.call(900, 700) as Image).save_png_to_buffer()},
-		{"name": "Playfield", "data": (mk_img.call(500, 400) as Image).save_png_to_buffer()},
-	])), "embedded fixture: field table written", failures)
-	var fx_big: String = art_dir.path_join("Embedded Largest.vpx")
-	_expect(_write_bytes_file(fx_big, _cfb_file_bytes([
-		{"name": "tex_a", "data": (mk_img.call(300, 300) as Image).save_png_to_buffer()},
-		{"name": "decal", "data": (mk_img.call(120, 120) as Image).save_png_to_buffer()},
-		{"name": "tex_b", "data": (mk_img.call(900, 700) as Image).save_png_to_buffer()},
-	])), "embedded fixture: largest table written", failures)
-	var fx_mini: String = art_dir.path_join("Embedded Mini.vpx")
-	_expect(_write_bytes_file(fx_mini, _cfb_file_bytes([
-		{"name": "Playfield", "data": (solid_img.call(320, 240) as Image).save_png_to_buffer()},
-	])), "embedded fixture: mini-stream table written", failures)
 	var chaff: PackedByteArray = PackedByteArray()
 	while chaff.size() < 6000:
 		chaff.append_array("not an image, just table data".to_utf8_buffer())
+	var fx_glass: String = art_dir.path_join("Embedded Glass.vpx")
+	_expect(_write_bytes_file(fx_glass, _cfb_file_bytes([
+		{"name": "GameData", "data": chaff},
+		{"name": "Image0", "data": _biff_texture_bytes("Playfield", 600, 600, (mk_img.call(600, 600) as Image).save_png_to_buffer())},
+		{"name": "Image1", "data": _biff_texture_bytes("Backglass", 400, 500, (mk_img.call(400, 500) as Image).save_png_to_buffer(), false, false, [_biff_record("INME", _zero_bytes(4))])},
+		{"name": "Image2", "data": _biff_texture_bytes("insertcoin", 64, 64, (mk_img.call(64, 64) as Image).save_png_to_buffer())},
+	])), "embedded fixture: glass table written", failures)
+	var fx_field: String = art_dir.path_join("Embedded Field.vpx")
+	_expect(_write_bytes_file(fx_field, _cfb_file_bytes([
+		{"name": "Image0", "data": _biff_texture_bytes("cabart", 900, 700, (mk_img.call(900, 700) as Image).save_png_to_buffer())},
+		{"name": "Image1", "data": _biff_texture_bytes("Playfield", 500, 400, (mk_img.call(500, 400) as Image).save_png_to_buffer())},
+	])), "embedded fixture: field table written", failures)
+	var fx_big: String = art_dir.path_join("Embedded Largest.vpx")
+	_expect(_write_bytes_file(fx_big, _cfb_file_bytes([
+		{"name": "Image0", "data": _biff_texture_bytes("tex_a", 300, 300, (mk_img.call(300, 300) as Image).save_png_to_buffer())},
+		{"name": "Image1", "data": _biff_texture_bytes("decal", 120, 120, (mk_img.call(120, 120) as Image).save_png_to_buffer())},
+		{"name": "Image2", "data": _biff_texture_bytes("tex_b", 900, 700, (mk_img.call(900, 700) as Image).save_png_to_buffer())},
+	])), "embedded fixture: largest table written", failures)
+	var fx_mini: String = art_dir.path_join("Embedded Mini.vpx")
+	_expect(_write_bytes_file(fx_mini, _cfb_file_bytes([
+		{"name": "Image0", "data": _biff_texture_bytes("Playfield", 320, 240, (solid_img.call(320, 240) as Image).save_png_to_buffer())},
+	])), "embedded fixture: mini-stream table written", failures)
+	var fx_link: String = art_dir.path_join("Embedded Link.vpx")
+	_expect(_write_bytes_file(fx_link, _cfb_file_bytes([
+		{"name": "Image0", "data": _biff_texture_bytes("Playfield", 800, 600, PackedByteArray(), true)},
+		{"name": "Image1", "data": _biff_texture_bytes("cabart", 900, 700, (mk_img.call(900, 700) as Image).save_png_to_buffer())},
+		{"name": "Screenshot", "data": (mk_img.call(800, 600) as Image).save_png_to_buffer()},
+	])), "embedded fixture: link table written", failures)
+	var fx_shot: String = art_dir.path_join("Embedded Shot.vpx")
+	_expect(_write_bytes_file(fx_shot, _cfb_file_bytes([
+		{"name": "GameData", "data": chaff},
+		{"name": "Screenshot", "data": (mk_img.call(500, 375) as Image).save_png_to_buffer()},
+	])), "embedded fixture: screenshot-only table written", failures)
+	var fx_bits: String = art_dir.path_join("Embedded Bits.vpx")
+	_expect(_write_bytes_file(fx_bits, _cfb_file_bytes([
+		{"name": "Image0", "data": _biff_texture_bytes("Playfield", 1024, 768, PackedByteArray(), false, true)},
+		{"name": "Image1", "data": _biff_texture_bytes("glass lamps", 800, 600, PackedByteArray(), false, true)},
+	])), "embedded fixture: BITS table written", failures)
 	var fx_none: String = art_dir.path_join("Embedded Empty.vpx")
 	_expect(_write_bytes_file(fx_none, _cfb_file_bytes([
-		{"name": "gamedata", "data": chaff},
-		{"name": "sound", "data": _zero_bytes(6000)},
+		{"name": "GameData", "data": chaff},
+		{"name": "Sound0", "data": _zero_bytes(6000)},
 	])), "embedded fixture: imageless table written", failures)
 	var fx_cold: String = art_dir.path_join("Embedded Cold.vpx")
 	_expect(_write_bytes_file(fx_cold, _cfb_file_bytes([
-		{"name": "Playfield", "data": (mk_img.call(300, 300) as Image).save_png_to_buffer()},
+		{"name": "Image0", "data": _biff_texture_bytes("Playfield", 300, 300, (mk_img.call(300, 300) as Image).save_png_to_buffer())},
 	])), "embedded fixture: cold table written (never extracted in this section)", failures)
 	var fx_bmp: String = art_dir.path_join("Embedded Bmp.vpx")
 	_expect(_write_bytes_file(fx_bmp, _cfb_file_bytes([
-		{"name": "Backdrop", "data": _bmp_bytes(640, 480)},
+		{"name": "Image0", "data": _biff_texture_bytes("Backdrop", 640, 480, _bmp_bytes(640, 480))},
 	])), "embedded fixture: BMP table written", failures)
+	var fx_biffbad: String = art_dir.path_join("Embedded BadBiff.vpx")
+	var bad_biff: PackedByteArray = PackedByteArray()
+	bad_biff.append_array(_biff_string_record("NAME", "Playfield"))
+	var bad_rec: PackedByteArray = PackedByteArray()
+	bad_rec.resize(4)
+	bad_rec.encode_s32(0, 999999)
+	bad_biff.append_array(bad_rec)
+	bad_biff.append_array("WDTH".to_ascii_buffer())
+	bad_biff.append_array(_zero_bytes(64))
+	_expect(_write_bytes_file(fx_biffbad, _cfb_file_bytes([
+		{"name": "Image0", "data": bad_biff},
+	])), "embedded fixture: corrupt-BIFF table written", failures)
 	var fx_corrupt: String = art_dir.path_join("Embedded Corrupt.vpx")
 	_expect(_write_bytes_file(fx_corrupt, _zero_bytes(2048)), "embedded fixture: corrupt file written", failures)
 	var glass_bytes: PackedByteArray = FileAccess.get_file_as_bytes(fx_glass)
 	glass_bytes.resize(300)
 	var fx_trunc: String = art_dir.path_join("Embedded Truncated.vpx")
 	_expect(_write_bytes_file(fx_trunc, glass_bytes), "embedded fixture: truncated file written", failures)
-	# (a) A stream named for the backglass wins - over a LARGER
-	# playfield stream that precedes it in the directory.
+	# The census surface first: the walker reports the records
+	# it found - the textures' names and dimensions from inside
+	# the streams (the stream names Image0/Image1/Image2 say
+	# nothing at all).
+	var glass_walk: Array = ArtProvider.inspect_vpx_images(fx_glass)
+	_expect(glass_walk.size() == 3
+		and str((glass_walk[0] as Dictionary)["name"]) == "Playfield" and str((glass_walk[0] as Dictionary)["kind"]) == "data"
+		and str((glass_walk[1] as Dictionary)["name"]) == "Backglass" and int((glass_walk[1] as Dictionary)["width"]) == 400
+		and int((glass_walk[1] as Dictionary)["height"]) == 500,
+		"embedded: inspect reports the walked records (NAME and dims from inside the streams)", failures)
+	# (a) A texture named for the backglass wins - over a LARGER
+	# playfield texture that precedes it in the directory. The
+	# glass texture also carries a legacy INME record ahead of
+	# its payload object: unknown records are size-skipped.
 	var emb_t0: int = Time.get_ticks_msec()
 	var glass_cache: String = ArtProvider.extract_art_image(fx_glass)
 	var emb_ms: int = Time.get_ticks_msec() - emb_t0
@@ -3830,8 +3943,8 @@ func _run_core_test() -> void:
 	var glass_img: Image = Image.new()
 	_expect(glass_cache == ArtProvider.cache_path_for(fx_glass) and glass_img.load(glass_cache) == OK
 		and glass_img.get_width() == 400 and glass_img.get_height() == 500,
-		"embedded: the backglass-named stream wins over the larger playfield (400x500, unscaled)", failures)
-	_expect(ArtProvider.outcome_for(fx_glass) == ArtProvider.STATUS_OK,
+		"embedded: the backglass-named DATA wins over the larger playfield (400x500, unscaled)", failures)
+	_expect(ArtProvider.outcome_for_embedded(fx_glass) == ArtProvider.STATUS_OK,
 		"embedded: a successful extraction records ok", failures)
 	# (b) With no backglass name in the file, the playfield wins -
 	# over a larger unnamed image.
@@ -3847,27 +3960,59 @@ func _run_core_test() -> void:
 	_expect(big_cache != "" and big_img.load(big_cache) == OK
 		and big_img.get_width() == 512 and big_img.get_height() == 398,
 		"embedded: the largest-image fallback wins (900x700 -> 512x398)", failures)
-	# A small stream rides the mini-stream chain and still extracts.
+	# A small texture's whole stream rides the mini-stream chain;
+	# its DATA span is range-read out of the mini sectors.
 	var mini_cache: String = ArtProvider.extract_art_image(fx_mini)
 	var mini_img: Image = Image.new()
 	_expect(mini_cache != "" and mini_img.load(mini_cache) == OK
 		and mini_img.get_width() == 320 and mini_img.get_height() == 240,
-		"embedded: a mini-stream image extracts (320x240)", failures)
-	# A BMP stream (the designer's other container format) decodes.
+		"embedded: a mini-stream texture's DATA extracts (320x240)", failures)
+	# BMP bytes (an older import's original file) inside a
+	# backdrop-named texture's DATA decode like any payload.
 	var bmpv_cache: String = ArtProvider.extract_art_image(fx_bmp)
 	var bmpv_img: Image = Image.new()
 	_expect(bmpv_cache != "" and bmpv_img.load(bmpv_cache) == OK
 		and bmpv_img.get_width() == 512 and bmpv_img.get_height() == 384,
-		"embedded: a BMP backdrop stream extracts (640x480 -> 512x384)", failures)
+		"embedded: BMP bytes in a backdrop texture's DATA extract (640x480 -> 512x384)", failures)
+	# A LINK texture holds no payload in its own stream: its art
+	# is the Screenshot stream's raw bytes. The larger unnamed
+	# DATA texture beside it is the trap: only the LINK
+	# candidate's playfield class outranks it - a reader that
+	# ignored LINK and fell back to the bare Screenshot stream
+	# (class 2, ranked by area) would serve the cab art instead.
+	var link_cache: String = ArtProvider.extract_art_image(fx_link)
+	var link_img: Image = Image.new()
+	_expect(link_cache != "" and link_img.load(link_cache) == OK
+		and link_img.get_width() == 512 and link_img.get_height() == 384
+		and ArtProvider.outcome_for_embedded(fx_link) == ArtProvider.STATUS_OK,
+		"embedded: a LINK texture resolves through the Screenshot stream (800x600 -> 512x384)", failures)
+	# The Screenshot stream is a candidate in its own right: a
+	# file with no image streams at all still serves from it.
+	var shot_cache: String = ArtProvider.extract_art_image(fx_shot)
+	var shot_img: Image = Image.new()
+	_expect(shot_cache != "" and shot_img.load(shot_cache) == OK
+		and shot_img.get_width() == 500 and shot_img.get_height() == 375,
+		"embedded: a Screenshot stream alone still serves (500x375, unscaled)", failures)
+	# BITS-only art (pre-10.8.1 BMP imports): the legacy stamp -
+	# a census answer, not no_image and not failed.
+	_expect(ArtProvider.extract_art_image(fx_bits) == "" and ArtProvider.outcome_for_embedded(fx_bits) == ArtProvider.STATUS_LEGACY,
+		"embedded: a BITS-only table records legacy_format, not no_image", failures)
+	var bits_walk: Array = ArtProvider.inspect_vpx_images(fx_bits)
+	_expect(bits_walk.size() == 2 and str((bits_walk[0] as Dictionary)["kind"]) == "bits",
+		"embedded: inspect reports BITS payloads as their own kind", failures)
 	# No images inside: parsed, stamped no_image, title card.
-	_expect(ArtProvider.extract_art_image(fx_none) == "" and ArtProvider.outcome_for(fx_none) == ArtProvider.STATUS_NO_IMAGE,
+	_expect(ArtProvider.extract_art_image(fx_none) == "" and ArtProvider.outcome_for_embedded(fx_none) == ArtProvider.STATUS_NO_IMAGE,
 		"embedded: a table file with no image streams records no_image", failures)
-	# Corrupt and truncated compound files: failed, remembered,
-	# and no crash (this test reaching its next line is the proof).
-	_expect(ArtProvider.extract_art_image(fx_corrupt) == "" and ArtProvider.outcome_for(fx_corrupt) == ArtProvider.STATUS_FAILED,
+	# Corrupt files: failed, remembered, and no crash (this test
+	# reaching its next line is the proof) - a non-compound file,
+	# a truncated compound file, and a compound file whose image
+	# stream's BIFF records run off the stream's end.
+	_expect(ArtProvider.extract_art_image(fx_corrupt) == "" and ArtProvider.outcome_for_embedded(fx_corrupt) == ArtProvider.STATUS_FAILED,
 		"embedded: a non-compound file records failed", failures)
-	_expect(ArtProvider.extract_art_image(fx_trunc) == "" and ArtProvider.outcome_for(fx_trunc) == ArtProvider.STATUS_FAILED,
+	_expect(ArtProvider.extract_art_image(fx_trunc) == "" and ArtProvider.outcome_for_embedded(fx_trunc) == ArtProvider.STATUS_FAILED,
 		"embedded: a truncated compound file records failed, no crash", failures)
+	_expect(ArtProvider.extract_art_image(fx_biffbad) == "" and ArtProvider.outcome_for_embedded(fx_biffbad) == ArtProvider.STATUS_FAILED,
+		"embedded: a corrupt BIFF image stream records failed, no crash", failures)
 	var dead_entry: GameEntry = GameEntry.new()
 	dead_entry.art_source_path = fx_corrupt
 	dead_entry.art_vpx_path = fx_corrupt
@@ -3916,13 +4061,16 @@ func _run_core_test() -> void:
 	var eh_none: GameEntry = GameEntry.new()
 	eh_none.art_source_path = fx_none
 	eh_none.art_vpx_path = fx_none
+	var eh_legacy: GameEntry = GameEntry.new()
+	eh_legacy.art_source_path = fx_bits
+	eh_legacy.art_vpx_path = fx_bits
 	var eh_fall: GameEntry = GameEntry.new()
 	eh_fall.art_source_path = b2s_fall
 	eh_fall.art_vpx_path = fx_cold
-	var ehealth: Dictionary = ArtWarmer.embedded_health([eh_ok, eh_none, eh_fall, prio_entry])
-	_expect(int(ehealth["total"]) == 3 and int(ehealth["ok"]) == 1 and int(ehealth["no_image"]) == 1
-		and int(ehealth["untried"]) == 1 and int(ehealth["failed"]) == 0,
-		"embedded: health counts only games where the embedded source is in play", failures)
+	var ehealth: Dictionary = ArtWarmer.embedded_health([eh_ok, eh_none, eh_legacy, eh_fall, prio_entry])
+	_expect(int(ehealth["total"]) == 4 and int(ehealth["ok"]) == 1 and int(ehealth["no_image"]) == 1
+		and int(ehealth["legacy"]) == 1 and int(ehealth["untried"]) == 1 and int(ehealth["failed"]) == 0,
+		"embedded: health counts only games where the embedded source is in play (legacy bucket included)", failures)
 	# Backglass health stays backglass-only: the .vpx-primary
 	# entries above are not its subject.
 	var bh_fall: GameEntry = GameEntry.new()
@@ -3935,7 +4083,7 @@ func _run_core_test() -> void:
 	# its backglass is already known-negative.
 	var fx_warm: String = art_dir.path_join("Embedded Warm.vpx")
 	_expect(_write_bytes_file(fx_warm, _cfb_file_bytes([
-		{"name": "Playfield", "data": (mk_img.call(500, 400) as Image).save_png_to_buffer()},
+		{"name": "Image0", "data": _biff_texture_bytes("Playfield", 500, 400, (mk_img.call(500, 400) as Image).save_png_to_buffer())},
 	])), "embedded fixture: warm table written", failures)
 	var warm_vpx_entry: GameEntry = GameEntry.new()
 	warm_vpx_entry.art_source_path = fx_warm
@@ -4003,6 +4151,39 @@ func _run_core_test() -> void:
 	_expect(emb_entry != null and emb_entry.ensure_art() == ArtProvider.cache_path_for(emb_path),
 		"embedded: a scanned game's panel extracts the image inside its .vpx", failures)
 	_wipe_tree(vpx_root)
+	# Pre-fix stamp migration: an embedded outcome stamped by
+	# the offset-0 reader (a shared-"v" entry with no "ev")
+	# still reads under the backglass gate, but counts as
+	# untried under the BIFF gate - so the file is retried
+	# exactly once under the new reader, and the retry's record
+	# carries the embedded generation. (Placed last in this
+	# section: the warm passes above prune the index down to
+	# their own libraries, and this plant must postdate them.)
+	var fx_retry: String = art_dir.path_join("Embedded Retried.vpx")
+	_expect(_write_bytes_file(fx_retry, FileAccess.get_file_as_bytes(fx_glass)), "embedded fixture: retried table written", failures)
+	var retry_key: String = ArtProvider.stamp_key_for(fx_retry)
+	var idx_path2: String = "user://art_cache/art_index.json"
+	var planted2: Dictionary = {}
+	var idx_text2: String = FileAccess.get_file_as_string(idx_path2)
+	if idx_text2 != "":
+		var parsed_idx2: Variant = JSON.parse_string(idx_text2)
+		if parsed_idx2 is Dictionary:
+			planted2 = parsed_idx2 as Dictionary
+	planted2[retry_key] = {"status": "no_image", "src": fx_retry, "v": ArtProvider.EXTRACTOR_VERSION}
+	_expect(_write_text_file(idx_path2, JSON.stringify(planted2)), "embedded fixture: pre-fix no_image entry planted", failures)
+	ArtProvider.reload_index()
+	_expect(ArtProvider.outcome_for(fx_retry) == ArtProvider.STATUS_NO_IMAGE
+		and ArtProvider.outcome_for_embedded(fx_retry) == "",
+		"embedded: a pre-fix stamp still reads under the backglass gate but is untried under the BIFF gate", failures)
+	_expect(ArtProvider.extract_art_image(fx_retry) != "" and ArtProvider.outcome_for_embedded(fx_retry) == ArtProvider.STATUS_OK,
+		"embedded: the pre-fix file is retried once under the BIFF walker and extracts", failures)
+	var after_idx2: Dictionary = {}
+	var parsed_after2: Variant = JSON.parse_string(FileAccess.get_file_as_string(idx_path2))
+	if parsed_after2 is Dictionary:
+		after_idx2 = parsed_after2 as Dictionary
+	var after_entry2: Variant = after_idx2.get(retry_key, null)
+	_expect(after_entry2 is Dictionary and int((after_entry2 as Dictionary).get("ev", 0)) == ArtProvider.VPX_READER_VERSION,
+		"embedded: the retried entry is stamped with the embedded reader generation", failures)
 
 	# --- Missing-backglass list (this round): the scanner's
 	# pairing record rendered and written as Chris's go-download

@@ -522,14 +522,13 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   index's exact ok / no-image / failed / untried counts for the
   library. A third art source sits between the backglass and the
   title card: the image inside the `.vpx` itself. A table file is
-  an OLE/CFB compound file whose storage holds the table's
-  embedded images as named streams; `core/cfb_reader.gd` reads
-  that structure read-only (header, FAT, directory, mini-stream
+  an OLE/CFB compound file; `core/cfb_reader.gd` reads that
+  structure read-only (header, FAT, directory, mini-stream
   chains — bounded range reads only, never the whole file) and
-  `ArtProvider.extract_vpx_image` picks, in order, a stream named
-  for backglass/backdrop art, the playfield image, or the largest
-  image over a small-sprite floor (200x200 / 60,000 pixels),
-  decoding PNG/JPEG/BMP/WebP/TGA plus bare DIB streams. A
+  `ArtProvider.extract_vpx_image` walks the table's embedded
+  image records to pick its art (the real format, and the
+  reader that first misread it, are the next bullet's subject),
+  decoding PNG/JPEG/BMP/WebP/TGA plus bare DIB payloads. A
   same-stem `.directb2s` still outranks it — the designated
   backglass beats incidental embedded art — and a backglass that
   holds no usable image falls through to it. Embedded extractions
@@ -541,7 +540,43 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   sibling "Embedded art health" line report the new source's
   reach. The missing-backglass list is unaffected: it records
   `.directb2s` FILES, and a game whose art now comes from inside
-  its `.vpx` still lacks one. (History: the original eager, main-thread scan
+  its `.vpx` still lacks one.
+- **Embedded art reads the real VPX format (the BIFF fix).** The
+  first embedded reader modelled a `.vpx`'s image streams as raw
+  image files and probed for image bytes at offset 0; on Chris's
+  library it extracted art from only 11 of 81 real files and
+  stamped 70 "no image in file" — because no real image stream
+  has that shape. The diagnosis was convicted from VPX's own
+  source: a table's parts live under one storage (`GameStg`),
+  its images are streams named `Image0`, `Image1`, …, and each
+  is a **BIFF record sequence** — `[int32 size][tag][payload]`
+  records carrying the texture's `NAME`, its `WDTH`/`HGHT`, and
+  either `LINK` (the payload is `TableInfo`'s `Screenshot`
+  stream, the one stream written as a raw image file) or a
+  `JPEG` object whose nested `DATA` record holds the original
+  imported image file's bytes verbatim, a few hundred bytes in.
+  The extractor now walks those records (`ArtProvider`'s BIFF
+  walker over `CfbReader`'s unchanged container reads),
+  classifies by the `NAME` record (backglass/backdrop, then
+  playfield, then largest by record dimensions over the sprite
+  floor), and range-reads exactly the chosen `DATA` span into
+  the same decode/panel-fit pipeline. Pre-10.8.1 files may store
+  a BMP import as a `BITS` record (LZW-compressed raw pixels,
+  no encoded image anywhere); those are not decoded — they
+  stamp a distinct **legacy format** outcome, surfaced as its
+  own count on the Embedded art health line, so a library scan
+  is the census that decides whether an LZW decoder is ever
+  worth building. Embedded outcome stamps carry their own
+  reader generation (`ev`), separate from the backglass
+  extractor's version: every stamp the offset-0 reader wrote
+  counts as untried under the walker, so each pre-fix file is
+  retried exactly once and re-stamped with its true outcome,
+  while no backglass stamp is disturbed. `inspect_vpx_images`
+  exposes the walk itself (names, dimensions, payload kind per
+  image) as the census surface the core test and the harness
+  check the extractor against — including three real `.vpx`
+  files from the VPX repo, read in place, never committed.
+  (History: the original eager, main-thread scan
   froze the app for over a minute at 300 tables, 2026-10-20; the
   lazy-only fix that followed moved the cost onto first page
   visits, which is what the warmer retired, 2026-10-21.)

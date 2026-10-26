@@ -6,10 +6,11 @@ extends RefCounted
 ##      (.png / .jpg / .jpeg / .webp)
 ##   2. the backglass image extracted from a same-stem .directb2s file
 ##   3. an image extracted from inside the .vpx file itself (its
-##      OLE/CFB storage holds the table's embedded images - see
-##      extract_vpx_image), cached under user:// like the backglass
-##      art - extraction is best-effort and any failure just falls
-##      through to the generated title card.
+##      OLE/CFB storage holds the table's embedded images as BIFF
+##      records - see _walk_vpx_image_stream), cached under
+##      user:// like the backglass art - extraction is
+##      best-effort and any failure just falls through to the
+##      generated title card.
 ## Returns "" when no art exists. Never writes anywhere near the tables.
 ## The designated .directb2s stays ahead of the embedded image on
 ## purpose: it is the game's chosen backglass, while the embedded
@@ -47,6 +48,12 @@ extends RefCounted
 ##   failed   - the file could not be read/decoded, or its
 ##              designated backglass image would not decode, or the
 ##              cache write failed
+##   legacy_format - embedded (.vpx) only: the file's art exists
+##              only as pre-10.8.1 BITS records (LZW-compressed
+##              raw pixels, no encoded image anywhere). A census
+##              answer, not a failure: it says how many real files
+##              would need an LZW decoder built before their
+##              embedded art could serve.
 ## A stamped negative is REMEMBERED: panels and the warmer skip the
 ## file entirely until its stamp changes (the file was replaced),
 ## so a no-art table costs zero extraction work on every later page
@@ -61,6 +68,19 @@ extends RefCounted
 ## reader stamped - once, under the new version. That is how the
 ## entity-escaped backglasses (see _xml_unescape) got their retry:
 ## v1 stamped them "failed"; v2 reads them.
+##
+## The embedded (.vpx) reader carries its OWN generation counter
+## (VPX_READER_VERSION, stamped as "ev"), deliberately separate:
+## the backglass version's bumps must never force .vpx files
+## through a retry, and the embedded reader's fix must not disturb
+## a single backglass stamp. Generation 0 (no "ev" field) is the
+## offset-0 probe reader the embedded round first shipped - it
+## required image bytes at a stream's very start, which no real
+## .vpx image stream has, so it stamped most real files
+## "no image". Generation 1 is the BIFF walker. Every embedded
+## stamp from an older generation counts as untried under
+## outcome_for_embedded, so each pre-fix file is retried exactly
+## once under the walker and re-stamped with its true outcome.
 
 const CACHE_DIR: String = "user://art_cache"
 const INDEX_PATH: String = CACHE_DIR + "/art_index.json"
@@ -71,6 +91,7 @@ const PANEL_ART_MAX_H: int = 640
 const STATUS_OK: String = "ok"
 const STATUS_NO_IMAGE: String = "no_image"
 const STATUS_FAILED: String = "failed"
+const STATUS_LEGACY: String = "legacy_format"
 
 ## The extractor's format version, stamped into every outcome-index
 ## entry as "v". v1: the original reader (no unescaping - it
@@ -80,6 +101,11 @@ const STATUS_FAILED: String = "failed"
 ## negatively; older entries then count as untried and are retried
 ## once under the new reader.
 const EXTRACTOR_VERSION: int = 2
+
+## The embedded (.vpx) reader's generation - see the class doc.
+## 0 = the offset-0 probe reader (stamps carry no "ev"); 1 = the
+## BIFF walker (_walk_vpx_image_stream).
+const VPX_READER_VERSION: int = 1
 
 ## Designated image elements, in the server's own precedence: the
 ## plain backglass; the lit half of an on/off pair; the dark half;
@@ -162,8 +188,42 @@ static func outcome_for(b2s_path: String) -> String:
 	return ""
 
 
+## The recorded outcome for a .vpx's embedded image, gated on
+## the embedded reader's generation rather than the backglass
+## version: an entry whose "ev" predates VPX_READER_VERSION (or
+## carries none - every pre-fix stamp) reads "" (untried) here,
+## so the file gets its one retry under the current walker. The
+## backglass gate (outcome_for) is never consulted for .vpx
+## paths, and this gate never for .directb2s paths - each
+## reader's fix disturbs only its own files' stamps.
+static func outcome_for_embedded(vpx_path: String) -> String:
+	_index_mutex.lock()
+	_load_index_locked()
+	var entry: Variant = _index.get(stamp_key_for(vpx_path), null)
+	_index_mutex.unlock()
+	if entry is Dictionary:
+		var d: Dictionary = entry as Dictionary
+		if int(d.get("ev", 0)) < VPX_READER_VERSION:
+			return ""
+		return str(d.get("status", ""))
+	return ""
+
+
+## The outcome gate for any art source, routed by file kind:
+## .vpx sources answer to the embedded reader's generation,
+## everything else to the backglass extractor's version. Panels,
+## the warmer and the health counts consult outcomes through
+## here (or through the kind-specific gates directly), so a
+## stale embedded stamp can never suppress its one retry and a
+## backglass stamp is read exactly as it always was.
+static func outcome_for_source(source_path: String) -> String:
+	if source_path.get_extension().to_lower() == "vpx":
+		return outcome_for_embedded(source_path)
+	return outcome_for(source_path)
+
+
 static func is_negative_outcome(status: String) -> bool:
-	return status == STATUS_NO_IMAGE or status == STATUS_FAILED
+	return status == STATUS_NO_IMAGE or status == STATUS_FAILED or status == STATUS_LEGACY
 
 
 static func _record_outcome(b2s_path: String, status: String) -> void:
@@ -180,6 +240,29 @@ static func _record_outcome(b2s_path: String, status: String) -> void:
 			_index_mutex.unlock()
 			return
 	_index[key] = {"status": status, "src": b2s_path, "v": EXTRACTOR_VERSION}
+	_save_index_locked()
+	_index_mutex.unlock()
+
+
+## Record an embedded (.vpx) outcome, stamped with BOTH format
+## counters: "v" keeps the shared entry shape (generic index
+## readers stay sane), "ev" is the embedded generation
+## outcome_for_embedded gates on. The same-status shortcut
+## requires a current "ev" for the same reason _record_outcome
+## requires a current "v": a pre-fix entry re-recorded by the
+## walker must gain its generation, or it would read as untried
+## forever.
+static func _record_outcome_embedded(vpx_path: String, status: String) -> void:
+	var key: String = stamp_key_for(vpx_path)
+	_index_mutex.lock()
+	_load_index_locked()
+	var entry: Variant = _index.get(key, null)
+	if entry is Dictionary:
+		var d: Dictionary = entry as Dictionary
+		if str(d.get("status", "")) == status and int(d.get("ev", 0)) >= VPX_READER_VERSION:
+			_index_mutex.unlock()
+			return
+	_index[key] = {"status": status, "src": vpx_path, "v": EXTRACTOR_VERSION, "ev": VPX_READER_VERSION}
 	_save_index_locked()
 	_index_mutex.unlock()
 
@@ -315,18 +398,26 @@ static func extract_art_image(source_path: String) -> String:
 static func extract_vpx_image(vpx_path: String) -> String:
 	var cache_path: String = cache_path_for(vpx_path)
 	if FileAccess.file_exists(cache_path):
-		if outcome_for(vpx_path) != STATUS_OK:
-			_record_outcome(vpx_path, STATUS_OK)
+		if outcome_for_embedded(vpx_path) != STATUS_OK:
+			_record_outcome_embedded(vpx_path, STATUS_OK)
 		return cache_path
 	var result: Dictionary = _extract_vpx_uncached(vpx_path, cache_path)
-	_record_outcome(vpx_path, str(result["status"]))
+	_record_outcome_embedded(vpx_path, str(result["status"]))
 	return str(result["path"])
 
 
 ## How much of a stream to read just to identify it: enough for
 ## every supported format's header dimensions (the JPEG marker
-## scan included), far less than any real image.
+## scan included), far less than any real image. Used for the
+## one raw stream in the format, TableInfo's Screenshot.
 const VPX_PROBE_BYTES: int = 65536
+## How much of an image stream the BIFF walk reads. The records
+## that matter - the texture's name, its dimensions, and where
+## its payload record sits - all live in the first few hundred
+## bytes of a real stream; a megabyte of headroom is paranoia.
+## The payload itself is never walked: it is range-read
+## afterwards, exactly its own span.
+const VPX_BIFF_WALK_BYTES: int = 1024 * 1024
 ## The largest embedded image stream worth decoding at all. Real
 ## art tops out at a few megabytes; this only refuses pathology.
 const VPX_MAX_IMAGE_BYTES: int = 96 * 1024 * 1024
@@ -340,56 +431,112 @@ const VPX_FALLBACK_MIN_H: int = 200
 const VPX_FALLBACK_MIN_AREA: int = 60000
 
 
-## One real embedded extraction attempt. The image pick, in order:
-##   (a) a stream whose name suggests backglass/backdrop art
-##   (b) the playfield image
-##   (c) the largest decodable image over the sprite floor above
+## One real embedded extraction attempt, against the format as
+## VPX actually writes it (vpinball source: PinTable::SaveData
+## names the streams, Texture::Save writes the records):
+##   - a table's parts live under one storage, GameStg; its
+##     images are the streams named Image0, Image1, ... (the CFB
+##     census is flat - the entry name carries no storage prefix
+##     and no content hint, and no other storage names streams
+##     that way);
+##   - an image stream is a BIFF record sequence, never an image
+##     file: [int32 size][4-char tag][payload] records carrying
+##     the texture's NAME, its WDTH/HGHT, and then either LINK
+##     (no payload in the stream - the image lives in
+##     TableInfo's Screenshot stream, the one stream written as
+##     a raw image file) or a JPEG object whose nested DATA
+##     record holds the original imported image file's bytes
+##     verbatim, a few hundred bytes in;
+##   - pre-10.8.1 files may instead store a BMP import as a BITS
+##     record: LZW-compressed raw pixels, no encoded image
+##     anywhere. Not decoded here - see the outcomes below.
+## The first embedded reader probed for image bytes at a
+## stream's offset 0, a shape no real image stream has, and so
+## found nothing in any real file; this walker reads the records
+## instead.
+##
+## The image pick, in order:
+##   (a) a texture whose NAME suggests backglass/backdrop art
+##   (b) the playfield texture
+##   (c) the largest by record dimensions over the sprite floor
 ## Within a class, the largest pixel area wins (equal areas: the
-## larger stream). Ranked candidates are decoded in order and the
-## first that decodes is the art - a named stream whose bytes are
-## corrupt does not veto the next candidate.
-## Outcomes: the file is not a readable compound file, or image
-## candidates existed but none decoded -> failed; the file parsed
-## but holds no image candidate at all -> no_image.
+## larger payload). Ranked candidates are decoded in order and
+## the first that decodes is the art - a corrupt payload does not
+## veto the next candidate. A LINK texture is a candidate whose
+## bytes are the Screenshot stream's; the Screenshot stream is
+## also a candidate in its own right when no LINK claims it (its
+## texture's records may have failed while the stream is whole).
+## Outcomes: the file is not a readable compound file, image
+## candidates existed but none decoded, or an image stream's
+## records are corrupt -> failed; nothing decodable but an image
+## exists only as BITS -> legacy_format; the file holds no
+## GameStg images and no Screenshot stream -> no_image.
 static func _extract_vpx_uncached(vpx_path: String, cache_path: String) -> Dictionary:
 	var reader: CfbReader = CfbReader.new()
 	if not reader.open(vpx_path):
 		reader.close()
 		return {"path": "", "status": STATUS_FAILED}
+	var images: Array = []
+	var screenshot: Dictionary = {}
+	var saw_corrupt: bool = false
+	for item: Variant in _walk_vpx_images(reader):
+		var info: Dictionary = item as Dictionary
+		if bool(info.get("is_screenshot", false)):
+			screenshot = info
+		else:
+			images.append(info)
+			if bool(info.get("corrupt", false)):
+				saw_corrupt = true
 	var candidates: Array = []
-	for entry: Variant in reader.stream_entries():
-		if not (entry is Dictionary):
-			continue
-		var e: Dictionary = entry as Dictionary
-		var size: int = int(e.get("size", 0))
-		if size < 100:
-			continue ## too small to hold a panel image in any format
-		var probe: PackedByteArray = reader.read_prefix(e, VPX_PROBE_BYTES)
-		if probe.size() < 8:
-			continue
-		var dims: Vector2i = _image_dimensions(probe)
-		if dims == Vector2i.ZERO and not _has_image_magic(probe):
-			continue ## not image bytes by header or by magic
-		var cls: int = _vpx_name_class(str(e.get("name", "")))
-		if cls == 2 and (dims.x < VPX_FALLBACK_MIN_W or dims.y < VPX_FALLBACK_MIN_H \
-				or dims.x * dims.y < VPX_FALLBACK_MIN_AREA):
-			continue ## nameless and small: a sprite or decal, not card art
+	var link_seen: bool = false
+	for info2: Variant in images:
+		var im: Dictionary = info2 as Dictionary
+		var rec: Dictionary = {
+			"name": str(im.get("name", "")),
+			"cls": _vpx_name_class(str(im.get("name", ""))),
+			"area": int(im.get("width", 0)) * int(im.get("height", 0)),
+			"width": int(im.get("width", 0)),
+			"height": int(im.get("height", 0)),
+		}
+		if bool(im.get("has_data", false)):
+			rec["kind"] = "data"
+			rec["entry"] = im["entry"]
+			rec["offset"] = int(im.get("data_offset", 0))
+			rec["size"] = int(im.get("data_size", 0))
+			candidates.append(rec)
+		elif bool(im.get("is_link", false)):
+			link_seen = true
+			rec["kind"] = "screenshot"
+			rec["size"] = int(screenshot.get("size", 0))
+			candidates.append(rec)
+	if not link_seen and not screenshot.is_empty():
+		var sdims: Vector2i = screenshot["dims"] as Vector2i
 		candidates.append({
-			"entry": e, "cls": cls,
-			"area": dims.x * dims.y, "size": size,
+			"name": "Screenshot", "kind": "screenshot",
+			"cls": 2, "area": sdims.x * sdims.y,
+			"width": sdims.x, "height": sdims.y,
+			"size": int(screenshot.get("size", 0)),
 		})
-	if candidates.is_empty():
-		reader.close()
-		return {"path": "", "status": STATUS_NO_IMAGE}
-	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+	var usable: Array = []
+	for cand: Variant in candidates:
+		var c: Dictionary = cand as Dictionary
+		if int(c["cls"]) == 2 and (int(c["width"]) < VPX_FALLBACK_MIN_W or int(c["height"]) < VPX_FALLBACK_MIN_H \
+				or int(c["area"]) < VPX_FALLBACK_MIN_AREA):
+			continue ## unnamed and small: a sprite or decal, not card art
+		usable.append(c)
+	usable.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		if int(a["cls"]) != int(b["cls"]):
 			return int(a["cls"]) < int(b["cls"])
 		if int(a["area"]) != int(b["area"]):
 			return int(a["area"]) > int(b["area"])
 		return int(a["size"]) > int(b["size"]))
-	for cand: Variant in candidates:
-		var c: Dictionary = cand as Dictionary
-		var bytes: PackedByteArray = reader.read_stream(c["entry"] as Dictionary, VPX_MAX_IMAGE_BYTES)
+	for cand2: Variant in usable:
+		var c2: Dictionary = cand2 as Dictionary
+		var bytes: PackedByteArray = PackedByteArray()
+		if str(c2["kind"]) == "data":
+			bytes = reader.read_stream_range(c2["entry"] as Dictionary, int(c2["offset"]), int(c2["size"]), VPX_MAX_IMAGE_BYTES)
+		elif not screenshot.is_empty():
+			bytes = reader.read_stream(screenshot["entry"] as Dictionary, VPX_MAX_IMAGE_BYTES)
 		if bytes.is_empty():
 			continue
 		var img: Image = _decode_image_bytes(bytes)
@@ -397,15 +544,190 @@ static func _extract_vpx_uncached(vpx_path: String, cache_path: String) -> Dicti
 			reader.close()
 			return _store_extracted(img, cache_path)
 	reader.close()
-	return {"path": "", "status": STATUS_FAILED}
+	if not usable.is_empty() or saw_corrupt:
+		return {"path": "", "status": STATUS_FAILED}
+	for info3: Variant in images:
+		if bool((info3 as Dictionary).get("has_bits", false)):
+			return {"path": "", "status": STATUS_LEGACY}
+	return {"path": "", "status": STATUS_NO_IMAGE}
 
 
-## The art class a stream's NAME claims: 0 = backglass/backdrop,
-## 1 = playfield, 2 = unnamed. VPX authors name the streams after
-## what they hold ("Backglass", "Playfield" and kin), so the name
-## is the strongest signal in the file.
-static func _vpx_name_class(stream_name: String) -> int:
-	var n: String = stream_name.to_lower()
+## Walk a .vpx's image-bearing streams: every GameStg Image<n>
+## stream's BIFF records (see _walk_vpx_image_stream), plus the
+## Screenshot stream when one exists (flagged is_screenshot,
+## with its header dimensions probed - it is a raw image file).
+## Everything else in the file is not image data and is never
+## opened.
+static func _walk_vpx_images(reader: CfbReader) -> Array:
+	var out: Array = []
+	for entry: Variant in reader.stream_entries():
+		if not (entry is Dictionary):
+			continue
+		var e: Dictionary = entry as Dictionary
+		var stream_name: String = str(e.get("name", ""))
+		if stream_name == "Screenshot":
+			var probe: PackedByteArray = reader.read_prefix(e, VPX_PROBE_BYTES)
+			var dims: Vector2i = Vector2i.ZERO
+			if _has_image_magic(probe):
+				dims = _image_dimensions(probe)
+			out.append({
+				"is_screenshot": true, "entry": e,
+				"size": int(e.get("size", 0)), "dims": dims,
+			})
+		elif _is_vpx_image_stream_name(stream_name):
+			out.append(_walk_vpx_image_stream(reader, e))
+	return out
+
+
+## A GameStg image stream's name: "Image" + a plain index
+## (Image0, Image1, ...). Texture names never appear here - they
+## live inside the streams, in the NAME records.
+static func _is_vpx_image_stream_name(stream_name: String) -> bool:
+	if not stream_name.begins_with("Image") or stream_name.length() <= 5:
+		return false
+	var suffix: String = stream_name.substr(5)
+	return suffix.is_valid_int() and str(suffix.to_int()) == suffix
+
+
+## Walk one Image<n> stream's BIFF records. Framing (BiffWriter):
+## each record is [int32 recordSize][4-byte tag][payload], the
+## size counting tag + payload, so a record spans 4 + size
+## bytes; a sub-object (the JPEG PinBinary) is a bare size-4
+## header record whose fields then follow as ordinary records,
+## closed by an ENDB record. Texture::Save writes NAME, PATH,
+## WDTH, HGHT, then LINK or the JPEG object (or, pre-10.8.1, a
+## BITS record), then ALTV/MD5H/OPAQ and ENDB. Unknown records -
+## older files carry an extra INME, newer ones may add more -
+## are skipped by their size, which is all a reader that only
+## wants the payload needs.
+##
+## Returns {stream, entry, name, width, height, has_data,
+## data_offset, data_size, is_link, has_bits, corrupt} where the
+## DATA location is a span INSIDE this stream (read it with
+## CfbReader.read_stream_range). corrupt means the record walk
+## broke - a size field that runs off the stream, a truncated
+## read - before the texture's payload question was settled.
+static func _walk_vpx_image_stream(reader: CfbReader, entry: Dictionary) -> Dictionary:
+	var info: Dictionary = {
+		"stream": str(entry.get("name", "")), "entry": entry,
+		"name": "", "width": 0, "height": 0,
+		"has_data": false, "data_offset": 0, "data_size": 0,
+		"is_link": false, "has_bits": false, "corrupt": false,
+	}
+	var stream_size: int = int(entry.get("size", 0))
+	var bytes: PackedByteArray = reader.read_prefix(entry, VPX_BIFF_WALK_BYTES)
+	if bytes.is_empty():
+		info["corrupt"] = true
+		return info
+	var pos: int = 0
+	var in_jpeg: bool = false
+	while pos + 8 <= bytes.size():
+		var rec_size: int = _le_i32(bytes, pos)
+		if rec_size < 4 or pos + 4 + rec_size > stream_size:
+			info["corrupt"] = true
+			return info
+		var tag: String = bytes.slice(pos + 4, pos + 8).get_string_from_ascii()
+		var payload_off: int = pos + 8
+		var payload_len: int = rec_size - 4
+		var past_prefix: bool = pos + 4 + rec_size > bytes.size()
+		if in_jpeg:
+			if tag == "ENDB":
+				in_jpeg = false
+			elif tag == "DATA":
+				# The payload record itself runs past the walk
+				# prefix by design (it IS the image) - its span
+				# is all the walk needs from it.
+				info["has_data"] = true
+				info["data_offset"] = payload_off
+				info["data_size"] = payload_len
+				return info
+			elif past_prefix:
+				return info
+		else:
+			match tag:
+				"NAME":
+					info["name"] = _biff_string(bytes, payload_off, payload_len)
+				"WDTH":
+					if payload_len >= 4:
+						info["width"] = _le_i32(bytes, payload_off)
+				"HGHT":
+					if payload_len >= 4:
+						info["height"] = _le_i32(bytes, payload_off)
+				"LINK":
+					info["is_link"] = true
+				"BITS":
+					info["has_bits"] = true
+				"JPEG":
+					in_jpeg = true
+					pos += 8 ## a bare header record: its fields follow flat
+					continue
+				"ENDB":
+					return info
+				_:
+					if past_prefix:
+						return info
+		pos += 4 + rec_size
+	return info
+
+
+## A BIFF string record's payload: [int32 byte count][UTF-8
+## bytes]. "" on anything malformed - a bad name costs the
+## texture its class, never the walk.
+static func _biff_string(bytes: PackedByteArray, off: int, payload_len: int) -> String:
+	if payload_len < 4 or off + 4 > bytes.size():
+		return ""
+	var n: int = _le_i32(bytes, off)
+	if n <= 0 or n > payload_len - 4 or off + 4 + n > bytes.size():
+		return ""
+	return bytes.slice(off + 4, off + 4 + n).get_string_from_utf8()
+
+
+## Diagnostic surface (the census): a .vpx's walked image
+## records, in directory order, without extracting anything -
+## [{stream, name, width, height, kind}] where kind is "data"
+## (an encoded image file sits in the stream's DATA record),
+## "link" (the payload is the Screenshot stream), "bits"
+## (legacy LZW pixels only), "none" (no payload record found)
+## or "corrupt" (the record walk broke); plus a Screenshot entry
+## (kind "screenshot", header dimensions) when that stream
+## exists. This is the extractor's own walk - the same records
+## its pick runs on - so a census can never disagree with the
+## extractor about what a file holds.
+static func inspect_vpx_images(vpx_path: String) -> Array:
+	var reader: CfbReader = CfbReader.new()
+	if not reader.open(vpx_path):
+		reader.close()
+		return []
+	var out: Array = []
+	for item: Variant in _walk_vpx_images(reader):
+		var info: Dictionary = item as Dictionary
+		if bool(info.get("is_screenshot", false)):
+			var d: Vector2i = info["dims"] as Vector2i
+			out.append({"stream": "Screenshot", "name": "Screenshot",
+				"width": d.x, "height": d.y, "kind": "screenshot"})
+			continue
+		var kind: String = "none"
+		if bool(info.get("corrupt", false)):
+			kind = "corrupt"
+		elif bool(info.get("has_data", false)):
+			kind = "data"
+		elif bool(info.get("is_link", false)):
+			kind = "link"
+		elif bool(info.get("has_bits", false)):
+			kind = "bits"
+		out.append({"stream": str(info.get("stream", "")), "name": str(info.get("name", "")),
+			"width": int(info.get("width", 0)), "height": int(info.get("height", 0)), "kind": kind})
+	reader.close()
+	return out
+
+
+## The art class a texture's NAME record claims: 0 =
+## backglass/backdrop, 1 = playfield, 2 = unnamed. VPX authors
+## name their textures after what they hold ("Backglass",
+## "Playfield" and kin), so the name is the strongest signal in
+## the file.
+static func _vpx_name_class(texture_name: String) -> int:
+	var n: String = texture_name.to_lower()
 	if n.contains("backglass") or n.contains("backdrop") or n.contains("back glass"):
 		return 0
 	if n.contains("playfield"):

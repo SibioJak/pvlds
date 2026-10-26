@@ -81,7 +81,7 @@ func ensure_art() -> String:
 func _ensure_from_source(src: String) -> String:
 	if ArtProvider.is_cached(src):
 		return ArtProvider.cache_path_for(src)
-	if ArtProvider.is_negative_outcome(ArtProvider.outcome_for(src)):
+	if ArtProvider.is_negative_outcome(ArtProvider.outcome_for_source(src)):
 		return ""
 	if ArtProvider.claim_extract(src):
 		var got: String = ArtProvider.extract_art_image(src)
@@ -89,7 +89,7 @@ func _ensure_from_source(src: String) -> String:
 		return got
 	if ArtProvider.await_extract(src, CLAIM_WAIT_MSEC):
 		return ArtProvider.cache_path_for(src)
-	if ArtProvider.outcome_for(src) == "":
+	if ArtProvider.outcome_for_source(src) == "":
 		# The claim holder is still grinding past the wait bound
 		# (an enormous file, a wedged warmer): extract it ourselves
 		# rather than leaving the panel blank-faced. The registry
