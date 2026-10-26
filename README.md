@@ -603,6 +603,22 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   rows and the control rail are spaced so the whole bottom row,
   buttons included, clears the rail from a seated eye
   (`WALL_ROW_YS`, the rail's height in `_build_rail`).
+- **Power-on flicker (flicker round).** When focus *settles* on a
+  card (a ~200 ms rest, so fast navigation never strobes the wall),
+  the already-popping card powers on, B2S-style: a backglass-backed
+  card lights its real lamp layers — extracted from the
+  `.directb2s`'s `<Illumination>` bulbs into a sibling cache
+  (`user://art_cache/layers/<stamp>/`, capped at the 40 largest
+  rects; an on/off-pair file becomes base + one full-frame lit
+  layer) — in a stratified, per-game-seeded cascade of catches and
+  dips, and stays lit while focused. Cards without layers (side
+  image, embedded art, title cards) surge their whole face on a
+  brightness curve instead, so focus speaks one language across the
+  wall. One card ever performs; the cascade only writes material
+  alphas, so its cost is trivial. The same round sizes cards by
+  their art: the wall grid's uniform aspect is tuned from the
+  library's median extracted-art aspect (bounded 0.76–0.93), and a
+  popped card grows to its own art's true aspect as it powers on.
 - **One input model.** VR controller laser, mouse ray, and
   gamepad/keyboard focus all pick from the same surfaces. Mouse can
   drive the whole UI flat at the desk — the flat camera is static at

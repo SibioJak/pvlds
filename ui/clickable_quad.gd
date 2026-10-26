@@ -16,6 +16,7 @@ var _mat: StandardMaterial3D
 var _frame_mat: StandardMaterial3D
 var _frame: MeshInstance3D
 var _content_alpha: float = 1.0 ## the face's current fade (set_content_alpha): the frame's ceiling too
+var _face_brightness: float = 1.0 ## the face's brightness multiplier (set_face_brightness): the power-on flicker's dimmer
 var _hovered: bool = false ## the last visual state the room asked for; the frame's showing is derived, never stored raw
 var _focused: bool = false
 
@@ -100,6 +101,23 @@ func set_content_alpha(a: float) -> void:
 		fc.a = alpha
 		_frame_mat.albedo_color = fc
 	_apply_frame_state()
+
+
+## Dim or brighten the quad's face (1 = full, 0 = black): the
+## power-on flicker's whole-face surge for cards with no lamp
+## layers. Only the albedo's colour moves - the alpha is the
+## content fade's (set_content_alpha), and the two compose: a
+## faded wall card flickers at its faded level, never brighter.
+func set_face_brightness(b: float) -> void:
+	_face_brightness = clampf(b, 0.0, 1.0)
+	if _mat != null:
+		var a: float = _mat.albedo_color.a
+		_mat.albedo_color = Color(_face_brightness, _face_brightness, _face_brightness, a)
+
+
+## Smoke seam: the face's current brightness multiplier.
+func face_brightness() -> float:
+	return _face_brightness
 
 
 func set_visual_state(hovered: bool, focused: bool) -> void:

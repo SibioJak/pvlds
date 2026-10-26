@@ -57,6 +57,53 @@ const POP_OUT_DISTANCE: float = 0.15 ## metres off the wall at full pop
 const POP_OUT_SCALE: float = 1.08 ## card scale at full pop
 const POP_OUT_SEC: float = 0.15 ## pop in/out travel time, seconds
 
+## Card proportions (the sizing round, 2026-10-26 - Chris:
+## "consider the average dimension of a backglass so it fits
+## as much as possible. Or when it pops out and lights up, its
+## sizing to proper size"). Two halves:
+## (a) The wall grid stays uniform, but its aspect is tuned
+## from the library's own art: the median aspect of the art
+## PVLDS has actually extracted (ArtProvider.library_art_
+## median_aspect), conservatively clamped so the field-passed
+## wall geometry (rows, banner, rail) is never destabilized.
+## Too few samples, or a median already at the default, keeps
+## PANEL_SIZE exactly. The panel face renders at matching
+## pixel proportions, so the tune never stretches a face.
+## (b) The popped card ALSO grows to its own art's true
+## aspect (the number below clamps freak aspects): same
+## popped height, width follows the glass. A card whose art
+## aspect equals the grid's pops exactly as it always has -
+## the grow is continuous with the old uniform scale - and a
+## title card (no art) pops the old way too.
+const PANEL_ASPECT_MIN: float = 0.76 ## grid aspect clamp, low (default 0.844)
+const PANEL_ASPECT_MAX: float = 0.93 ## grid aspect clamp, high
+const PANEL_ASPECT_MIN_SAMPLES: int = 8 ## art samples before the median may move the grid
+const POP_ASPECT_MIN: float = 0.55 ## a popped card's narrowest true aspect
+const POP_ASPECT_MAX: float = 1.45 ## a popped card's widest true aspect
+
+## Power-on flicker (the flicker round, 2026-10-26 - Chris,
+## on double-clicking a .directb2s and watching its lamps
+## stutter on: "It would be a neat effect for the game
+## cards"). When focus SETTLES on a card (the debounce below,
+## so fast navigation never strobes the wall), the card -
+## already popping out - powers on: a B2S-backed card lights
+## its real lamp layers in a fast cascade over its unlit base
+## and stays lit while focused; any other card surges its
+## whole face (dark, catch, dip, lit) on the same trigger, so
+## focus speaks one language across the wall. One card ever
+## performs. No audio. Every feel knob is a constant here.
+const POWER_SETTLE_SEC: float = 0.2 ## focus must rest this long before the power-on starts
+const POWER_CASCADE_SEC: float = 1.05 ## the power-on's full run, seconds
+const POWER_DARK: float = 0.22 ## the brightness fallback's floor (and its curve's low key)
+## The fallback's brightness keyframes [seconds, brightness]:
+## dark hold, a first catch, a dip, a near-catch with a sag,
+## then lit for good. Read by power_brightness_at.
+const POWER_BRIGHTNESS_KEYS: Array = [
+	[0.0, 0.22], [0.09, 0.22], [0.15, 0.80], [0.21, 0.30],
+	[0.30, 0.95], [0.38, 0.50], [0.50, 1.0], [0.58, 0.82],
+	[0.68, 1.0], [1.05, 1.0],
+]
+
 ## Page slide (the bumper feel round, 2026-10-24 - Chris, on the
 ## bumper flip: "it snaps to next wall, which is great, its fast,
 ## but i need some kind of visual doodad, a quick blur or
@@ -123,6 +170,20 @@ var _panel_base_pos: Array[Vector3] = [] ## wall-flush position per panel, paral
 var _panel_pop_dir: Array[Vector3] = [] ## unit vector from the panel toward the viewer (its wall normal)
 var _panel_pop: Array[float] = [] ## current pop amount per panel, 0 flush .. 1 popped
 var _panel_pop_applied: Array[float] = [] ## last pop amount written to a panel's transform (write guard)
+var _panel_size: Vector2 = PANEL_SIZE ## the wall's live card size: PANEL_SIZE, or the median-tuned size (see _tune_panel_size)
+var _panel_face_px: Vector2i = Vector2i(512, 640) ## the panel faces' render size: 512x640, or width-tuned with _panel_size
+var _panel_art_aspect: Array[float] = [] ## per panel: its art's aspect (w/h) once its face lands, 0 = no art (title card)
+var _power_panel: ClickableQuad = null ## the card currently performing (or holding) the power-on
+var _power_candidate: ClickableQuad = null ## the pop target the settle debounce is timing
+var _power_candidate_t: float = 0.0 ## seconds the candidate has rested
+var _power_phase: int = 0 ## 0 idle, 1 cascading, 2 settled lit
+var _power_mode: int = 0 ## 0 = whole-face brightness fallback, 1 = real lamp layers
+var _power_t: float = 0.0 ## seconds into the live cascade
+var _power_game: GameEntry = null ## the performing card's game
+var _power_layers: Array[MeshInstance3D] = [] ## the performing card's lamp layer quads (children of the panel)
+var _power_mats: Array[StandardMaterial3D] = [] ## their materials, parallel to _power_layers
+var _power_schedule: Array = [] ## per layer: [catch_t, dip_end_t, on_t] cascade times, parallel to _power_layers
+var _power_kicked: Dictionary = {} ## game_id -> true: a background layer extraction was kicked for this game this session
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
@@ -205,9 +266,39 @@ func setup(factory: TextureFactory, scanner: LibraryScanner, store: StateStore, 
 
 
 func refresh_library() -> void:
+	_tune_panel_size()
 	_recompute_visible()
 	_page = 0
 	_rebuild_wall()
+
+
+## The grid tune (sizing half (a)): set _panel_size and
+## _panel_face_px from the library's median art aspect,
+## clamped to [PANEL_ASPECT_MIN, PANEL_ASPECT_MAX] around
+## the default. Runs at every library adoption, from the
+## art cached by then - a fresh install with nothing
+## extracted yet keeps the default exactly, and the tune
+## lands as the warmer fills the cache. Height never moves
+## (the rows' pitch is the wall's skeleton); width follows
+## the aspect, and the face renders at the matching pixel
+## proportions so no face is ever stretched by the tune.
+func _tune_panel_size() -> void:
+	_panel_size = PANEL_SIZE
+	_panel_face_px = Vector2i(512, 640)
+	if _scanner == null:
+		return
+	var games: Array[GameEntry] = []
+	games.assign(_scanner.games)
+	var samples: Array[float] = ArtProvider.library_art_aspect_samples(games)
+	if samples.size() < PANEL_ASPECT_MIN_SAMPLES:
+		return
+	var median: float = ArtProvider.median_float(samples)
+	var aspect: float = clampf(median, PANEL_ASPECT_MIN, PANEL_ASPECT_MAX)
+	var default_aspect: float = PANEL_SIZE.x / PANEL_SIZE.y
+	if absf(aspect - default_aspect) < 0.01:
+		return
+	_panel_size = Vector2(PANEL_SIZE.y * aspect, PANEL_SIZE.y)
+	_panel_face_px = Vector2i(int(round(640.0 * aspect)), 640)
 
 
 ## Take a fresh scanner as the room's library and rebuild
@@ -444,6 +535,10 @@ func _sort_visible() -> void:
 # ---------------------------------------------------------------- wall
 
 func _rebuild_wall() -> void:
+	# The power-on's performer and its lamp layers die with
+	# the wall being torn down: drop the state without
+	# touching the (about to be freed) nodes.
+	_power_reset_state()
 	# The SETUP panel's focus, remembered across the rebuild:
 	# if a rebuild ever runs while the panel stands, the
 	# player's place on the panel must survive it (the tail
@@ -497,12 +592,13 @@ func _rebuild_wall() -> void:
 		var row: int = i / PAGE_COLS
 		var angle: float = deg_to_rad(float(col - 1) - 0.5) * 14.0
 		var pos: Vector3 = Vector3(sin(angle) * WALL_RADIUS, WALL_ROW_YS[row], -cos(angle) * WALL_RADIUS)
-		var q: ClickableQuad = _make_quad(_wall, "panel", game.game_id, placeholder, PANEL_SIZE, pos)
+		var q: ClickableQuad = _make_quad(_wall, "panel", game.game_id, placeholder, _panel_size, pos)
 		_panels.append(q)
 		_panel_base_pos.append(pos)
 		_panel_pop_dir.append((EYE - pos).normalized())
 		_panel_pop.append(0.0)
 		_panel_pop_applied.append(0.0)
+		_panel_art_aspect.append(0.0)
 		# The card's Launch button (Chris, 2026-10-21): a distinct
 		# quad riding the panel's lower third - pointing at the card
 		# browses (opens More Info); only the button commits to the
@@ -686,16 +782,26 @@ func _fill_wall_textures(gen: int) -> void:
 		var game: GameEntry = _visible_games[start + i]
 		var quad: ClickableQuad = _panels[i]
 		var tex: Texture2D = null
+		var art_aspect: float = 0.0
 		var art_file: String = game.ensure_art()
 		if art_file != "":
 			var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
 			if art_tex != null:
-				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store), Vector2i(512, 640))
+				# The card's own art aspect rides along: the
+				# pop-out grows the card to it (sizing half (b)).
+				art_aspect = float(art_tex.get_width()) / float(art_tex.get_height())
+				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store), _panel_face_px)
 		if tex == null:
-			tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), Vector2i(512, 640))
+			tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), _panel_face_px)
 		if gen != _gen:
 			return
 		quad.set_texture(tex)
+		_panel_art_aspect[i] = art_aspect
+		if art_aspect > 0.0 and _panel_pop[i] > 0.0:
+			# The card is already popped (focus rested while
+			# its face streamed in): force the pop transform
+			# to re-apply at the art's true aspect next frame.
+			_panel_pop_applied[i] = -1.0
 		if i < _panel_launches.size():
 			var failed: bool = game.game_id == _failed_game_id
 			var ltex: Texture2D = await _factory.render_texture(
@@ -858,7 +964,16 @@ func _update_pop(delta: float) -> void:
 		_panel_pop_applied[i] = amt
 		var q: ClickableQuad = _panels[i]
 		q.position = _panel_base_pos[i] + _panel_pop_dir[i] * (POP_OUT_DISTANCE * amt)
-		q.scale = Vector3.ONE * (1.0 + (POP_OUT_SCALE - 1.0) * amt)
+		# The pop's scale: height is the old uniform grow;
+		# the WIDTH additionally follows the card's own art
+		# aspect (sizing half (b)) - at full pop the card
+		# stands at its glass's true proportions, eased by the
+		# same amount that drives the travel, so the two read
+		# as one gesture. No art (title card) or an art aspect
+		# equal to the grid's reduces this to the old uniform
+		# scale exactly.
+		var full: Vector2 = panel_full_pop_scale(q)
+		q.scale = Vector3(lerpf(1.0, full.x, amt), lerpf(1.0, full.y, amt), lerpf(1.0, full.y, amt))
 
 
 func _on_select(quad: ClickableQuad) -> void:
@@ -1917,6 +2032,317 @@ func pop_target() -> ClickableQuad:
 	return _pop_target_panel()
 
 
+## Sizing queries (the flicker shot reads these): the wall's
+## live card size, a panel's recorded art aspect (0 = none),
+## and the scale a panel reaches at FULL pop given its art -
+## the very numbers _update_pop interpolates toward, so a
+## shot can assert the end state without re-deriving it.
+func grid_panel_size() -> Vector2:
+	return _panel_size
+
+
+func panel_art_aspect(q: ClickableQuad) -> float:
+	var idx: int = _panels.find(q)
+	if idx < 0 or idx >= _panel_art_aspect.size():
+		return 0.0
+	return _panel_art_aspect[idx]
+
+
+func panel_full_pop_scale(q: ClickableQuad) -> Vector2:
+	var asp: float = panel_art_aspect(q)
+	if asp <= 0.0:
+		return Vector2(POP_OUT_SCALE, POP_OUT_SCALE)
+	var w: float = (_panel_size.y * POP_OUT_SCALE * clampf(asp, POP_ASPECT_MIN, POP_ASPECT_MAX)) / _panel_size.x
+	return Vector2(w, POP_OUT_SCALE)
+
+
+# ------------------------------------------------------------ power-on flicker
+
+## The power-on's per-frame driver, on _process beside the
+## pop and the slide. The performer is chosen from the pop
+## target (the room's one shared focus), but only after the
+## candidate has RESTED for POWER_SETTLE_SEC - a focus that
+## is still travelling (bumper flips, fast stick sweeps)
+## never starts a cascade, so the wall stays calm under
+## fast navigation. A page slide reads as no candidate at
+## all; detail, placard, SETUP and launch already null the
+## pop target, so every cancel Chris named funnels through
+## "the candidate changed (or vanished)": the performer
+## restores in the same frame and the new candidate's own
+## settle clock starts.
+func _update_power(delta: float) -> void:
+	var cand: ClickableQuad = _pop_target_panel()
+	if _slide_phase != 0:
+		cand = null
+	if cand != _power_candidate:
+		_power_candidate = cand
+		_power_candidate_t = 0.0
+	else:
+		_power_candidate_t += delta
+	if _power_panel != null and cand != _power_panel:
+		_restore_power()
+	if _power_panel == null and cand != null and _power_candidate_t >= POWER_SETTLE_SEC:
+		_start_power(cand)
+	if _power_panel != null and _power_phase == 1:
+		_power_t += delta
+		_apply_power()
+		if _power_t >= POWER_CASCADE_SEC:
+			_power_phase = 2
+			_apply_power()
+
+
+## Start the cascade on a settled card. The mode is chosen
+## once, here: real lamp layers when the game's backglass
+## extraction is already cached AND the face on the card is
+## that very extraction (layers composited over any other
+## image would sit in the wrong places); otherwise the
+## whole-face brightness surge. A cold layer set is kicked
+## to a background extraction so the NEXT visit to this card
+## can light its real lamps - this visit surges, honestly,
+## rather than stalling the room on file work.
+func _start_power(panel: ClickableQuad) -> void:
+	_power_panel = panel
+	_power_t = 0.0
+	_power_phase = 1
+	_power_mode = 0
+	_power_game = _scanner.game_by_id(panel.payload) if _scanner != null else null
+	if _power_game != null:
+		var src: String = _power_game.flicker_source()
+		if src != "" and _power_game.art_path == ArtProvider.cache_path_for(src):
+			if ArtProvider.has_flicker_layers(src):
+				var data: Dictionary = ArtProvider.extract_flicker_layers(src)
+				if not (data.get("layers", []) as Array).is_empty():
+					_build_power_layers(panel, data)
+					# A set whose every layer lives under the
+					# name strip builds no quads: surge instead
+					# of sitting on the unlit base all focus.
+					_power_mode = 1 if not _power_layers.is_empty() else 0
+			else:
+				_kick_power_extraction(_power_game)
+	_apply_power()
+
+
+## The background first-extraction of a card's layer set:
+## once per game per session, on a worker thread (the claim
+## discipline inside ensure_flicker arbitrates with any
+## other claimant). The layers land for the next focus
+## visit; nothing here blocks or restarts this visit's
+## surge.
+func _kick_power_extraction(game: GameEntry) -> void:
+	if _power_kicked.has(game.game_id):
+		return
+	_power_kicked[game.game_id] = true
+	WorkerThreadPool.add_task(Callable(game, "ensure_flicker"))
+
+
+## Build the lamp layer quads over the performing card: one
+## small quad per bulb, a child of the panel (so it rides
+## the pop and the slide for free), placed by mapping the
+## bulb's fitted rect through the SAME cover transform the
+## art face draws the base with (CardFace: STRETCH_KEEP_
+## ASPECT_COVERED over the face px). The name strip is the
+## face's own furniture: a layer living wholly under it is
+## skipped, a straddler is cropped to the strip's top edge.
+## Materials start transparent; the cascade only ever
+## writes their alpha - no texture is composited per frame.
+func _build_power_layers(panel: ClickableQuad, data: Dictionary) -> void:
+	var fitted: Vector2i = data["base_size"] as Vector2i
+	if fitted.x <= 0 or fitted.y <= 0:
+		return
+	var cover: float = maxf(float(_panel_face_px.x) / float(fitted.x), float(_panel_face_px.y) / float(fitted.y))
+	var ox: float = (float(_panel_face_px.x) - float(fitted.x) * cover) * 0.5
+	var oy: float = (float(_panel_face_px.y) - float(fitted.y) * cover) * 0.5
+	var strip_top: float = float(_panel_face_px.y - CardFace.ART_STRIP_HEIGHT_PX)
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.seed = (_power_game.game_id.hash() if _power_game != null else 12345)
+	var layers: Array = data["layers"] as Array
+	for li: int in range(layers.size()):
+		var ld: Dictionary = layers[li] as Dictionary
+		var rect: Rect2 = ld["rect"] as Rect2
+		var fr: Rect2 = Rect2(rect.position * cover + Vector2(ox, oy), rect.size * cover)
+		if fr.position.y >= strip_top or fr.size.x <= 0.0 or fr.size.y <= 0.0:
+			continue
+		var tex: Texture2D = TextureFactory.load_art_texture(str(ld["path"]))
+		if tex == null:
+			continue
+		var draw_tex: Texture2D = tex
+		if fr.end.y > strip_top:
+			# Crop the straddler at the strip: the quad
+			# shrinks to the visible part and an atlas
+			# region shows the matching top of the snippet.
+			var vf: float = (strip_top - fr.position.y) / fr.size.y
+			fr.size.y *= vf
+			var at: AtlasTexture = AtlasTexture.new()
+			at.atlas = tex
+			at.region = Rect2(0.0, 0.0, float(tex.get_width()), maxf(1.0, floor(float(tex.get_height()) * vf)))
+			draw_tex = at
+		var mi: MeshInstance3D = MeshInstance3D.new()
+		var qm: QuadMesh = QuadMesh.new()
+		qm.size = Vector2(fr.size.x / float(_panel_face_px.x) * _panel_size.x,
+			fr.size.y / float(_panel_face_px.y) * _panel_size.y)
+		mi.mesh = qm
+		var mat: StandardMaterial3D = StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		# Render AFTER the panel's face, always: transparent
+		# objects sort by origin distance, and on a tilted
+		# panel half these quads' origins sit FARTHER than
+		# the face's own - sorted naively they draw first
+		# and the face paints over them (the flicker round's
+		# field lesson, proven by screenshot forensics: only
+		# the slivers outside the silhouette showed).
+		mat.render_priority = 1
+		mat.albedo_texture = draw_tex
+		mat.albedo_color = Color(1.0, 1.0, 1.0, 0.0)
+		mi.material_override = mat
+		mi.position = Vector3(
+			(fr.get_center().x / float(_panel_face_px.x) - 0.5) * _panel_size.x,
+			(0.5 - fr.get_center().y / float(_panel_face_px.y)) * _panel_size.y,
+			0.005 + float(_power_layers.size()) * 0.0003)
+		panel.add_child(mi)
+		_power_layers.append(mi)
+		_power_mats.append(mat)
+	# The cascade schedule, from the game's own seed (the
+	# same card flickers the same way every visit): the
+	# layers draw STRATIFIED slots of the power-on window -
+	# one catch per slot, jittered inside it, the slot order
+	# shuffled so the ripple visits the glass in no spatial
+	# order. Stratification is the contract that the cascade
+	# spreads across the whole window instead of clumping
+	# wherever chance puts the draws; about a third of lamps
+	# also dip once right after catching, then hold.
+	var n_layers: int = _power_layers.size()
+	if n_layers > 0:
+		var slots: Array[int] = []
+		for si: int in range(n_layers):
+			slots.append(si)
+		for si in range(n_layers - 1, 0, -1):
+			var sj: int = rng.randi_range(0, si)
+			var tmp: int = slots[si]
+			slots[si] = slots[sj]
+			slots[sj] = tmp
+		var win_lo: float = 0.08
+		var win_hi: float = 0.70
+		var slot_w: float = (win_hi - win_lo) / float(n_layers)
+		for k: int in range(n_layers):
+			var catch_t: float = win_lo + float(slots[k]) * slot_w + rng.randf() * slot_w * 0.8
+			var on_t: float = catch_t
+			var dip_end: float = catch_t
+			if rng.randf() < 0.35:
+				dip_end = catch_t + rng.randf_range(0.05, 0.10)
+				on_t = dip_end + rng.randf_range(0.04, 0.10)
+			_power_schedule.append([catch_t, dip_end, on_t])
+
+
+## The cascade's current frame, applied: layer alphas from
+## their schedules, or the face brightness from the surge
+## curve. Runs only while a cascade is live (and once at
+## its settle) - a resting room pays nothing for the effect.
+func _apply_power() -> void:
+	if _power_panel == null:
+		return
+	if _power_mode == 1:
+		for i: int in range(_power_mats.size()):
+			var sched: Array = _power_schedule[i] as Array
+			_power_mats[i].albedo_color.a = _power_layer_alpha(sched, _power_t)
+	else:
+		_power_panel.set_face_brightness(power_brightness_at(_power_t))
+
+
+## One layer's alpha at cascade time t: dark until it
+## catches, lit, a dip back to a ghost if its schedule has
+## one, then lit for good.
+func _power_layer_alpha(sched: Array, t: float) -> float:
+	if t < float(sched[0]):
+		return 0.0
+	if t < float(sched[1]):
+		return 1.0
+	if t < float(sched[2]):
+		return 0.12
+	return 1.0
+
+
+## The brightness fallback's surge curve (pure, so the
+## shots can pin it): the POWER_BRIGHTNESS_KEYS keyframes,
+## lerped. Starts at the dark floor, catches, dips, sags
+## once more, and is fully lit from ~0.68 s to the
+## cascade's end.
+static func power_brightness_at(t: float) -> float:
+	var keys: Array = POWER_BRIGHTNESS_KEYS
+	if t <= float((keys[0] as Array)[0]):
+		return float((keys[0] as Array)[1])
+	for i: int in range(1, keys.size()):
+		var prev: Array = keys[i - 1] as Array
+		var cur: Array = keys[i] as Array
+		if t <= float(cur[0]):
+			var span: float = float(cur[0]) - float(prev[0])
+			var f: float = 0.0 if span <= 0.0 else (t - float(prev[0])) / span
+			return lerpf(float(prev[1]), float(cur[1]), f)
+	return 1.0
+
+
+## Focus left the performer (or a cancel fired): the card
+## goes back to its normal still - brightness restored,
+## layer quads freed - and the machine idles. Exactly one
+## performer ever exists, so restore is total.
+func _restore_power() -> void:
+	if _power_panel != null and is_instance_valid(_power_panel):
+		_power_panel.set_face_brightness(1.0)
+	for mi: MeshInstance3D in _power_layers:
+		if is_instance_valid(mi):
+			mi.queue_free()
+	_power_reset_state()
+
+
+## The power state, cleared WITHOUT touching any nodes -
+## for _restore_power (after it has cleaned the live ones)
+## and for wall rebuilds (where the nodes are dying anyway).
+func _power_reset_state() -> void:
+	_power_panel = null
+	_power_candidate = null
+	_power_candidate_t = 0.0
+	_power_phase = 0
+	_power_mode = 0
+	_power_t = 0.0
+	_power_game = null
+	_power_layers.clear()
+	_power_mats.clear()
+	_power_schedule.clear()
+
+
+## Power-on queries (the flicker shot reads the effect the
+## way the other smokes read theirs): the phase (0 idle,
+## 1 cascading, 2 settled lit), the performing panel, the
+## mode (0 brightness, 1 layers), the live layer count, the
+## cascade clock, and one layer's current alpha.
+func power_phase() -> int:
+	return _power_phase
+
+
+func power_panel() -> ClickableQuad:
+	return _power_panel
+
+
+func power_mode() -> int:
+	return _power_mode
+
+
+func power_layer_count() -> int:
+	return _power_layers.size()
+
+
+func power_time() -> float:
+	return _power_t
+
+
+func power_layer_alpha(i: int) -> float:
+	if i < 0 or i >= _power_mats.size():
+		return -1.0
+	return _power_mats[i].albedo_color.a
+
+
 ## Page-slide queries (the nav smoke and the slide shot read
 ## the slide the way the other smokes read their subjects):
 ## the wall holder's current yaw in degrees - 0.0 is exact
@@ -2026,6 +2452,7 @@ func _process(delta: float) -> void:
 		_request_setup_panel_render(false)
 	_update_pop(delta)
 	_update_slide(delta)
+	_update_power(delta)
 	var deaf: bool = _launching_game_id != ""
 	_joy_cooldown = maxf(0.0, _joy_cooldown - delta)
 	var ax: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)

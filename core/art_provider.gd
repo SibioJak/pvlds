@@ -351,12 +351,24 @@ static func prune_cache(keep_paths: Dictionary) -> void:
 				continue
 			if not keep_paths.has(CACHE_DIR.path_join(name)):
 				dir.remove(name)
+	# Flicker layer sets (the sibling cache): a set dies with
+	# its source - its directory is named by the same stamp the
+	# flat keep set carries.
+	var ldir: DirAccess = DirAccess.open(LAYERS_DIR)
+	if ldir != null:
+		for sub: String in ldir.get_directories():
+			if not keep_paths.has(CACHE_DIR.path_join(sub + ".png")):
+				_wipe_tree(LAYERS_DIR.path_join(sub))
 	_index_mutex.lock()
 	_load_index_locked()
 	var changed: bool = false
 	var keys: Array = _index.keys()
 	for key: Variant in keys:
-		if not keep_paths.has(CACHE_DIR.path_join(str(key) + ".png")):
+		# Layer outcomes key on "L" + stamp; their keep test is
+		# the stamp's flat path, like every other entry's.
+		var ks: String = str(key)
+		var stamp: String = ks.trim_prefix("L") if ks.begins_with("L") else ks
+		if not keep_paths.has(CACHE_DIR.path_join(stamp + ".png")):
 			_index.erase(key)
 			changed = true
 	if changed:
@@ -375,6 +387,454 @@ static func extract_directb2s_image(b2s_path: String) -> String:
 	var result: Dictionary = _extract_uncached(b2s_path, cache_path)
 	_record_outcome(b2s_path, str(result["status"]))
 	return str(result["path"])
+
+
+# ---------------------------------------------------------- flicker layers
+## The power-on flicker's raw material (the flicker round): the
+## layers a real backglass is made of, kept SEPARATE from the
+## flattened still the wall shows. A .directb2s is XML carrying a
+## base backglass image plus an <Illumination> section of <Bulb>
+## elements - each bulb has its own lit image (the Image
+## attribute) and its placement on the glass (LocX / LocY / Width
+## / Height, in the base image's pixels). The B2S server draws a
+## bulb's image over the base while its lamp is on; the wall's
+## still is the base alone. This extractor preserves the layers
+## so the focused card can do what the server does when a file
+## is opened standalone: lamps flickering on over the glass.
+##
+## A sibling cache, NOT a new art source: the art order and the
+## flat outcome semantics are untouched. Layers live under
+## user://art_cache/layers/<stamp>/ (base.png, layer_NN.png,
+## meta.json - the meta is written LAST, so its presence is the
+## set's completeness proof), keyed by the same stamp as the
+## flat cache, with outcomes recorded in the same index under a
+## layer key ("L" + stamp) gated on LAYERS_VERSION.
+## Outcomes: ok (a layer set was extracted), no_layers (the file
+## read fine and its base decoded, but it carries no usable
+## illumination layers - a plain still, or bulbs without
+## images), failed (unreadable / undecodable base). A stamped
+## negative is remembered exactly like the flat outcomes, so a
+## layerless backglass costs no repeat work.
+##
+## Bulb image shapes in the wild (Chris's own files, censused):
+## the stored image is usually exactly the bulb's rect; some
+## files store the FULL glass image for a bulb (the server crops
+## the rect out of it); a rare file stores some other size (the
+## rect is its truth - the image is scaled to it). Parent="DMD"
+## bulbs light the DMD/grill area, not the glass - excluded.
+## Dual (on/off pair) files have no per-bulb art to preserve:
+## their layer set is the single full-frame On image over the
+## Off base, which the effect drives the same way.
+##
+## The cap: real glasses carry a few dozen bulbs at most (8-30
+## in the censused files); a pathological file keeps the LARGEST
+## LAYER_CAP rects - the lamps a power-on reads by - and the
+## dropped count rides in the meta.
+
+const LAYERS_DIR: String = CACHE_DIR + "/layers"
+const LAYERS_VERSION: int = 1
+const LAYER_CAP: int = 40
+const STATUS_NO_LAYERS: String = "no_layers"
+
+
+static func layers_dir_for(b2s_path: String) -> String:
+	return LAYERS_DIR.path_join(stamp_key_for(b2s_path))
+
+
+static func layers_meta_path(b2s_path: String) -> String:
+	return layers_dir_for(b2s_path).path_join("meta.json")
+
+
+## The claim key a layer extraction of this file holds - one
+## shared registry with the flat extractions, a distinct key,
+## so a panel extracting art and a focus extracting layers
+## never claim against each other.
+static func flicker_claim_key(b2s_path: String) -> String:
+	return b2s_path + "#layers"
+
+
+## The recorded layer outcome for the file's CURRENT stamp,
+## gated on LAYERS_VERSION like outcome_for is gated on the
+## extractor's: "" when never extracted under this reader.
+static func flicker_outcome(b2s_path: String) -> String:
+	_index_mutex.lock()
+	_load_index_locked()
+	var entry: Variant = _index.get("L" + stamp_key_for(b2s_path), null)
+	_index_mutex.unlock()
+	if entry is Dictionary:
+		var d: Dictionary = entry as Dictionary
+		if int(d.get("lv", 0)) < LAYERS_VERSION:
+			return ""
+		return str(d.get("status", ""))
+	return ""
+
+
+static func is_flicker_negative(status: String) -> bool:
+	return status == STATUS_NO_LAYERS or status == STATUS_FAILED
+
+
+static func _record_flicker_outcome(b2s_path: String, status: String, layer_count: int) -> void:
+	var key: String = "L" + stamp_key_for(b2s_path)
+	_index_mutex.lock()
+	_load_index_locked()
+	var entry: Variant = _index.get(key, null)
+	if entry is Dictionary:
+		var d: Dictionary = entry as Dictionary
+		if str(d.get("status", "")) == status and int(d.get("lv", 0)) >= LAYERS_VERSION:
+			_index_mutex.unlock()
+			return
+	_index[key] = {"status": status, "src": b2s_path, "v": EXTRACTOR_VERSION, "lv": LAYERS_VERSION, "n": layer_count}
+	_save_index_locked()
+	_index_mutex.unlock()
+
+
+## A complete layer set sits in the sibling cache (meta present
+## and readable). Cheap: file probes only, no XML work.
+static func has_flicker_layers(b2s_path: String) -> bool:
+	return flicker_outcome(b2s_path) == STATUS_OK and not _read_flicker_meta(b2s_path).is_empty()
+
+
+## Wait for another thread's in-flight layer extraction of this
+## file, like await_extract: true only when the layer set now
+## exists; a recorded negative ends the wait early.
+static func await_flicker(b2s_path: String, timeout_msec: int) -> bool:
+	var deadline: int = Time.get_ticks_msec() + timeout_msec
+	while Time.get_ticks_msec() < deadline:
+		if has_flicker_layers(b2s_path):
+			return true
+		if flicker_outcome(b2s_path) != "":
+			return false
+		_claims_mutex.lock()
+		var held: bool = _claims.has(flicker_claim_key(b2s_path))
+		_claims_mutex.unlock()
+		if not held:
+			return has_flicker_layers(b2s_path)
+		OS.delay_msec(5)
+	return has_flicker_layers(b2s_path)
+
+
+## Extract (or serve from the sibling cache) the layer set of a
+## .directb2s: {status, pair, glass_size, base_size, layers}
+## where layers is [{path, rect}] with rect in FITTED base
+## coordinates (the same _fit_to_panel space the flat cache
+## stores), and base_size is the fitted base's pixel size. An
+## empty layers array always rides a non-ok status.
+static func extract_flicker_layers(b2s_path: String) -> Dictionary:
+	var meta: Dictionary = _read_flicker_meta(b2s_path)
+	if not meta.is_empty():
+		if flicker_outcome(b2s_path) != STATUS_OK:
+			_record_flicker_outcome(b2s_path, STATUS_OK, (meta.get("layers", []) as Array).size())
+		return _flicker_result(b2s_path, meta, STATUS_OK)
+	var result: Dictionary = _extract_flicker_uncached(b2s_path)
+	_record_flicker_outcome(b2s_path, str(result["status"]), (result.get("layers", []) as Array).size())
+	return result
+
+
+## The on-disk meta, validated: current version, and every file
+## it names still present (a half-written or pruned set reads
+## as no set at all, so the next extract rebuilds it whole).
+static func _read_flicker_meta(b2s_path: String) -> Dictionary:
+	var text: String = FileAccess.get_file_as_string(layers_meta_path(b2s_path))
+	if text == "":
+		return {}
+	var parsed: Variant = JSON.parse_string(text)
+	if not (parsed is Dictionary):
+		return {}
+	var meta: Dictionary = parsed as Dictionary
+	if int(meta.get("lv", 0)) < LAYERS_VERSION:
+		return {}
+	var dir: String = layers_dir_for(b2s_path)
+	if not FileAccess.file_exists(dir.path_join("base.png")):
+		return {}
+	var layers: Variant = meta.get("layers", null)
+	if not (layers is Array):
+		return {}
+	for item: Variant in layers as Array:
+		if not (item is Dictionary) or not FileAccess.file_exists(dir.path_join(str((item as Dictionary).get("file", "")))):
+			return {}
+	return meta
+
+
+static func _flicker_result(b2s_path: String, meta: Dictionary, status: String) -> Dictionary:
+	var dir: String = layers_dir_for(b2s_path)
+	var layers: Array = []
+	for item: Variant in meta.get("layers", []):
+		var ld: Dictionary = item as Dictionary
+		var r: Array = ld.get("rect", [0, 0, 0, 0]) as Array
+		layers.append({
+			"path": dir.path_join(str(ld.get("file", ""))),
+			"rect": Rect2(float(r[0]), float(r[1]), float(r[2]), float(r[3])),
+		})
+	var g: Array = meta.get("glass", [0, 0]) as Array
+	var f: Array = meta.get("fitted", [0, 0]) as Array
+	return {
+		"status": status, "pair": bool(meta.get("pair", false)),
+		"glass_size": Vector2i(int(g[0]), int(g[1])),
+		"base_size": Vector2i(int(f[0]), int(f[1])),
+		"base_path": dir.path_join("base.png"),
+		"layers": layers,
+	}
+
+
+## One real layer extraction attempt. See the section doc for
+## the format; the parsing primitives (_decode_xml_text,
+## _element_value_blobs, _decode_blob_image, _fit_to_panel) are
+## the flat extractor's own, so a file the wall shows art for
+## cannot disagree with this reader about its base.
+static func _extract_flicker_uncached(b2s_path: String) -> Dictionary:
+	var empty: Dictionary = {"status": STATUS_FAILED, "pair": false,
+		"glass_size": Vector2i.ZERO, "base_size": Vector2i.ZERO, "base_path": "", "layers": []}
+	var bytes: PackedByteArray = FileAccess.get_file_as_bytes(b2s_path)
+	if bytes.is_empty():
+		return empty
+	var text: String = _decode_xml_text(bytes)
+	if text == "":
+		return empty
+	# The base: the Off half of an on/off pair when the pair
+	# exists (the pair's layer is its On half), else the plain
+	# backglass image - the flat extractor's designated order.
+	var off_blobs: Array[String] = _element_value_blobs(text, "BackglassOffImage")
+	var on_blobs: Array[String] = _element_value_blobs(text, "BackglassOnImage")
+	var pair: bool = not off_blobs.is_empty() and not on_blobs.is_empty()
+	var base_img: Image = null
+	var designated_seen: bool = false
+	if pair:
+		designated_seen = true
+		base_img = _decode_blob_image(off_blobs[0])
+	else:
+		for blob: String in _element_value_blobs(text, "BackglassImage"):
+			designated_seen = true
+			base_img = _decode_blob_image(blob)
+			if base_img != null:
+				break
+	if base_img == null and not designated_seen:
+		# No designated element at all: the flat extractor's
+		# fallback (largest image blob in the file) is the last
+		# base candidate before this file counts as imageless.
+		for blob2: String in _base64_candidates(text):
+			base_img = _decode_blob_image(blob2)
+			if base_img != null:
+				break
+	if base_img == null:
+		# A designated image that will not decode is corruption
+		# (failed, like the flat path); no image anywhere is
+		# no_layers - the file is a fine backglass, it just has
+		# nothing for the flicker to light.
+		empty["status"] = STATUS_FAILED if designated_seen else STATUS_NO_LAYERS
+		return empty
+	var glass: Vector2i = base_img.get_size()
+	# Collect the layers in glass coordinates.
+	var raw_layers: Array = [] ## [{img, rect}]
+	if pair:
+		var on_img: Image = _decode_blob_image(on_blobs[0])
+		if on_img == null:
+			empty["status"] = STATUS_FAILED
+			return empty
+		raw_layers.append({"img": on_img, "rect": Rect2i(0, 0, glass.x, glass.y)})
+	else:
+		for bulb: Dictionary in _b2s_bulbs(text):
+			var bimg: Image = _decode_blob_image(str(bulb["blob"]))
+			if bimg == null:
+				continue ## one dead bulb never sinks the set
+			var rect: Rect2i = bulb["rect"] as Rect2i
+			var clipped: Rect2i = rect.intersection(Rect2i(0, 0, glass.x, glass.y))
+			if clipped.size.x <= 0 or clipped.size.y <= 0:
+				continue
+			raw_layers.append({"img": _layer_snippet(bimg, clipped, rect, glass), "rect": clipped})
+	if raw_layers.is_empty():
+		empty["status"] = STATUS_NO_LAYERS
+		empty["glass_size"] = glass
+		return empty
+	# The cap keeps the largest rects (see the section doc).
+	raw_layers.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var ra: Rect2i = a["rect"] as Rect2i
+		var rb: Rect2i = b["rect"] as Rect2i
+		return ra.size.x * ra.size.y > rb.size.x * rb.size.y)
+	var dropped: int = maxi(0, raw_layers.size() - LAYER_CAP)
+	if dropped > 0:
+		raw_layers.resize(LAYER_CAP)
+	# Store at fitted scale: the base through _fit_to_panel, each
+	# snippet scaled by the same factor, rects carried as floats
+	# so the room's cover mapping stays sub-pixel honest.
+	var dir: String = layers_dir_for(b2s_path)
+	_ensure_layers_dir(dir)
+	var fitted: Image = base_img.duplicate() as Image
+	_fit_to_panel(fitted)
+	if fitted.save_png(dir.path_join("base.png")) != OK:
+		return empty
+	var fit: float = float(fitted.get_width()) / float(glass.x)
+	var meta_layers: Array = []
+	for i: int in range(raw_layers.size()):
+		var rl: Dictionary = raw_layers[i]
+		var snippet: Image = (rl["img"] as Image).duplicate() as Image
+		var rect: Rect2i = rl["rect"] as Rect2i
+		if fit < 0.999:
+			snippet.resize(maxi(1, int(round(float(rect.size.x) * fit))),
+				maxi(1, int(round(float(rect.size.y) * fit))), Image.INTERPOLATE_LANCZOS)
+		var fname: String = "layer_%02d.png" % i
+		if snippet.save_png(dir.path_join(fname)) != OK:
+			return empty
+		meta_layers.append({"file": fname, "rect": [
+			float(rect.position.x) * fit, float(rect.position.y) * fit,
+			float(rect.size.x) * fit, float(rect.size.y) * fit]})
+	var meta: Dictionary = {
+		"lv": LAYERS_VERSION, "pair": pair,
+		"glass": [glass.x, glass.y], "fitted": [fitted.get_width(), fitted.get_height()],
+		"dropped": dropped, "layers": meta_layers,
+	}
+	var mf: FileAccess = FileAccess.open(dir.path_join("meta.json"), FileAccess.WRITE)
+	if mf == null:
+		return empty
+	mf.store_string(JSON.stringify(meta))
+	mf.close()
+	var result: Dictionary = _flicker_result(b2s_path, meta, STATUS_OK)
+	return result
+
+
+## The illumination bulbs of a backglass: [{rect, blob}] for
+## every <Bulb> under <Illumination> that belongs to the glass
+## itself (Parent absent or "Backglass"), is visible, and
+## carries an image. Tag-scoped attribute reads, the flat
+## extractor's tolerance style: attribute order is free, and a
+## malformed bulb is skipped, never fatal.
+static func _b2s_bulbs(text: String) -> Array:
+	var out: Array = []
+	var sec_start: int = text.find("<Illumination")
+	if sec_start < 0:
+		return out
+	var sec_end: int = text.find("</Illumination>", sec_start)
+	if sec_end < 0:
+		sec_end = text.length()
+	var from: int = sec_start
+	while true:
+		var at: int = text.find("<Bulb", from)
+		if at < 0 or at >= sec_end:
+			return out
+		var close: int = text.find(">", at)
+		if close < 0 or close > sec_end:
+			return out
+		var tag: String = text.substr(at, close - at)
+		from = close
+		var parent: String = _xml_attr(tag, "Parent")
+		if parent != "" and parent != "Backglass":
+			continue ## DMD/grill-area bulbs light a different surface
+		if _xml_attr(tag, "Visible") == "0":
+			continue
+		var rect: Rect2i = Rect2i(
+			int(_xml_attr(tag, "LocX")), int(_xml_attr(tag, "LocY")),
+			int(_xml_attr(tag, "Width")), int(_xml_attr(tag, "Height")))
+		if rect.size.x <= 0 or rect.size.y <= 0:
+			continue
+		var blob: String = _xml_unescape(_xml_attr(tag, "Image")).replace(" ", "").replace("\t", "").replace("\r", "").replace("\n", "")
+		if blob.length() < 100:
+			continue
+		out.append({"rect": rect, "blob": blob})
+	return out
+
+
+## One attribute's value from a tag's text ("" when absent).
+## The space-prefixed needle keeps a short name from matching
+## inside a longer one (" ID=" never lands inside " RomID=").
+static func _xml_attr(tag: String, attr: String) -> String:
+	var needle: String = " " + attr + "=\""
+	var at: int = tag.find(needle)
+	if at < 0:
+		return ""
+	var start: int = at + needle.length()
+	var end: int = tag.find("\"", start)
+	if end < 0:
+		return ""
+	return tag.substr(start, end - start)
+
+
+## A bulb's stored image prepared to its rect: a full-glass
+## image contributes its rect region; a rect-sized image is
+## itself; anything else is scaled to the rect (the rect is
+## the placement truth in every B2S reader).
+static func _layer_snippet(img: Image, clipped: Rect2i, full_rect: Rect2i, glass: Vector2i) -> Image:
+	if img.get_size() == glass:
+		return img.get_region(clipped)
+	if img.get_size() == full_rect.size:
+		if clipped == full_rect:
+			return img
+		# Partly off-glass: the snippet's visible part is the
+		# clipped region offset into it.
+		var off: Vector2i = clipped.position - full_rect.position
+		return img.get_region(Rect2i(off, clipped.size))
+	var scaled: Image = img.duplicate() as Image
+	scaled.resize(full_rect.size.x, full_rect.size.y, Image.INTERPOLATE_LANCZOS)
+	if clipped == full_rect:
+		return scaled
+	var off2: Vector2i = clipped.position - full_rect.position
+	return scaled.get_region(Rect2i(off2, clipped.size))
+
+
+static func _ensure_layers_dir(dir: String) -> void:
+	var root: DirAccess = DirAccess.open("user://")
+	if root != null:
+		root.make_dir_recursive(dir.trim_prefix("user://"))
+
+
+## Recursive delete of a directory tree under user:// (the
+## layer-prune's broom; missing paths are a no-op).
+static func _wipe_tree(path: String) -> void:
+	var dir: DirAccess = DirAccess.open(path)
+	if dir == null:
+		return
+	for name: String in dir.get_files():
+		dir.remove(name)
+	for sub: String in dir.get_directories():
+		_wipe_tree(path.path_join(sub))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
+## The aspects (width / height) of the art a library actually
+## shows - one sample per game, from the image it resolved to:
+## its side image, or its cached extraction. Read from file
+## headers only (no full decodes), so a wall build can consult
+## the whole library's art cheaply. Empty when no game has
+## readable art yet - the caller keeps its default proportions
+## then, and later builds re-ask as art lands.
+static func library_art_aspect_samples(games: Array[GameEntry]) -> Array[float]:
+	var aspects: Array[float] = []
+	for g: GameEntry in games:
+		var path: String = g.art_path
+		if path == "":
+			for src: String in g.art_sources():
+				if is_cached(src):
+					path = cache_path_for(src)
+					break
+		if path == "":
+			continue
+		var f: FileAccess = FileAccess.open(path, FileAccess.READ)
+		if f == null:
+			continue
+		var n: int = mini(VPX_PROBE_BYTES, int(f.get_length()))
+		var head: PackedByteArray = f.get_buffer(n)
+		f.close()
+		var dims: Vector2i = _image_dimensions(head)
+		if dims.x > 0 and dims.y > 0:
+			aspects.append(float(dims.x) / float(dims.y))
+	return aspects
+
+
+## The median of a float set (0.0 when empty).
+static func median_float(values: Array[float]) -> float:
+	if values.is_empty():
+		return 0.0
+	var sorted: Array[float] = values.duplicate()
+	sorted.sort()
+	var mid: int = sorted.size() / 2
+	if sorted.size() % 2 == 1:
+		return sorted[mid]
+	return (sorted[mid - 1] + sorted[mid]) * 0.5
+
+
+## The median aspect of the library's art (see
+## library_art_aspect_samples): 0.0 when no game has
+## readable art.
+static func library_art_median_aspect(games: Array[GameEntry]) -> float:
+	return median_float(library_art_aspect_samples(games))
 
 
 ## Extract art from any extraction source, by file kind: a

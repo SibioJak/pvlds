@@ -14,6 +14,8 @@ var art_path: String = "" ## Loadable image (side image or extracted cache file)
 var art_source_path: String = "" ## The primary extraction source not yet extracted: a same-stem .directb2s, or the .vpx itself when the game has no backglass. "" when neither exists.
 var art_vpx_path: String = "" ## The game's first build's .vpx - the embedded-image fallback source, tried when the primary source holds no usable image. Set for every game; it is the table file itself, so it always exists.
 var _art_attempted: bool = false
+var _flicker_attempted: bool = false
+var _flicker_data: Dictionary = {}
 
 
 ## Art the scan knows exists for this game - extracted or not.
@@ -96,6 +98,55 @@ func _ensure_from_source(src: String) -> String:
 		# prevented a duplicate; it does not get to prevent art.
 		return ArtProvider.extract_art_image(src)
 	return ""
+
+
+## The .directb2s whose lamp layers this game's face could
+## wear for the power-on flicker, or "" when the game has none
+## in play. Only the primary extraction source counts, and only
+## when it is a backglass: a side image outranks the backglass
+## for the face, so the scanner never records the backglass
+## beside one (see LibraryScanner._resolve_art) - layers
+## composited over a different image would sit in the wrong
+## places, so those games take the brightness fallback instead.
+## The room additionally requires the face it shows to BE this
+## backglass's extraction before it builds layer quads.
+func flicker_source() -> String:
+	if art_source_path.get_extension().to_lower() == "directb2s":
+		return art_source_path
+	return ""
+
+
+## The game's flicker layer set (ArtProvider.extract_flicker_
+## layers' dictionary), with ensure_art's claim discipline:
+## a warm sibling cache serves with no work; a stamped negative
+## (no_layers / failed) answers empty at once; a cold source is
+## claimed and extracted here, or joined if another claimant
+## (the room's focus-triggered worker) is already extracting it.
+## The result memoizes for the entry's life, like _art_attempted.
+## Safe to call from a worker thread - the room does exactly
+## that, so a first focus never pays the extraction on the
+## render thread; the ArtProvider statics it touches are
+## mutex-guarded, as the warmer's path already relies on.
+func ensure_flicker() -> Dictionary:
+	if not _flicker_data.is_empty() or _flicker_attempted:
+		return _flicker_data
+	_flicker_attempted = true
+	var src: String = flicker_source()
+	if src == "":
+		return _flicker_data
+	if ArtProvider.has_flicker_layers(src):
+		_flicker_data = ArtProvider.extract_flicker_layers(src)
+		return _flicker_data
+	if ArtProvider.is_flicker_negative(ArtProvider.flicker_outcome(src)):
+		return _flicker_data
+	var key: String = ArtProvider.flicker_claim_key(src)
+	if ArtProvider.claim_extract(key):
+		_flicker_data = ArtProvider.extract_flicker_layers(src)
+		ArtProvider.release_extract(key)
+		return _flicker_data
+	if ArtProvider.await_flicker(src, CLAIM_WAIT_MSEC):
+		_flicker_data = ArtProvider.extract_flicker_layers(src)
+	return _flicker_data
 
 
 func build_count() -> int:

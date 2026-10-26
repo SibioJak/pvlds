@@ -240,6 +240,22 @@ var _shot_pop_phase: int = -1
 var _shot_pop_frames: int = 0
 var _shot_pop_panel: ClickableQuad = null
 var _shot_pop_since_msec: int = 0
+var _shot_flicker_prefix: String = "" ## --pvlds-shot-flicker PREFIX: the power-on flicker's QA hook (needs the harness's bulb fixture folder)
+var _shot_flicker_phase: int = -1
+var _shot_flicker_frames: int = 0
+var _shot_flicker_panel: ClickableQuad = null ## the bulb-bearing fixture card (layers leg)
+var _shot_flicker_panel2: ClickableQuad = null ## a title-card panel (brightness fallback leg)
+var _shot_flicker_since: int = 0
+var _shot_flicker_counts: Array[int] = [] ## amber pixel counts across the layers cascade: [base, mid, lit]
+var _shot_flicker_burst: Array[Image] = [] ## frames grabbed across the layers cascade, counted after settle (readbacks lag state under software rendering; the burst spans the lag)
+var _shot_flicker_t0: int = 0 ## when the layers cascade was first seen
+var _shot_flicker_next_grab: int = 0 ## next burst grab time
+var _shot_flicker_min_b: float = 1.0 ## darkest face brightness seen during the fallback cascade
+var _shot_flicker_min_mean: float = -1.0 ## darkest rendered mean luminance inside the fallback card's rect during its cascade
+var _shot_flicker_problems: Array[String] = []
+var _shot_flicker_stage: int = 0 ## sub-state inside the current phase
+var _shot_flicker_game: GameEntry = null ## the bulb-bearing fixture game
+var _shot_flicker_saw_partial: bool = false ## a frame with some-but-not-all layers lit was observed
 var _art_bench: bool = false ## --pvlds-art-bench: dev measurement route (cold/warm page-fill timings)
 var _bench_phase: int = -1
 var _bench_t_room: int = 0
@@ -275,6 +291,10 @@ func _ready() -> void:
 	if shot_slide_idx >= 0 and shot_slide_idx + 1 < user_args.size():
 		_shot_slide_path = user_args[shot_slide_idx + 1]
 		_shot_slide_phase = 0
+	var shot_flicker_idx: int = user_args.find("--pvlds-shot-flicker")
+	if shot_flicker_idx >= 0 and shot_flicker_idx + 1 < user_args.size():
+		_shot_flicker_prefix = user_args[shot_flicker_idx + 1]
+		_shot_flicker_phase = 0
 	if user_args.has("--pvlds-smoke-placard"):
 		_smoke_placard = true
 	if user_args.has("--pvlds-smoke-setup-panel"):
@@ -330,7 +350,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _shot_pop_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "") and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _shot_pop_prefix != "" or _shot_flicker_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "") and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -471,6 +491,8 @@ func _process(_delta: float) -> void:
 		_drive_shot_pop()
 	if _shot_slide_phase >= 0:
 		_drive_shot_slide()
+	if _shot_flicker_phase >= 0:
+		_drive_shot_flicker()
 	if _shot_path != "" and _shot_ready():
 		_shot_frames += 1
 		if _shot_frames >= 8:
@@ -868,9 +890,10 @@ func _poll_shot_launch() -> void:
 ## PREFIX_flush.png (every card flush), then focuses the middle
 ## card through the room's own focus path, waits for the pop to
 ## complete, asserts the transform evidence (the focused card
-## sits POP_OUT_DISTANCE off the wall at POP_OUT_SCALE, its
-## neighbour untouched, the pop target is the focused card),
-## saves PREFIX_popped.png, prints the verdict, quits.
+## sits POP_OUT_DISTANCE off the wall at the room's full-pop
+## scale for its art, its neighbour untouched, the pop target
+## is the focused card), saves PREFIX_popped.png, prints the
+## verdict, quits.
 func _drive_shot_pop() -> void:
 	match _shot_pop_phase:
 		0:
@@ -905,8 +928,14 @@ func _drive_shot_pop() -> void:
 			var off: Vector3 = _room.panel_pop_offset(_shot_pop_panel)
 			if absf(off.length() - RoomView.POP_OUT_DISTANCE) > 0.01:
 				problems.append("offset length %.4f, want %.2f" % [off.length(), RoomView.POP_OUT_DISTANCE])
-			if absf(_shot_pop_panel.scale.x - RoomView.POP_OUT_SCALE) > 0.01:
-				problems.append("scale %.3f, want %.2f" % [_shot_pop_panel.scale.x, RoomView.POP_OUT_SCALE])
+			# The scale contract is the room's own full-pop
+			# seam: uniform POP_OUT_SCALE for a card with no
+			# art aspect, the true-aspect grow for one with
+			# (the sizing round changed the contract on
+			# purpose - Chris's "sizing to proper size").
+			var full: Vector2 = _room.panel_full_pop_scale(_shot_pop_panel)
+			if absf(_shot_pop_panel.scale.x - full.x) > 0.01 or absf(_shot_pop_panel.scale.y - full.y) > 0.01:
+				problems.append("scale %.3f/%.3f, want %.3f/%.3f" % [_shot_pop_panel.scale.x, _shot_pop_panel.scale.y, full.x, full.y])
 			if _room.pop_target() != _shot_pop_panel:
 				problems.append("pop target is not the focused panel")
 			var pidx: int = _room._panels.find(_shot_pop_panel)
@@ -922,6 +951,277 @@ func _drive_shot_pop() -> void:
 			else:
 				printerr("PVLDS POP SHOT: FAIL - ", "; ".join(PackedStringArray(problems)))
 				get_tree().quit(1)
+
+
+## Amber-ish pixel count inside a panel's screen rect - the
+## flicker shot's visible-evidence measure (the fixture bulbs
+## are amber; the unlit glass and the room are not).
+func _flicker_amber_count(q: ClickableQuad) -> int:
+	return _flicker_amber_count_img(q, get_viewport().get_texture().get_image())
+
+
+## The count over a GIVEN frame (the burst analysis counts
+## frames it grabbed earlier; the panel's rect is read live,
+## valid while the panel stands popped and focused).
+func _flicker_amber_count_img(q: ClickableQuad, img: Image) -> int:
+	# The viewport's ACTIVE camera: the desk camera's rects are
+	# only ever read relatively (the nav clearance legs); pixel
+	# sampling needs the projection the frame was rendered with.
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	if cam == null:
+		return -1
+	var rect: Rect2 = _nav_screen_rect(q, cam)
+	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
+	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
+	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
+	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
+	var n: int = 0
+	var y: int = y0
+	while y < y1:
+		var x: int = x0
+		while x < x1:
+			var px: Color = img.get_pixel(x, y)
+			if px.r > 0.72 and px.g > 0.42 and px.g < 0.92 and px.b < 0.45 and px.r > px.b + 0.3:
+				n += 1
+			x += 2
+		y += 2
+	return n
+
+
+## Mean luminance inside a panel's screen rect - the
+## fallback leg's rendered evidence (a surging face darkens
+## the whole rect measurably, whatever its art).
+func _flicker_rect_mean(q: ClickableQuad) -> float:
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	if cam == null:
+		return -1.0
+	var rect: Rect2 = _nav_screen_rect(q, cam)
+	var img: Image = get_viewport().get_texture().get_image()
+	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
+	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
+	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
+	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
+	if x1 <= x0 or y1 <= y0:
+		return -1.0
+	var sum: float = 0.0
+	var n: int = 0
+	var y: int = y0
+	while y < y1:
+		var x: int = x0
+		while x < x1:
+			var px: Color = img.get_pixel(x, y)
+			sum += px.r * 0.3 + px.g * 0.5 + px.b * 0.2
+			n += 1
+			x += 3
+		y += 3
+	return sum / float(maxi(1, n))
+
+
+func _flicker_finish() -> void:
+	_shot_flicker_phase = -1
+	if _shot_flicker_problems.is_empty():
+		print("PVLDS FLICKER SHOT: PASS counts=", _shot_flicker_counts, " min_brightness=", snappedf(_shot_flicker_min_b, 0.01))
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS FLICKER SHOT: FAIL - ", "; ".join(PackedStringArray(_shot_flicker_problems)))
+		get_tree().quit(1)
+
+
+## --pvlds-shot-flicker PREFIX: the power-on flicker's QA
+## hook (the flicker round). Needs the harness's bulb-bearing
+## fixture folder (its config names the folder beside the
+## dummy library): a "Flicker Wide" table whose .directb2s
+## carries five visible amber bulbs over a dark glass (one
+## straddling the name strip, one wholly beneath it). Legs:
+## (1) a fast focus pass never starts a power-on (the settle
+## debounce); (2) settled focus on the fixture card runs the
+## LAYER cascade - sampled frames go dark -> partial -> lit
+## with strictly rising amber counts, five layer quads (the
+## sub-strip bulb skipped), and the popped card stands at
+## its art's true aspect; (3) a title card runs the
+## brightness fallback on the same trigger (face dips dark,
+## ends at full); (4) opening the detail view mid-cascade
+## cancels cleanly. Saves PREFIX_base/mid/lit.png.
+func _drive_shot_flicker() -> void:
+	var now: int = Time.get_ticks_msec()
+	if now - _shot_flicker_since > 90000 and _shot_flicker_phase > 0:
+		_shot_flicker_problems.append("timed out in phase %d" % _shot_flicker_phase)
+		_flicker_finish()
+		return
+	match _shot_flicker_phase:
+		0:
+			if _room == null or not _room.visible or not _room.wall_ready or _scanner == null:
+				return
+			if _shot_flicker_stage == 0:
+				_room._handle_rail("filter:all")
+				_shot_flicker_stage = 1
+				return
+			if _shot_flicker_game == null:
+				for g: GameEntry in _scanner.games:
+					if g.title.begins_with("Flicker Wide"):
+						_shot_flicker_game = g
+						break
+			if _shot_flicker_game == null:
+				if not _scan_active:
+					_shot_flicker_problems.append("the Flicker Wide fixture game is not in the library (the harness config names its folder)")
+					_flicker_finish()
+				return
+			for p: ClickableQuad in _room._panels:
+				if p.payload == _shot_flicker_game.game_id:
+					_shot_flicker_panel = p
+				elif p.payload == "dg-cinder-peak":
+					_shot_flicker_panel2 = p
+			if _shot_flicker_panel == null or _shot_flicker_panel2 == null:
+				var payloads: Array = []
+				for p2: ClickableQuad in _room._panels:
+					payloads.append(p2.payload)
+				_shot_flicker_problems.append("fixture/title panels not on the wall (flicker=%s title=%s) panels=%s" % [_shot_flicker_panel != null, _shot_flicker_panel2 != null, str(payloads)])
+				_flicker_finish()
+				return
+			var data: Dictionary = _shot_flicker_game.ensure_flicker()
+			if (data.get("layers", []) as Array).is_empty():
+				_shot_flicker_problems.append("the fixture game's layer set did not extract")
+				_flicker_finish()
+				return
+			_room._set_focused(_shot_flicker_panel)
+			_shot_flicker_frames = 0
+			_shot_flicker_since = now
+			_shot_flicker_phase = 1
+		1:
+			# Debounce leg: a ~90 ms rest on the fixture card
+			# (well inside the settle window, and time-based -
+			# a frame count would straddle the window at
+			# software-render frame rates), then focus moves
+			# on. The passed card may never perform (the card
+			# focus lands on may - it gets its own settle;
+			# that is the next legs' business, and phase 2's
+			# focus change restores it).
+			_shot_flicker_frames += 1
+			if _room.power_panel() == _shot_flicker_panel:
+				_shot_flicker_problems.append("a fast focus pass started a power-on on the passed card (debounce failed)")
+				_flicker_finish()
+				return
+			if now - _shot_flicker_since > 90 and _shot_flicker_frames >= 1:
+				_room._set_focused(_shot_flicker_panel2)
+			if now - _shot_flicker_since > 450:
+				_shot_flicker_counts.clear()
+				_shot_flicker_saw_partial = false
+				_room._set_focused(_shot_flicker_panel)
+				_shot_flicker_since = now
+				_shot_flicker_phase = 2
+		2:
+			# Layers leg: grab a BURST of frames on a wall-
+			# clock cadence across the cascade and past its
+			# settle, then count them all once the pressure
+			# is off. Rendered readbacks lag the room's state
+			# by several frames under software rendering, so
+			# no single triggered sample can be trusted to
+			# land mid-cascade - but a burst spanning the
+			# lag must contain the dark -> partial -> lit arc
+			# if the effect truly renders as a cascade.
+			var ph: int = _room.power_phase()
+			if ph == 1 or (ph == 2 and _shot_flicker_t0 > 0 and now < _shot_flicker_t0 + 1900):
+				if ph == 1:
+					var lit_n: int = 0
+					for li: int in range(_room.power_layer_count()):
+						if _room.power_layer_alpha(li) > 0.5:
+							lit_n += 1
+					if lit_n > 0 and lit_n < _room.power_layer_count():
+						_shot_flicker_saw_partial = true
+					if _shot_flicker_t0 == 0:
+						_shot_flicker_t0 = now
+						_shot_flicker_next_grab = now
+				if _shot_flicker_t0 > 0 and now >= _shot_flicker_next_grab:
+					_shot_flicker_burst.append(get_viewport().get_texture().get_image())
+					_shot_flicker_next_grab = now + 130
+			elif ph == 2 and _shot_flicker_t0 > 0:
+				var series: Array[int] = []
+				for fimg: Image in _shot_flicker_burst:
+					series.append(_flicker_amber_count_img(_shot_flicker_panel, fimg))
+				var base_c: int = series[0] if series.size() > 0 else -1
+				var lit_c: int = series[series.size() - 1] if series.size() > 0 else -1
+				var mid_c: int = -1
+				var mid_idx: int = -1
+				for si: int in range(series.size()):
+					if series[si] > base_c and series[si] < lit_c and (mid_idx < 0 or abs(series[si] - (base_c + lit_c) / 2) < abs(mid_c - (base_c + lit_c) / 2)):
+						mid_c = series[si]
+						mid_idx = si
+				_shot_flicker_counts = [base_c, mid_c, lit_c]
+				if not _shot_flicker_burst.is_empty():
+					_shot_flicker_burst[0].save_png(_shot_flicker_prefix + "_base.png")
+					_shot_flicker_burst[_shot_flicker_burst.size() - 1].save_png(_shot_flicker_prefix + "_lit.png")
+				if mid_idx >= 0:
+					_shot_flicker_burst[mid_idx].save_png(_shot_flicker_prefix + "_mid.png")
+				if _room.power_mode() != 1:
+					_shot_flicker_problems.append("the B2S-backed card did not use its lamp layers (mode %d)" % _room.power_mode())
+				if _room.power_layer_count() != 5:
+					_shot_flicker_problems.append("layer quads %d, want 5 (sixth bulb lives under the name strip)" % _room.power_layer_count())
+				if not _shot_flicker_saw_partial:
+					_shot_flicker_problems.append("no partial-lit state observed - the cascade read as a switch, not a cascade")
+				if base_c < 0 or lit_c < base_c + 100:
+					_shot_flicker_problems.append("the lit card is not visibly brighter than the unlit base (base %d, lit %d)" % [base_c, lit_c])
+				if mid_c <= base_c or mid_c >= lit_c:
+					_shot_flicker_problems.append("no rendered partial frame between dark and lit (series %s)" % str(series))
+				var asp: float = _room.panel_art_aspect(_shot_flicker_panel)
+				if absf(asp - 1.25) > 0.03:
+					_shot_flicker_problems.append("fixture art aspect %.3f, want 1.25" % asp)
+				var full: Vector2 = _room.panel_full_pop_scale(_shot_flicker_panel)
+				if absf(_shot_flicker_panel.scale.x - full.x) > 0.02 or absf(_shot_flicker_panel.scale.y - full.y) > 0.02:
+					_shot_flicker_problems.append("popped scale %s, want %s (true-aspect pop)" % [str(_shot_flicker_panel.scale), str(full)])
+				_shot_flicker_min_b = 1.0
+				_shot_flicker_min_mean = -1.0
+				_room._set_focused(_shot_flicker_panel2)
+				_shot_flicker_since = now
+				_shot_flicker_phase = 3
+			elif now - _shot_flicker_since > 10000:
+				_shot_flicker_problems.append("the layers cascade never ran")
+				_flicker_finish()
+		3:
+			# Fallback leg: the title card surges its face.
+			# Evidence is twofold - the face-brightness state
+			# AND the rendered mean luminance in the card's
+			# rect (the surge darkens the whole face, so the
+			# mean must dip against its resting value).
+			var ph2: int = _room.power_phase()
+			if ph2 == 1 and _room.power_panel() == _shot_flicker_panel2:
+				_shot_flicker_min_b = minf(_shot_flicker_min_b, _shot_flicker_panel2.face_brightness())
+				var m: float = _flicker_rect_mean(_shot_flicker_panel2)
+				if m >= 0.0 and (_shot_flicker_min_mean < 0.0 or m < _shot_flicker_min_mean):
+					_shot_flicker_min_mean = m
+			elif ph2 == 2 and _room.power_panel() == _shot_flicker_panel2:
+				# The honest denominator: the same card, in the
+				# same popped geometry, at full brightness.
+				var end_mean: float = _flicker_rect_mean(_shot_flicker_panel2)
+				if _room.power_mode() != 0:
+					_shot_flicker_problems.append("the title card did not use the brightness fallback (mode %d)" % _room.power_mode())
+				if _shot_flicker_min_b > 0.85:
+					_shot_flicker_problems.append("the fallback's face never dipped (min brightness %.2f)" % _shot_flicker_min_b)
+				if _shot_flicker_min_mean < 0.0 or end_mean <= 0.0 or _shot_flicker_min_mean > end_mean * 0.8:
+					_shot_flicker_problems.append("the fallback's rendered face never darkened (min mean %.3f, settled mean %.3f)" % [_shot_flicker_min_mean, end_mean])
+				if absf(_shot_flicker_panel2.face_brightness() - 1.0) > 0.001:
+					_shot_flicker_problems.append("the fallback did not end at full brightness (%.3f)" % _shot_flicker_panel2.face_brightness())
+				_room._set_focused(_shot_flicker_panel)
+				_shot_flicker_since = now
+				_shot_flicker_phase = 4
+			elif now - _shot_flicker_since > 10000:
+				_shot_flicker_problems.append("the fallback cascade never ran")
+				_flicker_finish()
+		4:
+			# Cancel leg: detail opens mid-cascade; the
+			# performer restores in the same breath.
+			if _room.power_phase() == 1 and _room.power_layer_count() > 0:
+				_room._open_detail(_shot_flicker_game)
+				_shot_flicker_stage = 2
+				_shot_flicker_since = now
+			elif _shot_flicker_stage == 2 and now - _shot_flicker_since > 120:
+				if _room.power_phase() != 0 or _room.power_layer_count() != 0:
+					_shot_flicker_problems.append("opening detail did not cancel the cascade (phase %d, layers %d)" % [_room.power_phase(), _room.power_layer_count()])
+				if absf(_shot_flicker_panel.face_brightness() - 1.0) > 0.001:
+					_shot_flicker_problems.append("the cancelled card's face did not restore to full brightness")
+				_flicker_finish()
+			elif _shot_flicker_stage != 2 and now - _shot_flicker_since > 10000:
+				_shot_flicker_problems.append("the cancel leg's cascade never started")
+				_flicker_finish()
 
 
 func _save_shot_png(path: String) -> Error:
@@ -3034,6 +3334,31 @@ func _zero_bytes(n: int) -> PackedByteArray:
 	return b
 
 
+## Base64 of an image's PNG bytes, wrapped at 76 characters
+## with the CRLF stored as entities - the exact storage shape
+## real designer .directb2s files use (the flicker fixtures
+## ride it so the layer reader faces the real file, escapes
+## and all).
+func _b2s_wrap_b64(img: Image) -> String:
+	var raw: String = Marshalls.raw_to_base64(img.save_png_to_buffer())
+	var wrapped: String = ""
+	var wi: int = 0
+	while wi < raw.length():
+		if wi > 0:
+			wrapped += "&#xD;&#xA;"
+		wrapped += raw.substr(wi, 76)
+		wi += 76
+	return wrapped
+
+
+## One <Bulb> element in the real file's shape: placement
+## rect in glass pixels, visibility, parent surface, and the
+## lit snippet as the entity-wrapped Image attribute.
+func _b2s_bulb_xml(parent_name: String, vis: String, x: int, y: int, w: int, h: int, img: Image) -> String:
+	var par: String = (" Parent=\"%s\"" % parent_name) if parent_name != "" else ""
+	return "<Bulb%s ID=\"7\" Name=\"Lamp\" RomID=\"3\" RomIDType=\"Lamp\" RomInverted=\"0\" InitialState=\"0\" DualMode=\"0\" Intensity=\"5\" LightColor=\"255, 200, 60\" DodgeColor=\"0, 0, 0\" Visible=\"%s\" LocX=\"%d\" LocY=\"%d\" Width=\"%d\" Height=\"%d\" IsImageSnippit=\"1\" Image=\"%s\" />" % [par, vis, x, y, w, h, _b2s_wrap_b64(img)]
+
+
 ## Recursive delete of a core-test fixture tree (absolute OS
 ## path). Missing paths are a no-op, so a test can wipe before
 ## building its fixtures and again when it is done with them.
@@ -3832,6 +4157,148 @@ func _run_core_test() -> void:
 	var after_entry: Variant = after_idx.get(mig_key, null)
 	_expect(after_entry is Dictionary and int((after_entry as Dictionary).get("v", 0)) == ArtProvider.EXTRACTOR_VERSION,
 		"the retried entry is stamped with the current extractor version", failures)
+
+	# --- Flicker layers (flicker round): the B2S lamp layers
+	# the power-on plays, preserved beside the flattened still.
+	# Fixtures are built from the REAL .directb2s structure:
+	# base image in <Images>, bulbs under <Illumination> with
+	# entity-wrapped base64 snippets and glass-pixel rects.
+	var fl_solid: Callable = func(w: int, h: int, c: Color) -> Image:
+		var im: Image = Image.create(w, h, false, Image.FORMAT_RGBA8)
+		im.fill(c)
+		return im
+	var fl_glass: Image = fl_solid.call(1000, 800, Color(0.06, 0.08, 0.19)) as Image
+	var amber_img: Image = fl_solid.call(300, 120, Color(1.0, 0.75, 0.16)) as Image
+	var fl_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(fl_glass.save_png_to_buffer()) + "\" /></Images><Illumination>"
+	fl_text += _b2s_bulb_xml("Backglass", "1", 60, 60, 300, 120, amber_img)
+	fl_text += _b2s_bulb_xml("Backglass", "1", 420, 60, 300, 120, amber_img)
+	fl_text += _b2s_bulb_xml("Backglass", "1", 60, 300, 300, 120, amber_img)
+	fl_text += _b2s_bulb_xml("DMD", "1", 10, 10, 100, 50, amber_img)
+	fl_text += _b2s_bulb_xml("Backglass", "0", 500, 500, 100, 100, amber_img)
+	fl_text += "</Illumination></DirectB2SData>"
+	var b2s_fl: String = art_dir.path_join("Layered Table.directb2s")
+	_expect(_write_text_file(b2s_fl, fl_text), "layered fixture written", failures)
+	var fl: Dictionary = ArtProvider.extract_flicker_layers(b2s_fl)
+	_expect(str(fl["status"]) == ArtProvider.STATUS_OK and not bool(fl["pair"]),
+		"a layered backglass extracts its layers (status ok, not a pair)", failures)
+	_expect((fl["glass_size"] as Vector2i) == Vector2i(1000, 800) and (fl["base_size"] as Vector2i) == Vector2i(512, 410),
+		"layer extraction reports the glass size and the fitted base size (1000x800 -> 512x410)", failures)
+	var fl_layers: Array = fl["layers"] as Array
+	_expect(fl_layers.size() == 3,
+		"three glass bulbs become layers - the DMD-parent and Visible=0 bulbs are excluded (%d)" % fl_layers.size(), failures)
+	var fl_expect: Array = [[30.72, 30.72, 153.6, 61.44], [215.04, 30.72, 153.6, 61.44], [30.72, 153.6, 153.6, 61.44]]
+	var fl_rects_ok: bool = fl_layers.size() == 3
+	for fe: Variant in fl_expect:
+		var fea: Array = fe as Array
+		var found: bool = false
+		for fl_item: Variant in fl_layers:
+			var rr: Rect2 = (fl_item as Dictionary)["rect"] as Rect2
+			if absf(rr.position.x - float(fea[0])) < 0.2 and absf(rr.position.y - float(fea[1])) < 0.2 \
+					and absf(rr.size.x - float(fea[2])) < 0.2 and absf(rr.size.y - float(fea[3])) < 0.2:
+				found = true
+		fl_rects_ok = fl_rects_ok and found
+	_expect(fl_rects_ok, "layer rects are carried in fitted coordinates (glass px x 0.512)", failures)
+	_expect(ArtProvider.has_flicker_layers(b2s_fl) and ArtProvider.flicker_outcome(b2s_fl) == ArtProvider.STATUS_OK,
+		"the layer set reads back as a warm cache hit with an ok outcome", failures)
+	var fl_meta_text: String = FileAccess.get_file_as_string(ArtProvider.layers_meta_path(b2s_fl))
+	var fl2: Dictionary = ArtProvider.extract_flicker_layers(b2s_fl)
+	_expect((fl2["layers"] as Array).size() == 3 and FileAccess.get_file_as_string(ArtProvider.layers_meta_path(b2s_fl)) == fl_meta_text,
+		"a second extraction serves the sibling cache untouched (extracted once)", failures)
+	var fl_entry: GameEntry = GameEntry.new()
+	fl_entry.art_source_path = b2s_fl
+	_expect(fl_entry.flicker_source() == b2s_fl and (fl_entry.ensure_flicker()["layers"] as Array).size() == 3,
+		"GameEntry.ensure_flicker serves the layer set under the claim discipline", failures)
+	var fl_side_entry: GameEntry = GameEntry.new()
+	fl_side_entry.art_path = art_dir.path_join("side.png")
+	_expect(fl_side_entry.flicker_source() == "" and fl_side_entry.ensure_flicker().is_empty(),
+		"a side-image game has no flicker layers (the brightness fallback's country)", failures)
+	# A full-glass-sized bulb image: the layer is its rect region.
+	var full_glass: Image = fl_solid.call(400, 500, Color(1.0, 0.75, 0.16)) as Image
+	var fg_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64((fl_solid.call(400, 500, Color(0.05, 0.05, 0.1)) as Image).save_png_to_buffer()) + "\" /></Images><Illumination>"
+	fg_text += _b2s_bulb_xml("Backglass", "1", 100, 100, 200, 150, full_glass)
+	fg_text += "</Illumination></DirectB2SData>"
+	var b2s_fg: String = art_dir.path_join("Full Glass Bulb Table.directb2s")
+	_expect(_write_text_file(b2s_fg, fg_text), "full-glass bulb fixture written", failures)
+	var fg: Dictionary = ArtProvider.extract_flicker_layers(b2s_fg)
+	var fg_layers: Array = fg["layers"] as Array
+	var fg_img: Image = Image.new()
+	_expect(fg_layers.size() == 1 and fg_img.load(str((fg_layers[0] as Dictionary)["path"])) == OK
+		and fg_img.get_size() == Vector2i(200, 150),
+		"a full-glass bulb image is cropped to its rect (200x150 layer)", failures)
+	var fg_px: Color = fg_img.get_pixel(100, 75)
+	_expect(fg_px.r > 0.9 and fg_px.g > 0.6 and fg_px.g < 0.85 and fg_px.b < 0.3,
+		"the cropped layer carries the bulb's lit art (amber)", failures)
+	# An on/off pair: base is the Off image, the one layer is the
+	# full-frame On image.
+	var pair_off2: Image = fl_solid.call(400, 500, Color(0.04, 0.04, 0.08)) as Image
+	var pair_on2: Image = fl_solid.call(400, 500, Color(1.0, 0.75, 0.16)) as Image
+	var b2s_fl_pair: String = art_dir.path_join("Flicker Pair Table.directb2s")
+	_expect(_write_text_file(b2s_fl_pair, "<DirectB2SData><Images><BackglassOffImage Value=\"" + Marshalls.raw_to_base64(pair_off2.save_png_to_buffer()) + "\" /><BackglassOnImage Value=\"" + Marshalls.raw_to_base64(pair_on2.save_png_to_buffer()) + "\" /></Images></DirectB2SData>"),
+		"pair fixture written", failures)
+	var flp: Dictionary = ArtProvider.extract_flicker_layers(b2s_fl_pair)
+	var flp_layers: Array = flp["layers"] as Array
+	_expect(bool(flp["pair"]) and flp_layers.size() == 1 and ((flp_layers[0] as Dictionary)["rect"] as Rect2) == Rect2(0, 0, 400, 500),
+		"an on/off pair yields base + one full-frame lit layer", failures)
+	# No illumination at all: a plain still, stamped no_layers.
+	var b2s_fl_none: String = art_dir.path_join("Plain Table.directb2s")
+	_expect(_write_text_file(b2s_fl_none, "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(pair_off2.save_png_to_buffer()) + "\" /></Images><Illumination></Illumination></DirectB2SData>"),
+		"layerless fixture written", failures)
+	_expect(str(ArtProvider.extract_flicker_layers(b2s_fl_none)["status"]) == ArtProvider.STATUS_NO_LAYERS
+		and ArtProvider.flicker_outcome(b2s_fl_none) == ArtProvider.STATUS_NO_LAYERS
+		and not ArtProvider.has_flicker_layers(b2s_fl_none),
+		"a backglass without usable bulbs stamps no_layers (remembered, not retried)", failures)
+	# A designated base that will not decode: failed, even with
+	# healthy bulbs riding along.
+	var bad_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(_zero_bytes(300)) + "\" /></Images><Illumination>"
+	bad_text += _b2s_bulb_xml("Backglass", "1", 60, 60, 300, 120, amber_img)
+	bad_text += "</Illumination></DirectB2SData>"
+	var b2s_fl_bad: String = art_dir.path_join("Corrupt Layers Table.directb2s")
+	_expect(_write_text_file(b2s_fl_bad, bad_text), "corrupt-base fixture written", failures)
+	_expect(str(ArtProvider.extract_flicker_layers(b2s_fl_bad)["status"]) == ArtProvider.STATUS_FAILED
+		and ArtProvider.is_flicker_negative(ArtProvider.flicker_outcome(b2s_fl_bad)),
+		"an undecodable base stamps the layer extraction failed", failures)
+	# The cap: 45 bulbs in rising sizes keeps the largest 40.
+	var cap_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(fl_glass.save_png_to_buffer()) + "\" /></Images><Illumination>"
+	for ci: int in range(45):
+		var cw: int = 10 + ci
+		cap_text += _b2s_bulb_xml("Backglass", "1", (ci % 9) * 110, (ci / 9) * 160, cw, 20, fl_solid.call(cw, 20, Color(1.0, 0.75, 0.16)) as Image)
+	cap_text += "</Illumination></DirectB2SData>"
+	var b2s_cap: String = art_dir.path_join("Many Bulbs Table.directb2s")
+	_expect(_write_text_file(b2s_cap, cap_text), "cap fixture written", failures)
+	var cap: Dictionary = ArtProvider.extract_flicker_layers(b2s_cap)
+	var cap_layers: Array = cap["layers"] as Array
+	var cap_min_w: float = 1e9
+	for cap_item: Variant in cap_layers:
+		cap_min_w = minf(cap_min_w, ((cap_item as Dictionary)["rect"] as Rect2).size.x)
+	var cap_meta: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.layers_meta_path(b2s_cap)))
+	_expect(cap_layers.size() == ArtProvider.LAYER_CAP and cap_min_w > 7.6
+		and cap_meta is Dictionary and int((cap_meta as Dictionary).get("dropped", 0)) == 5,
+		"45 bulbs cap at %d layers, the largest kept, the drop counted in the meta" % ArtProvider.LAYER_CAP, failures)
+	# The library's median art aspect (sizing half (a)'s input).
+	var med_paths: Array[String] = []
+	for mi2: int in range(3):
+		var mp: String = art_dir.path_join("median_%d.png" % mi2)
+		var mdims: Array = [[512, 640], [400, 500], [300, 600]][mi2]
+		(fl_solid.call(int(mdims[0]), int(mdims[1]), Color(0.2, 0.2, 0.2)) as Image).save_png(mp)
+		med_paths.append(mp)
+	var med_games: Array[GameEntry] = []
+	for mp2: String in med_paths:
+		var mg: GameEntry = GameEntry.new()
+		mg.art_path = mp2
+		med_games.append(mg)
+	_expect(absf(ArtProvider.library_art_median_aspect(med_games) - 0.8) < 0.001,
+		"the median art aspect comes from the library's own art (0.5, 0.8, 0.8 -> 0.8)", failures)
+	_expect(ArtProvider.library_art_median_aspect([]) == 0.0,
+		"no readable art, no median (the caller keeps its default proportions)", failures)
+	# Prune: a layer set dies with its source. The keep set
+	# names only the layered fixture's flat path, so the pair
+	# fixture's set and outcome must go, and its own survive.
+	var keep_map: Dictionary = {ArtProvider.cache_path_for(b2s_fl): true}
+	ArtProvider.prune_cache(keep_map)
+	_expect(ArtProvider.has_flicker_layers(b2s_fl),
+		"prune keeps the layer set of a library source", failures)
+	_expect(not FileAccess.file_exists(ArtProvider.layers_meta_path(b2s_fl_pair)) and ArtProvider.flicker_outcome(b2s_fl_pair) == "",
+		"prune removes an orphaned layer set and its outcome", failures)
 
 	# --- Embedded art: images extracted from inside .vpx files.
 	# The fixtures are REAL compound files written by
