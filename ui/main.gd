@@ -256,6 +256,9 @@ var _shot_flicker_problems: Array[String] = []
 var _shot_flicker_stage: int = 0 ## sub-state inside the current phase
 var _shot_flicker_game: GameEntry = null ## the bulb-bearing fixture game
 var _shot_flicker_saw_partial: bool = false ## a frame with some-but-not-all layers lit was observed
+var _shot_flicker_fixtures: Dictionary = {} ## fix-round legs: fixture title prefix -> {"game": GameEntry, "panel": ClickableQuad}
+var _shot_flicker_spill: int = -1 ## fix round: cascade-driven amber change OUTSIDE the face across the burst (max-min), -1 until measured
+var _shot_flicker_armed: bool = false ## fix-round legs: the current leg's focus has been set
 var _art_bench: bool = false ## --pvlds-art-bench: dev measurement route (cold/warm page-fill timings)
 var _bench_phase: int = -1
 var _bench_t_room: int = 0
@@ -980,8 +983,52 @@ func _flicker_amber_count_img(q: ClickableQuad, img: Image) -> int:
 	while y < y1:
 		var x: int = x0
 		while x < x1:
-			var px: Color = img.get_pixel(x, y)
-			if px.r > 0.72 and px.g > 0.42 and px.g < 0.92 and px.b < 0.45 and px.r > px.b + 0.3:
+			if _flicker_is_amber(img.get_pixel(x, y)):
+				n += 1
+			x += 2
+		y += 2
+	return n
+
+
+## The amber test itself, shared by the in-rect count and
+## the spill measure below.
+func _flicker_is_amber(px: Color) -> bool:
+	return px.r > 0.72 and px.g > 0.42 and px.g < 0.92 and px.b < 0.45 and px.r > px.b + 0.3
+
+
+## Amber pixels in the band AROUND a panel's screen rect -
+## the spill measure. The band holds neighbouring cards and
+## room, whose own amber content is constant across the
+## burst, so the burst's max-min difference isolates what
+## the performer's layers add out there. Post-fix the layers
+## are clipped to the face, so the difference must be zero;
+## pre-fix the cover transform parks two bulbs' worth of lit
+## glass in the band (the build's own pre-fix shot measured
+## lit amber 44 px left of the face).
+func _flicker_spill_band_count(q: ClickableQuad, img: Image) -> int:
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	if cam == null:
+		return -1
+	var rect: Rect2 = _nav_screen_rect(q, cam)
+	# The face's own bounds, with a 1 px tolerance for edge
+	# anti-aliasing (and the layer quads' 5 mm forward offset,
+	# a sub-pixel projection growth at room distance). An
+	# earlier cut shrank the inner rect by several px, which
+	# counted the face's own lit edge ring as "spill" - the
+	# measure was wrong, not the clipping: the burst's newly
+	# lit amber sits entirely inside the face rect.
+	var inner: Rect2 = rect.grow(-1.0)
+	var outer: Rect2 = rect.grow(90.0)
+	var x0: int = clampi(int(outer.position.x), 0, img.get_width() - 1)
+	var y0: int = clampi(int(outer.position.y), 0, img.get_height() - 1)
+	var x1: int = clampi(int(outer.end.x), 0, img.get_width())
+	var y1: int = clampi(int(outer.end.y), 0, img.get_height())
+	var n: int = 0
+	var y: int = y0
+	while y < y1:
+		var x: int = x0
+		while x < x1:
+			if not inner.has_point(Vector2(x, y)) and _flicker_is_amber(img.get_pixel(x, y)):
 				n += 1
 			x += 2
 		y += 2
@@ -1020,7 +1067,7 @@ func _flicker_rect_mean(q: ClickableQuad) -> float:
 func _flicker_finish() -> void:
 	_shot_flicker_phase = -1
 	if _shot_flicker_problems.is_empty():
-		print("PVLDS FLICKER SHOT: PASS counts=", _shot_flicker_counts, " min_brightness=", snappedf(_shot_flicker_min_b, 0.01))
+		print("PVLDS FLICKER SHOT: PASS counts=", _shot_flicker_counts, " min_brightness=", snappedf(_shot_flicker_min_b, 0.01), " spill=", _shot_flicker_spill)
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS FLICKER SHOT: FAIL - ", "; ".join(PackedStringArray(_shot_flicker_problems)))
@@ -1037,11 +1084,20 @@ func _flicker_finish() -> void:
 ## debounce); (2) settled focus on the fixture card runs the
 ## LAYER cascade - sampled frames go dark -> partial -> lit
 ## with strictly rising amber counts, five layer quads (the
-## sub-strip bulb skipped), and the popped card stands at
-## its art's true aspect; (3) a title card runs the
-## brightness fallback on the same trigger (face dips dark,
-## ends at full); (4) opening the detail view mid-cascade
-## cancels cleanly. Saves PREFIX_base/mid/lit.png.
+## sub-strip bulb skipped), ZERO cascade-driven amber
+## outside the face (the fix round's spill measure), and
+## the popped card stands at its art's true aspect within
+## the cap; (3) a title card runs the brightness fallback
+## on the same trigger (face dips dark, ends at full);
+## (4) the fix round's pop gates - a wide embedded card and
+## a tall playfield card pop at the uniform 1.08, a glass-
+## shaped card at its true aspect within the cap; (5) the
+## gate wart - a game whose flat B2S extraction failed
+## still extracts its lamps and cascades on its second
+## visit; (6) the warmer's second phase - a never-focused
+## B2S card's first focus cascades immediately; (7)
+## opening the detail view mid-cascade cancels cleanly.
+## Saves PREFIX_base/mid/lit.png.
 func _drive_shot_flicker() -> void:
 	var now: int = Time.get_ticks_msec()
 	if now - _shot_flicker_since > 90000 and _shot_flicker_phase > 0:
@@ -1054,13 +1110,22 @@ func _drive_shot_flicker() -> void:
 				return
 			if _shot_flicker_stage == 0:
 				_room._handle_rail("filter:all")
+				# Park the harness pointer in a corner: the
+				# room's pop target prefers the pointer's hover
+				# over pad focus, and a pointer left sitting on
+				# a popped card holds the performance there
+				# against every focus change below (the fix
+				# round's fuller wall put a card under it).
+				get_viewport().warp_mouse(Vector2(4, 4))
 				_shot_flicker_stage = 1
 				return
 			if _shot_flicker_game == null:
 				for g: GameEntry in _scanner.games:
 					if g.title.begins_with("Flicker Wide"):
 						_shot_flicker_game = g
-						break
+					for pre: String in ["Flicker Backdrop Wide", "Flicker Playfield Tall", "Flicker Glass Pop", "Flicker Wart", "Flicker Warmed"]:
+						if g.title.begins_with(pre):
+							_shot_flicker_fixtures[pre] = {"game": g}
 			if _shot_flicker_game == null:
 				if not _scan_active:
 					_shot_flicker_problems.append("the Flicker Wide fixture game is not in the library (the harness config names its folder)")
@@ -1071,6 +1136,10 @@ func _drive_shot_flicker() -> void:
 					_shot_flicker_panel = p
 				elif p.payload == "dg-cinder-peak":
 					_shot_flicker_panel2 = p
+				for pre2: String in _shot_flicker_fixtures.keys():
+					var fx0: Dictionary = _shot_flicker_fixtures[pre2] as Dictionary
+					if p.payload == (fx0["game"] as GameEntry).game_id:
+						fx0["panel"] = p
 			if _shot_flicker_panel == null or _shot_flicker_panel2 == null:
 				var payloads: Array = []
 				for p2: ClickableQuad in _room._panels:
@@ -1078,6 +1147,27 @@ func _drive_shot_flicker() -> void:
 				_shot_flicker_problems.append("fixture/title panels not on the wall (flicker=%s title=%s) panels=%s" % [_shot_flicker_panel != null, _shot_flicker_panel2 != null, str(payloads)])
 				_flicker_finish()
 				return
+			for pre3: String in _shot_flicker_fixtures.keys():
+				if not (_shot_flicker_fixtures[pre3] as Dictionary).has("panel"):
+					_shot_flicker_problems.append("fixture %s is not on the wall" % pre3)
+					_flicker_finish()
+					return
+			# The wart must be CONSTRUCTED as a wart before
+			# any leg trusts it: a backglass in hand, but a
+			# face that is NOT that backglass's extraction
+			# (its flat extraction failed and fell through).
+			var wart0: Dictionary = _shot_flicker_fixtures.get("Flicker Wart", {}) as Dictionary
+			if not wart0.is_empty():
+				var wg0: GameEntry = wart0["game"] as GameEntry
+				wg0.ensure_art()
+				if wg0.flicker_source() == "":
+					_shot_flicker_problems.append("the wart fixture game has no flicker source - the wart is not constructed")
+					_flicker_finish()
+					return
+				if wg0.art_path == ArtProvider.cache_path_for(wg0.flicker_source()):
+					_shot_flicker_problems.append("the wart fixture's face IS its backglass extraction - the wart is not constructed")
+					_flicker_finish()
+					return
 			var data: Dictionary = _shot_flicker_game.ensure_flicker()
 			if (data.get("layers", []) as Array).is_empty():
 				_shot_flicker_problems.append("the fixture game's layer set did not extract")
@@ -1147,6 +1237,23 @@ func _drive_shot_flicker() -> void:
 						mid_c = series[si]
 						mid_idx = si
 				_shot_flicker_counts = [base_c, mid_c, lit_c]
+				# Spill: amber in the band around the face,
+				# differenced across the burst (the band's own
+				# constant content cancels). Zero is the only
+				# passing value - the layers are clipped to
+				# the face on every edge now.
+				var band: Array[int] = []
+				for fimg2: Image in _shot_flicker_burst:
+					band.append(_flicker_spill_band_count(_shot_flicker_panel, fimg2))
+				if not band.is_empty():
+					var bmin: int = band[0]
+					var bmax: int = band[0]
+					for bv: int in band:
+						bmin = mini(bmin, bv)
+						bmax = maxi(bmax, bv)
+					_shot_flicker_spill = bmax - bmin
+					if _shot_flicker_spill != 0:
+						_shot_flicker_problems.append("lamp layers spill outside the face (burst band counts %s)" % str(band))
 				if not _shot_flicker_burst.is_empty():
 					_shot_flicker_burst[0].save_png(_shot_flicker_prefix + "_base.png")
 					_shot_flicker_burst[_shot_flicker_burst.size() - 1].save_png(_shot_flicker_prefix + "_lit.png")
@@ -1200,13 +1307,137 @@ func _drive_shot_flicker() -> void:
 					_shot_flicker_problems.append("the fallback's rendered face never darkened (min mean %.3f, settled mean %.3f)" % [_shot_flicker_min_mean, end_mean])
 				if absf(_shot_flicker_panel2.face_brightness() - 1.0) > 0.001:
 					_shot_flicker_problems.append("the fallback did not end at full brightness (%.3f)" % _shot_flicker_panel2.face_brightness())
-				_room._set_focused(_shot_flicker_panel)
+				_shot_flicker_stage = 0
+				_shot_flicker_armed = false
 				_shot_flicker_since = now
 				_shot_flicker_phase = 4
 			elif now - _shot_flicker_since > 10000:
 				_shot_flicker_problems.append("the fallback cascade never ran")
 				_flicker_finish()
 		4:
+			# Fix-round pop gates: settle on each pop subject
+			# in turn and read its scale. The wide embedded
+			# card and the tall playfield card are NOT glass
+			# shapes - both must pop at the uniform 1.08 (no
+			# neighbour swallowed, no shrink). The glass-
+			# shaped card keeps its true-aspect grow, bounded
+			# by the cap.
+			var order: Array[String] = ["Flicker Backdrop Wide", "Flicker Playfield Tall", "Flicker Glass Pop"]
+			var fx4: Dictionary = _shot_flicker_fixtures[order[_shot_flicker_stage]] as Dictionary
+			var panel4: ClickableQuad = fx4["panel"] as ClickableQuad
+			if not _shot_flicker_armed:
+				_room._set_focused(panel4)
+				_shot_flicker_since = now
+				_shot_flicker_armed = true
+				return
+			if now - _shot_flicker_since < 700:
+				return
+			var full4: Vector2 = _room.panel_full_pop_scale(panel4)
+			var asp4: float = _room.panel_art_aspect(panel4)
+			if order[_shot_flicker_stage] == "Flicker Glass Pop":
+				if absf(asp4 - 1.2) > 0.03:
+					_shot_flicker_problems.append("glass fixture aspect %.3f, want 1.2 (the fixture is not what it claims)" % asp4)
+				if full4.x <= RoomView.POP_OUT_SCALE or full4.x > RoomView.POP_FULL_X_MAX + 0.001 or absf(full4.y - RoomView.POP_OUT_SCALE) > 0.001:
+					_shot_flicker_problems.append("glass pop %s: want x in (1.08, cap %.2f], y = 1.08" % [str(full4), RoomView.POP_FULL_X_MAX])
+			else:
+				if order[_shot_flicker_stage] == "Flicker Backdrop Wide" and asp4 < 1.6:
+					_shot_flicker_problems.append("wide fixture aspect %.3f, want ~1.71 (the fixture is not what it claims)" % asp4)
+				if order[_shot_flicker_stage] == "Flicker Playfield Tall" and (asp4 < 0.45 or asp4 > 0.55):
+					_shot_flicker_problems.append("tall fixture aspect %.3f, want ~0.5 (the fixture is not what it claims)" % asp4)
+				if full4 != Vector2(RoomView.POP_OUT_SCALE, RoomView.POP_OUT_SCALE):
+					_shot_flicker_problems.append("%s pops at %s, want the uniform 1.08 (aspect %.3f is no glass's shape)" % [order[_shot_flicker_stage], str(full4), asp4])
+			if absf(panel4.scale.x - full4.x) > 0.02 or absf(panel4.scale.y - full4.y) > 0.02:
+				_shot_flicker_problems.append("%s settled scale %s, want %s" % [order[_shot_flicker_stage], str(panel4.scale), str(full4)])
+			_shot_flicker_stage += 1
+			_shot_flicker_armed = false
+			_shot_flicker_since = now
+			if _shot_flicker_stage >= order.size():
+				_shot_flicker_stage = 0
+				_room._set_focused(_shot_flicker_panel2)
+				_shot_flicker_phase = 5
+		5:
+			# Gate-wart leg: the wart game's face is NOT its
+			# backglass's extraction (phase 0 proved it), yet
+			# its lamps must still extract and cascade. First
+			# settle may surge while the set is cold - the
+			# point is the kick FIRES (pre-fix it never did):
+			# wait for the set to land, settle again, and the
+			# second visit must run the layers.
+			var fx5: Dictionary = _shot_flicker_fixtures["Flicker Wart"] as Dictionary
+			var g5: GameEntry = fx5["game"] as GameEntry
+			var panel5: ClickableQuad = fx5["panel"] as ClickableQuad
+			if _shot_flicker_stage == 0:
+				if not _shot_flicker_armed:
+					_room._set_focused(panel5)
+					_shot_flicker_since = now
+					_shot_flicker_armed = true
+					return
+				if _room.power_panel() == panel5:
+					_room._set_focused(_shot_flicker_panel2)
+					_shot_flicker_armed = false
+					_shot_flicker_stage = 1
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 10000:
+					_shot_flicker_problems.append("the wart leg's first power-on never started")
+					_flicker_finish()
+			elif _shot_flicker_stage == 1:
+				if ArtProvider.has_flicker_layers(g5.flicker_source()):
+					_shot_flicker_stage = 2
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 30000:
+					_shot_flicker_problems.append("the wart game's layers were never extracted - the kick never fired")
+					_flicker_finish()
+			elif _shot_flicker_stage == 2:
+				if not _shot_flicker_armed:
+					_room._set_focused(panel5)
+					_shot_flicker_since = now
+					_shot_flicker_armed = true
+					return
+				if _room.power_panel() == panel5:
+					if _room.power_mode() != 1:
+						_shot_flicker_problems.append("the wart game surged on its second visit too (mode %d) - its lamps never cascade" % _room.power_mode())
+					elif _room.power_layer_count() <= 0:
+						_shot_flicker_problems.append("the wart game claims layers mode with no layer quads")
+					_shot_flicker_armed = false
+					_shot_flicker_stage = 0
+					_shot_flicker_since = now
+					_shot_flicker_phase = 6
+				elif now - _shot_flicker_since > 10000:
+					_shot_flicker_problems.append("the wart leg's second power-on never started")
+					_flicker_finish()
+		6:
+			# Warmer leg: nobody has focused the Warmed card
+			# in this run - if its layer set is waiting, only
+			# the warmer's second phase can have put it there.
+			# Its FIRST focus must then cascade immediately,
+			# no settle-kick, no surge.
+			var fx6: Dictionary = _shot_flicker_fixtures["Flicker Warmed"] as Dictionary
+			var g6: GameEntry = fx6["game"] as GameEntry
+			var panel6: ClickableQuad = fx6["panel"] as ClickableQuad
+			if not ArtProvider.has_flicker_layers(g6.flicker_source()):
+				if now - _shot_flicker_since > 90000:
+					_shot_flicker_problems.append("the warmer never prefetched the Warmed fixture's layers")
+					_flicker_finish()
+				return
+			if not _shot_flicker_armed:
+				_room._set_focused(panel6)
+				_shot_flicker_since = now
+				_shot_flicker_armed = true
+				return
+			if _room.power_panel() == panel6:
+				if _room.power_mode() != 1:
+					_shot_flicker_problems.append("the warmed card's first focus surged instead of cascading (mode %d)" % _room.power_mode())
+				elif _room.power_layer_count() != 5:
+					_shot_flicker_problems.append("the warmed card built %d layer quads, want 5" % _room.power_layer_count())
+				_shot_flicker_armed = false
+				_shot_flicker_stage = 0
+				_shot_flicker_since = now
+				_room._set_focused(_shot_flicker_panel)
+				_shot_flicker_phase = 7
+			elif now - _shot_flicker_since > 10000:
+				_shot_flicker_problems.append("the warmed leg's power-on never started")
+				_flicker_finish()
+		7:
 			# Cancel leg: detail opens mid-cascade; the
 			# performer restores in the same breath.
 			if _room.power_phase() == 1 and _room.power_layer_count() > 0:
@@ -3928,7 +4159,7 @@ func _run_core_test() -> void:
 		OS.delay_msec(20)
 		waited += 20
 	_expect(warmer.is_idle() and ArtProvider.is_cached(b2s_b), "the warmer pre-extracts the library in the background", failures)
-	_expect(warmer.last_pass_items == 1, "the warm pass performed exactly one extraction", failures)
+	_expect(warmer.last_pass_items == 2, "the warm pass performed one flat extraction and one (bulb-less) layer extraction - phase two warms the flicker set too", failures)
 	_expect(ArtWarmer.cache_coverage(warm_games) == Vector2i(1, 1), "cache coverage reports have/want", failures)
 	# The stop request (exit-hang round): a pass abandoned at an
 	# item boundary leaves the rest of its queue unextracted, keeps
@@ -4016,7 +4247,10 @@ func _run_core_test() -> void:
 	var ok_entry: GameEntry = GameEntry.new()
 	ok_entry.art_source_path = b2s_ok
 	# The warmer never re-queues a stamped negative (nor a cached
-	# file): a library of just those two extracts NOTHING.
+	# file's flat art): a library of just those two performs no
+	# FLAT extraction. The cached game's untried layer set is
+	# phase two's one extraction; the no-image file is never
+	# layer-queued at all (no base anywhere in it).
 	var warmer3: ArtWarmer = ArtWarmer.new()
 	var skip_games: Array[GameEntry] = [neg_entry, ok_entry]
 	warmer3.warm_library(skip_games)
@@ -4024,8 +4258,10 @@ func _run_core_test() -> void:
 	while not warmer3.is_idle() and waited < 20000:
 		OS.delay_msec(20)
 		waited += 20
-	_expect(warmer3.is_idle() and warmer3.last_pass_items == 0,
-		"the warmer skips stamped negatives and cached files entirely", failures)
+	_expect(warmer3.is_idle() and warmer3.last_pass_items == 1
+		and ArtProvider.flicker_outcome(b2s_ok) == ArtProvider.STATUS_NO_LAYERS
+		and ArtProvider.flicker_outcome(b2s_neg) == "",
+		"the warmer skips stamped negatives and cached flat art; the cached game's layers are phase two's one extraction", failures)
 	# A designated backglass element whose payload will not decode
 	# is corruption: the failed class, not no_image.
 	var b2s_bad: String = art_dir.path_join("Corrupt Table.directb2s")
@@ -4299,6 +4535,86 @@ func _run_core_test() -> void:
 		"prune keeps the layer set of a library source", failures)
 	_expect(not FileAccess.file_exists(ArtProvider.layers_meta_path(b2s_fl_pair)) and ArtProvider.flicker_outcome(b2s_fl_pair) == "",
 		"prune removes an orphaned layer set and its outcome", failures)
+
+	# --- The gate wart + warmer phase two (flicker fix round).
+	# The wart: a .directb2s whose designated DMDImage is
+	# corrupt - the flat reader convicts the file at the
+	# designated step and never reaches its blob fallback,
+	# while the layers reader (no BackglassImage present)
+	# falls back to the largest blob and finds a healthy base
+	# under healthy bulbs. One file, two verdicts: flat
+	# FAILED, layers OK.
+	var wart_noise: Image = mk_img.call(600, 400) as Image
+	var wart_text: String = "<DirectB2SData><Images><DMDImage Value=\"" + Marshalls.raw_to_base64(_zero_bytes(300)) + "\" /><ReelImage Value=\"" + Marshalls.raw_to_base64(wart_noise.save_png_to_buffer()) + "\" /></Images><Illumination>"
+	wart_text += _b2s_bulb_xml("Backglass", "1", 0, 0, 600, 400, fl_solid.call(600, 400, Color(1.0, 0.75, 0.16)) as Image)
+	wart_text += _b2s_bulb_xml("Backglass", "1", 20, 20, 100, 60, amber_img)
+	wart_text += _b2s_bulb_xml("Backglass", "1", 200, 100, 120, 80, amber_img)
+	wart_text += "</Illumination></DirectB2SData>"
+	var b2s_wart: String = art_dir.path_join("Wart Table.directb2s")
+	_expect(_write_text_file(b2s_wart, wart_text), "wart fixture written", failures)
+	_expect(ArtProvider.extract_art_image(b2s_wart) == "" and ArtProvider.outcome_for_source(b2s_wart) == ArtProvider.STATUS_FAILED,
+		"wart: the flat extraction fails on the corrupt designated DMD image", failures)
+	var wart_layers: Dictionary = ArtProvider.extract_flicker_layers(b2s_wart)
+	_expect(str(wart_layers["status"]) == ArtProvider.STATUS_OK and (wart_layers["layers"] as Array).size() == 3,
+		"wart: the same file's layers extract (base from the blob fallback)", failures)
+	var wart_entry: GameEntry = GameEntry.new()
+	wart_entry.art_source_path = b2s_wart
+	_expect(wart_entry.ensure_art() == "" and wart_entry.flicker_source() == b2s_wart and not wart_entry.ensure_flicker().is_empty(),
+		"wart: the entry's face fell through while its layers serve - the room's gate keys on the source alone", failures)
+	# Warmer phase two: a bulb-bearing game is warmed flat
+	# first, layers second, in ONE pass - polled, so the order
+	# is observed, not assumed.
+	var pf_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(fl_glass.save_png_to_buffer()) + "\" /></Images><Illumination>"
+	pf_text += _b2s_bulb_xml("Backglass", "1", 60, 60, 300, 120, amber_img)
+	pf_text += "</Illumination></DirectB2SData>"
+	var b2s_pf: String = art_dir.path_join("Prefetch Table.directb2s")
+	_expect(_write_text_file(b2s_pf, pf_text), "prefetch fixture written", failures)
+	var pf_entry: GameEntry = GameEntry.new()
+	pf_entry.art_source_path = b2s_pf
+	var pf_warmer: ArtWarmer = ArtWarmer.new()
+	pf_warmer.warm_library([pf_entry])
+	var pf_flat_at: int = -1
+	var pf_layer_at: int = -1
+	var pf_waited: int = 0
+	while pf_waited < 30000:
+		if pf_flat_at < 0 and ArtProvider.is_cached(b2s_pf):
+			pf_flat_at = pf_waited
+		if pf_layer_at < 0 and ArtProvider.flicker_outcome(b2s_pf) != "":
+			pf_layer_at = pf_waited
+		if pf_flat_at >= 0 and pf_layer_at >= 0 and pf_warmer.is_idle():
+			break
+		OS.delay_msec(5)
+		pf_waited += 5
+	_expect(pf_flat_at >= 0 and pf_layer_at >= 0 and pf_flat_at <= pf_layer_at,
+		"warmer phase two: the flat extraction lands before the layer outcome (flat %d ms, layers %d ms)" % [pf_flat_at, pf_layer_at], failures)
+	_expect(pf_warmer.last_pass_items == 2 and ArtProvider.has_flicker_layers(b2s_pf),
+		"warmer phase two: one pass performs the flat and the layer extraction, and the set waits warm", failures)
+	# Once per game ever: a second pass over the same library
+	# extracts nothing - both stamps stand.
+	var pf_warmer2: ArtWarmer = ArtWarmer.new()
+	pf_warmer2.warm_library([pf_entry])
+	pf_waited = 0
+	while not pf_warmer2.is_idle() and pf_waited < 20000:
+		OS.delay_msec(20)
+		pf_waited += 20
+	_expect(pf_warmer2.is_idle() and pf_warmer2.last_pass_items == 0,
+		"warmer phase two: stamped layer outcomes are never re-queued", failures)
+	# The wart under the warmer: a fresh wart file's flat
+	# extraction fails during the pass, and its layers are
+	# STILL prefetched - FAILED is not the no_image skip.
+	var b2s_wart2: String = art_dir.path_join("Wart Warm Table.directb2s")
+	_expect(_write_text_file(b2s_wart2, wart_text), "wart warm fixture written", failures)
+	var wart2_entry: GameEntry = GameEntry.new()
+	wart2_entry.art_source_path = b2s_wart2
+	var wart_warmer: ArtWarmer = ArtWarmer.new()
+	wart_warmer.warm_library([wart2_entry])
+	pf_waited = 0
+	while not wart_warmer.is_idle() and pf_waited < 30000:
+		OS.delay_msec(20)
+		pf_waited += 20
+	_expect(wart_warmer.is_idle() and ArtProvider.has_flicker_layers(b2s_wart2)
+		and ArtProvider.outcome_for_source(b2s_wart2) == ArtProvider.STATUS_FAILED,
+		"warmer phase two: a flat-failed backglass still gets its layers prefetched (the wart)", failures)
 
 	# --- Embedded art: images extracted from inside .vpx files.
 	# The fixtures are REAL compound files written by

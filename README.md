@@ -619,6 +619,21 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   their art: the wall grid's uniform aspect is tuned from the
   library's median extracted-art aspect (bounded 0.76–0.93), and a
   popped card grows to its own art's true aspect as it powers on.
+  The **flicker fix round** gated that grow by shape: only a
+  glass-plausible art aspect (0.75–1.45 — real glasses measure
+  1.11–1.30) earns the true-aspect pop, with its horizontal
+  growth capped at 1.5×; embedded playfield/banner art pops at
+  the uniform 1.08× instead (the first cut clamped the raw
+  aspect, ballooning a wide embedded card to 1.86× over its
+  neighbours and shrinking a tall one to 0.70×). Lamp layers are
+  now clipped to the card face on every edge (the cover
+  transform had parked edge bulbs in space beside the card),
+  the layer path keys on the game *having* a backglass rather
+  than on its face being that backglass's extraction (a failed
+  flat extraction no longer strands a game's lamps), and the
+  art warmer pre-extracts layer sets in a second phase after
+  the flat art, so a B2S card's first focus usually cascades
+  immediately.
 - **One input model.** VR controller laser, mouse ray, and
   gamepad/keyboard focus all pick from the same surfaces. Mouse can
   drive the whole UI flat at the desk — the flat camera is static at

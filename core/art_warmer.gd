@@ -16,6 +16,28 @@ extends RefCounted
 ## Adjacent-page prefetch is prioritize(): those paths jump the
 ## queue. The warmer writes only cache files - texture creation
 ## stays in the room, on warm hits that are a small file read.
+##
+## Phase two (flicker fix round): once the flat queue is empty,
+## the same pass walks a second queue - the lamp-layer sets of
+## B2S-backed games that have no stamped layer outcome yet -
+## through GameEntry.ensure_flicker, so a first focus on a
+## B2S card can cascade immediately instead of surging while
+## its set is cold. Flat art is strictly first, always: the
+## layer queue is only touched while the flat queue is empty,
+## and anything prioritize() or a fresh warm_library() queues
+## flat pre-empts it again. Same discipline as phase one -
+## background worker only, never during a scan (warm_library
+## is only ever called on a scan's adopt), abandoned at item
+## boundaries on request_stop, and once per game ever: a
+## stamped layer outcome (ok / no_layers / failed) is never
+## re-queued, and a set extracted by a focus visit meanwhile
+## is skipped when its turn comes. One flat outcome DOES
+## skip a game here: a stamped no_image means the file was
+## read and holds no usable image anywhere - no base for
+## lamps to light over, so there is nothing to extract. A
+## FAILED flat read (the wart: a corrupt designated element
+## hiding healthy lamps behind the blob fallback) stays
+## queued - that distinction is the wart's whole lesson.
 
 ## Set by the owner; fired (deferred to the main thread) when a pass
 ## empties its queue.
@@ -27,6 +49,8 @@ var last_pass_items: int = 0 ## extractions the last pass performed
 var _mutex: Mutex = Mutex.new()
 var _queue: Array[String] = []
 var _queued: Dictionary = {}
+var _layer_queue: Array[GameEntry] = [] ## phase two: entries owing a layer extraction
+var _layer_queued: Dictionary = {} ## game_id -> true, for _layer_queue
 var _worker_active: bool = false
 var _stop_requested: bool = false
 var _pass_started_msec: int = 0
@@ -46,6 +70,22 @@ func warm_library(games: Array[GameEntry]) -> void:
 	_mutex.lock()
 	_queue.clear()
 	_queued.clear()
+	_layer_queue.clear()
+	_layer_queued.clear()
+	for g: GameEntry in games:
+		# Phase two's queue, built alongside phase one's: every
+		# B2S-backed game whose layer set has never been tried.
+		# (A FAILED flat extraction does not skip a game - a
+		# backglass can fail flat and still hold lamps; the
+		# wart fixture is exactly that game. A stamped
+		# no_image does: no usable image anywhere in the file
+		# means no base exists for lamps to light over.)
+		var fsrc: String = g.flicker_source()
+		if fsrc != "" and ArtProvider.flicker_outcome(fsrc) == "" \
+				and ArtProvider.outcome_for_source(fsrc) != ArtProvider.STATUS_NO_IMAGE \
+				and not _layer_queued.has(g.game_id):
+			_layer_queue.append(g)
+			_layer_queued[g.game_id] = true
 	for g: GameEntry in games:
 		var sources: Array[String] = g.art_sources()
 		for i: int in range(sources.size()):
@@ -104,7 +144,7 @@ func prioritize(games: Array[GameEntry]) -> void:
 
 func is_idle() -> bool:
 	_mutex.lock()
-	var idle: bool = not _worker_active and _queue.is_empty()
+	var idle: bool = not _worker_active and _queue.is_empty() and _layer_queue.is_empty()
 	_mutex.unlock()
 	return idle
 
@@ -221,7 +261,7 @@ static func cache_coverage(games: Array[GameEntry]) -> Vector2i:
 
 ## Caller holds _mutex. Starts the single worker when there is work.
 func _start_locked() -> void:
-	if _worker_active or _queue.is_empty():
+	if _worker_active or (_queue.is_empty() and _layer_queue.is_empty()):
 		return
 	# A fresh pass is a new lease: a stop requested of some earlier,
 	# already-finished moment must not abandon it. (While a pass is
@@ -246,12 +286,14 @@ func _run_pass() -> void:
 			_stop_requested = false
 			_queue.clear()
 			_queued.clear()
+			_layer_queue.clear()
+			_layer_queued.clear()
 			_worker_active = false
 			last_pass_msec = Time.get_ticks_msec() - _pass_started_msec
 			last_pass_items = _pass_items
 			_mutex.unlock()
 			return
-		if _queue.is_empty():
+		if _queue.is_empty() and _layer_queue.is_empty():
 			_worker_active = false
 			last_pass_msec = Time.get_ticks_msec() - _pass_started_msec
 			last_pass_items = _pass_items
@@ -259,9 +301,22 @@ func _run_pass() -> void:
 			if on_drained.is_valid():
 				on_drained.call_deferred()
 			return
-		var src: String = _queue.pop_front()
-		_queued.erase(src)
+		# Flat art strictly first: a layer item is only taken
+		# once the flat queue stands empty (a fresh flat queue
+		# - prioritize, a new warm - pre-empts phase two at
+		# the next item boundary, exactly like a scan would).
+		var src: String = ""
+		var layer_game: GameEntry = null
+		if not _queue.is_empty():
+			src = _queue.pop_front()
+			_queued.erase(src)
+		else:
+			layer_game = _layer_queue.pop_front()
+			_layer_queued.erase(layer_game.game_id)
 		_mutex.unlock()
+		if layer_game != null:
+			_warm_layers(layer_game)
+			continue
 		if ArtProvider.is_cached(src):
 			continue
 		if ArtProvider.is_negative_outcome(ArtProvider.outcome_for_source(src)):
@@ -280,3 +335,25 @@ func _run_pass() -> void:
 		# A breath between items keeps disk and CPU contention low
 		# while the room is loading its own (warm) textures.
 		OS.delay_msec(2)
+
+
+## One game's phase-two item (worker thread): extract its
+## lamp-layer set through the entry, whose claim discipline
+## arbitrates with the room's focus-triggered extraction -
+## whichever claimant gets there first does the work and the
+## other reads the stamped outcome. A set a focus visit
+## extracted while this item waited its turn is skipped by
+## the outcome re-check. Counts as a pass item only when the
+## outcome actually transitions from untried to stamped:
+## warm hits and skips are not extractions.
+func _warm_layers(g: GameEntry) -> void:
+	var src: String = g.flicker_source()
+	if src == "" or ArtProvider.flicker_outcome(src) != "" \
+			or ArtProvider.outcome_for_source(src) == ArtProvider.STATUS_NO_IMAGE:
+		return
+	g.ensure_flicker()
+	if ArtProvider.flicker_outcome(src) != "":
+		_mutex.lock()
+		_pass_items += 1
+		_mutex.unlock()
+	OS.delay_msec(2)

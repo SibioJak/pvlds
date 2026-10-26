@@ -108,8 +108,9 @@ func _ensure_from_source(src: String) -> String:
 ## beside one (see LibraryScanner._resolve_art) - layers
 ## composited over a different image would sit in the wrong
 ## places, so those games take the brightness fallback instead.
-## The room additionally requires the face it shows to BE this
-## backglass's extraction before it builds layer quads.
+## The room keys its layer path on this alone: a game whose
+## flat extraction failed and fell through to embedded art or
+## a title card still cascades from here (flicker fix round).
 func flicker_source() -> String:
 	if art_source_path.get_extension().to_lower() == "directb2s":
 		return art_source_path

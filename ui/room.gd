@@ -78,8 +78,17 @@ const POP_OUT_SEC: float = 0.15 ## pop in/out travel time, seconds
 const PANEL_ASPECT_MIN: float = 0.76 ## grid aspect clamp, low (default 0.844)
 const PANEL_ASPECT_MAX: float = 0.93 ## grid aspect clamp, high
 const PANEL_ASPECT_MIN_SAMPLES: int = 8 ## art samples before the median may move the grid
-const POP_ASPECT_MIN: float = 0.55 ## a popped card's narrowest true aspect
-const POP_ASPECT_MAX: float = 1.45 ## a popped card's widest true aspect
+## The pop's true-aspect gate (flicker fix round): the grow to
+## "proper size" is only honest when the art IS a backglass -
+## real glasses measure 1.11-1.30 - so the true-aspect pop
+## applies only inside a glass-plausible band, and even then
+## the horizontal growth is capped: a popped card must not
+## swallow its neighbours. Embedded art fails the band by
+## construction (playfield textures run 0.44-0.5, banner and
+## screenshot textures 1.7+) and pops the old uniform way.
+const POP_GATE_ASPECT_MIN: float = 0.75 ## narrowest aspect the pop treats as a glass's shape
+const POP_GATE_ASPECT_MAX: float = 1.45 ## widest aspect the pop treats as a glass's shape
+const POP_FULL_X_MAX: float = 1.5 ## a true-aspect pop's widest horizontal growth, whatever the glass
 
 ## Power-on flicker (the flicker round, 2026-10-26 - Chris,
 ## on double-clicking a .directb2s and watching its lamps
@@ -2050,10 +2059,17 @@ func panel_art_aspect(q: ClickableQuad) -> float:
 
 func panel_full_pop_scale(q: ClickableQuad) -> Vector2:
 	var asp: float = panel_art_aspect(q)
-	if asp <= 0.0:
+	if asp < POP_GATE_ASPECT_MIN or asp > POP_GATE_ASPECT_MAX:
+		# No art (0), a playfield sliver, a banner: none of
+		# these is a glass's shape, so the card pops at the
+		# pre-round uniform scale exactly. (The flicker
+		# round's first cut clamped the raw aspect INTO
+		# [0.55, 1.45] instead, which ballooned a wide
+		# embedded card to 1.86x and shrank a tall one to
+		# 0.70x - the wonky panels Chris photographed.)
 		return Vector2(POP_OUT_SCALE, POP_OUT_SCALE)
-	var w: float = (_panel_size.y * POP_OUT_SCALE * clampf(asp, POP_ASPECT_MIN, POP_ASPECT_MAX)) / _panel_size.x
-	return Vector2(w, POP_OUT_SCALE)
+	var w: float = (_panel_size.y * POP_OUT_SCALE * asp) / _panel_size.x
+	return Vector2(minf(w, POP_FULL_X_MAX), POP_OUT_SCALE)
 
 
 # ------------------------------------------------------------ power-on flicker
@@ -2092,14 +2108,20 @@ func _update_power(delta: float) -> void:
 
 
 ## Start the cascade on a settled card. The mode is chosen
-## once, here: real lamp layers when the game's backglass
-## extraction is already cached AND the face on the card is
-## that very extraction (layers composited over any other
-## image would sit in the wrong places); otherwise the
+## once, here: real lamp layers when the game HAS a
+## backglass and its layer extraction is already cached -
+## whatever source won the flat face. (The flicker round's
+## first cut additionally required the face to BE this
+## backglass's extraction, which quietly excluded every
+## game whose flat B2S extraction failed and fell through
+## to embedded art or a title card: their lamps were
+## extractable but never extracted - surge-only forever.
+## The layers are placed over the face the card actually
+## wears; that is the wart's whole trade.) Otherwise the
 ## whole-face brightness surge. A cold layer set is kicked
-## to a background extraction so the NEXT visit to this card
-## can light its real lamps - this visit surges, honestly,
-## rather than stalling the room on file work.
+## to a background extraction so the NEXT visit to this
+## card can light its real lamps - this visit surges,
+## honestly, rather than stalling the room on file work.
 func _start_power(panel: ClickableQuad) -> void:
 	_power_panel = panel
 	_power_t = 0.0
@@ -2108,7 +2130,7 @@ func _start_power(panel: ClickableQuad) -> void:
 	_power_game = _scanner.game_by_id(panel.payload) if _scanner != null else null
 	if _power_game != null:
 		var src: String = _power_game.flicker_source()
-		if src != "" and _power_game.art_path == ArtProvider.cache_path_for(src):
+		if src != "":
 			if ArtProvider.has_flicker_layers(src):
 				var data: Dictionary = ArtProvider.extract_flicker_layers(src)
 				if not (data.get("layers", []) as Array).is_empty():
@@ -2140,9 +2162,15 @@ func _kick_power_extraction(game: GameEntry) -> void:
 ## the pop and the slide for free), placed by mapping the
 ## bulb's fitted rect through the SAME cover transform the
 ## art face draws the base with (CardFace: STRETCH_KEEP_
-## ASPECT_COVERED over the face px). The name strip is the
-## face's own furniture: a layer living wholly under it is
-## skipped, a straddler is cropped to the strip's top edge.
+## ASPECT_COVERED over the face px), then CLIPPED to the
+## face on every edge: the visible region runs from the
+## face's top-left to the name strip's top edge, a layer
+## living wholly outside it is skipped, and a straddler on
+## any edge is cropped to the intersection with an atlas
+## region showing the matching window of its snippet. (The
+## first cut fenced only the strip edge; the cover transform
+## is wider than the face for any glass wider than the
+## panel, so edge bulbs rendered in space beside the card.)
 ## Materials start transparent; the cascade only ever
 ## writes their alpha - no texture is composited per frame.
 func _build_power_layers(panel: ClickableQuad, data: Dictionary) -> void:
@@ -2153,6 +2181,7 @@ func _build_power_layers(panel: ClickableQuad, data: Dictionary) -> void:
 	var ox: float = (float(_panel_face_px.x) - float(fitted.x) * cover) * 0.5
 	var oy: float = (float(_panel_face_px.y) - float(fitted.y) * cover) * 0.5
 	var strip_top: float = float(_panel_face_px.y - CardFace.ART_STRIP_HEIGHT_PX)
+	var clip: Rect2 = Rect2(0.0, 0.0, float(_panel_face_px.x), strip_top)
 	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 	rng.seed = (_power_game.game_id.hash() if _power_game != null else 12345)
 	var layers: Array = data["layers"] as Array
@@ -2160,26 +2189,34 @@ func _build_power_layers(panel: ClickableQuad, data: Dictionary) -> void:
 		var ld: Dictionary = layers[li] as Dictionary
 		var rect: Rect2 = ld["rect"] as Rect2
 		var fr: Rect2 = Rect2(rect.position * cover + Vector2(ox, oy), rect.size * cover)
-		if fr.position.y >= strip_top or fr.size.x <= 0.0 or fr.size.y <= 0.0:
+		if fr.size.x <= 0.0 or fr.size.y <= 0.0:
+			continue
+		var vis: Rect2 = fr.intersection(clip)
+		if vis.size.x <= 0.0 or vis.size.y <= 0.0:
 			continue
 		var tex: Texture2D = TextureFactory.load_art_texture(str(ld["path"]))
 		if tex == null:
 			continue
 		var draw_tex: Texture2D = tex
-		if fr.end.y > strip_top:
-			# Crop the straddler at the strip: the quad
-			# shrinks to the visible part and an atlas
-			# region shows the matching top of the snippet.
-			var vf: float = (strip_top - fr.position.y) / fr.size.y
-			fr.size.y *= vf
+		if vis != fr:
+			# Only part of the bulb lands on the face: the
+			# quad shrinks to the intersection and an atlas
+			# region shows the matching window of the
+			# snippet. One mechanism for all four edges -
+			# the strip below, the cover crop at the sides
+			# and top.
 			var at: AtlasTexture = AtlasTexture.new()
 			at.atlas = tex
-			at.region = Rect2(0.0, 0.0, float(tex.get_width()), maxf(1.0, floor(float(tex.get_height()) * vf)))
+			at.region = Rect2(
+				(vis.position.x - fr.position.x) / fr.size.x * float(tex.get_width()),
+				(vis.position.y - fr.position.y) / fr.size.y * float(tex.get_height()),
+				maxf(1.0, vis.size.x / fr.size.x * float(tex.get_width())),
+				maxf(1.0, vis.size.y / fr.size.y * float(tex.get_height())))
 			draw_tex = at
 		var mi: MeshInstance3D = MeshInstance3D.new()
 		var qm: QuadMesh = QuadMesh.new()
-		qm.size = Vector2(fr.size.x / float(_panel_face_px.x) * _panel_size.x,
-			fr.size.y / float(_panel_face_px.y) * _panel_size.y)
+		qm.size = Vector2(vis.size.x / float(_panel_face_px.x) * _panel_size.x,
+			vis.size.y / float(_panel_face_px.y) * _panel_size.y)
 		mi.mesh = qm
 		var mat: StandardMaterial3D = StandardMaterial3D.new()
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -2198,8 +2235,8 @@ func _build_power_layers(panel: ClickableQuad, data: Dictionary) -> void:
 		mat.albedo_color = Color(1.0, 1.0, 1.0, 0.0)
 		mi.material_override = mat
 		mi.position = Vector3(
-			(fr.get_center().x / float(_panel_face_px.x) - 0.5) * _panel_size.x,
-			(0.5 - fr.get_center().y / float(_panel_face_px.y)) * _panel_size.y,
+			(vis.get_center().x / float(_panel_face_px.x) - 0.5) * _panel_size.x,
+			(0.5 - vis.get_center().y / float(_panel_face_px.y)) * _panel_size.y,
 			0.005 + float(_power_layers.size()) * 0.0003)
 		panel.add_child(mi)
 		_power_layers.append(mi)
