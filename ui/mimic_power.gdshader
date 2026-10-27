@@ -10,9 +10,25 @@ render_mode unshaded, cull_disabled, depth_draw_opaque;
 // (0..1, host-driven through its stutters and sag - see
 // RoomView.MIMIC_POWER_KEYS); `sweep` drives the diagonal
 // front. The per-pixel grade:
-//   base x (1 + 0.50*luma^0.75 + 0.90*sat*(0.25 + 0.75*luma))
+//   base x (1 + 0.78*luma^0.75 + 0.70*sat*(0.25 + 0.75*luma))
 // plus a 0.40 additive glow above luma 0.70 - with two
 // production additions over the prototype:
+//
+// Gain balance (the crank round, 2026-10-27): the field
+// verdict on the swap build was "like the effect, it just
+// needs to be cranked up" - to the prototype's heat, the
+// clips the user approved. The gains were rebalanced, not
+// merely scaled: the luma term rose (0.50 -> 0.78) and the
+// saturation term was trimmed (0.90 -> 0.70), because the
+// dark glasses (Taxi, Bride) answer the luma term while
+// Taxi's saturated figures were already running hot on the
+// sat term. Tuned on the three real faces until a reference
+// render of this grade landed each settled mean-luma lift
+// on the prototype's measured values (Taxi +18%, Goonies
+// +37%, Bride +20%). The shoulder below is UNCHANGED -
+// the extra heat still rolls off at the top end, so
+// Goonies' title lifts without pinning (0.00% pinned
+// channels in the title region on the real file).
 //
 // Soft shoulder: the grade's gain rolls off as the pixel's own
 // luma approaches 1 (the `head` factor), and the graded result
@@ -36,8 +52,8 @@ uniform float power = 0.0;
 uniform float sweep = 0.0;
 uniform float pair_mix = 0.0;
 uniform float has_pair = 0.0;
-uniform float lift_lum = 0.50;
-uniform float lift_sat = 0.90;
+uniform float lift_lum = 0.78;
+uniform float lift_sat = 0.70;
 uniform float glow_gain = 0.40;
 uniform float glow_knee = 0.70;
 

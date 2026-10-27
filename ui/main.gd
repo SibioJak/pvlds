@@ -1075,7 +1075,7 @@ func _mimic_ref_grade_pixel(src: Color) -> Color:
 	var mn: float = minf(src.r, minf(src.g, src.b))
 	var sat: float = (mx - mn) / mx if mx > 0.001 else 0.0
 	var head: float = clampf((1.0 - lum) / 0.35, 0.15, 1.0)
-	var drive: float = head * (0.50 * pow(lum, 0.75) + 0.90 * sat * (0.25 + 0.75 * lum))
+	var drive: float = head * (0.78 * pow(lum, 0.75) + 0.70 * sat * (0.25 + 0.75 * lum))
 	var glow: float = 0.40 * head * smoothstep(0.70, 1.0, lum)
 	var act: float = clampf(drive + glow, 0.0, 1.0)
 	var out: Color = Color()
