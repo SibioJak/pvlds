@@ -633,7 +633,17 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   flat extraction no longer strands a game's lamps), and the
   art warmer pre-extracts layer sets in a second phase after
   the flat art, so a B2S card's first focus usually cascades
-  immediately.
+  immediately. The **flasher-release round** (2026-10-27) splits
+  the layers by the file's own RomIDType: a type-2 bulb is a
+  solenoid *flasher* — a momentary device on the real machine —
+  so it strikes with the cascade, holds briefly, and releases
+  fully before the cascade ends, while lamps (and a pair set's
+  one layer) hold as before. Holding flashers was the field
+  ghost: on Taxi, seven translucent passenger flashers stacked
+  over the unlit base for the whole dwell (×1.73 mean
+  luminance); the settled card is now base + lamps (×1.01).
+  Layer sets carry their kinds from extraction (layer cache
+  generation lv3, so kind-less sets re-extract once).
 - **One input model.** VR controller laser, mouse ray, and
   gamepad/keyboard focus all pick from the same surfaces. Mouse can
   drive the whole UI flat at the desk — the flat camera is static at

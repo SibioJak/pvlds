@@ -101,6 +101,10 @@ const POP_FULL_X_MAX: float = 1.5 ## a true-aspect pop's widest horizontal growt
 ## whole face (dark, catch, dip, lit) on the same trigger, so
 ## focus speaks one language across the wall. One card ever
 ## performs. No audio. Every feel knob is a constant here.
+## The layers the file marks as solenoid flashers strike
+## with the cascade but release before it ends - they are
+## momentary devices, and holding them stacked the field
+## ghost (the flasher-release round; POWER_FLASHER_* below).
 const POWER_SETTLE_SEC: float = 0.2 ## focus must rest this long before the power-on starts
 const POWER_CASCADE_SEC: float = 1.05 ## the power-on's full run, seconds
 const POWER_DARK: float = 0.22 ## the brightness fallback's floor (and its curve's low key)
@@ -112,6 +116,18 @@ const POWER_BRIGHTNESS_KEYS: Array = [
 	[0.30, 0.95], [0.38, 0.50], [0.50, 1.0], [0.58, 0.82],
 	[0.68, 1.0], [1.05, 1.0],
 ]
+## Flasher release (the flasher-release round, 2026-10-27): a
+## layer the file marks as a solenoid device (RomIDType 2 -
+## ArtProvider's FLASHER kind) is momentary on the real
+## machine, so it may strike with the cascade but may not
+## HOLD: it stays struck for this long past its catch, then
+## fades out over the fade constant, and the release is
+## clamped so every flasher is fully out by the cascade's
+## end - the settled card is lamps over base, never a stack
+## of translucent flasher copies (the Taxi ghost: seven
+## passenger flashers held lit for the whole dwell).
+const POWER_FLASHER_HOLD_SEC: float = 0.30 ## a struck flasher's hold before its release begins
+const POWER_FLASHER_FADE_SEC: float = 0.15 ## the release's fade length
 
 ## Page slide (the bumper feel round, 2026-10-24 - Chris, on the
 ## bumper flip: "it snaps to next wall, which is great, its fast,
@@ -192,7 +208,8 @@ var _power_t: float = 0.0 ## seconds into the live cascade
 var _power_game: GameEntry = null ## the performing card's game
 var _power_layers: Array[MeshInstance3D] = [] ## the performing card's lamp layer quads (children of the panel)
 var _power_mats: Array[StandardMaterial3D] = [] ## their materials, parallel to _power_layers
-var _power_schedule: Array = [] ## per layer: [catch_t, dip_end_t, on_t] cascade times, parallel to _power_layers
+var _power_schedule: Array = [] ## per layer: [catch_t, dip_end_t, on_t, release_t] cascade times, parallel to _power_layers; release_t < 0 for a layer that holds
+var _power_flasher: Array[bool] = [] ## per layer: a solenoid flasher (strikes, then releases), parallel to _power_layers
 var _power_kicked: Dictionary = {} ## game_id -> true: a background layer extraction was kicked for this game this session
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
@@ -2286,6 +2303,7 @@ func _build_power_layers(panel: ClickableQuad, data: Dictionary) -> void:
 		panel.add_child(mi)
 		_power_layers.append(mi)
 		_power_mats.append(mat)
+		_power_flasher.append(str(ld.get("kind", ArtProvider.LAYER_KIND_LAMP)) == ArtProvider.LAYER_KIND_FLASHER)
 	# The cascade schedule, from the game's own seed (the
 	# same card flickers the same way every visit): the
 	# layers draw STRATIFIED slots of the power-on window -
@@ -2294,7 +2312,10 @@ func _build_power_layers(panel: ClickableQuad, data: Dictionary) -> void:
 	# order. Stratification is the contract that the cascade
 	# spreads across the whole window instead of clumping
 	# wherever chance puts the draws; about a third of lamps
-	# also dip once right after catching, then hold.
+	# also dip once right after catching, then hold. A
+	# flasher does neither the dip nor the hold: its slot is
+	# a strike, a short hold, and a release timed to land
+	# fully out by the cascade's end.
 	var n_layers: int = _power_layers.size()
 	if n_layers > 0:
 		var slots: Array[int] = []
@@ -2315,7 +2336,12 @@ func _build_power_layers(panel: ClickableQuad, data: Dictionary) -> void:
 			if rng.randf() < 0.35:
 				dip_end = catch_t + rng.randf_range(0.05, 0.10)
 				on_t = dip_end + rng.randf_range(0.04, 0.10)
-			_power_schedule.append([catch_t, dip_end, on_t])
+			var release_t: float = -1.0
+			if _power_flasher[k]:
+				dip_end = catch_t
+				on_t = catch_t
+				release_t = minf(on_t + POWER_FLASHER_HOLD_SEC, POWER_CASCADE_SEC - POWER_FLASHER_FADE_SEC)
+			_power_schedule.append([catch_t, dip_end, on_t, release_t])
 
 
 ## The cascade's current frame, applied: layer alphas from
@@ -2346,6 +2372,14 @@ func _apply_power() -> void:
 ## blends a pair - it swaps state - so a pair layer's dip
 ## goes to 0.0 instead: catch, blink off, held on, at the
 ## same schedule instants. Pair alphas are {0, 1} only.
+##
+## A flasher's schedule carries a fourth time, its release
+## (release_t >= 0): the layer is a momentary solenoid
+## device, not a lamp state, so after its strike and short
+## hold it fades to nothing and STAYS nothing - the settled
+## card never wears it. The release is scheduled to finish
+## by the cascade's end, so the phase-2 settle (which stops
+## applying alphas) can never freeze a flasher mid-fade.
 func _power_layer_alpha(sched: Array, t: float) -> float:
 	if t < float(sched[0]):
 		return 0.0
@@ -2353,6 +2387,13 @@ func _power_layer_alpha(sched: Array, t: float) -> float:
 		return 1.0
 	if t < float(sched[2]):
 		return 0.0 if _power_pair else 0.12
+	if sched.size() > 3 and float(sched[3]) >= 0.0:
+		var rel: float = float(sched[3])
+		if t < rel:
+			return 1.0
+		if t >= rel + POWER_FLASHER_FADE_SEC:
+			return 0.0
+		return 1.0 - (t - rel) / POWER_FLASHER_FADE_SEC
 	return 1.0
 
 
@@ -2403,6 +2444,7 @@ func _power_reset_state() -> void:
 	_power_layers.clear()
 	_power_mats.clear()
 	_power_schedule.clear()
+	_power_flasher.clear()
 
 
 ## Power-on queries (the flicker shot reads the effect the
@@ -2434,6 +2476,14 @@ func power_layer_alpha(i: int) -> float:
 	if i < 0 or i >= _power_mats.size():
 		return -1.0
 	return _power_mats[i].albedo_color.a
+
+
+## Whether layer i is a solenoid flasher (strikes with the
+## cascade, then releases) rather than a lamp (holds).
+func power_layer_is_flasher(i: int) -> bool:
+	if i < 0 or i >= _power_flasher.size():
+		return false
+	return _power_flasher[i]
 
 
 ## Page-slide queries (the nav smoke and the slide shot read

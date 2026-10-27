@@ -264,6 +264,7 @@ var _shot_flicker_off_img: Image = null ## pair-strobe leg: the pair card render
 var _shot_flicker_on_img: Image = null ## pair-strobe leg: the pair card rendered at cascade end (pure On), popped geometry
 var _shot_flicker_dip_win: Vector2 = Vector2.ZERO ## pair-strobe leg: the Specter schedule's dip window [dip_end, on_t]
 var _shot_flicker_live_missed: bool = false ## pair-strobe leg: the live cascade finished before a poll saw phase 1 (one giant post-extraction frame) - the sweep and the rendered fit carry the leg instead
+var _shot_flicker_flasher_idx: int = -1 ## flasher leg: the performing set's flasher layer index (-1 until the cascade builds it)
 var _shot_flicker_armed: bool = false ## fix-round legs: the current leg's focus has been set
 var _art_bench: bool = false ## --pvlds-art-bench: dev measurement route (cold/warm page-fill timings)
 var _bench_phase: int = -1
@@ -1035,6 +1036,34 @@ func _flicker_is_amber(px: Color) -> bool:
 	return px.r > 0.72 and px.g > 0.42 and px.g < 0.92 and px.b < 0.45 and px.r > px.b + 0.3
 
 
+## Flasher-red pixel count inside a panel's screen rect over
+## a GIVEN frame - the flasher leg's visible-evidence measure
+## (the fixture's flasher paints a bold semi-transparent red
+## band across the glass; nothing else on the card is red -
+## the base is navy, the lamps are amber, whose green channel
+## keeps it out of this test).
+func _flicker_red_count_img(q: ClickableQuad, img: Image) -> int:
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	if cam == null:
+		return -1
+	var rect: Rect2 = _nav_screen_rect(q, cam)
+	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
+	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
+	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
+	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
+	var n: int = 0
+	var y: int = y0
+	while y < y1:
+		var x: int = x0
+		while x < x1:
+			var px: Color = img.get_pixel(x, y)
+			if px.r > 0.55 and px.g < 0.32 and px.b < 0.32:
+				n += 1
+			x += 2
+		y += 2
+	return n
+
+
 ## Amber pixels in the band AROUND a panel's screen rect -
 ## the spill measure. The band holds neighbouring cards and
 ## room, whose own amber content is constant across the
@@ -1214,8 +1243,14 @@ func _flicker_finish() -> void:
 ## rendered blend fits against the Off/On endpoint frames
 ## including a frame rendered with the clock parked inside
 ## the dip window. Leg (2) carries the counter-guard: a
-## bulb layer's dip still measures 0.12. Saves
-## PREFIX_base/mid/lit.png plus pair frames.
+## bulb layer's dip still measures 0.12. (11) the flasher
+## leg - a glass with two RomIDType-1 lamps and one giant
+## RomIDType-2 solenoid snippet (a red band the base does
+## not carry): the set extracts with the kinds the file
+## declares, the flasher renders mid-cascade, and the
+## settled card is lamps only - the flasher fully released
+## (parked alpha probes + rendered strike/settled frames).
+## Saves PREFIX_base/mid/lit.png plus pair/flasher frames.
 func _drive_shot_flicker() -> void:
 	var now: int = Time.get_ticks_msec()
 	if now - _shot_flicker_since > 90000 and _shot_flicker_phase > 0:
@@ -1241,7 +1276,7 @@ func _drive_shot_flicker() -> void:
 				for g: GameEntry in _scanner.games:
 					if g.title.begins_with("Flicker Wide"):
 						_shot_flicker_game = g
-					for pre: String in ["Flicker Backdrop Wide", "Flicker Playfield Tall", "Flicker Glass Pop", "Flicker Wart", "Flicker Warmed", "Flicker Pair", "Flicker Pair Plain", "Flicker Specter"]:
+					for pre: String in ["Flicker Backdrop Wide", "Flicker Playfield Tall", "Flicker Glass Pop", "Flicker Wart", "Flicker Warmed", "Flicker Pair", "Flicker Pair Plain", "Flicker Specter", "Flicker Flasher"]:
 						# "Flicker Pair" is a prefix of "Flicker
 						# Pair Plain" - the plain game must not
 						# claim the pair's slot.
@@ -1994,9 +2029,174 @@ func _drive_shot_flicker() -> void:
 						_shot_flicker_on_img.save_png(_shot_flicker_prefix + "_ghost_on.png")
 					_room._power_t = RoomView.POWER_CASCADE_SEC
 					_room._apply_power()
-					_flicker_finish()
+					_shot_flicker_stage = 0
+					_shot_flicker_armed = false
+					_shot_flicker_since = now
+					_shot_flicker_phase = 11
 				elif now - _shot_flicker_since > 20000:
 					_shot_flicker_problems.append("the blend leg's dip frame never rendered")
+					_flicker_finish()
+		11:
+			# Flasher leg (flasher-release round): the
+			# Flicker Flasher glass carries two small
+			# RomIDType-1 lamps and one giant RomIDType-2
+			# solenoid snippet - a bold semi-transparent
+			# red band across the whole glass, content the
+			# navy base does not carry. The card must
+			# cascade all three layers, the flasher
+			# VISIBLE mid-cascade, and settle to lamps
+			# only: flasher fully released, lamps held
+			# lit. Proven by the layer alphas with the
+			# cascade clock parked (at the strike, inside
+			# the release fade, at the end) and by
+			# rendered frames - the red band present in
+			# the parked strike frame, absent from the
+			# settled frame, whose amber says the lamps
+			# stayed. Stages: 0 verify the extracted set
+			# (kinds by the file's own RomIDType), 5 idle
+			# frames then focus, 1 the live cascade and
+			# the parked alpha probes, 2 the rendered
+			# strike frame, 3 the rendered settled frame.
+			if not _shot_flicker_fixtures.has("Flicker Flasher"):
+				_shot_flicker_problems.append("the Flicker Flasher fixture game is not in the library - the flasher leg has no subject")
+				_flicker_finish()
+				return
+			var fx11: Dictionary = _shot_flicker_fixtures["Flicker Flasher"] as Dictionary
+			var g11: GameEntry = fx11["game"] as GameEntry
+			var panel11: ClickableQuad = fx11.get("panel", null) as ClickableQuad
+			if not is_instance_valid(panel11):
+				# Same stale-panel exposure as the blend
+				# leg (a scan landing mid-run rebuilds the
+				# wall): re-resolve from the live wall.
+				panel11 = null
+				for p11: ClickableQuad in _room._panels:
+					if p11.payload == g11.game_id:
+						panel11 = p11
+						break
+				if panel11 != null:
+					fx11["panel"] = panel11
+			if _shot_flicker_stage == 0:
+				if panel11 == null:
+					_shot_flicker_problems.append("the Flasher panel is not on the wall - the flasher leg has no card")
+					_flicker_finish()
+					return
+				var data11: Dictionary = g11.ensure_flicker()
+				var layers11: Array = data11.get("layers", []) as Array
+				var n_flash11: int = 0
+				var n_lamp11: int = 0
+				var giant11: bool = false
+				var bsz11: Vector2i = data11.get("base_size", Vector2i.ZERO) as Vector2i
+				for item11: Variant in layers11:
+					var ld11: Dictionary = item11 as Dictionary
+					if str(ld11.get("kind", "")) == ArtProvider.LAYER_KIND_FLASHER:
+						n_flash11 += 1
+						var r11: Rect2 = ld11["rect"] as Rect2
+						giant11 = r11.size.x > float(bsz11.x) * 0.95 and r11.size.y > float(bsz11.y) * 0.95
+					else:
+						n_lamp11 += 1
+				if bool(data11.get("pair", false)) or layers11.size() != 3 or n_flash11 != 1 or n_lamp11 != 2 or not giant11:
+					_shot_flicker_problems.append("the flasher fixture extracted wrong (pair %s, layers %d, flashers %d, lamps %d, giant %s) - want a bulb set of one full-glass flasher over two lamps" % [str(data11.get("pair", false)), layers11.size(), n_flash11, n_lamp11, str(giant11)])
+					_flicker_finish()
+					return
+				# Idle frames before focusing, the blend
+				# leg's lesson: a synchronous extraction on
+				# this thread must not swallow the settle +
+				# cascade into one giant delta frame.
+				_shot_flicker_probe_wait = 0
+				_shot_flicker_stage = 5
+				_shot_flicker_since = now
+			elif _shot_flicker_stage == 5:
+				_shot_flicker_probe_wait += 1
+				if _shot_flicker_probe_wait >= 6:
+					_shot_flicker_flasher_idx = -1
+					_room._set_focused(panel11)
+					_shot_flicker_stage = 1
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the flasher leg's warm wait never elapsed")
+					_flicker_finish()
+			elif _shot_flicker_stage == 1:
+				var ph11: int = _room.power_phase()
+				if _room.power_panel() == panel11 and ph11 > 0 and _shot_flicker_flasher_idx < 0:
+					for li11: int in range(_room.power_layer_count()):
+						if _room.power_layer_is_flasher(li11):
+							_shot_flicker_flasher_idx = li11
+							break
+				if _room.power_panel() == panel11 and ph11 == 2:
+					if _room.power_layer_count() != 3:
+						_shot_flicker_problems.append("the flasher card built %d layer quads, want 3 (two lamps + the giant flasher)" % _room.power_layer_count())
+					if _shot_flicker_flasher_idx < 0:
+						_shot_flicker_problems.append("the flasher card's layers carry no flasher - the room never learned the kind")
+						_flicker_finish()
+						return
+					var sched11: Array = _room._power_schedule[_shot_flicker_flasher_idx] as Array
+					var rel11: float = float(sched11[3]) if sched11.size() > 3 else -1.0
+					if rel11 < 0.0:
+						_shot_flicker_problems.append("the flasher's schedule carries no release - it would hold like a lamp")
+						_flicker_finish()
+						return
+					# Parked alpha probes, deterministic:
+					# struck just after its catch, mid-fade
+					# inside its release, gone at the
+					# cascade's end while the lamps hold.
+					_room._power_t = float(sched11[0]) + 0.05
+					_room._apply_power()
+					var struck11: float = _room.power_layer_alpha(_shot_flicker_flasher_idx)
+					if struck11 < 0.9:
+						_shot_flicker_problems.append("parked at its strike the flasher reads alpha %.2f, want it lit" % struck11)
+					_room._power_t = rel11 + RoomView.POWER_FLASHER_FADE_SEC * 0.5
+					_room._apply_power()
+					var midfade11: float = _room.power_layer_alpha(_shot_flicker_flasher_idx)
+					if midfade11 < 0.05 or midfade11 > 0.95:
+						_shot_flicker_problems.append("parked mid-release the flasher reads alpha %.2f - the release is not a fade in flight" % midfade11)
+					_room._power_t = RoomView.POWER_CASCADE_SEC
+					_room._apply_power()
+					var settled11: float = _room.power_layer_alpha(_shot_flicker_flasher_idx)
+					if settled11 != 0.0:
+						_shot_flicker_problems.append("the flasher is still lit at the cascade's end (alpha %.2f) - it never released" % settled11)
+					for li11b: int in range(_room.power_layer_count()):
+						if li11b != _shot_flicker_flasher_idx and _room.power_layer_alpha(li11b) != 1.0:
+							_shot_flicker_problems.append("a lamp is not held lit at the cascade's end (layer %d alpha %.2f)" % [li11b, _room.power_layer_alpha(li11b)])
+					# The rendered strike frame: park the
+					# clock back at the strike, let it draw.
+					_room._power_t = float(sched11[0]) + 0.05
+					_room._apply_power()
+					_shot_flicker_probe_wait = 0
+					_shot_flicker_stage = 2
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the flasher card's cascade never ran")
+					_flicker_finish()
+			elif _shot_flicker_stage == 2:
+				_shot_flicker_probe_wait += 1
+				if _shot_flicker_probe_wait >= 10:
+					var on_img11: Image = get_viewport().get_texture().get_image()
+					var red_on11: int = _flicker_red_count_img(panel11, on_img11)
+					if red_on11 < 150:
+						_shot_flicker_problems.append("the parked strike frame shows no flasher (red px %d) - the giant never rendered" % red_on11)
+					on_img11.save_png(_shot_flicker_prefix + "_flasher_on.png")
+					_room._power_t = RoomView.POWER_CASCADE_SEC
+					_room._apply_power()
+					_shot_flicker_probe_wait = 0
+					_shot_flicker_stage = 3
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the flasher leg's strike frame never rendered")
+					_flicker_finish()
+			elif _shot_flicker_stage == 3:
+				_shot_flicker_probe_wait += 1
+				if _shot_flicker_probe_wait >= 10:
+					var settled_img11: Image = get_viewport().get_texture().get_image()
+					var red_off11: int = _flicker_red_count_img(panel11, settled_img11)
+					if red_off11 > 10:
+						_shot_flicker_problems.append("the settled card still shows the flasher (red px %d) - the ghost stack is still held" % red_off11)
+					var amber_set11: int = _flicker_amber_count_img(panel11, settled_img11)
+					if amber_set11 < 100:
+						_shot_flicker_problems.append("the settled card's lamps are not lit (amber px %d) - the release took the lamps with it" % amber_set11)
+					settled_img11.save_png(_shot_flicker_prefix + "_flasher_settled.png")
+					_flicker_finish()
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the flasher leg's settled frame never rendered")
 					_flicker_finish()
 
 
@@ -5124,6 +5324,52 @@ func _run_core_test() -> void:
 	var pp_base: Image = Image.new()
 	_expect(pp_cache != "" and pp_base.load(str(pp_fl["base_path"])) == OK and pp_base.get_data() == pp_img.get_data(),
 		"pair+plain: the layer set's base and the flat face are the same image", failures)
+	# Layer kinds (flasher-release round): the file's own
+	# RomIDType classifies each layer - 2 is a solenoid
+	# FLASHER (momentary on the machine; the room flashes
+	# and releases it), anything else a LAMP. The pair's one
+	# layer is a lamp by construction. The meta on disk
+	# carries the kinds under the current layer generation,
+	# so a kind-less cached set can never be served.
+	_expect(str(((flp["layers"] as Array)[0] as Dictionary).get("kind", "")) == ArtProvider.LAYER_KIND_LAMP,
+		"a pair set's one layer is a lamp (it holds)", failures)
+	var kind_bulb: Callable = func(rom_type: String, x: int, y: int, w: int, h: int, img: Image) -> String:
+		var rt: String = (" RomIDType=\"%s\"" % rom_type) if rom_type != "" else ""
+		return "<Bulb Parent=\"Backglass\" ID=\"7\" Name=\"Lamp\" RomID=\"3\"%s RomInverted=\"0\" InitialState=\"0\" DualMode=\"0\" Intensity=\"5\" Visible=\"1\" LocX=\"%d\" LocY=\"%d\" Width=\"%d\" Height=\"%d\" IsImageSnippit=\"1\" Image=\"%s\" />" % [rt, x, y, w, h, _b2s_wrap_b64(img)]
+	var kind_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(fl_glass.save_png_to_buffer()) + "\" /></Images><Illumination>"
+	kind_text += kind_bulb.call("1", 60, 60, 300, 120, amber_img) as String
+	kind_text += kind_bulb.call("2", 0, 0, 1000, 800, fl_solid.call(1000, 800, Color(1.0, 0.16, 0.16, 0.66)) as Image) as String
+	kind_text += kind_bulb.call("", 420, 300, 300, 120, amber_img) as String
+	kind_text += "</Illumination></DirectB2SData>"
+	var b2s_kind: String = art_dir.path_join("Kind Table.directb2s")
+	_expect(_write_text_file(b2s_kind, kind_text), "kind fixture written", failures)
+	var kind_fl: Dictionary = ArtProvider.extract_flicker_layers(b2s_kind)
+	var kind_layers: Array = kind_fl["layers"] as Array
+	var kind_flashers: int = 0
+	var kind_lamps: int = 0
+	var kind_giant_is_flasher: bool = false
+	for kind_item: Variant in kind_layers:
+		var kd: Dictionary = kind_item as Dictionary
+		var krect: Rect2 = kd["rect"] as Rect2
+		if str(kd.get("kind", "")) == ArtProvider.LAYER_KIND_FLASHER:
+			kind_flashers += 1
+			# The flasher is the full-glass snippet (1000x800
+			# in glass px, ~512x410 fitted); a small bulb
+			# wearing the kind would fail here.
+			kind_giant_is_flasher = krect.size.x > 480.0 and krect.size.y > 390.0
+		else:
+			kind_lamps += 1
+	_expect(kind_layers.size() == 3 and kind_flashers == 1 and kind_lamps == 2 and kind_giant_is_flasher,
+		"RomIDType classifies the layers: the type-2 full-glass bulb is the one flasher, the type-1 and untyped bulbs are lamps", failures)
+	var kind_meta: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.layers_meta_path(b2s_kind)))
+	var kind_meta_flashers: int = 0
+	if kind_meta is Dictionary:
+		for km_item: Variant in (kind_meta as Dictionary).get("layers", []):
+			if str((km_item as Dictionary).get("kind", "")) == ArtProvider.LAYER_KIND_FLASHER:
+				kind_meta_flashers += 1
+	_expect(kind_meta is Dictionary and int((kind_meta as Dictionary).get("lv", 0)) == ArtProvider.LAYERS_VERSION
+		and kind_meta_flashers == 1,
+		"the layer meta carries the kinds under generation lv%d (one flasher of three)" % ArtProvider.LAYERS_VERSION, failures)
 	# No illumination at all: a plain still, stamped no_layers.
 	var b2s_fl_none: String = art_dir.path_join("Plain Table.directb2s")
 	_expect(_write_text_file(b2s_fl_none, "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(pair_off2.save_png_to_buffer()) + "\" /></Images><Illumination></Illumination></DirectB2SData>"),

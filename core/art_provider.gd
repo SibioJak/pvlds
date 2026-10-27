@@ -494,10 +494,25 @@ const LAYERS_DIR: String = CACHE_DIR + "/layers"
 ## fight), and the flat reader's base could disagree with
 ## this reader's. v2 (flicker fix round 2): both readers
 ## share _find_base_image, so a set's base IS the wall's face
-## by construction. Older stamps and metas retry once.
-const LAYERS_VERSION: int = 2
+## by construction. v3 (flasher-release round): every layer
+## carries a KIND - a bulb whose RomIDType is 2 is a solenoid
+## FLASHER (a momentary device on the real machine), anything
+## else is a LAMP - because the room must flash the flashers
+## and release them instead of holding every layer lit (the
+## Taxi conviction: 7 solenoid snippets held at alpha 1.0 for
+## the whole dwell stacked their translucent lit copies over
+## the base forever - the field ghost). A v2 meta carries no
+## kinds, so it reads as no set and re-extracts once. Older
+## stamps and metas retry once.
+const LAYERS_VERSION: int = 3
 const LAYER_CAP: int = 40
 const STATUS_NO_LAYERS: String = "no_layers"
+## Layer kinds (see the generation note above). A pair set's
+## one full-frame layer is a LAMP by construction: the pair
+## IS the glass's lit state, not a momentary device, and it
+## holds exactly as it always has.
+const LAYER_KIND_LAMP: String = "lamp"
+const LAYER_KIND_FLASHER: String = "flasher"
 
 
 static func layers_dir_for(b2s_path: String) -> String:
@@ -578,10 +593,11 @@ static func await_flicker(b2s_path: String, timeout_msec: int) -> bool:
 
 ## Extract (or serve from the sibling cache) the layer set of a
 ## .directb2s: {status, pair, glass_size, base_size, layers}
-## where layers is [{path, rect}] with rect in FITTED base
+## where layers is [{path, rect, kind}] with rect in FITTED base
 ## coordinates (the same _fit_to_panel space the flat cache
-## stores), and base_size is the fitted base's pixel size. An
-## empty layers array always rides a non-ok status.
+## stores), kind a LAYER_KIND_* string, and base_size is the
+## fitted base's pixel size. An empty layers array always
+## rides a non-ok status.
 static func extract_flicker_layers(b2s_path: String) -> Dictionary:
 	var meta: Dictionary = _read_flicker_meta(b2s_path)
 	if not meta.is_empty():
@@ -627,6 +643,7 @@ static func _flicker_result(b2s_path: String, meta: Dictionary, status: String) 
 		layers.append({
 			"path": dir.path_join(str(ld.get("file", ""))),
 			"rect": Rect2(float(r[0]), float(r[1]), float(r[2]), float(r[3])),
+			"kind": str(ld.get("kind", LAYER_KIND_LAMP)),
 		})
 	var g: Array = meta.get("glass", [0, 0]) as Array
 	var f: Array = meta.get("fitted", [0, 0]) as Array
@@ -669,9 +686,10 @@ static func _extract_flicker_uncached(b2s_path: String) -> Dictionary:
 	var pair: bool = bool(found["pair"])
 	var glass: Vector2i = base_img.get_size()
 	# Collect the layers in glass coordinates.
-	var raw_layers: Array = [] ## [{img, rect}]
+	var raw_layers: Array = [] ## [{img, rect, kind}]
 	if pair:
-		raw_layers.append({"img": found["on_img"] as Image, "rect": Rect2i(0, 0, glass.x, glass.y)})
+		raw_layers.append({"img": found["on_img"] as Image, "rect": Rect2i(0, 0, glass.x, glass.y),
+			"kind": LAYER_KIND_LAMP})
 	else:
 		for bulb: Dictionary in _b2s_bulbs(text):
 			var bimg: Image = _decode_blob_image(str(bulb["blob"]))
@@ -681,7 +699,8 @@ static func _extract_flicker_uncached(b2s_path: String) -> Dictionary:
 			var clipped: Rect2i = rect.intersection(Rect2i(0, 0, glass.x, glass.y))
 			if clipped.size.x <= 0 or clipped.size.y <= 0:
 				continue
-			raw_layers.append({"img": _layer_snippet(bimg, clipped, rect, glass), "rect": clipped})
+			raw_layers.append({"img": _layer_snippet(bimg, clipped, rect, glass), "rect": clipped,
+				"kind": str(bulb.get("kind", LAYER_KIND_LAMP))})
 	if raw_layers.is_empty():
 		empty["status"] = STATUS_NO_LAYERS
 		empty["glass_size"] = glass
@@ -715,7 +734,7 @@ static func _extract_flicker_uncached(b2s_path: String) -> Dictionary:
 		var fname: String = "layer_%02d.png" % i
 		if snippet.save_png(dir.path_join(fname)) != OK:
 			return empty
-		meta_layers.append({"file": fname, "rect": [
+		meta_layers.append({"file": fname, "kind": str(rl.get("kind", LAYER_KIND_LAMP)), "rect": [
 			float(rect.position.x) * fit, float(rect.position.y) * fit,
 			float(rect.size.x) * fit, float(rect.size.y) * fit]})
 	var meta: Dictionary = {
@@ -732,12 +751,22 @@ static func _extract_flicker_uncached(b2s_path: String) -> Dictionary:
 	return result
 
 
-## The illumination bulbs of a backglass: [{rect, blob}] for
-## every <Bulb> under <Illumination> that belongs to the glass
-## itself (Parent absent or "Backglass"), is visible, and
+## The illumination bulbs of a backglass: [{rect, blob, kind}]
+## for every <Bulb> under <Illumination> that belongs to the
+## glass itself (Parent absent or "Backglass"), is visible, and
 ## carries an image. Tag-scoped attribute reads, the flat
 ## extractor's tolerance style: attribute order is free, and a
 ## malformed bulb is skipped, never fatal.
+##
+## The kind is the file's own word for what the bulb IS: the
+## B2S RomIDType numbers the ROM channel a bulb listens to -
+## 1 is a lamp channel, 2 is a SOLENOID channel. A solenoid
+## bulb's image is a flasher's lit art: on the machine the
+## device fires for a fraction of a second and releases, so
+## the layer is a FLASHER. Anything else - type 1, a missing
+## attribute, a word instead of a number (designer files in
+## the wild carry all three shapes) - is a LAMP, the state a
+## power-on may hold.
 static func _b2s_bulbs(text: String) -> Array:
 	var out: Array = []
 	var sec_start: int = text.find("<Illumination")
@@ -769,7 +798,8 @@ static func _b2s_bulbs(text: String) -> Array:
 		var blob: String = _xml_unescape(_xml_attr(tag, "Image")).replace(" ", "").replace("\t", "").replace("\r", "").replace("\n", "")
 		if blob.length() < 100:
 			continue
-		out.append({"rect": rect, "blob": blob})
+		var kind: String = LAYER_KIND_FLASHER if int(_xml_attr(tag, "RomIDType")) == 2 else LAYER_KIND_LAMP
+		out.append({"rect": rect, "blob": blob, "kind": kind})
 	return out
 
 
