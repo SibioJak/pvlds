@@ -282,7 +282,7 @@ var _shot_flicker_live_missed: bool = false ## pair-strobe leg: the live cascade
 var _shot_flicker_flasher_idx: int = -1 ## flasher leg: the performing set's flasher layer index (-1 until the cascade builds it)
 var _shot_flicker_anim_idx: int = -1 ## animation leg: the performing set's giant member layer index (-1 until the cascade builds it)
 var _shot_flicker_anim_idxs: Array[int] = [] ## animation leg: every member layer index in the performing set (the parked probes walk them all)
-var _shot_flicker_anim_strike: Array[int] = [0, 0] ## animation leg: the two strike frames' member-color counts [green, cyan], accumulated across both parked instants
+var _shot_flicker_anim_strike: Array[int] = [0, 0] ## animation leg: the strike bursts' best single-frame member-color counts [green, magenta], kept across both parked instants
 var _shot_flicker_away_panel: ClickableQuad = null ## kick leg: a live non-subject panel to park focus on (re-resolved at the leg, after the wall rebuilds)
 var _shot_flicker_armed: bool = false ## fix-round legs: the current leg's focus has been set
 var _art_bench: bool = false ## --pvlds-art-bench: dev measurement route (cold/warm page-fill timings)
@@ -1118,11 +1118,17 @@ func _flicker_green_count_img(q: ClickableQuad, img: Image) -> int:
 	return n
 
 
-## Anim-cyan pixel count inside a panel's screen rect over
+## Anim-magenta pixel count inside a panel's screen rect over
 ## a GIVEN frame - the animation leg's measure for its small
-## member (solid cyan art the navy base does not carry; the
-## amber lamps' low blue keeps them out of this test).
-func _flicker_cyan_count_img(q: ClickableQuad, img: Image) -> int:
+## member (solid magenta art the navy base does not carry).
+## Magenta, not the cyan this leg first used: the room's
+## focus frame is cyan-blue and rings the panel INSIDE this
+## rect, so a cyan test counts the frame itself on every
+## frame - the settled card measured a held member that
+## was only the frame (493 px, first anim run). Magenta
+## collides with nothing the room draws: the frame's red
+## is low, the amber lamps' blue is low, the base is navy.
+func _flicker_magenta_count_img(q: ClickableQuad, img: Image) -> int:
 	var cam: Camera3D = get_viewport().get_camera_3d()
 	if cam == null:
 		return -1
@@ -1137,7 +1143,7 @@ func _flicker_cyan_count_img(q: ClickableQuad, img: Image) -> int:
 		var x: int = x0
 		while x < x1:
 			var px: Color = img.get_pixel(x, y)
-			if px.b > 0.6 and px.g > 0.5 and px.r < 0.42:
+			if px.r > 0.6 and px.b > 0.45 and px.g < 0.4:
 				n += 1
 			x += 2
 		y += 2
@@ -1353,10 +1359,10 @@ func _flicker_finish() -> void:
 ## glass whose file sequences two of
 ## its four bulbs in an <Animations> section (a giant
 ## RomIDType-1 snippet painting a green band, a small
-## untyped bulb painting cyan; two named-by-nothing amber
+## untyped bulb painting magenta; two named-by-nothing amber
 ## lamps hold): the members extract as ANIM, render
 ## mid-cascade, and are gone from the settled card - the
-## settled frame holds zero member content (green and cyan
+## settled frame holds zero member content (green and magenta
 ## counts) while the lamps stay lit (parked alpha probes
 ## on a member's schedule + rendered strike/settled
 ## frames, the flasher leg's shape). The run's log
@@ -2447,9 +2453,9 @@ func _drive_shot_flicker() -> void:
 			# (phase 0 hands straight here). The
 			# Flicker Anim glass carries four bulbs - two
 			# small amber lamps named by no animation step
-			# (they hold), one giant RomIDType-1 full-glass
-			# snippet painting a semi-transparent GREEN band,
-			# and one small untyped bulb painting solid CYAN -
+			# (they hold), one giant RomIDType-1 snippet
+			# painting a semi-transparent GREEN band,
+			# and one small untyped bulb painting solid MAGENTA -
 			# the two the file's <Animations> section
 			# sequences by name. A decoy Parent="DMD"
 			# animation names one lamp and must confer
@@ -2457,7 +2463,7 @@ func _drive_shot_flicker() -> void:
 			# the members VISIBLE mid-cascade, and settle to
 			# the lamps only: members fully released (the
 			# settled frame holds zero member content - no
-			# green, no cyan), lamps held lit. Proven by the
+			# green, no magenta), lamps held lit. Proven by the
 			# parked alpha probes on the giant member's
 			# schedule and by rendered frames, the flasher
 			# leg's shape. Stages: 0 verify the extracted
@@ -2498,14 +2504,14 @@ func _drive_shot_flicker() -> void:
 					if kind13 == ArtProvider.LAYER_KIND_ANIM:
 						n_anim13 += 1
 						var r13: Rect2 = ld13["rect"] as Rect2
-						if r13.size.x > float(bsz13.x) * 0.95 and r13.size.y > float(bsz13.y) * 0.95:
+						if r13.get_area() > float(bsz13.x * bsz13.y) * 0.5:
 							giant13 = true
 					elif kind13 == ArtProvider.LAYER_KIND_FLASHER:
 						n_flash13 += 1
 					else:
 						n_lamp13 += 1
 				if bool(data13.get("pair", false)) or layers13.size() != 4 or n_anim13 != 2 or n_lamp13 != 2 or n_flash13 != 0 or not giant13:
-					_shot_flicker_problems.append("the anim fixture extracted wrong (pair %s, layers %d, anim %d, lamps %d, flashers %d, giant %s) - want a bulb set of two sequenced members (one full-glass) over two held lamps" % [str(data13.get("pair", false)), layers13.size(), n_anim13, n_lamp13, n_flash13, str(giant13)])
+					_shot_flicker_problems.append("the anim fixture extracted wrong (pair %s, layers %d, anim %d, lamps %d, flashers %d, giant %s) - want a bulb set of two sequenced members (one giant, over half the glass) over two held lamps" % [str(data13.get("pair", false)), layers13.size(), n_anim13, n_lamp13, n_flash13, str(giant13)])
 					_flicker_finish()
 					return
 				_shot_flicker_probe_wait = 0
@@ -2584,13 +2590,30 @@ func _drive_shot_flicker() -> void:
 					_shot_flicker_problems.append("the anim card's cascade never ran")
 					_flicker_finish()
 			elif _shot_flicker_stage == 2:
+				# A BURST, not a single grab: rendered
+				# readbacks lag the applied state by many
+				# frames under software rendering, so one
+				# grab ten frames after the park can still
+				# return a pre-park frame (the magenta run's
+				# strike frames showed no member at all,
+				# though the parked probes had it lit). The
+				# park is re-pinned every frame and every
+				# grab from the third on is counted, keeping
+				# the BEST single frame per color - a burst
+				# spanning the lag must contain the parked
+				# state, the layers leg's own pattern.
 				_shot_flicker_probe_wait += 1
-				if _shot_flicker_probe_wait >= 10:
+				var sched13a2: Array = _room._power_schedule[_shot_flicker_anim_idx] as Array
+				_room._power_t = float(sched13a2[0]) + 0.05
+				_room._apply_power()
+				if _shot_flicker_probe_wait >= 3:
 					var on_img13: Image = get_viewport().get_texture().get_image()
-					_shot_flicker_anim_strike[0] += _flicker_green_count_img(panel13, on_img13)
-					_shot_flicker_anim_strike[1] += _flicker_cyan_count_img(panel13, on_img13)
-					on_img13.save_png(_shot_flicker_prefix + "_anim_on_a.png")
-					# The second strike frame: the other
+					_shot_flicker_anim_strike[0] = maxi(_shot_flicker_anim_strike[0], _flicker_green_count_img(panel13, on_img13))
+					_shot_flicker_anim_strike[1] = maxi(_shot_flicker_anim_strike[1], _flicker_magenta_count_img(panel13, on_img13))
+					if _shot_flicker_probe_wait == 3:
+						on_img13.save_png(_shot_flicker_prefix + "_anim_on_a.png")
+				if _shot_flicker_probe_wait >= 24:
+					# The second strike burst: the other
 					# member at ITS strike (the two strike at
 					# different instants by schedule, so one
 					# parked frame cannot promise both).
@@ -2601,48 +2624,61 @@ func _drive_shot_flicker() -> void:
 					_shot_flicker_probe_wait = 0
 					_shot_flicker_stage = 4
 					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the animation leg's first strike frame never rendered")
+				elif now - _shot_flicker_since > 40000:
+					_shot_flicker_problems.append("the animation leg's first strike burst never rendered")
 					_flicker_finish()
 			elif _shot_flicker_stage == 4:
 				_shot_flicker_probe_wait += 1
-				if _shot_flicker_probe_wait >= 10:
+				var sched13b2: Array = _room._power_schedule[_shot_flicker_anim_idx] as Array
+				_room._power_t = float(sched13b2[0]) + 0.05
+				_room._apply_power()
+				if _shot_flicker_probe_wait >= 3:
 					var on_img13b: Image = get_viewport().get_texture().get_image()
-					_shot_flicker_anim_strike[0] += _flicker_green_count_img(panel13, on_img13b)
-					_shot_flicker_anim_strike[1] += _flicker_cyan_count_img(panel13, on_img13b)
-					on_img13b.save_png(_shot_flicker_prefix + "_anim_on_b.png")
-					# Across their own strike frames, BOTH
+					_shot_flicker_anim_strike[0] = maxi(_shot_flicker_anim_strike[0], _flicker_green_count_img(panel13, on_img13b))
+					_shot_flicker_anim_strike[1] = maxi(_shot_flicker_anim_strike[1], _flicker_magenta_count_img(panel13, on_img13b))
+					if _shot_flicker_probe_wait == 3:
+						on_img13b.save_png(_shot_flicker_prefix + "_anim_on_b.png")
+				if _shot_flicker_probe_wait >= 24:
+					# Across their own strike bursts, BOTH
 					# members must have rendered - the giant
-					# by its green, the small by its cyan.
+					# by its green, the small by its magenta.
 					if _shot_flicker_anim_strike[0] < 150:
 						_shot_flicker_problems.append("no strike frame shows the giant member (green px %d) - it never rendered" % _shot_flicker_anim_strike[0])
 					if _shot_flicker_anim_strike[1] < 40:
-						_shot_flicker_problems.append("no strike frame shows the small member (cyan px %d) - it never rendered" % _shot_flicker_anim_strike[1])
+						_shot_flicker_problems.append("no strike frame shows the small member (magenta px %d) - it never rendered" % _shot_flicker_anim_strike[1])
 					_room._power_t = RoomView.POWER_CASCADE_SEC
 					_room._apply_power()
 					_shot_flicker_probe_wait = 0
 					_shot_flicker_stage = 3
 					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the animation leg's second strike frame never rendered")
+				elif now - _shot_flicker_since > 40000:
+					_shot_flicker_problems.append("the animation leg's second strike burst never rendered")
 					_flicker_finish()
 			elif _shot_flicker_stage == 3:
+				# The settled burst: the end state re-pinned
+				# every frame, frames grabbed across the
+				# readback lag, and only the LAST grab counts
+				# - by then the pipeline has long flushed to
+				# the parked end state, so what it shows is
+				# the settled card itself, not a stale strike.
 				_shot_flicker_probe_wait += 1
-				if _shot_flicker_probe_wait >= 10:
+				_room._power_t = RoomView.POWER_CASCADE_SEC
+				_room._apply_power()
+				if _shot_flicker_probe_wait >= 24:
 					var settled_img13: Image = get_viewport().get_texture().get_image()
 					var green_off13: int = _flicker_green_count_img(panel13, settled_img13)
 					if green_off13 > 10:
 						_shot_flicker_problems.append("the settled card still shows the giant member (green px %d) - the animation frame is still held" % green_off13)
-					var cyan_off13: int = _flicker_cyan_count_img(panel13, settled_img13)
-					if cyan_off13 > 10:
-						_shot_flicker_problems.append("the settled card still shows the small member (cyan px %d) - the animation frame is still held" % cyan_off13)
+					var magenta_off13: int = _flicker_magenta_count_img(panel13, settled_img13)
+					if magenta_off13 > 10:
+						_shot_flicker_problems.append("the settled card still shows the small member (magenta px %d) - the animation frame is still held" % magenta_off13)
 					var amber_set13: int = _flicker_amber_count_img(panel13, settled_img13)
 					if amber_set13 < 100:
 						_shot_flicker_problems.append("the settled card's lamps are not lit (amber px %d) - the release took the lamps with it" % amber_set13)
 					settled_img13.save_png(_shot_flicker_prefix + "_anim_settled.png")
 					_flicker_finish()
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the animation leg's settled frame never rendered")
+				elif now - _shot_flicker_since > 40000:
+					_shot_flicker_problems.append("the animation leg's settled burst never rendered")
 					_flicker_finish()
 
 
