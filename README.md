@@ -603,64 +603,39 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   rows and the control rail are spaced so the whole bottom row,
   buttons included, clears the rail from a seated eye
   (`WALL_ROW_YS`, the rail's height in `_build_rail`).
-- **Power-on flicker (flicker round).** When focus *settles* on a
-  card (a ~200 ms rest, so fast navigation never strobes the wall),
-  the already-popping card powers on, B2S-style: a backglass-backed
-  card lights its real lamp layers — extracted from the
-  `.directb2s`'s `<Illumination>` bulbs into a sibling cache
-  (`user://art_cache/layers/<stamp>/`, capped at the 40 largest
-  rects; an on/off-pair file becomes base + one full-frame lit
-  layer) — in a stratified, per-game-seeded cascade of catches and
-  dips, and stays lit while focused. Cards without layers (side
-  image, embedded art, title cards) surge their whole face on a
-  brightness curve instead, so focus speaks one language across the
-  wall. One card ever performs; the cascade only writes material
-  alphas, so its cost is trivial. The same round sizes cards by
-  their art: the wall grid's uniform aspect is tuned from the
-  library's median extracted-art aspect (bounded 0.76–0.93), and a
-  popped card grows to its own art's true aspect as it powers on.
-  The **flicker fix round** gated that grow by shape: only a
-  glass-plausible art aspect (0.75–1.45 — real glasses measure
-  1.11–1.30) earns the true-aspect pop, with its horizontal
-  growth capped at 1.5×; embedded playfield/banner art pops at
-  the uniform 1.08× instead (the first cut clamped the raw
-  aspect, ballooning a wide embedded card to 1.86× over its
-  neighbours and shrinking a tall one to 0.70×). Lamp layers are
-  now clipped to the card face on every edge (the cover
-  transform had parked edge bulbs in space beside the card),
-  the layer path keys on the game *having* a backglass rather
-  than on its face being that backglass's extraction (a failed
-  flat extraction no longer strands a game's lamps), and the
-  art warmer pre-extracts layer sets in a second phase after
-  the flat art, so a B2S card's first focus usually cascades
-  immediately. The **flasher-release round** (2026-10-27) splits
-  the layers by the file's own RomIDType: a type-2 bulb is a
-  solenoid *flasher* — a momentary device on the real machine —
-  so it strikes with the cascade, holds briefly, and releases
-  fully before the cascade ends, while lamps (and a pair set's
-  one layer) hold as before. Holding flashers was the field
-  ghost: on Taxi, seven translucent passenger flashers stacked
-  over the unlit base for the whole dwell (×1.73 mean
-  luminance); the settled card is now base + lamps (×1.01).
-  Layer sets carry their kinds from extraction (layer cache
-  generation lv3, so kind-less sets re-extract once). The
-  **animation-release round** (2026-10-27) adds the file's
-  other declaration: a bulb named by an `<Animations>` step
-  is a sequenced *frame* (kind `anim`), and it releases on
-  the flasher schedule too — the server only ever shows one
-  frame of a sequence at a time, so a settled card may hold
-  none of them. Holding frames was the Goonies ghost: that
-  old-format file carries no RomIDType at all, and all 22 of
-  its layers are animation frames (a 7-frame sparkle over
-  76% of the glass; three 5-step opacity ramps redrawing
-  the ship, the key and Willy) — PVLDS stacked and held
-  every frame at once, so the card permanently double-
-  printed its own subjects. Its settled card is now the
-  bare base, pixel for pixel. On Taxi the same parse moves
-  the two "light" lamps the file itself blinks in attract
-  to the release class (17 layers: 7 flashers + 2 anim +
-  8 lamps). Layer cache generation lv4, so membership-less
-  sets re-extract once.
+- **Power-on mimic (the swap round, 2026-10-27).** When focus
+  *settles* on a card (a ~200 ms rest, so fast navigation never
+  strobes the wall), the already-popping card powers on: ONE
+  shader quad over the face grades the face's own pixels
+  through a lamp-catch envelope (three stutters, a sag dip,
+  full by ~0.5 s) and a diagonal light sweep, settling to a
+  held grade - bright art is shouldered off so nothing clips.
+  A card whose backglass is an on/off pair instead crossfades
+  the whole picture to the author's lit On image (the flat
+  extraction caches it beside the face) and back to the Off
+  face when focus leaves. Every face class performs the same
+  way - B2S, embedded, sidecar, title card - because the
+  shader samples the face the card already wears; one card
+  ever performs, and nothing is extracted on focus. This
+  replaced the snippet-layer cascade (the flicker rounds):
+  four field ghosts in a row were each one more value of the
+  file's own taxonomy the compositor did not honor (solenoid
+  flashers held as lamps on Taxi, all 22 of Goonies' animation
+  frames stacked at once, Bride of PinBot's GI circuit
+  washes, transparent quads sorting in camera order), so the
+  stack - layer extractor, layer cache and generations, the
+  focus kick, the warmer's second phase - is deleted, not
+  dormant; a stale `art_cache/layers` directory on an existing
+  install is wiped by the first cache prune. The sizing half
+  of the old flicker round survives untouched: the wall
+  grid's uniform aspect is tuned from the library's median
+  extracted-art aspect (bounded 0.76-0.93), a popped card
+  grows to its own art's true aspect as it powers on, and
+  that grow is gated by shape - only a glass-plausible art
+  aspect (0.75-1.45; real glasses measure 1.11-1.30) earns
+  the true-aspect pop, with horizontal growth capped at
+  1.5x; embedded playfield/banner art pops at the uniform
+  1.08x instead.
 - **One input model.** VR controller laser, mouse ray, and
   gamepad/keyboard focus all pick from the same surfaces. Mouse can
   drive the whole UI flat at the desk — the flat camera is static at

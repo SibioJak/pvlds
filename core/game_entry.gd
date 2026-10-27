@@ -14,8 +14,6 @@ var art_path: String = "" ## Loadable image (side image or extracted cache file)
 var art_source_path: String = "" ## The primary extraction source not yet extracted: a same-stem .directb2s, or the .vpx itself when the game has no backglass. "" when neither exists.
 var art_vpx_path: String = "" ## The game's first build's .vpx - the embedded-image fallback source, tried when the primary source holds no usable image. Set for every game; it is the table file itself, so it always exists.
 var _art_attempted: bool = false
-var _flicker_attempted: bool = false
-var _flicker_data: Dictionary = {}
 
 
 ## Art the scan knows exists for this game - extracted or not.
@@ -46,22 +44,6 @@ func art_sources() -> Array[String]:
 ## file itself. The claim registry prevents DUPLICATE work; it
 ## must never become a stall with no fallback.
 const CLAIM_WAIT_MSEC: int = 3000
-
-## How long the room's power-on KICK waits on another
-## claimant's in-flight layer extraction of the same file.
-## The panel cap above stays short - a visible card cannot
-## stall - but the kick is background work whose only job is
-## landing the set for the next visit, and the 3 s cap lost
-## the race against real multi-second extractions (the
-## intermittent-firing conviction: focus lands while the
-## warmer is mid-extraction of the same file, the cap
-## expires, the kick dies empty). The wait itself ends the
-## moment the extraction resolves - await_flicker returns
-## on the recorded outcome or the released claim - so this
-## bound is only the wedge guard: ten times the panel cap,
-## far beyond any real extraction, never open-ended.
-const KICK_WAIT_MSEC: int = 30000
-
 
 ## A loadable image path for a visible panel, walking the art
 ## sources in order (art_sources). Per source: warm cache serves
@@ -120,88 +102,37 @@ func _ensure_from_source(src: String) -> String:
 	return ""
 
 
-## The .directb2s whose lamp layers this game's face could
-## wear for the power-on flicker, or "" when the game has none
-## in play. Only the primary extraction source counts, and only
-## when it is a backglass: a side image outranks the backglass
-## for the face, so the scanner never records the backglass
-## beside one (see LibraryScanner._resolve_art) - layers
-## composited over a different image would sit in the wrong
-## places, so those games take the brightness fallback instead.
-## The room keys its layer path on this alone: a game whose
-## flat extraction failed and fell through to embedded art or
-## a title card still cascades from here (flicker fix round).
-func flicker_source() -> String:
+## The .directb2s this game's face comes from, or "" when it
+## does not. Only the primary extraction source counts, and
+## only when it is a backglass: a side image outranks the
+## backglass for the face, so the scanner never records the
+## backglass beside one (see LibraryScanner._resolve_art).
+## The room keys its pair crossfade on this (with pair_on_art):
+## a game whose flat extraction failed and fell through to
+## embedded art or a title card has no pair to crossfade to,
+## however its file is built.
+func backglass_source() -> String:
 	if art_source_path.get_extension().to_lower() == "directb2s":
 		return art_source_path
 	return ""
 
 
-## The game's flicker layer set (ArtProvider.extract_flicker_
-## layers' dictionary), with ensure_art's claim discipline:
-## a warm sibling cache serves with no work; a stamped negative
-## (no_layers, or failed with its retry spent - the actionable
-## outcome, ArtProvider.flicker_actionable_outcome) answers
-## empty at once; a cold source is claimed and extracted here,
-## or joined if another claimant (the room's focus-triggered
-## worker) is already extracting it. The result memoizes for
-## the entry's life, like _art_attempted. Safe to call from a
-## worker thread - the room does exactly that, so a first
-## focus never pays the extraction on the render thread; the
-## ArtProvider statics it touches are mutex-guarded, as the
-## warmer's path already relies on.
-##
-## wait_msec bounds only the JOIN: how long this caller waits
-## on another claimant's in-flight extraction before giving
-## up empty. Visible-path callers keep the default panel cap;
-## the room's kick passes KICK_WAIT_MSEC (see its doc).
-func ensure_flicker(wait_msec: int = CLAIM_WAIT_MSEC) -> Dictionary:
-	if not _flicker_data.is_empty() or _flicker_attempted:
-		return _flicker_data
-	_flicker_attempted = true
-	var src: String = flicker_source()
+## The cached pair ON half for this game, as a loadable face
+## texture path, or "" when there is none to crossfade to:
+## the face must BE this backglass's extraction (art_path is
+## its cache) and the extraction must have cached its On
+## sibling (ArtProvider.has_pair_on). Cheap probes only - the
+## extraction itself is the flat pipeline's work, already done
+## by the time a panel exists.
+func pair_on_art() -> String:
+	var src: String = backglass_source()
 	if src == "":
-		return _flicker_data
-	if ArtProvider.has_flicker_layers(src):
-		_flicker_data = ArtProvider.extract_flicker_layers(src)
-		return _flicker_data
-	if ArtProvider.is_flicker_negative(ArtProvider.flicker_actionable_outcome(src)):
-		return _flicker_data
-	var key: String = ArtProvider.flicker_claim_key(src)
-	if ArtProvider.claim_extract(key):
-		_flicker_data = ArtProvider.extract_flicker_layers(src)
-		ArtProvider.release_extract(key)
-		return _flicker_data
-	if ArtProvider.await_flicker(src, wait_msec):
-		_flicker_data = ArtProvider.extract_flicker_layers(src)
-	return _flicker_data
-
-
-## The room's power-on kick, as a task target: land this
-## game's layer set for its next focus visit, riding out
-## another claimant's in-flight extraction of the same file
-## (the KICK_WAIT_MSEC join above) instead of dying at the
-## panel cap. Completion is logged either way (POWER: kick
-## done): success, failure, or no source - the field trap
-## reads outcomes, not hopes.
-##
-## The task MUST stay bound to the entry, never to a Node:
-## the room first bound it to itself (a bound Callable
-## carrying the game as an argument), and that shape
-## corrupted the heap - the process segfaulted in
-## pthread_mutex_lock during shutdown, deterministically,
-## while the suite itself passed (bisect, 2026-10-27). The
-## entry-bound task is the shape the launcher has shipped
-## since the flicker round; it is also the honest owner -
-## the wait, the outcome and the title all live here.
-func kick_flicker() -> void:
-	var t0: int = Time.get_ticks_msec()
-	ensure_flicker(KICK_WAIT_MSEC)
-	var src: String = flicker_source()
-	print("POWER: kick done game=\"%s\" outcome=%s elapsed_ms=%d" % [
-		title,
-		ArtProvider.flicker_outcome(src) if src != "" else "",
-		Time.get_ticks_msec() - t0])
+		return ""
+	if art_path != ArtProvider.cache_path_for(src):
+		return ""
+	if ArtProvider.has_pair_on(src):
+		return ArtProvider.pair_on_path_for(src)
+	return ""
 
 
 func build_count() -> int:

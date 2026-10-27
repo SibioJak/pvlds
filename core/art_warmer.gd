@@ -17,37 +17,6 @@ extends RefCounted
 ## queue. The warmer writes only cache files - texture creation
 ## stays in the room, on warm hits that are a small file read.
 ##
-## Phase two (flicker fix round): once the flat queue is empty,
-## the same pass walks a second queue - the lamp-layer sets of
-## B2S-backed games that have no stamped layer outcome yet -
-## through GameEntry.ensure_flicker, so a first focus on a
-## B2S card can cascade immediately instead of surging while
-## its set is cold. Flat art is strictly first, always: the
-## layer queue is only touched while the flat queue is empty,
-## and anything prioritize() or a fresh warm_library() queues
-## flat pre-empts it again. Same discipline as phase one -
-## background worker only, never during a scan (warm_library
-## is only ever called on a scan's adopt), abandoned at item
-## boundaries on request_stop, and once per game ever: a
-## stamped layer outcome (ok / no_layers) is never
-## re-queued, and a set extracted by a focus visit meanwhile
-## is skipped when its turn comes. A FAILED stamp is the
-## one exception (half-2 round): it re-queues until its
-## single per-generation retry is spent - the actionable
-## outcome (ArtProvider.flicker_actionable_outcome) carries
-## that rule, here and in GameEntry. One flat outcome DOES
-## skip a game here: a stamped no_image means the file was
-## read end to end and holds no usable image anywhere - no
-## base for lamps to light over, so there is nothing to
-## extract. Any other outcome stays queued: the two readers
-## stamp independently, and one reader's failure is not
-## evidence about the other. (Before flicker fix round 2
-## the wart lived in exactly that gap - a corrupt designated
-## DMD stamped the flat read FAILED while the layers reader
-## found the base in the blob fallback. The readers share
-## one base finder now, so the wart's flat read finds the
-## same base its lamps use; the queue rule stays regardless.)
-
 ## Set by the owner; fired (deferred to the main thread) when a pass
 ## empties its queue.
 var on_drained: Callable = Callable()
@@ -58,8 +27,6 @@ var last_pass_items: int = 0 ## extractions the last pass performed
 var _mutex: Mutex = Mutex.new()
 var _queue: Array[String] = []
 var _queued: Dictionary = {}
-var _layer_queue: Array[GameEntry] = [] ## phase two: entries owing a layer extraction
-var _layer_queued: Dictionary = {} ## game_id -> true, for _layer_queue
 var _worker_active: bool = false
 var _stop_requested: bool = false
 var _pass_started_msec: int = 0
@@ -75,25 +42,15 @@ func warm_library(games: Array[GameEntry]) -> void:
 	for g: GameEntry in games:
 		for src: String in g.art_sources():
 			keep[ArtProvider.cache_path_for(src)] = true
+			if src.get_extension().to_lower() == "directb2s":
+				# A pair file's cached ON half (the swap round):
+				# it maps to this source's stamp, so it stands
+				# or falls with the face beside it.
+				keep[ArtProvider.pair_on_path_for(src)] = true
 	ArtProvider.prune_cache(keep)
 	_mutex.lock()
 	_queue.clear()
 	_queued.clear()
-	_layer_queue.clear()
-	_layer_queued.clear()
-	for g: GameEntry in games:
-		# Phase two's queue, built alongside phase one's: every
-		# B2S-backed game whose layer set has never been tried.
-		# (A FAILED flat extraction does not skip a game - the
-		# readers stamp independently. A stamped no_image does:
-		# no usable image anywhere in the file means no base
-		# exists for lamps to light over.)
-		var fsrc: String = g.flicker_source()
-		if fsrc != "" and ArtProvider.flicker_actionable_outcome(fsrc) == "" \
-				and ArtProvider.outcome_for_source(fsrc) != ArtProvider.STATUS_NO_IMAGE \
-				and not _layer_queued.has(g.game_id):
-			_layer_queue.append(g)
-			_layer_queued[g.game_id] = true
 	for g: GameEntry in games:
 		var sources: Array[String] = g.art_sources()
 		for i: int in range(sources.size()):
@@ -134,12 +91,7 @@ func warm_library(games: Array[GameEntry]) -> void:
 ## Move these games' art sources to the front of the queue
 ## (order preserved) so a page flip lands on warm art. Paths not
 ## yet queued are added; cached or panel-claimed ones are skipped
-## by the worker. The same call moves the games' LAYER items to
-## the front of the phase-two queue (half-2 round): a settled
-## page is what the player is about to look at, so its lamp
-## sets should not wait behind the whole library's - before
-## this, prioritize served only the flat queue and a page's
-## first focus could still find its layers cold.
+## by the worker.
 func prioritize(games: Array[GameEntry]) -> void:
 	var front: Array[String] = []
 	for g: GameEntry in games:
@@ -152,62 +104,13 @@ func prioritize(games: Array[GameEntry]) -> void:
 		_queued[src] = true
 	for i: int in range(front.size() - 1, -1, -1):
 		_queue.push_front(front[i])
-	_prioritize_layers_locked(games)
 	_start_locked()
 	_mutex.unlock()
-
-
-## Move these games' pending layer items to the front of the
-## phase-two queue (the games' given order preserved; the rest
-## of the queue keeps its order behind them). Only items the
-## pass already owes move: a game never queued (already
-## stamped, no backglass, not in this library) has nothing to
-## move, and nothing is ADDED - the room's focus kick covers a
-## game the warmer never queued, through the entry itself.
-## A live pass picks the new front up at its next item
-## boundary; an idle one (re)starts.
-func prioritize_layers(games: Array[GameEntry]) -> void:
-	if games.is_empty():
-		return
-	_mutex.lock()
-	_prioritize_layers_locked(games)
-	_start_locked()
-	_mutex.unlock()
-
-
-## Caller holds _mutex. Rebuild the layer queue as the moved
-## games (in argument order, each at most once, only those
-## actually queued) followed by the unmoved remainder in its
-## existing order. The moved entries are the QUEUE's own
-## instances, matched by game_id - a caller holding a twin
-## instance of the same game can never duplicate an item.
-## Membership never changes here, so the _layer_queued
-## registry needs no update.
-func _prioritize_layers_locked(games: Array[GameEntry]) -> void:
-	if _layer_queue.is_empty():
-		return
-	var by_id: Dictionary = {}
-	for q: GameEntry in _layer_queue:
-		by_id[q.game_id] = q
-	var front: Array[GameEntry] = []
-	for g: GameEntry in games:
-		var q: Variant = by_id.get(g.game_id, null)
-		if q != null and not front.has(q as GameEntry):
-			front.append(q as GameEntry)
-	if front.is_empty():
-		return
-	var rest: Array[GameEntry] = []
-	for g: GameEntry in _layer_queue:
-		if not front.has(g):
-			rest.append(g)
-	_layer_queue.clear()
-	_layer_queue.append_array(front)
-	_layer_queue.append_array(rest)
 
 
 func is_idle() -> bool:
 	_mutex.lock()
-	var idle: bool = not _worker_active and _queue.is_empty() and _layer_queue.is_empty()
+	var idle: bool = not _worker_active and _queue.is_empty()
 	_mutex.unlock()
 	return idle
 
@@ -324,7 +227,7 @@ static func cache_coverage(games: Array[GameEntry]) -> Vector2i:
 
 ## Caller holds _mutex. Starts the single worker when there is work.
 func _start_locked() -> void:
-	if _worker_active or (_queue.is_empty() and _layer_queue.is_empty()):
+	if _worker_active or _queue.is_empty():
 		return
 	# A fresh pass is a new lease: a stop requested of some earlier,
 	# already-finished moment must not abandon it. (While a pass is
@@ -333,7 +236,7 @@ func _start_locked() -> void:
 	_worker_active = true
 	_pass_started_msec = Time.get_ticks_msec()
 	_pass_items = 0
-	print("POWER: warmer pass start flat=%d layers=%d" % [_queue.size(), _layer_queue.size()])
+	print("POWER: warmer pass start flat=%d" % [_queue.size()])
 	WorkerThreadPool.add_task(_run_pass)
 
 
@@ -350,14 +253,12 @@ func _run_pass() -> void:
 			_stop_requested = false
 			_queue.clear()
 			_queued.clear()
-			_layer_queue.clear()
-			_layer_queued.clear()
 			_worker_active = false
 			last_pass_msec = Time.get_ticks_msec() - _pass_started_msec
 			last_pass_items = _pass_items
 			_mutex.unlock()
 			return
-		if _queue.is_empty() and _layer_queue.is_empty():
+		if _queue.is_empty():
 			_worker_active = false
 			last_pass_msec = Time.get_ticks_msec() - _pass_started_msec
 			last_pass_items = _pass_items
@@ -365,22 +266,9 @@ func _run_pass() -> void:
 			if on_drained.is_valid():
 				on_drained.call_deferred()
 			return
-		# Flat art strictly first: a layer item is only taken
-		# once the flat queue stands empty (a fresh flat queue
-		# - prioritize, a new warm - pre-empts phase two at
-		# the next item boundary, exactly like a scan would).
-		var src: String = ""
-		var layer_game: GameEntry = null
-		if not _queue.is_empty():
-			src = _queue.pop_front()
-			_queued.erase(src)
-		else:
-			layer_game = _layer_queue.pop_front()
-			_layer_queued.erase(layer_game.game_id)
+		var src: String = _queue.pop_front()
+		_queued.erase(src)
 		_mutex.unlock()
-		if layer_game != null:
-			_warm_layers(layer_game)
-			continue
 		if ArtProvider.is_cache_current(src):
 			continue
 		if ArtProvider.is_negative_outcome(ArtProvider.outcome_for_source(src)):
@@ -399,33 +287,3 @@ func _run_pass() -> void:
 		# A breath between items keeps disk and CPU contention low
 		# while the room is loading its own (warm) textures.
 		OS.delay_msec(2)
-
-
-## One game's phase-two item (worker thread): extract its
-## lamp-layer set through the entry, whose claim discipline
-## arbitrates with the room's focus-triggered extraction -
-## whichever claimant gets there first does the work and the
-## other reads the stamped outcome. A set a focus visit
-## extracted while this item waited its turn is skipped by
-## the outcome re-check. Counts as a pass item only when the
-## outcome actually transitions from untried to stamped:
-## warm hits and skips are not extractions.
-func _warm_layers(g: GameEntry) -> void:
-	var src: String = g.flicker_source()
-	var t0: int = Time.get_ticks_msec()
-	if src == "" or ArtProvider.flicker_actionable_outcome(src) != "" \
-			or ArtProvider.outcome_for_source(src) == ArtProvider.STATUS_NO_IMAGE:
-		# Skipped at its turn: a focus visit (or the stamp's
-		# own retry rule) settled this one while it waited.
-		print("POWER: warmer layer game=\"%s\" outcome=%s elapsed_ms=%d skipped" % [
-			g.title, ArtProvider.flicker_outcome(src) if src != "" else "", Time.get_ticks_msec() - t0])
-		return
-	g.ensure_flicker()
-	var outcome: String = ArtProvider.flicker_outcome(src)
-	print("POWER: warmer layer game=\"%s\" outcome=%s elapsed_ms=%d" % [
-		g.title, outcome, Time.get_ticks_msec() - t0])
-	if outcome != "":
-		_mutex.lock()
-		_pass_items += 1
-		_mutex.unlock()
-	OS.delay_msec(2)

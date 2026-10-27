@@ -12,7 +12,6 @@ signal setup_panel_scan_requested ## the SETUP panel's SCAN LIBRARY: Main owns t
 signal launch_requested(game: GameEntry, build: TableBuild) ## card Launch / detail Play - Main owns the launch + exit
 signal exit_requested ## rail EXIT: Main disarms the watchdog and quits
 signal art_prefetch_requested(games: Array) ## a page settled: Main's warmer should bring the neighbouring pages' art forward
-signal art_kick_requested(game: GameEntry) ## a power-on kick fired for this game: Main's warmer should bring its layer set forward
 
 const PAGE_COLS: int = 4
 const PAGE_ROWS: int = 3
@@ -91,54 +90,41 @@ const POP_GATE_ASPECT_MIN: float = 0.75 ## narrowest aspect the pop treats as a 
 const POP_GATE_ASPECT_MAX: float = 1.45 ## widest aspect the pop treats as a glass's shape
 const POP_FULL_X_MAX: float = 1.5 ## a true-aspect pop's widest horizontal growth, whatever the glass
 
-## Power-on flicker (the flicker round, 2026-10-26 - Chris,
-## on double-clicking a .directb2s and watching its lamps
-## stutter on: "It would be a neat effect for the game
-## cards"). When focus SETTLES on a card (the debounce below,
-## so fast navigation never strobes the wall), the card -
-## already popping out - powers on: a B2S-backed card lights
-## its real lamp layers in a fast cascade over its unlit base
-## and stays lit while focused; any other card surges its
-## whole face (dark, catch, dip, lit) on the same trigger, so
-## focus speaks one language across the wall. One card ever
-## performs. No audio. Every feel knob is a constant here.
-## The layers the file marks as solenoid flashers strike
-## with the cascade but release before it ends - they are
-## momentary devices, and holding them stacked the field
-## ghost (the flasher-release round; POWER_FLASHER_* below).
-## Layers the file's own animation section sequences are
-## frames, not states, and release on the same schedule -
-## holding every frame of a sequence double-prints the
-## glass (the animation-release round).
+## Power-on (the swap round, 2026-10-27): the snippet-layer
+## cascade is RETIRED - four field ghosts in a row were one
+## more value of the file's own taxonomy the compositor did
+## not honor (solenoid flashers held as lamps, animation
+## frames stacked, GI circuit washes, transparent quads
+## sorting in camera order), and the stack is deleted, not
+## dormant. What performs now is the MIMIC: one shader quad
+## over the focused card's face, grading the face's own
+## pixels through a lamp-catch envelope and a diagonal
+## sweep (ui/mimic_power.gdshader) - the power-on the mimic
+## prototype proved on the real Taxi, Goonies and Bride
+## faces, with a soft shoulder added so bright printed art
+## cannot clip. A pair card crossfades the whole picture to
+## the author's On image instead; its settled state carries
+## no synthesized grade. Every face class gets the same
+## performance - B2S, embedded, sidecar, title card -
+## because the shader samples the face the card already
+## wears, and no extraction or file work happens on focus.
+## One card ever performs; focus leaving restores the
+## plain face. No audio. Every feel knob is a constant
+## here or a uniform default in the shader.
 const POWER_SETTLE_SEC: float = 0.2 ## focus must rest this long before the power-on starts
 const POWER_CASCADE_SEC: float = 1.05 ## the power-on's full run, seconds
-const POWER_DARK: float = 0.22 ## the brightness fallback's floor (and its curve's low key)
-## The fallback's brightness keyframes [seconds, brightness]:
-## dark hold, a first catch, a dip, a near-catch with a sag,
-## then lit for good. Read by power_brightness_at.
-const POWER_BRIGHTNESS_KEYS: Array = [
-	[0.0, 0.22], [0.09, 0.22], [0.15, 0.80], [0.21, 0.30],
-	[0.30, 0.95], [0.38, 0.50], [0.50, 1.0], [0.58, 0.82],
-	[0.68, 1.0], [1.05, 1.0],
+const MIMIC_SHADER: Shader = preload("res://ui/mimic_power.gdshader")
+## The catch envelope's keyframes [seconds, power]: three
+## stuttering catches across 0.06-0.27 s, a sag dip to 0.62
+## at 0.34 s, full by 0.48 s, held to the cascade's end.
+## Read by mimic_power_at - the prototype's proven curve.
+const MIMIC_POWER_KEYS: Array = [
+	[0.0, 0.0], [0.06, 0.50], [0.10, 0.15], [0.16, 0.68],
+	[0.21, 0.30], [0.27, 0.88], [0.34, 0.62], [0.48, 1.0],
+	[1.05, 1.0],
 ]
-## Flasher release (the flasher-release round, 2026-10-27): a
-## layer the file marks as a solenoid device (RomIDType 2 -
-## ArtProvider's FLASHER kind) is momentary on the real
-## machine, so it may strike with the cascade but may not
-## HOLD: it stays struck for this long past its catch, then
-## fades out over the fade constant, and the release is
-## clamped so every flasher is fully out by the cascade's
-## end - the settled card is lamps over base, never a stack
-## of translucent flasher copies (the Taxi ghost: seven
-## passenger flashers held lit for the whole dwell). The
-## animation-release round (same day) put ArtProvider's ANIM
-## kind - a frame the file's <Animations> section sequences -
-## on this same schedule: the file shows one frame of a
-## sequence at a time, so a settled card may hold none of
-## them (the Goonies ghost: 22 animation frames, every layer
-## the file carries, stacked and held at once).
-const POWER_FLASHER_HOLD_SEC: float = 0.30 ## a struck flasher's hold before its release begins
-const POWER_FLASHER_FADE_SEC: float = 0.15 ## the release's fade length
+const MIMIC_SWEEP_SEC: float = 0.79 ## the diagonal sweep front completes at this cascade second
+const PAIR_MIX_T0: float = 0.40 ## cascade second where a pair card's crossfade to its On image begins (it completes at the cascade's end)
 
 ## Page slide (the bumper feel round, 2026-10-24 - Chris, on the
 ## bumper flip: "it snaps to next wall, which is great, its fast,
@@ -213,16 +199,13 @@ var _power_panel: ClickableQuad = null ## the card currently performing (or hold
 var _power_candidate: ClickableQuad = null ## the pop target the settle debounce is timing
 var _power_candidate_t: float = 0.0 ## seconds the candidate has rested
 var _power_phase: int = 0 ## 0 idle, 1 cascading, 2 settled lit
-var _power_mode: int = 0 ## 0 = whole-face brightness fallback, 1 = real lamp layers
-var _power_pair: bool = false ## the performing set is an on/off pair: its one layer SWAPS between the two printed states, never blends (see _power_layer_alpha)
+var _power_mode: int = 0 ## 0 = none, 2 = mimic grade, 3 = pair crossfade (the swap round's modes; 1 was the retired layer cascade)
+var _power_pair: bool = false ## the performance crossfades to the author's On image (mode 3)
 var _power_t: float = 0.0 ## seconds into the live cascade
 var _power_game: GameEntry = null ## the performing card's game
-var _power_layers: Array[MeshInstance3D] = [] ## the performing card's lamp layer quads (children of the panel)
-var _power_mats: Array[StandardMaterial3D] = [] ## their materials, parallel to _power_layers
-var _power_schedule: Array = [] ## per layer: [catch_t, dip_end_t, on_t, release_t] cascade times, parallel to _power_layers; release_t < 0 for a layer that holds
-var _power_flasher: Array[bool] = [] ## per layer: release-class (a solenoid flasher or an animation frame - strikes, then releases instead of holding), parallel to _power_layers
-var _power_kinds: Array[String] = [] ## per layer: its ArtProvider kind, parallel to _power_layers
-var _power_kicked: Dictionary = {} ## game_id -> true: a background layer extraction was kicked for this game this session
+var _power_overlay: MeshInstance3D = null ## the mimic's one quad over the performing face (a child of the panel)
+var _power_mat: ShaderMaterial = null ## the overlay's material - its uniforms are the performance
+var _power_missed: ClickableQuad = null ## a candidate whose face texture was not ready when its settle fired: skipped until focus changes, never retried per frame
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
@@ -574,7 +557,7 @@ func _sort_visible() -> void:
 # ---------------------------------------------------------------- wall
 
 func _rebuild_wall() -> void:
-	# The power-on's performer and its lamp layers die with
+	# The power-on's performer and its overlay die with
 	# the wall being torn down: drop the state without
 	# touching the (about to be freed) nodes.
 	_power_reset_state()
@@ -2113,7 +2096,7 @@ func pop_target() -> ClickableQuad:
 	return _pop_target_panel()
 
 
-## Sizing queries (the flicker shot reads these): the wall's
+## Sizing queries (the shot suites read these): the wall's
 ## live card size, a panel's recorded art aspect (0 = none),
 ## and the scale a panel reaches at FULL pop given its art -
 ## the very numbers _update_pop interpolates toward, so a
@@ -2144,7 +2127,7 @@ func panel_full_pop_scale(q: ClickableQuad) -> Vector2:
 	return Vector2(minf(w, POP_FULL_X_MAX), POP_OUT_SCALE)
 
 
-# ------------------------------------------------------------ power-on flicker
+# ------------------------------------------------------------ power-on mimic
 
 ## The power-on's per-frame driver, on _process beside the
 ## pop and the slide. The performer is chosen from the pop
@@ -2165,6 +2148,8 @@ func _update_power(delta: float) -> void:
 	if cand != _power_candidate:
 		_power_candidate = cand
 		_power_candidate_t = 0.0
+		if cand != _power_missed:
+			_power_missed = null
 	else:
 		_power_candidate_t += delta
 	if _power_panel != null and cand != _power_panel:
@@ -2174,7 +2159,7 @@ func _update_power(delta: float) -> void:
 		elif cand == null:
 			trigger = "focus_cleared"
 		_restore_power(trigger)
-	if _power_panel == null and cand != null and _power_candidate_t >= POWER_SETTLE_SEC:
+	if _power_panel == null and cand != null and cand != _power_missed and _power_candidate_t >= POWER_SETTLE_SEC:
 		_start_power(cand)
 	if _power_panel != null and _power_phase == 1:
 		_power_t += delta
@@ -2185,291 +2170,110 @@ func _update_power(delta: float) -> void:
 			_apply_power()
 
 
-## Start the cascade on a settled card. The mode is chosen
-## once, here: real lamp layers when the game HAS a
-## backglass and its layer extraction is already cached -
-## whatever source won the flat face. (The flicker round's
-## first cut additionally required the face to BE this
-## backglass's extraction, which quietly excluded every
-## game whose flat B2S extraction failed and fell through
-## to embedded art or a title card: their lamps were
-## extractable but never extracted - surge-only forever.
-## The layers are placed over the face the card actually
-## wears; that is the wart's whole trade.) Otherwise the
-## whole-face brightness surge. A cold layer set is kicked
-## to a background extraction so the NEXT visit to this
-## card can light its real lamps - this visit surges,
-## honestly, rather than stalling the room on file work.
+## Start the power-on on a settled card. The mode is chosen
+## once, here: a pair card (its flat extraction cached the
+## author's On half - GameEntry.pair_on_art) crossfades,
+## mode 3; every other card takes the mimic grade, mode 2.
+## Either way the overlay samples the face the card already
+## wears, so no extraction or file work ever happens on
+## focus. A card whose face texture is somehow not ready
+## is skipped for this focus (marked missed), never
+## retried per frame.
 func _start_power(panel: ClickableQuad) -> void:
+	var game: GameEntry = _scanner.game_by_id(panel.payload) if _scanner != null else null
+	var label: String = game.title if game != null else panel.payload
+	var face_tex: Texture2D = panel.current_texture()
+	if face_tex == null:
+		_power_missed = panel
+		print("POWER: start game=\"%s\" skipped (face texture not ready)" % label)
+		return
+	var on_tex: Texture2D = null
+	if game != null:
+		var on_path: String = game.pair_on_art()
+		if on_path != "":
+			on_tex = TextureFactory.load_art_texture(on_path)
 	_power_panel = panel
+	_power_game = game
 	_power_t = 0.0
 	_power_phase = 1
-	_power_mode = 0
-	_power_pair = false
-	_power_game = _scanner.game_by_id(panel.payload) if _scanner != null else null
-	var src: String = ""
-	var kicked: bool = false
-	var n_kinds: Array[int] = [0, 0, 0] ## the set's composition: lamps, flashers, animation frames
-	if _power_game != null:
-		src = _power_game.flicker_source()
-		if src != "":
-			if ArtProvider.has_flicker_layers(src):
-				var data: Dictionary = ArtProvider.extract_flicker_layers(src)
-				for ld: Variant in data.get("layers", []) as Array:
-					var lkind: String = str((ld as Dictionary).get("kind", ArtProvider.LAYER_KIND_LAMP))
-					if lkind == ArtProvider.LAYER_KIND_FLASHER:
-						n_kinds[1] += 1
-					elif lkind == ArtProvider.LAYER_KIND_ANIM:
-						n_kinds[2] += 1
-					else:
-						n_kinds[0] += 1
-				if not (data.get("layers", []) as Array).is_empty():
-					_power_pair = bool(data.get("pair", false))
-					_build_power_layers(panel, data)
-					# A set whose every layer lives under the
-					# name strip builds no quads: surge instead
-					# of sitting on the unlit base all focus.
-					_power_mode = 1 if not _power_layers.is_empty() else 0
-			else:
-				kicked = _kick_power_extraction(_power_game)
-	# The field trap (half-2 round): every start states what
-	# it found and what it did - the source in play, whether
-	# the set stood warm, the stamp that stands, the mode it
-	# chose, the quads it built, whether it kicked, and the
-	# set's kind composition (the animation-release round: a
-	# card that ghosted with anim:22 stands convicted in the
-	# same one line). A visit that surged when it should
-	# have cascaded convicts itself in one line.
-	var label: String = _power_game.title if _power_game != null else panel.payload
-	print("POWER: start game=\"%s\" source=\"%s\" has_layers=%s outcome=%s mode=%d quads=%d kicks=%d kinds=lamp:%d,flasher:%d,anim:%d" % [
-		label, src,
-		str(src != "" and ArtProvider.has_flicker_layers(src)),
-		ArtProvider.flicker_outcome(src) if src != "" else "",
-		_power_mode, _power_layers.size(), 1 if kicked else 0,
-		n_kinds[0], n_kinds[1], n_kinds[2]])
+	_power_pair = on_tex != null
+	_power_mode = 3 if _power_pair else 2
+	_build_power_overlay(panel, face_tex, on_tex)
+	print("POWER: start game=\"%s\" mode=%d %s" % [
+		label, _power_mode,
+		"pair-crossfade" if _power_pair else "mimic"])
 	print("POWER: phase 0->1 game=\"%s\"" % label)
 	_apply_power()
 
 
-## The background first-extraction of a card's layer set:
-## once per game per session, on a worker thread (the claim
-## discipline inside ensure_flicker arbitrates with any
-## other claimant). The layers land for the next focus
-## visit; nothing here blocks or restarts this visit's
-## surge. Returns true when this call actually issued the
-## kick (the start's POWER line counts it). The kick also
-## asks Main's warmer to bring the game's layer item to the
-## front of its phase-two queue (art_kick_requested): the
-## two extractions race under the claim registry, never
-## duplicate, and whichever lands first warms the set.
-func _kick_power_extraction(game: GameEntry) -> bool:
-	if _power_kicked.has(game.game_id):
-		return false
-	_power_kicked[game.game_id] = true
-	art_kick_requested.emit(game)
-	WorkerThreadPool.add_task(Callable(game, "kick_flicker"))
-	return true
+## Build the mimic's one overlay quad over the performing
+## card's face: sized to the face's art area (the whole
+## face above the name strip), sampling the face's own
+## texture through an atlas window over exactly that area.
+## A pair card's On texture rides as the shader's second
+## source, windowed by the same centered cover rule
+## CardFace draws the face with, so the crossfade's two
+## pictures register pixel for pixel.
+func _build_power_overlay(panel: ClickableQuad, face_tex: Texture2D, on_tex: Texture2D) -> void:
+	var art_rect: Rect2 = Rect2(0.0, 0.0, float(_panel_face_px.x),
+		float(_panel_face_px.y - CardFace.ART_STRIP_HEIGHT_PX))
+	var face_atlas: AtlasTexture = AtlasTexture.new()
+	face_atlas.atlas = face_tex
+	face_atlas.region = Rect2(art_rect.position, Vector2(
+		minf(art_rect.size.x, float(face_tex.get_width())),
+		minf(art_rect.size.y, float(face_tex.get_height()))))
+	_power_mat = ShaderMaterial.new()
+	_power_mat.shader = MIMIC_SHADER
+	_power_mat.set_shader_parameter("face_tex", face_atlas)
+	_power_mat.set_shader_parameter("power", 0.0)
+	_power_mat.set_shader_parameter("sweep", 0.0)
+	_power_mat.set_shader_parameter("has_pair", 0.0)
+	if on_tex != null:
+		var on_atlas: AtlasTexture = AtlasTexture.new()
+		on_atlas.atlas = on_tex
+		var ow: float = float(on_tex.get_width())
+		var oh: float = float(on_tex.get_height())
+		var cover: float = maxf(art_rect.size.x / ow, art_rect.size.y / oh)
+		var win: Vector2 = art_rect.size / cover
+		on_atlas.region = Rect2((Vector2(ow, oh) - win) * 0.5, win)
+		_power_mat.set_shader_parameter("on_tex", on_atlas)
+		_power_mat.set_shader_parameter("has_pair", 1.0)
+		_power_mat.set_shader_parameter("pair_mix", 0.0)
+	var qm: QuadMesh = QuadMesh.new()
+	qm.size = Vector2(art_rect.size.x / float(_panel_face_px.x) * _panel_size.x,
+		art_rect.size.y / float(_panel_face_px.y) * _panel_size.y)
+	_power_overlay = MeshInstance3D.new()
+	_power_overlay.mesh = qm
+	_power_overlay.material_override = _power_mat
+	_power_overlay.position = Vector3(
+		(art_rect.get_center().x / float(_panel_face_px.x) - 0.5) * _panel_size.x,
+		(0.5 - art_rect.get_center().y / float(_panel_face_px.y)) * _panel_size.y,
+		0.006)
+	panel.add_child(_power_overlay)
 
 
-
-
-## Build the lamp layer quads over the performing card: one
-## small quad per bulb, a child of the panel (so it rides
-## the pop and the slide for free), placed by mapping the
-## bulb's fitted rect through the SAME cover transform the
-## art face draws the base with (CardFace: STRETCH_KEEP_
-## ASPECT_COVERED over the face px), then CLIPPED to the
-## face on every edge: the visible region runs from the
-## face's top-left to the name strip's top edge, a layer
-## living wholly outside it is skipped, and a straddler on
-## any edge is cropped to the intersection with an atlas
-## region showing the matching window of its snippet. (The
-## first cut fenced only the strip edge; the cover transform
-## is wider than the face for any glass wider than the
-## panel, so edge bulbs rendered in space beside the card.)
-## Materials start transparent; the cascade only ever
-## writes their alpha - no texture is composited per frame.
-func _build_power_layers(panel: ClickableQuad, data: Dictionary) -> void:
-	var fitted: Vector2i = data["base_size"] as Vector2i
-	if fitted.x <= 0 or fitted.y <= 0:
-		return
-	var cover: float = maxf(float(_panel_face_px.x) / float(fitted.x), float(_panel_face_px.y) / float(fitted.y))
-	var ox: float = (float(_panel_face_px.x) - float(fitted.x) * cover) * 0.5
-	var oy: float = (float(_panel_face_px.y) - float(fitted.y) * cover) * 0.5
-	var strip_top: float = float(_panel_face_px.y - CardFace.ART_STRIP_HEIGHT_PX)
-	var clip: Rect2 = Rect2(0.0, 0.0, float(_panel_face_px.x), strip_top)
-	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
-	rng.seed = (_power_game.game_id.hash() if _power_game != null else 12345)
-	var layers: Array = data["layers"] as Array
-	for li: int in range(layers.size()):
-		var ld: Dictionary = layers[li] as Dictionary
-		var rect: Rect2 = ld["rect"] as Rect2
-		var fr: Rect2 = Rect2(rect.position * cover + Vector2(ox, oy), rect.size * cover)
-		if fr.size.x <= 0.0 or fr.size.y <= 0.0:
-			continue
-		var vis: Rect2 = fr.intersection(clip)
-		if vis.size.x <= 0.0 or vis.size.y <= 0.0:
-			continue
-		var tex: Texture2D = TextureFactory.load_art_texture(str(ld["path"]))
-		if tex == null:
-			continue
-		var draw_tex: Texture2D = tex
-		if vis != fr:
-			# Only part of the bulb lands on the face: the
-			# quad shrinks to the intersection and an atlas
-			# region shows the matching window of the
-			# snippet. One mechanism for all four edges -
-			# the strip below, the cover crop at the sides
-			# and top.
-			var at: AtlasTexture = AtlasTexture.new()
-			at.atlas = tex
-			at.region = Rect2(
-				(vis.position.x - fr.position.x) / fr.size.x * float(tex.get_width()),
-				(vis.position.y - fr.position.y) / fr.size.y * float(tex.get_height()),
-				maxf(1.0, vis.size.x / fr.size.x * float(tex.get_width())),
-				maxf(1.0, vis.size.y / fr.size.y * float(tex.get_height())))
-			draw_tex = at
-		var mi: MeshInstance3D = MeshInstance3D.new()
-		var qm: QuadMesh = QuadMesh.new()
-		qm.size = Vector2(vis.size.x / float(_panel_face_px.x) * _panel_size.x,
-			vis.size.y / float(_panel_face_px.y) * _panel_size.y)
-		mi.mesh = qm
-		var mat: StandardMaterial3D = StandardMaterial3D.new()
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		# Render AFTER the panel's face, always: transparent
-		# objects sort by origin distance, and on a tilted
-		# panel half these quads' origins sit FARTHER than
-		# the face's own - sorted naively they draw first
-		# and the face paints over them (the flicker round's
-		# field lesson, proven by screenshot forensics: only
-		# the slivers outside the silhouette showed).
-		mat.render_priority = 1
-		mat.albedo_texture = draw_tex
-		mat.albedo_color = Color(1.0, 1.0, 1.0, 0.0)
-		mi.material_override = mat
-		mi.position = Vector3(
-			(vis.get_center().x / float(_panel_face_px.x) - 0.5) * _panel_size.x,
-			(0.5 - vis.get_center().y / float(_panel_face_px.y)) * _panel_size.y,
-			0.005 + float(_power_layers.size()) * 0.0003)
-		panel.add_child(mi)
-		_power_layers.append(mi)
-		_power_mats.append(mat)
-		var kind: String = str(ld.get("kind", ArtProvider.LAYER_KIND_LAMP))
-		_power_kinds.append(kind)
-		_power_flasher.append(power_layer_releases(kind))
-	# The cascade schedule, from the game's own seed (the
-	# same card flickers the same way every visit): the
-	# layers draw STRATIFIED slots of the power-on window -
-	# one catch per slot, jittered inside it, the slot order
-	# shuffled so the ripple visits the glass in no spatial
-	# order. Stratification is the contract that the cascade
-	# spreads across the whole window instead of clumping
-	# wherever chance puts the draws; about a third of lamps
-	# also dip once right after catching, then hold. A
-	# flasher does neither the dip nor the hold: its slot is
-	# a strike, a short hold, and a release timed to land
-	# fully out by the cascade's end.
-	var n_layers: int = _power_layers.size()
-	if n_layers > 0:
-		var slots: Array[int] = []
-		for si: int in range(n_layers):
-			slots.append(si)
-		for si in range(n_layers - 1, 0, -1):
-			var sj: int = rng.randi_range(0, si)
-			var tmp: int = slots[si]
-			slots[si] = slots[sj]
-			slots[sj] = tmp
-		var win_lo: float = 0.08
-		var win_hi: float = 0.70
-		var slot_w: float = (win_hi - win_lo) / float(n_layers)
-		for k: int in range(n_layers):
-			var catch_t: float = win_lo + float(slots[k]) * slot_w + rng.randf() * slot_w * 0.8
-			var on_t: float = catch_t
-			var dip_end: float = catch_t
-			if rng.randf() < 0.35:
-				dip_end = catch_t + rng.randf_range(0.05, 0.10)
-				on_t = dip_end + rng.randf_range(0.04, 0.10)
-			var release_t: float = -1.0
-			if _power_flasher[k]:
-				dip_end = catch_t
-				on_t = catch_t
-				release_t = minf(on_t + POWER_FLASHER_HOLD_SEC, POWER_CASCADE_SEC - POWER_FLASHER_FADE_SEC)
-			_power_schedule.append([catch_t, dip_end, on_t, release_t])
-
-
-## The cascade's current frame, applied: layer alphas from
-## their schedules, or the face brightness from the surge
-## curve. Runs only while a cascade is live (and once at
-## its settle) - a resting room pays nothing for the effect.
+## The cascade's current frame, applied: the mimic's
+## uniforms from the cascade clock - the catch envelope,
+## the sweep front, and (pair cards) the crossfade. Runs
+## only while a cascade is live (and once at its settle) -
+## a resting room pays nothing for the effect. At settle
+## the overlay STANDS (the settled card is the graded
+## face, or the author's On image) until focus leaves.
 func _apply_power() -> void:
-	if _power_panel == null:
+	if _power_mat == null:
 		return
-	if _power_mode == 1:
-		for i: int in range(_power_mats.size()):
-			var sched: Array = _power_schedule[i] as Array
-			_power_mats[i].albedo_color.a = _power_layer_alpha(sched, _power_t)
-	else:
-		_power_panel.set_face_brightness(power_brightness_at(_power_t))
+	_power_mat.set_shader_parameter("power", mimic_power_at(_power_t))
+	_power_mat.set_shader_parameter("sweep", clampf(_power_t / MIMIC_SWEEP_SEC, 0.0, 1.0))
+	if _power_pair:
+		_power_mat.set_shader_parameter("pair_mix", pair_mix_at(_power_t))
 
 
-## Whether a layer of this kind releases after its strike
-## instead of holding for the dwell: anything that is not a
-## LAMP - a solenoid FLASHER and an animation frame (ANIM)
-## alike, the two momentary shapes a file declares. Static
-## and pure so the harness's alpha check can pin the
-## predicate itself, not only its downstream effects.
-static func power_layer_releases(kind: String) -> bool:
-	return kind != ArtProvider.LAYER_KIND_LAMP
-
-
-## One layer's alpha at cascade time t: dark until it
-## catches, lit, a dip if its schedule has one, then lit
-## for good. The dip's depth is where a pair set parts
-## from a bulb set: for a bulb snippet, 0.12 over its own
-## dark socket reads as a lamp sagging - a feature. For a
-## pair, the "layer" is the WHOLE lit glass, so 0.12 is a
-## full-frame double exposure of two different pictures
-## (the ghost twin, field report 2026-10-26, convicted by
-## rendered blend-fit: the dip frame fits alpha 0.120 with
-## both pictures' edges present). A real B2S server never
-## blends a pair - it swaps state - so a pair layer's dip
-## goes to 0.0 instead: catch, blink off, held on, at the
-## same schedule instants. Pair alphas are {0, 1} only.
-##
-## A flasher's schedule carries a fourth time, its release
-## (release_t >= 0): the layer is a momentary solenoid
-## device, not a lamp state, so after its strike and short
-## hold it fades to nothing and STAYS nothing - the settled
-## card never wears it. The release is scheduled to finish
-## by the cascade's end, so the phase-2 settle (which stops
-## applying alphas) can never freeze a flasher mid-fade.
-func _power_layer_alpha(sched: Array, t: float) -> float:
-	if t < float(sched[0]):
-		return 0.0
-	if t < float(sched[1]):
-		return 1.0
-	if t < float(sched[2]):
-		return 0.0 if _power_pair else 0.12
-	if sched.size() > 3 and float(sched[3]) >= 0.0:
-		var rel: float = float(sched[3])
-		if t < rel:
-			return 1.0
-		if t >= rel + POWER_FLASHER_FADE_SEC:
-			return 0.0
-		return 1.0 - (t - rel) / POWER_FLASHER_FADE_SEC
-	return 1.0
-
-
-## The brightness fallback's surge curve (pure, so the
-## shots can pin it): the POWER_BRIGHTNESS_KEYS keyframes,
-## lerped. Starts at the dark floor, catches, dips, sags
-## once more, and is fully lit from ~0.68 s to the
-## cascade's end.
-static func power_brightness_at(t: float) -> float:
-	var keys: Array = POWER_BRIGHTNESS_KEYS
+## The catch envelope (pure, so the shots can pin it): the
+## mimic prototype's stutter keys, lerped - three catches
+## across 0.06-0.27 s, a sag dip to 0.62 at 0.34 s, full by
+## 0.48 s, held to the cascade's end.
+static func mimic_power_at(t: float) -> float:
+	var keys: Array = MIMIC_POWER_KEYS
 	if t <= float((keys[0] as Array)[0]):
 		return float((keys[0] as Array)[1])
 	for i: int in range(1, keys.size()):
@@ -2482,26 +2286,37 @@ static func power_brightness_at(t: float) -> float:
 	return 1.0
 
 
-## Focus left the performer (or a cancel fired): the card
-## goes back to its normal still - brightness restored,
-## layer quads freed - and the machine idles. Exactly one
-## performer ever exists, so restore is total. Every
-## restore logs its trigger (the field trap: a cascade
-## that dies early should say what killed it).
+## A pair card's crossfade position at cascade time t
+## (pure, like the envelope): the Off picture holds
+## through the catch, then a smoothstep crossfade
+## completes exactly at the cascade's end.
+static func pair_mix_at(t: float) -> float:
+	if t <= PAIR_MIX_T0:
+		return 0.0
+	if t >= POWER_CASCADE_SEC:
+		return 1.0
+	var f: float = (t - PAIR_MIX_T0) / (POWER_CASCADE_SEC - PAIR_MIX_T0)
+	return f * f * (3.0 - 2.0 * f)
+
+
+## Focus left the performer (or a cancel fired): the
+## overlay is freed and the card is its normal still
+## again - restore is total because exactly one performer
+## ever exists. Every restore logs its trigger (the
+## field trap: a cascade that dies early should say what
+## killed it).
 func _restore_power(trigger: String) -> void:
 	print("POWER: restore trigger=%s game=\"%s\"" % [
 		trigger, _power_game.title if _power_game != null else ""])
-	if _power_panel != null and is_instance_valid(_power_panel):
-		_power_panel.set_face_brightness(1.0)
-	for mi: MeshInstance3D in _power_layers:
-		if is_instance_valid(mi):
-			mi.queue_free()
+	if _power_overlay != null and is_instance_valid(_power_overlay):
+		_power_overlay.queue_free()
 	_power_reset_state()
 
 
 ## The power state, cleared WITHOUT touching any nodes -
-## for _restore_power (after it has cleaned the live ones)
-## and for wall rebuilds (where the nodes are dying anyway).
+## for _restore_power (after it has cleaned the live one)
+## and for wall rebuilds (where the nodes are dying
+## anyway).
 func _power_reset_state() -> void:
 	_power_panel = null
 	_power_candidate = null
@@ -2511,18 +2326,19 @@ func _power_reset_state() -> void:
 	_power_pair = false
 	_power_t = 0.0
 	_power_game = null
-	_power_layers.clear()
-	_power_mats.clear()
-	_power_schedule.clear()
-	_power_flasher.clear()
-	_power_kinds.clear()
+	_power_overlay = null
+	_power_mat = null
 
 
-## Power-on queries (the flicker shot reads the effect the
+## Power-on queries (the mimic shot reads the effect the
 ## way the other smokes read theirs): the phase (0 idle,
 ## 1 cascading, 2 settled lit), the performing panel, the
-## mode (0 brightness, 1 layers), the live layer count, the
-## cascade clock, and one layer's current alpha.
+## mode (2 mimic grade, 3 pair crossfade), the cascade
+## clock, whether the performance is a pair crossfade, and
+## the standing overlay count - which doubles as the
+## swap's structural assertion: a performance is ONE
+## quad, and no focus ever builds a layer quad or touches
+## a layer cache, because that machinery no longer exists.
 func power_phase() -> int:
 	return _power_phase
 
@@ -2535,36 +2351,16 @@ func power_mode() -> int:
 	return _power_mode
 
 
-func power_layer_count() -> int:
-	return _power_layers.size()
-
-
 func power_time() -> float:
 	return _power_t
 
 
-func power_layer_alpha(i: int) -> float:
-	if i < 0 or i >= _power_mats.size():
-		return -1.0
-	return _power_mats[i].albedo_color.a
+func power_is_pair() -> bool:
+	return _power_pair
 
 
-## Whether layer i is release-class (a solenoid flasher or
-## an animation frame - strikes with the cascade, then
-## releases) rather than a lamp (holds). The name is the
-## flasher round's; the meaning widened with the ANIM kind.
-func power_layer_is_flasher(i: int) -> bool:
-	if i < 0 or i >= _power_flasher.size():
-		return false
-	return _power_flasher[i]
-
-
-## Layer i's kind, as the file declared it (ArtProvider's
-## LAYER_KIND_* strings; "" when no such layer performs).
-func power_layer_kind(i: int) -> String:
-	if i < 0 or i >= _power_kinds.size():
-		return ""
-	return _power_kinds[i]
+func power_overlay_count() -> int:
+	return 1 if (_power_overlay != null and is_instance_valid(_power_overlay)) else 0
 
 
 ## Page-slide queries (the nav smoke and the slide shot read
