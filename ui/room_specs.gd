@@ -137,6 +137,29 @@ static func button_spec(text: String, accent: bool) -> Dictionary:
 	}
 
 
+## One alphabet-strip slot's face (the letter-jump round): a
+## single big glyph on the button family, in one of three
+## states - "plain" (a pickable letter), "accent" (the net
+## slot whose view is standing: THE or #), "dim" (a letter
+## with no games in the current view - greyed, unpickable,
+## its glyph gone quiet rather than merely its ground).
+static func letter_spec(label: String, state: String) -> Dictionary:
+	var bg: Color = BUTTON_BG
+	var fg: Color = Color(0.96, 0.96, 0.98)
+	if state == "accent":
+		bg = BUTTON_BG_ACCENT
+	elif state == "dim":
+		bg = Color(0.06, 0.06, 0.09)
+		fg = Color(0.36, 0.36, 0.45)
+	return {
+		"kind": "button",
+		"bg": bg,
+		"title": label,
+		"title_size": 118,
+		"title_color": fg,
+	}
+
+
 ## The setup placard: what stands in the room while the desk pass
 ## is open on the monitor during an XR session (the desk itself
 ## cannot reach the headset). Rendered with the banner layout -

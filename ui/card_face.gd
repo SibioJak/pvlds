@@ -198,6 +198,12 @@ func apply_spec(spec: Dictionary) -> void:
 	_body_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
 	_title_label.text = str(spec.get("title", ""))
 	_title_label.add_theme_font_size_override("font_size", int(spec.get("title_size", 58)))
+	# A spec may dim its own title ("title_color") - the letter
+	# strip's greyed slots render through it. Re-asserted on
+	# every spec (one CardFace serves all renders), with the
+	# stock colour as the default so no dimming can leak.
+	_title_label.add_theme_color_override("font_color",
+		_color_of(spec, "title_color", Color(0.96, 0.96, 0.98)))
 	_sub_label.text = str(spec.get("sub", ""))
 	_sub_label.visible = _sub_label.text != ""
 	_sub_label.add_theme_font_size_override("font_size", int(spec.get("sub_size", 32)))

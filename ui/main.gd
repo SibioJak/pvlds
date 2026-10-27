@@ -118,6 +118,22 @@ extends Node
 ##                       the bottom row - flush and popped - clear
 ##                       of the rail in screen space), print the
 ##                       verdict, quit
+##   --pvlds-smoke-letters
+##                       room boot on the harness's letter
+##                       fixtures (real VPS db records + real
+##                       title shapes); assert the alphabet
+##                       strip contract: presence/greying, the
+##                       strip as its own focus country, letter
+##                       jumps (page + focus landing, the quiet
+##                       title-sort switch), the THE net (a file
+##                       whose own title has "The", a file
+##                       missing it whose canonical db title
+##                       has it, an unmatched "The ..." file -
+##                       "Theatre" is not a member), the "#"
+##                       net, and exiting a net by letter.
+##                       Env PVLDS_LJ_NC=nostrip disables the
+##                       index's leading-The strip: the
+##                       canonical-The legs must fail by name.
 ##   --pvlds-seated-cam  with --pvlds-shot: take the shot from a
 ##                       seated eye height (RoomView.SEATED_EYE_Y)
 ##                       instead of the standing desk eye
@@ -183,6 +199,10 @@ var _shot_slide_path: String = "" ## --pvlds-shot-slide P: capture the wall at t
 var _shot_slide_phase: int = -1
 var _shot_slide_frames: int = 0
 var _nav_pop_panel: ClickableQuad = null ## bottom-row panel the nav smoke pops for the clearance re-check
+var _smoke_letters: bool = false ## --pvlds-smoke-letters: the alphabet strip + letter-jump contract
+var _letters_smoke_phase: int = 0
+var _letters_smoke_wait: int = 0
+var _letters_smoke_failures: int = 0
 var _seated_cam: bool = false ## --pvlds-seated-cam: shots/nav run from a seated eye height
 var _smoke_lockout: bool = false ## --pvlds-smoke-lockout: attack the load wait's input lockout mid-flight
 var _lockout_smoke_pending: bool = false ## a launch fired by the lockout smoke is in its wait; _settle_launch prints its verdict
@@ -342,6 +362,13 @@ func _ready() -> void:
 		_smoke_lockout = true
 	if user_args.has("--pvlds-smoke-nav"):
 		_smoke_nav = true
+	if user_args.has("--pvlds-smoke-letters"):
+		_smoke_letters = true
+		# The negative control (harness env): the index stops
+		# stripping a leading "The", so every canonical-The
+		# game files under T and the driver's canonical-The
+		# legs fail by name. Set here, before any room exists.
+		LetterIndex.debug_disable_the_strip = OS.get_environment("PVLDS_LJ_NC") == "nostrip"
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -376,7 +403,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "") and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_letters or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "") and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -509,6 +536,8 @@ func _process(_delta: float) -> void:
 		_drive_lockout_smoke()
 	if _smoke_nav:
 		_drive_nav_smoke()
+	if _smoke_letters:
+		_drive_letters_smoke()
 	if _smoke_quitwarm:
 		_drive_quitwarm_smoke()
 	if _art_bench:
@@ -2975,8 +3004,15 @@ func _nav_leg_cards_only() -> void:
 		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
 		if rq != null and rq.pick_enabled:
 			stops += 1
+	# The alphabet strip's lit slots are stops too (the
+	# letter-jump round): greyed slots are not pickable, so
+	# they are not stops - the same rule as the rail's label.
+	for k: Variant in _room._strip_quads.keys():
+		var sq: ClickableQuad = _room._strip_quads[k] as ClickableQuad
+		if sq != null and sq.visible and sq.pick_enabled:
+			stops += 1
 	_nav_expect(_room._focusables.size() == stops,
-		"cards-only: the focus walk is exactly the %d cards + rail stops (got %d)" % [_room._panels.size(), _room._focusables.size()])
+		"cards-only: the focus walk is exactly the %d cards + rail stops + lit letter slots (got %d)" % [_room._panels.size(), _room._focusables.size()])
 	# Column 1 (slots 1, 5, 9): DOWN walks the rows in order.
 	_room._set_focused(_room._panels[1])
 	for slot: int in [5, 9]:
@@ -3607,6 +3643,231 @@ func _nav_leg_favorites_async() -> void:
 		"X edge: focus lands on the ALL wall's first panel")
 	_nav_restore_favorites(saved_favs)
 	_nav_fav_done = true
+
+
+# ------------------------------------------------ letters smoke
+
+## --pvlds-smoke-letters: the alphabet strip contract (the
+## letter-jump round, 2026-10-27). The harness library is
+## fourteen games whose titles are REAL VPS db shapes - the
+## fixture database is copied from the real database's own
+## records (see pvlds-harness/make_letter_fixtures.py) -
+## spanning #, A, F, G, M, S, T, W across two pages in title
+## order, four of them canonical-The titles arriving three
+## ways:
+##   (a) a file whose own title carries "The" ("The Getaway
+##       - High Speed II", "The Simpsons Pinball Party"),
+##   (b) a file MISSING it whose canonical db title has it
+##       ("Addams Family" the file, "The Addams Family" the
+##       game),
+##   (c) an unmatched file titled "The ..." ("The Shadow" -
+##       its db record is deliberately withheld from the
+##       fixture database, so the file stands filename-only).
+## "Theatre of Magic" rides along as the control: "The" is
+## not a word of its own in it, so it is no THE member and
+## files under T. Every pick rides the pad path (focus the
+## slot, press A) - the route a player's A takes.
+func _drive_letters_smoke() -> void:
+	match _letters_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_room._handle_rail("filter:all")
+				_letters_smoke_wait = 0
+				_letters_smoke_phase = 1
+			else:
+				_letters_smoke_wait += 1
+				if _letters_smoke_wait > 3600:
+					_letters_smoke_fail("the room never came up")
+					_finish_letters_smoke()
+		1:
+			_letters_smoke_wait += 1
+			if _letters_smoke_wait > 3600:
+				_letters_smoke_fail("the ALL-filter wall never settled")
+				_finish_letters_smoke()
+			elif _room != null and _room.wall_ready and _letters_smoke_wait >= 4:
+				_letters_leg_fixtures()
+				_letters_leg_presence()
+				_letters_leg_country()
+				_letters_leg_jump()
+				_letters_leg_the_net()
+				_letters_leg_number_net()
+				_finish_letters_smoke()
+
+
+func _letters_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - letters smoke: ", label)
+	else:
+		_letters_smoke_fail(label)
+
+
+func _letters_smoke_fail(label: String) -> void:
+	_letters_smoke_failures += 1
+	printerr("  FAIL - letters smoke: ", label)
+
+
+func _finish_letters_smoke() -> void:
+	if _letters_smoke_failures == 0:
+		print("PVLDS LETTERS SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS LETTERS SMOKE: FAIL (%d)" % _letters_smoke_failures)
+		get_tree().quit(1)
+
+
+## The strip key a quad answers to, or "" when it is not a
+## strip slot (a wall panel, a rail stop, anything else).
+func _letters_key_of(q: ClickableQuad) -> String:
+	if q == null or _room == null:
+		return ""
+	for k: Variant in _room._strip_quads.keys():
+		if _room._strip_quads[k] == q:
+			return str(k)
+	return ""
+
+
+## The visible wall's titles, in wall order.
+func _letters_visible_titles() -> Array[String]:
+	var out: Array[String] = []
+	for g: GameEntry in _room._visible_games:
+		out.append(g.title)
+	return out
+
+
+## A strip pick the way the pad makes it: focus the slot,
+## press A (which routes through _activate, like any press).
+func _letters_pick(key: String) -> void:
+	_room._set_focused(_room.letter_quad(key))
+	_room._a_press()
+
+
+func _letters_leg_fixtures() -> void:
+	_letters_expect(_scanner != null and _scanner.games.size() == 14,
+		"fixtures: the letter library holds 14 games (got %d)" % (_scanner.games.size() if _scanner != null else -1))
+	var addams: GameEntry = _scanner.game_by_id("aT_GONvw") if _scanner != null else null
+	_letters_expect(addams != null and addams.title == "The Addams Family",
+		"fixtures: the 'Addams Family' file stands under its canonical db title 'The Addams Family' (got '%s')" % (addams.title if addams != null else "<missing>"))
+	var shadow: GameEntry = null
+	if _scanner != null:
+		for g: GameEntry in _scanner.games:
+			if g.title == "The Shadow":
+				shadow = g
+	_letters_expect(shadow != null and shadow.game_id.begins_with("local:"),
+		"fixtures: 'The Shadow' is filename-only (its db record is withheld from the fixture database)")
+	var expected: Array[String] = [
+		"8 Ball", "The Addams Family", "Attack from Mars", "Funhouse",
+		"The Getaway - High Speed II", "Medieval Madness", "Monster Bash",
+		"Scared Stiff", "The Shadow", "The Simpsons Pinball Party",
+		"Tales of the Arabian Nights", "Theatre of Magic", "Twilight Zone", "White Water"]
+	_letters_expect(_letters_visible_titles() == expected,
+		"fixtures: the wall's title order is the census order (got %s)" % str(_letters_visible_titles()))
+	_letters_expect(_letters_visible_titles().find("The Addams Family") == 1,
+		"canonical-The: title order files The Addams Family under A, not T")
+
+
+func _letters_leg_presence() -> void:
+	_letters_expect(_room.strip_slot_pickable("A"), "presence: A is pickable (it has games)")
+	_letters_expect(not _room.strip_slot_pickable("B"), "presence: B is greyed (no games) - not pickable")
+	_letters_expect(not _room._focusables.has(_room.letter_quad("B")),
+		"presence: a greyed slot is not a focus stop")
+	_letters_expect(_room.strip_slot_pickable("THE"), "presence: THE is pickable (canonical-The games exist)")
+	var hash_q: ClickableQuad = _room.letter_quad("#")
+	_letters_expect(hash_q != null and hash_q.visible and _room.strip_slot_pickable("#"),
+		"presence: the # slot is laid out and pickable (the library holds '8 Ball')")
+	_letters_expect(_room.strip_slot_pickable("W"), "presence: W is pickable")
+
+
+func _letters_leg_country() -> void:
+	_room._set_focused(_room.rail_quad("sort"))
+	_room._move_focus(Vector2(0.0, 1.0))
+	_letters_expect(_letters_key_of(_room.focused_quad()) != "",
+		"country: DOWN from the rail lands on the strip (got key '%s')" % _letters_key_of(_room.focused_quad()))
+	# Walk to the row's start, then prove the sideways walk and
+	# its greyed-slot skips against the deterministic lit order.
+	for i: int in range(30):
+		_room._move_focus(Vector2(-1.0, 0.0))
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "#",
+		"country: the sideways walk holds at the strip's first slot (got '%s')" % _letters_key_of(_room.focused_quad()))
+	_room._move_focus(Vector2(1.0, 0.0))
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "A",
+		"country: # steps right to A")
+	_room._move_focus(Vector2(1.0, 0.0))
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "F",
+		"country: A steps right to F - the greyed B-E are skipped, never landed on (got '%s')" % _letters_key_of(_room.focused_quad()))
+	for i: int in range(30):
+		_room._move_focus(Vector2(1.0, 0.0))
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "THE",
+		"country: the sideways walk holds at the strip's last slot, THE (got '%s')" % _letters_key_of(_room.focused_quad()))
+	_room._move_focus(Vector2(0.0, -1.0))
+	_letters_expect(_nav_key_of(_room.focused_quad()) != "",
+		"country: UP from the strip returns to the rail")
+	# No trap: Tab cycling from a strip slot reaches a card.
+	_room._set_focused(_room.letter_quad("A"))
+	var saw_panel: bool = false
+	for i: int in range(_room._focusables.size() + 2):
+		_room._cycle_focus(1)
+		if _room._panels.has(_room.focused_quad()):
+			saw_panel = true
+			break
+	_letters_expect(saw_panel, "country: Tab cycling escapes the strip to a card (no focus trap)")
+
+
+func _letters_leg_jump() -> void:
+	_room._handle_rail("sort")
+	_letters_expect(_room._sort == "year",
+		"jump: precondition - the sort starts off NAME (got %s)" % _room._sort)
+	_letters_pick("W")
+	_letters_expect(_room._sort == "name", "jump: picking a letter quietly switches to title sort")
+	_letters_expect(_room._page == 1, "jump: W lands on the second page (got page %d)" % _room._page)
+	var f: ClickableQuad = _room.focused_quad()
+	_letters_expect(f != null and f.payload == "LJRH3fKk",
+		"jump: focus lands on W's first card, White Water (got '%s')" % (f.payload if f != null else "<none>"))
+	_letters_expect(_room.active_letter_net() == "", "jump: a letter pick stands in no net")
+	_letters_pick("F")
+	_letters_expect(_room._page == 0 and _room.focused_quad() != null and _room.focused_quad().payload == "O1-qbuxg",
+		"jump: F lands back on page 1 with focus on Funhouse")
+
+
+func _letters_leg_the_net() -> void:
+	_letters_pick("THE")
+	_letters_expect(_room.active_letter_net() == "THE", "THE net: the net view stands")
+	_letters_expect(_letters_visible_titles().has("The Getaway - High Speed II"),
+		"THE net: (a) a file whose own title carries 'The' is a member")
+	_letters_expect(_letters_visible_titles().has("The Addams Family"),
+		"THE net: (b) a file missing 'The' whose canonical db title has it is a member")
+	_letters_expect(_letters_visible_titles().has("The Shadow"),
+		"THE net: (c) an unmatched file titled 'The ...' is a member")
+	_letters_expect(not _letters_visible_titles().has("Theatre of Magic"),
+		"THE net: 'Theatre of Magic' is not a member ('The' is not a word of its own in it)")
+	var expected: Array[String] = ["The Addams Family", "The Getaway - High Speed II", "The Shadow", "The Simpsons Pinball Party"]
+	_letters_expect(_letters_visible_titles() == expected,
+		"THE net: exactly the canonical-The games, sorted by the word after The (got %s)" % str(_letters_visible_titles()))
+	_letters_expect(_room._page == 0 and not _room._panels.is_empty() and _room.focused_quad() == _room._panels[0],
+		"THE net: focus lands on the net's first card")
+	# The net property: the members never left their letters -
+	# picking A exits the net and lands on the very game the
+	# net was showing.
+	_letters_pick("A")
+	_letters_expect(_room.active_letter_net() == "", "THE net: picking a letter exits the net")
+	var f: ClickableQuad = _room.focused_quad()
+	_letters_expect(f != null and f.payload == "aT_GONvw",
+		"canonical-The: picking A lands on The Addams Family (got '%s')" % (f.payload if f != null else "<none>"))
+	# A rail sort press leaves the net too.
+	_letters_pick("THE")
+	_room._handle_rail("sort")
+	_letters_expect(_room.active_letter_net() == "" and _room._visible_games.size() == 14,
+		"THE net: a sort press leaves the net (the full set returns)")
+
+
+func _letters_leg_number_net() -> void:
+	_letters_pick("#")
+	_letters_expect(_room.active_letter_net() == "#", "# net: the net view stands")
+	var expected: Array[String] = ["8 Ball"]
+	_letters_expect(_letters_visible_titles() == expected,
+		"# net: exactly the non-letter starters (got %s)" % str(_letters_visible_titles()))
+	_letters_pick("F")
+	_letters_expect(_room.active_letter_net() == "" and _room.focused_quad() != null and _room.focused_quad().payload == "O1-qbuxg",
+		"# net: picking a letter exits at that letter (Funhouse)")
 
 
 # -------------------------------------------------- desk smoke
@@ -5684,6 +5945,62 @@ func _run_core_test() -> void:
 	_expect(VpsDatabase.clean_display_title("Pharaoh's Ledger (Vantage 1979) JP v55 DT-FS-VR-MR Ext2k Conversion.vpx") == "Pharaoh's Ledger JP Ext2k Conversion",
 		"display title: the shouted DT-FS-VR-MR chain scrubs; unknowable words stay", failures)
 	_wipe_tree(mt_root)
+
+	# Letter index (the letter-jump round): the alphabet
+	# strip's mathematics over REAL title shapes - every title
+	# below is a name the real VPS database actually carries
+	# (census 2026-10-27: 2,669 games, 148 canonical "The "
+	# starters, 24 non-A-Z starters after the strip).
+	_expect(LetterIndex.sort_title("The Addams Family") == "Addams Family",
+		"letter index: the sort title drops a leading 'The '", failures)
+	_expect(LetterIndex.sort_title("Theatre of Magic") == "Theatre of Magic",
+		"letter index: 'Theatre' is not 'The ' - nothing drops", failures)
+	_expect(LetterIndex.sort_title("The 5th Element") == "5th Element",
+		"letter index: 'The 5th Element' sorts as '5th Element'", failures)
+	_expect(LetterIndex.sort_title("The") == "The",
+		"letter index: a bare 'The' with no word after it keeps its name", failures)
+	_expect(LetterIndex.is_the_title("The Addams Family") and LetterIndex.is_the_title("the sopranos")
+		and not LetterIndex.is_the_title("Theatre of Magic") and not LetterIndex.is_the_title("The"),
+		"letter index: THE membership wants 'The ' as its own word, any case", failures)
+	_expect(LetterIndex.letter_of("The Addams Family") == "A",
+		"letter index: The Addams Family files under A", failures)
+	_expect(LetterIndex.letter_of("The Getaway - High Speed II") == "G",
+		"letter index: The Getaway files under G", failures)
+	_expect(LetterIndex.letter_of("Theatre of Magic") == "T",
+		"letter index: Theatre of Magic files under T", failures)
+	_expect(LetterIndex.letter_of("8 Ball") == "#" and LetterIndex.letter_of("The 5th Element") == "#"
+		and LetterIndex.letter_of("'Roid Belt Racers") == "#" and LetterIndex.letter_of("2001") == "#",
+		"letter index: digit and symbol starters file under #", failures)
+	_expect(LetterIndex.letter_of("Apollo 13") == "A",
+		"letter index: a bare number inside a title is a title word ('Apollo 13' files under A)", failures)
+	# The net property, at index level: a canonical-The game
+	# is in the THE net AND under its post-The letter - both
+	# facts off the same canonical title, never one or the other.
+	_expect(LetterIndex.in_net("The Addams Family", "THE") and LetterIndex.letter_of("The Addams Family") == "A",
+		"letter index: the THE net is a net, not a move (member AND filed under A)", failures)
+	_expect(LetterIndex.in_net("8 Ball", "#") and not LetterIndex.in_net("8 Ball", "THE")
+		and not LetterIndex.in_net("The Addams Family", "#"),
+		"letter index: the # net takes the non-letter starters only", failures)
+	# THE internal order: sorted by the word after "The" - the
+	# name sort over sort titles produces it directly.
+	var the_games: Array[GameEntry] = []
+	for t: String in ["The Sopranos", "The Shadow", "The Addams Family", "The Getaway - High Speed II"]:
+		var ge: GameEntry = GameEntry.new()
+		ge.title = t
+		the_games.append(ge)
+	the_games.sort_custom(func(a: GameEntry, b: GameEntry) -> bool:
+		return LetterIndex.sort_title(a.title).to_lower() < LetterIndex.sort_title(b.title).to_lower())
+	_expect(the_games[0].title == "The Addams Family" and the_games[1].title == "The Getaway - High Speed II"
+		and the_games[2].title == "The Shadow" and the_games[3].title == "The Sopranos",
+		"letter index: the THE set sorts by the word after 'The'", failures)
+	# Presence: over the same real shapes - letters lit, THE
+	# lit, and a letter nobody holds stays dark.
+	var pres: Dictionary = LetterIndex.presence_over(the_games)
+	_expect(pres.has("A") and pres.has("G") and pres.has("S") and pres.has("THE") and not pres.has("B") and not pres.has("#"),
+		"letter index: presence lights exactly the held letters plus THE", failures)
+	_expect(LetterIndex.slot_keys(false).size() == 27 and LetterIndex.slot_keys(true).size() == 28
+		and LetterIndex.slot_keys(true)[0] == "#" and LetterIndex.slot_keys(true)[27] == "THE",
+		"letter index: the slot order is (#) A-Z THE", failures)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")

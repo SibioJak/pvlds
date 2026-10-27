@@ -137,6 +137,32 @@ const PAIR_MIX_T0: float = 0.40 ## cascade second where a pair card's crossfade 
 ## quarter second end to end, the state change itself landing in
 ## one frame at the far point. The rail never rides the slide:
 ## it is furniture and stands still (see _apply_rail_textures).
+## The alphabet strip (the letter-jump round, 2026-10-27 -
+## Chris: "a way to quickly get to a specific letter in the
+## list of titles", with his addition: "an extra slot for
+## games that start with THE (or are missing THE)"). A row of
+## letter slots riding under the control rail - furniture,
+## like the rail: built once, persistent across rebuilds,
+## dressed from its own texture cache. A letter files by its
+## sort title (LetterIndex: a leading "The " drops, the
+## matcher's own convention), so The Addams Family lives
+## under A. Letters with no games in the current filter's set
+## render dim and are not stops at all. Picking a letter
+## quietly switches to title sort and lands the wall on that
+## letter's first page, focus on its first card. The THE slot
+## (and "#" for the number/symbol starters, laid out only
+## when the library holds one) is a NET, not a move: it shows
+## exactly its games, sorted by the word after "The", and the
+## games keep their own letters - picking any letter exits
+## the net at that letter. The strip is its own focus country
+## beside the rail's: sideways travel walks the strip's own
+## order, and the two rows trade places only vertically.
+const STRIP_Y: float = 0.25 ## the strip row's height (the rail rides at 0.45, same depth)
+const STRIP_Z: float = -1.85 ## the rail's depth: the strip is rail furniture
+const STRIP_LETTER_SIZE: Vector2 = Vector2(0.095, 0.13)
+const STRIP_THE_SIZE: Vector2 = Vector2(0.21, 0.13)
+const STRIP_GAP: float = 0.014
+
 const PAGE_SLIDE_OUT_SEC: float = 0.12 ## glide-out leg, seconds
 const PAGE_SLIDE_BACK_SEC: float = 0.12 ## glide-back leg, seconds
 const PAGE_SLIDE_YAW_DEG: float = 5.0 ## the far point's yaw, degrees (~a third of a column pitch)
@@ -240,6 +266,10 @@ var _pending_library: LibraryScanner = null ## a scan that landed while the SETU
 var _pick_snapshot: Dictionary = {} ## ClickableQuad -> pick_enabled, taken as the placard rises
 var _rail_quads: Dictionary = {} ## key -> ClickableQuad
 var _rail_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: every rail button face ever rendered, so a rebuild re-dresses the rail in its own frame
+var _strip_quads: Dictionary = {} ## letter key ("A".."Z", "THE", "#") -> ClickableQuad: the alphabet strip, built once with the rail
+var _strip_tex_cache: Dictionary = {} ## "key|state" -> Texture2D: every strip slot face ever rendered (the rail cache's pattern)
+var _strip_has_number: bool = false ## the library holds a non-letter title, so the "#" slot is laid out (see _refresh_strip)
+var _letter_net: String = "" ## "" | "THE" | "#": the standing net view - the wall shows exactly that net's games, in title order (see _jump_to_letter)
 var _slide_phase: int = 0 ## the page slide: 0 rest, 1 gliding out, 2 gliding back (see _update_slide)
 var _slide_dir: int = 0 ## the live slide's travel direction: +1 next page, -1 previous
 var _slide_t: float = 0.0 ## seconds into the live slide's current leg
@@ -288,6 +318,7 @@ func setup(factory: TextureFactory, scanner: LibraryScanner, store: StateStore, 
 
 
 func refresh_library() -> void:
+	_letter_net = "" ## a fresh library lifts any standing net: its set was the old scan's truth
 	_tune_panel_size()
 	_recompute_visible()
 	_page = 0
@@ -482,6 +513,15 @@ func _build_environment() -> void:
 func _recompute_visible() -> void:
 	_filter_note = ""
 	_collect_visible()
+	# Empty-net guard (the letter-jump round): a standing net
+	# whose last member just left the filter's set (the last
+	# THE favorite un-flagged from inside the net) must not
+	# present as an empty room either - the net lifts, the
+	# plain filtered list shows, and the banner says why.
+	if _visible_games.is_empty() and _letter_net != "" and _scanner != null and not _scanner.games.is_empty():
+		_filter_note = "%s view is empty here - showing the full list" % _letter_net
+		_letter_net = ""
+		_collect_visible()
 	# Empty-filter guard: a filter that matches nothing in a non-empty
 	# library must never present as an empty room (that is exactly how
 	# the sample-database trap showed up in the field - a black wall
@@ -496,11 +536,16 @@ func _recompute_visible() -> void:
 		_page = maxi(0, pages - 1)
 
 
-func _collect_visible() -> void:
-	_visible_games.clear()
-	if _scanner == null:
-		return
+## The current filter's collection, unsorted and net-free:
+## the set the wall draws from, and the set the alphabet
+## strip's presence is read over (the strip indexes what the
+## filter could show, never just the standing net's members -
+## its letters must stay pickable from inside a net view,
+## because picking one is how the net exits).
+func _collect_filtered() -> Array[GameEntry]:
 	var source: Array[GameEntry] = []
+	if _scanner == null:
+		return source
 	if _filter == "recents":
 		for gid: String in _store.recents:
 			var g: GameEntry = _scanner.game_by_id(gid)
@@ -517,8 +562,25 @@ func _collect_visible() -> void:
 				"favorites":
 					if _store.is_favorite(g.game_id):
 						source.append(g)
+	return source
+
+
+func _collect_visible() -> void:
+	var source: Array[GameEntry] = _collect_filtered()
+	if _letter_net != "":
+		# The net view: exactly the net's members out of the
+		# filter's set, in title order - the THE set sorted by
+		# the word after "The" falls out of the name sort,
+		# whose key is the sort title (see _title_key).
+		var members: Array[GameEntry] = []
+		for g: GameEntry in source:
+			if LetterIndex.in_net(g.title, _letter_net):
+				members.append(g)
+		source = members
 	_visible_games = source
-	if _filter != "recents":
+	if _letter_net != "":
+		_sort_by_name()
+	elif _filter != "recents":
 		_sort_visible()
 
 
@@ -528,30 +590,52 @@ func page_count() -> int:
 	return int(ceil(float(_visible_games.size()) / float(PAGE_SIZE)))
 
 
+## The wall's title key: the sort title (a leading "The "
+## dropped - LetterIndex), lowercased. Title sort files The
+## Addams Family under A, which is what makes the alphabet
+## strip's letters and the wall's own pages one truth: a
+## letter's first page in title sort is where that letter's
+## games actually start. Every other sort tiebreaks on the
+## same key, so "the title the wall sorts by" is one notion.
+func _title_key(g: GameEntry) -> String:
+	return LetterIndex.sort_title(g.title).to_lower()
+
+
+func _title_less(a: GameEntry, b: GameEntry) -> bool:
+	var ka: String = _title_key(a)
+	var kb: String = _title_key(b)
+	if ka != kb:
+		return ka < kb
+	return a.title.to_lower() < b.title.to_lower()
+
+
+func _sort_by_name() -> void:
+	_visible_games.sort_custom(_title_less)
+
+
 func _sort_visible() -> void:
 	match _sort:
 		"name":
-			_visible_games.sort_custom(func(a: GameEntry, b: GameEntry) -> bool:
-				return a.title.to_lower() < b.title.to_lower())
+			_sort_by_name()
 		"year":
 			_visible_games.sort_custom(func(a: GameEntry, b: GameEntry) -> bool:
 				var ay: int = a.year if a.year > 0 else 9999
 				var by: int = b.year if b.year > 0 else 9999
 				if ay != by:
 					return ay < by
-				return a.title.to_lower() < b.title.to_lower())
+				return _title_less(a, b))
 		"manufacturer":
 			_visible_games.sort_custom(func(a: GameEntry, b: GameEntry) -> bool:
 				if a.manufacturer.to_lower() != b.manufacturer.to_lower():
 					return a.manufacturer.to_lower() < b.manufacturer.to_lower()
-				return a.title.to_lower() < b.title.to_lower())
+				return _title_less(a, b))
 		"designer":
 			_visible_games.sort_custom(func(a: GameEntry, b: GameEntry) -> bool:
 				var ad: String = a.designers[0].to_lower() if not a.designers.is_empty() else "zzzz"
 				var bd: String = b.designers[0].to_lower() if not b.designers.is_empty() else "zzzz"
 				if ad != bd:
 					return ad < bd
-				return a.title.to_lower() < b.title.to_lower())
+				return _title_less(a, b))
 
 
 # ---------------------------------------------------------------- wall
@@ -651,6 +735,14 @@ func _rebuild_wall() -> void:
 			if rq != null:
 				rq.pick_enabled = str(k) != "page_label"
 				rq.set_content_alpha(1.0)
+	# The alphabet strip is furniture on the same terms: built
+	# once beside the rail, and every rebuild re-lays it out
+	# (the "#" slot's existence follows the library), re-reads
+	# its pick states (greyed letters are not stops) and
+	# re-dresses it from its texture cache in this same frame.
+	if _strip_quads.is_empty():
+		_build_strip(placeholder)
+	_refresh_strip()
 	_apply_rail_textures()
 	_refresh_focusables()
 	_fill_wall_textures(gen)
@@ -711,6 +803,10 @@ func _banner_line() -> String:
 	var line: String = "%d files - %d games - filter %s - sort %s" % [
 		_scanner.total_files, _scanner.games.size(),
 		str(FILTER_LABELS[_filter]), str(SORT_LABELS[_sort])]
+	if _letter_net == "THE":
+		line += " - THE tables"
+	elif _letter_net == "#":
+		line += " - number/symbol titles"
 	if _filter_note != "":
 		line += " - " + _filter_note
 	if _status_note != "":
@@ -771,6 +867,147 @@ func _apply_rail_textures() -> void:
 				quad.set_texture(_rail_tex_cache[ck] as Texture2D)
 
 
+## The strip's laid-out slots, in order: "#" leads when the
+## library holds a non-letter title (those games lead the
+## title sort too), then A-Z, then THE.
+func _strip_slot_keys() -> Array[String]:
+	return LetterIndex.slot_keys(_strip_has_number)
+
+
+## Build every slot once (the "#" slot included - _refresh_
+## strip decides whether it is laid out). Creation order is
+## not layout order; _refresh_strip positions the row.
+func _build_strip(placeholder: Texture2D) -> void:
+	var provisional: Vector3 = Vector3(0.0, STRIP_Y, STRIP_Z)
+	for i: int in range(26):
+		var letter: String = String.chr(65 + i)
+		_strip_quads[letter] = _make_quad(_rail, "letter", letter, placeholder, STRIP_LETTER_SIZE, provisional)
+	_strip_quads["THE"] = _make_quad(_rail, "letter", "THE", placeholder, STRIP_THE_SIZE, provisional)
+	_strip_quads["#"] = _make_quad(_rail, "letter", "#", placeholder, STRIP_LETTER_SIZE, provisional)
+
+
+## The strip's per-rebuild truth, from the two presence reads
+## (see LetterIndex.presence_over): across the whole library,
+## whether the "#" slot exists at all; across the current
+## filter's collection, which slots light up. Laid-out slots
+## are centered as one row under the rail; a slot that is not
+## laid out is invisible and unpickable. Pick states land
+## here too - a greyed slot is never a stop, for the pointer
+## or for focus.
+func _refresh_strip() -> void:
+	var lib_presence: Dictionary = {}
+	var presence: Dictionary = {}
+	if _scanner != null:
+		lib_presence = LetterIndex.presence_over(_scanner.games)
+		presence = LetterIndex.presence_over(_collect_filtered())
+	_strip_has_number = lib_presence.has("#")
+	var keys: Array[String] = _strip_slot_keys()
+	var total: float = 0.0
+	for key: String in keys:
+		total += _strip_slot_size(key).x + STRIP_GAP
+	total -= STRIP_GAP
+	var x: float = -total * 0.5
+	for key: String in _strip_quads.keys():
+		var q: ClickableQuad = _strip_quads[key] as ClickableQuad
+		if q == null:
+			continue
+		if keys.has(key):
+			var w: float = _strip_slot_size(key).x
+			q.visible = true
+			q.position = Vector3(x + w * 0.5, STRIP_Y, STRIP_Z)
+			# The row re-centers whenever the "#" slot joins or
+			# leaves, so a slot's facing follows its laid-out
+			# position, not the position it was built at.
+			ClickableQuad.face_point(q, EYE)
+			x += w + STRIP_GAP
+			q.pick_enabled = presence.has(key)
+			q.set_content_alpha(1.0)
+		else:
+			q.visible = false
+			q.pick_enabled = false
+	_apply_strip_textures(presence)
+
+
+func _strip_slot_size(key: String) -> Vector2:
+	return STRIP_THE_SIZE if key == "THE" else STRIP_LETTER_SIZE
+
+
+## A slot's [label, state] under the current view: the label
+## is the key itself; the state is "dim" for a slot with no
+## games in the filter's set, "accent" for the net slot whose
+## view is standing, "plain" otherwise.
+func _strip_label_state(key: String, presence: Dictionary) -> Array:
+	var state: String = "plain"
+	if not presence.has(key):
+		state = "dim"
+	elif key == _letter_net:
+		state = "accent"
+	return [key, state]
+
+
+## Dress every laid-out slot from the texture cache, in this
+## call (the rail's discipline): a hit is the slot's real
+## face in the rebuild's own frame; a miss keeps the face it
+## already wears until _fill_wall_textures renders that
+## label+state once, ever.
+func _apply_strip_textures(presence: Dictionary) -> void:
+	for key: String in _strip_slot_keys():
+		var quad: ClickableQuad = _strip_quads.get(key) as ClickableQuad
+		if quad == null:
+			continue
+		var ls: Array = _strip_label_state(key, presence)
+		var ck: String = str(ls[0]) + "|" + str(ls[1])
+		if _strip_tex_cache.has(ck):
+			quad.set_texture(_strip_tex_cache[ck] as Texture2D)
+
+
+## A strip pick: the jump itself. An ordinary letter files
+## the wall to title sort (quietly - the banner's sort line
+## says NAME after) and lands on the letter's first page,
+## focus on its first card. A net slot (THE / #) raises the
+## net view instead: page one of exactly its games, focus on
+## the first. Picking a letter from inside a net exits the
+## net at that letter - the games were never moved, only
+## viewed. RECENTS drops to ALL on any pick: a recency list's
+## order is its meaning, and a letter index over it would be
+## a lie - the jump leaves the list for the library, the way
+## picking a filter leaves a sort. Greyed slots are not
+## pickable and never reach here; the no-such-letter landing
+## below is defensive only.
+func _jump_to_letter(key: String) -> void:
+	_failed_game_id = ""
+	_status_note = ""
+	if _filter == "recents":
+		_filter = "all"
+	_sort = "name"
+	if key == "THE" or key == "#":
+		_letter_net = key
+		_page = 0
+		_recompute_visible()
+		_rebuild_wall()
+		_persist_view()
+		if not _panels.is_empty():
+			_set_focused(_panels[0])
+		return
+	_letter_net = ""
+	_recompute_visible()
+	var idx: int = -1
+	for i: int in range(_visible_games.size()):
+		if LetterIndex.letter_of(_visible_games[i].title) == key:
+			idx = i
+			break
+	if idx < 0:
+		_rebuild_wall()
+		_persist_view()
+		return
+	_page = idx / PAGE_SIZE
+	_rebuild_wall()
+	_persist_view()
+	var slot: int = idx % PAGE_SIZE
+	if slot < _panels.size():
+		_set_focused(_panels[slot])
+
+
 func _fill_wall_textures(gen: int) -> void:
 	# Banner first: it carries the library summary line.
 	var banner_tex: Texture2D = await _factory.render_texture(RoomSpecs.banner_spec(_banner_line()), Vector2i(1024, 262))
@@ -798,6 +1035,27 @@ func _fill_wall_textures(gen: int) -> void:
 			return
 		_rail_tex_cache[ck] = btex
 		quad.set_texture(btex)
+	# Strip slots THIRD - same furniture family as the rail:
+	# cache hits already dressed in _refresh_strip; a
+	# label+state that has never rendered (a first-ever dim
+	# letter, the accent of a net just raised) renders now,
+	# ahead of the panels, and joins the cache.
+	var strip_presence: Dictionary = LetterIndex.presence_over(_collect_filtered()) if _scanner != null else {}
+	for skey: String in _strip_slot_keys():
+		var squad: ClickableQuad = _strip_quads.get(skey) as ClickableQuad
+		if squad == null:
+			continue
+		var ls: Array = _strip_label_state(skey, strip_presence)
+		var sck: String = str(ls[0]) + "|" + str(ls[1])
+		if _strip_tex_cache.has(sck):
+			squad.set_texture(_strip_tex_cache[sck] as Texture2D)
+			continue
+		var spx: Vector2i = Vector2i(420, 260) if skey == "THE" else Vector2i(190, 260)
+		var stex: Texture2D = await _factory.render_texture(RoomSpecs.letter_spec(str(ls[0]), str(ls[1])), spx)
+		if gen != _gen:
+			return
+		_strip_tex_cache[sck] = stex
+		squad.set_texture(stex)
 	# Panels.
 	var start: int = _page * PAGE_SIZE
 	for i: int in range(_panels.size()):
@@ -892,6 +1150,14 @@ func _refresh_focusables() -> void:
 			var q: ClickableQuad = _rail_quads[k]
 			if q.pick_enabled:
 				_focusables.append(q)
+		# The strip's lit slots are stops too, after the rail's
+		# (their row rides under it). Greyed slots are not
+		# pickable, so they are not stops - the same rule the
+		# rail's page_label follows.
+		for skey: String in _strip_slot_keys():
+			var sq: ClickableQuad = _strip_quads.get(skey) as ClickableQuad
+			if sq != null and sq.visible and sq.pick_enabled:
+				_focusables.append(sq)
 	if _focused != null and not _focusables.has(_focused):
 		_set_focused(null)
 	_refresh_quad_states()
@@ -1062,6 +1328,9 @@ func _activate(quad: ClickableQuad) -> void:
 		"rail":
 			quad.pulse()
 			_handle_rail(quad.payload)
+		"letter":
+			quad.pulse()
+			_jump_to_letter(quad.payload)
 
 
 ## Launch the focused card's default build. This is the pad's
@@ -1131,6 +1400,7 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 		_status_note = ""
 	if key.begins_with("filter:"):
 		_filter = key.trim_prefix("filter:")
+		_letter_net = "" ## a filter press leaves the net view: the wall it rebuilds is the filter's own set
 		_page = 0
 		_recompute_visible()
 		_rebuild_wall()
@@ -1139,6 +1409,7 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 	elif key == "sort":
 		var idx: int = SORTS.find(_sort)
 		_sort = SORTS[(idx + 1) % SORTS.size()]
+		_letter_net = "" ## a sort press leaves the net view too - the net's order was title order by definition
 		_page = 0
 		_recompute_visible()
 		_rebuild_wall()
@@ -1392,6 +1663,10 @@ func _open_detail(game: GameEntry) -> void:
 		q.pick_enabled = false
 	for k: Variant in _rail_quads.keys():
 		_rail_quads[k].pick_enabled = false
+	for skey: Variant in _strip_quads.keys():
+		var sq: ClickableQuad = _strip_quads[skey] as ClickableQuad
+		if sq != null:
+			sq.pick_enabled = false
 	_detail.show_game(game)
 	_set_focused(null)
 	_refresh_focusables()
@@ -1519,6 +1794,10 @@ func _room_pickables() -> Array[ClickableQuad]:
 		var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
 		if rq != null:
 			out.append(rq)
+	for skey: Variant in _strip_quads.keys():
+		var sq: ClickableQuad = _strip_quads[skey] as ClickableQuad
+		if sq != null:
+			out.append(sq)
 	if _banner_quad != null:
 		out.append(_banner_quad)
 	if _detail != null:
@@ -1559,6 +1838,16 @@ func _restore_room_pick_states() -> void:
 				rq.pick_enabled = false ## the load wait is deaf: no rail quad picks, EXIT/SETUP included
 			else:
 				rq.pick_enabled = str(k) != "page_label"
+	# The strip's slots take the state the room's current view
+	# would have built them with: pickable exactly when their
+	# letter has games in the filter's set (greyed is not a
+	# stop), and never during the load wait.
+	if not _strip_quads.is_empty():
+		var strip_presence: Dictionary = LetterIndex.presence_over(_collect_filtered()) if _scanner != null else {}
+		for skey: Variant in _strip_quads.keys():
+			var sq: ClickableQuad = _strip_quads[skey] as ClickableQuad
+			if sq != null and not handled.has(sq):
+				sq.pick_enabled = not launching and sq.visible and strip_presence.has(str(skey))
 
 
 # ------------------------------------------------------- setup panel
@@ -2045,6 +2334,10 @@ func _apply_wall_alpha(a: float) -> void:
 		var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
 		if rq != null:
 			rq.set_content_alpha(a)
+	for skey: Variant in _strip_quads.keys():
+		var sq: ClickableQuad = _strip_quads[skey] as ClickableQuad
+		if sq != null:
+			sq.set_content_alpha(a)
 	if _banner_quad != null:
 		_banner_quad.set_content_alpha(a)
 
@@ -2072,6 +2365,24 @@ func focused_quad() -> ClickableQuad:
 func rail_quad(key: String) -> ClickableQuad:
 	var q: Variant = _rail_quads.get(key, null)
 	return q as ClickableQuad
+
+
+## Letter-jump queries (the letters smoke reads the room the
+## way the other smokes read theirs): a strip slot by key, the
+## standing net ("" when none), and whether a slot is pickable
+## in the current view.
+func letter_quad(key: String) -> ClickableQuad:
+	var q: Variant = _strip_quads.get(key, null)
+	return q as ClickableQuad
+
+
+func active_letter_net() -> String:
+	return _letter_net
+
+
+func strip_slot_pickable(key: String) -> bool:
+	var q: ClickableQuad = letter_quad(key)
+	return q != null and q.visible and q.pick_enabled
 
 
 ## Pop-out queries (the pop shot hook reads the room the way the
@@ -2572,23 +2883,52 @@ func _is_rail_quad(q: ClickableQuad) -> bool:
 	return q != null and _rail_quads.values().has(q)
 
 
-## The next focus stop along the rail from the focused quad, in
-## RAIL_FOCUS_ORDER, skipping stops that are not focusable right
-## now. Null at the rail's end - focus stays put there.
+func _is_strip_quad(q: ClickableQuad) -> bool:
+	return q != null and _strip_quads.values().has(q)
+
+
+## A quad's navigation country: 0 the wall, 1 the rail, 2 the
+## strip. Sideways travel never crosses countries (the rail's
+## law, extended to the strip when the letter-jump round gave
+## the rail a second row). Vertically the ladder is strict:
+## the grid steps DOWN to the rail and the strip steps UP to
+## it - neither may step past the rail to the other, however
+## the projection scores it (the strip's first build let a
+## bottom-row DOWN land on a letter, skipping the rail the
+## player's DOWN contract promises).
+func _focus_country(q: ClickableQuad) -> int:
+	if _is_rail_quad(q):
+		return 1
+	if _is_strip_quad(q):
+		return 2
+	return 0
+
+
+## The next focus stop along the focused quad's own row - the
+## rail in RAIL_FOCUS_ORDER, the strip in its layout order -
+## skipping stops that are not focusable right now (the
+## strip's greyed letters among them). Null at the row's end -
+## focus stays put there.
 func _rail_focus_neighbour(step: int) -> ClickableQuad:
 	if _focused == null:
 		return null
+	var quads: Dictionary = _rail_quads
+	var order: Array = []
+	order.assign(RAIL_FOCUS_ORDER)
+	if _is_strip_quad(_focused):
+		quads = _strip_quads
+		order.assign(_strip_slot_keys())
 	var idx: int = -1
-	for i: int in range(RAIL_FOCUS_ORDER.size()):
-		var cand: ClickableQuad = _rail_quads.get(RAIL_FOCUS_ORDER[i]) as ClickableQuad
+	for i: int in range(order.size()):
+		var cand: ClickableQuad = quads.get(str(order[i])) as ClickableQuad
 		if cand != null and cand == _focused:
 			idx = i
 			break
 	if idx < 0:
 		return null
 	var j: int = idx + step
-	while j >= 0 and j < RAIL_FOCUS_ORDER.size():
-		var q: ClickableQuad = _rail_quads.get(RAIL_FOCUS_ORDER[j]) as ClickableQuad
+	while j >= 0 and j < order.size():
+		var q: ClickableQuad = quads.get(str(order[j])) as ClickableQuad
 		if q != null and q.pick_enabled and _focusables.has(q):
 			return q
 		j += step
@@ -2612,7 +2952,7 @@ func _move_focus(dir: Vector2) -> void:
 	# row returns to the rail. A sideways step anywhere else
 	# never lands on the rail either.
 	var horizontal: bool = absf(dir.x) > 0.5
-	if horizontal and _is_rail_quad(_focused):
+	if horizontal and (_is_rail_quad(_focused) or _is_strip_quad(_focused)):
 		var step: int = 1 if dir.x > 0.0 else -1
 		var nq: ClickableQuad = _rail_focus_neighbour(step)
 		if nq != null:
@@ -2622,14 +2962,18 @@ func _move_focus(dir: Vector2) -> void:
 	if cam == null:
 		return
 	var from: Vector2 = cam.unproject_position(_focused.global_position)
-	var focused_rail: bool = _is_rail_quad(_focused)
+	var focused_country: int = _focus_country(_focused)
 	var best: ClickableQuad = null
 	var best_score: float = INF
 	for q: ClickableQuad in _focusables:
 		if q == _focused or not q.pick_enabled:
 			continue
-		if horizontal and _is_rail_quad(q) != focused_rail:
-			continue ## a sideways step never crosses between rail and wall
+		if horizontal and _focus_country(q) != focused_country:
+			continue ## a sideways step never crosses between wall, rail and strip
+		if not horizontal and focused_country == 0 and dir.y > 0.5 and _focus_country(q) == 2:
+			continue ## the grid steps DOWN to the rail, never past it to the strip (the rail's entry law, one row further)
+		if not horizontal and focused_country == 2 and dir.y < -0.5 and _focus_country(q) == 0:
+			continue ## the strip steps UP to the rail, never past it to the grid
 		var p: Vector2 = cam.unproject_position(q.global_position)
 		var delta_v: Vector2 = p - from
 		if delta_v.length() < 4.0:
