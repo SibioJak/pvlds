@@ -210,6 +210,15 @@ var _bootfocus_phase: int = 0
 var _bootfocus_wait: int = 0
 var _bootfocus_failures: int = 0
 var _bootfocus_game: String = "" ## env PVLDS_BOOTFOCUS_GAME: the seeded last-played game id the boot must focus
+var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
+var _jumpbench_phase: int = 0
+var _jumpbench_wait: int = 0
+var _jumpbench_t0: int = 0
+var _jumpbench_frames: int = 0
+var _jumpbench_label: String = ""
+var _jumpbench_after: int = -1 ## the phase entered when the in-flight measurement settles
+var _jumpbench_failures: int = 0
+var _jumpbench_boot_msec: int = 0
 var _seated_cam: bool = false ## --pvlds-seated-cam: shots/nav run from a seated eye height
 var _smoke_lockout: bool = false ## --pvlds-smoke-lockout: attack the load wait's input lockout mid-flight
 var _lockout_smoke_pending: bool = false ## a launch fired by the lockout smoke is in its wait; _settle_launch prints its verdict
@@ -379,11 +388,17 @@ func _ready() -> void:
 	if user_args.has("--pvlds-smoke-bootfocus"):
 		_smoke_bootfocus = true
 		_bootfocus_game = OS.get_environment("PVLDS_BOOTFOCUS_GAME")
+	if user_args.has("--pvlds-smoke-jumpbench"):
+		_smoke_jumpbench = true
+		_jumpbench_boot_msec = Time.get_ticks_msec()
 	# The focus-fix round's negative-control seam (harness
 	# env): "visual" starves the strip quads of visual-state
 	# refreshes (fault 1), "pager" drops the page-travel focus
 	# landing (fault 2). Set here, before any room exists.
 	RoomView.debug_focus_nc = OS.get_environment("PVLDS_FOCUS_NC")
+	# The pick-latency bench seam (PVLDS_BENCH): the room's
+	# fills print their phase timings + render counts.
+	RoomView.debug_bench = OS.has_environment("PVLDS_BENCH")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -418,7 +433,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_letters or _smoke_bootfocus or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "") and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_letters or _smoke_bootfocus or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "") and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -555,6 +570,8 @@ func _process(_delta: float) -> void:
 		_drive_letters_smoke()
 	if _smoke_bootfocus:
 		_drive_bootfocus_smoke()
+	if _smoke_jumpbench:
+		_drive_jumpbench_smoke()
 	if _smoke_quitwarm:
 		_drive_quitwarm_smoke()
 	if _art_bench:
@@ -3705,6 +3722,7 @@ func _drive_letters_smoke() -> void:
 				_letters_leg_fixtures()
 				_letters_leg_presence()
 				_letters_leg_country()
+				_letters_leg_hash_walk()
 				_letters_leg_jump()
 				_letters_leg_the_net()
 				_letters_leg_number_net()
@@ -3734,6 +3752,47 @@ func _drive_letters_smoke() -> void:
 			# when the slide settles - both directions, and at
 			# both clamped ends.
 			if _letters_leg_pager_step():
+				_letters_step = 0
+				_letters_smoke_wait = 0
+				_letters_smoke_phase = 5
+		5:
+			# The focus-law grab legs (Chris, 2026-10-27: picks
+			# move the wall, never the focus): pick W, let its
+			# wall settle, and focus must STILL be on the W
+			# slot - proven in the rendered pixels, not just
+			# the state. Then walk the row onto # for its own
+			# rendered proof.
+			if _letters_step == 0:
+				_letters_pick("W")
+				_letters_step = 1
+				_letters_smoke_wait = 0
+			else:
+				_letters_smoke_wait += 1
+				if _room.wall_ready and _letters_smoke_wait >= 6:
+					_letters_expect(_letters_key_of(_room.focused_quad()) == "W",
+						"focus law: focus is still on W after its pick's wall settled (got '%s')" % _letters_key_of(_room.focused_quad()))
+					var blue_w: int = _letters_grab_ring("W", "pick_focus_w.png")
+					_letters_expect(blue_w >= 6,
+						"focus law: the rendered frame shows the focus frame around 'W' after its pick (%d frame-blue band samples)" % blue_w)
+					for i: int in range(30):
+						_room._move_focus(Vector2(-1.0, 0.0))
+					_letters_expect(_letters_key_of(_room.focused_quad()) == "#",
+						"focus law: the post-pick walk holds at # (got '%s')" % _letters_key_of(_room.focused_quad()))
+					_letters_step = 0
+					_letters_smoke_wait = 0
+					_letters_smoke_phase = 6
+				elif _letters_smoke_wait > 3600:
+					_letters_smoke_fail("focus law: the W pick's wall never settled for the grab")
+					_finish_letters_smoke()
+		6:
+			_letters_smoke_wait += 1
+			if _letters_smoke_wait >= 6:
+				var blue_h: int = _letters_grab_ring("#", "walk_focus_hash.png")
+				_letters_expect(blue_h >= 6,
+					"focus law: the rendered frame shows the focus frame around '#' after the walk (%d frame-blue band samples)" % blue_h)
+				_finish_letters_smoke()
+			elif _letters_smoke_wait > 3600:
+				_letters_smoke_fail("focus law: the # grab never came due")
 				_finish_letters_smoke()
 
 
@@ -3855,6 +3914,29 @@ func _letters_leg_country() -> void:
 	_letters_expect(saw_panel, "country: Tab cycling escapes the strip to a card (no focus trap)")
 
 
+## The # walk legs (Chris, 2026-10-27: "Cant highlight #").
+## The country leg traverses the row from wherever the entry
+## landing falls; these start from deterministic neighbours:
+## one step LEFT from A must land on #, and the full walk
+## LEFT from THE must hold at # - with the frame flagged
+## showing on the slot each time.
+func _letters_leg_hash_walk() -> void:
+	_room._set_focused(_room.letter_quad("A"))
+	_room._move_focus(Vector2(-1.0, 0.0))
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "#",
+		"# walk: A steps left onto # (got '%s')" % _letters_key_of(_room.focused_quad()))
+	_letters_expect(_room.focused_quad() != null and _room.focused_quad().highlight_visible(),
+		"# walk: #'s highlight frame is flagged showing after the step from A")
+	_room._set_focused(_room.letter_quad("THE"))
+	for i: int in range(30):
+		_room._move_focus(Vector2(-1.0, 0.0))
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "#",
+		"# walk: the walk left from THE holds at # (got '%s')" % _letters_key_of(_room.focused_quad()))
+	_room._move_focus(Vector2(1.0, 0.0))
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "A",
+		"# walk: # steps right back to A")
+
+
 func _letters_leg_jump() -> void:
 	_room._handle_rail("sort")
 	_letters_expect(_room._sort == "year",
@@ -3862,13 +3944,15 @@ func _letters_leg_jump() -> void:
 	_letters_pick("W")
 	_letters_expect(_room._sort == "name", "jump: picking a letter quietly switches to title sort")
 	_letters_expect(_room._page == 1, "jump: W lands on the second page (got page %d)" % _room._page)
-	var f: ClickableQuad = _room.focused_quad()
-	_letters_expect(f != null and f.payload == "LJRH3fKk",
-		"jump: focus lands on W's first card, White Water (got '%s')" % (f.payload if f != null else "<none>"))
+	_letters_expect(_room.focused_quad() == _room.letter_quad("W"),
+		"focus law: picking W keeps focus on the W slot (got key '%s')" % _letters_key_of(_room.focused_quad()))
+	_letters_expect(_room._panels.size() > 1 and _room._panels[1].payload == "LJRH3fKk",
+		"jump: the wall W's pick built shows White Water")
 	_letters_expect(_room.active_letter_net() == "", "jump: a letter pick stands in no net")
 	_letters_pick("F")
-	_letters_expect(_room._page == 0 and _room.focused_quad() != null and _room.focused_quad().payload == "O1-qbuxg",
-		"jump: F lands back on page 1 with focus on Funhouse")
+	_letters_expect(_room._page == 0 and _room.focused_quad() == _room.letter_quad("F")
+		and _room._panels.size() > 3 and _room._panels[3].payload == "O1-qbuxg",
+		"focus law: F's pick keeps focus on F, and the wall shows Funhouse")
 
 
 func _letters_leg_the_net() -> void:
@@ -3885,16 +3969,16 @@ func _letters_leg_the_net() -> void:
 	var expected: Array[String] = ["The Addams Family", "The Getaway - High Speed II", "The Shadow", "The Simpsons Pinball Party"]
 	_letters_expect(_letters_visible_titles() == expected,
 		"THE net: exactly the canonical-The games, sorted by the word after The (got %s)" % str(_letters_visible_titles()))
-	_letters_expect(_room._page == 0 and not _room._panels.is_empty() and _room.focused_quad() == _room._panels[0],
-		"THE net: focus lands on the net's first card")
+	_letters_expect(_room._page == 0 and _room.focused_quad() == _room.letter_quad("THE"),
+		"focus law: picking THE keeps focus on the THE slot")
 	# The net property: the members never left their letters -
-	# picking A exits the net and lands on the very game the
-	# net was showing.
+	# picking A exits the net and the wall stands on the very
+	# game the net was showing, filed under its own letter.
 	_letters_pick("A")
 	_letters_expect(_room.active_letter_net() == "", "THE net: picking a letter exits the net")
-	var f: ClickableQuad = _room.focused_quad()
-	_letters_expect(f != null and f.payload == "aT_GONvw",
-		"canonical-The: picking A lands on The Addams Family (got '%s')" % (f.payload if f != null else "<none>"))
+	_letters_expect(_room.focused_quad() == _room.letter_quad("A")
+		and _room._panels.size() > 1 and _room._panels[1].payload == "aT_GONvw",
+		"canonical-The: picking A exits to the wall where The Addams Family files under A, focus on the A slot")
 	# A rail sort press leaves the net too.
 	_letters_pick("THE")
 	_room._handle_rail("sort")
@@ -3905,12 +3989,15 @@ func _letters_leg_the_net() -> void:
 func _letters_leg_number_net() -> void:
 	_letters_pick("#")
 	_letters_expect(_room.active_letter_net() == "#", "# net: the net view stands")
+	_letters_expect(_room.focused_quad() == _room.letter_quad("#"),
+		"focus law: picking # keeps focus on the # slot")
 	var expected: Array[String] = ["8 Ball"]
 	_letters_expect(_letters_visible_titles() == expected,
 		"# net: exactly the non-letter starters (got %s)" % str(_letters_visible_titles()))
 	_letters_pick("F")
-	_letters_expect(_room.active_letter_net() == "" and _room.focused_quad() != null and _room.focused_quad().payload == "O1-qbuxg",
-		"# net: picking a letter exits at that letter (Funhouse)")
+	_letters_expect(_room.active_letter_net() == "" and _room.focused_quad() == _room.letter_quad("F")
+		and _room._panels.size() > 3 and _room._panels[3].payload == "O1-qbuxg",
+		"# net: picking a letter exits at that letter (focus on F, the wall shows Funhouse)")
 
 
 ## Fault 1's legs (Chris, 2026-10-27: the highlight "doesn't
@@ -3943,6 +4030,21 @@ func _letters_leg_strip_entry() -> void:
 		"strip visual: the grab walk holds at THE (got '%s')" % _letters_focus_key)
 	_letters_expect(_room.focused_quad() != null and _room.focused_quad().highlight_visible(),
 		"strip visual: THE's highlight frame is flagged showing for the grab")
+
+
+## Grab the live frame and count focus-frame-blue pixels in
+## the ring band around the named slot (which must hold the
+## focus - anything else counts zero). The grab is saved
+## beside the log under PVLDS_GRAB_DIR.
+func _letters_grab_ring(key: String, file_name: String) -> int:
+	var fq: ClickableQuad = _room.letter_quad(key)
+	if fq == null or _room.focused_quad() != fq:
+		return 0
+	var img: Image = get_viewport().get_texture().get_image()
+	var dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if dir != "":
+		img.save_png(dir.path_join(file_name))
+	return _letters_ring_blue_count(img, fq, _room._strip_slot_size(key))
 
 
 ## The rendered half of fault 1: grab the actual frame and
@@ -4060,6 +4162,146 @@ func _letters_leg_pager_step() -> bool:
 					"pager: a clamped PREV at the first page keeps focus on the arrow")
 				return true
 	return false
+
+
+# -------------------------------------------------- jump bench
+
+## --pvlds-smoke-jumpbench: the pick-latency bench (the
+## focus-law round, 2026-10-27 - Chris: "tapping letter
+## switched to correct wall, but it took awhile to load,
+## grinding gear. not sure if one-time thing or what").
+## Boots a field-scale fixture library (360 stub tables over
+## verbatim real VPS records, sidecar art on every game),
+## waits out the scan + warm drain, then times the player's
+## own routes end to end - the press to the wall settled
+## (wall_ready): a COLD letter pick (a page never shown this
+## session), a WARM re-pick of the same letter, a plain page
+## turn for comparison, and the THE / # net picks. The
+## numbers are the deliverable (JUMPBENCH lines); the room's
+## BENCH fill lines (PVLDS_BENCH) attribute each fill's cost
+## to the banner, the furniture, and the panels. Sanity
+## failures (wrong library size, a pick landing wrong) fail
+## the boot - a broken bench must not masquerade as data.
+func _drive_jumpbench_smoke() -> void:
+	if _jumpbench_after >= 0:
+		_jumpbench_wait += 1
+		_jumpbench_frames += 1
+		if _room != null and _room.wall_ready and not _room.page_slide_active():
+			print("JUMPBENCH: %s: %d ms (%d frames)" % [_jumpbench_label, Time.get_ticks_msec() - _jumpbench_t0, _jumpbench_frames])
+			_jumpbench_phase = _jumpbench_after
+			_jumpbench_after = -1
+			_jumpbench_wait = 0
+		elif _jumpbench_wait > 7200:
+			_jumpbench_fail("the measurement '%s' never settled" % _jumpbench_label)
+			_finish_jumpbench_smoke()
+		return
+	match _jumpbench_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and not _scan_active \
+					and (_art_warmer == null or _art_warmer.is_idle()):
+				var games: int = _scanner.games.size() if _scanner != null else -1
+				print("JUMPBENCH: library games=%d files=%d warm_drain=%dms boot_settle=%dms" % [
+					games, _scanner.total_files if _scanner != null else -1,
+					_art_warmer.last_pass_msec if _art_warmer != null else -1,
+					Time.get_ticks_msec() - _jumpbench_boot_msec])
+				if games < 330 or games > 390:
+					_jumpbench_fail("the bench library holds %d games, not field scale (~360)" % games)
+					_finish_jumpbench_smoke()
+					return
+				_jumpbench_phase = 1
+			else:
+				_jumpbench_wait += 1
+				if _jumpbench_wait > 21600:
+					_jumpbench_fail("the bench room never settled (scan/warm)")
+					_finish_jumpbench_smoke()
+		1:
+			# The room boots into the VR filter by design; the
+			# bench times the FULL shelf, so stand in ALL first
+			# (the letters smoke does the same). The press is a
+			# full rebuild - its timing is honest data too.
+			_jumpbench_measure("filter ALL (bench setup)", Callable(self, "_jumpbench_press_all"), 2)
+		2:
+			_jumpbench_measure("pick S (cold page)", Callable(self, "_jumpbench_press_s"), 3)
+		3:
+			_jumpbench_measure("pick A (boot page, warm)", Callable(self, "_jumpbench_press_a"), 4)
+		4:
+			_jumpbench_measure("pick S (warm page)", Callable(self, "_jumpbench_press_s"), 5)
+		5:
+			_jumpbench_measure("page turn NEXT", Callable(self, "_jumpbench_press_next"), 6)
+		6:
+			_jumpbench_measure("pick THE (net)", Callable(self, "_jumpbench_press_the"), 7)
+		7:
+			if _room.strip_slot_pickable("#"):
+				_jumpbench_measure("pick # (net)", Callable(self, "_jumpbench_press_hash"), 8)
+			else:
+				_jumpbench_fail("the # slot is not pickable on the bench shelf in ALL (the sample holds 3 non-letter starters)")
+				_jumpbench_phase = 8
+		8:
+			_finish_jumpbench_smoke()
+
+
+func _jumpbench_measure(label: String, press: Callable, after: int) -> void:
+	_jumpbench_label = label
+	_jumpbench_frames = 0
+	_jumpbench_wait = 0
+	_jumpbench_t0 = Time.get_ticks_msec()
+	press.call()
+	_jumpbench_after = after
+
+
+func _jumpbench_press_all() -> void:
+	_room._handle_rail("filter:all")
+	if _room._filter != "all":
+		_jumpbench_fail("the bench could not stand in the ALL filter")
+
+
+func _jumpbench_press_s() -> void:
+	_letters_pick("S")
+	var idx: int = -1
+	for i: int in range(_room._visible_games.size()):
+		if LetterIndex.letter_of(_room._visible_games[i].title) == "S":
+			idx = i
+			break
+	if idx < 0 or _room._page != idx / _room.PAGE_SIZE:
+		_jumpbench_fail("pick S landed on page %d, expected %d" % [_room._page, idx / _room.PAGE_SIZE if idx >= 0 else -1])
+
+
+func _jumpbench_press_a() -> void:
+	_letters_pick("A")
+
+
+func _jumpbench_press_next() -> void:
+	var before: int = _room._page
+	_room._set_focused(_room.rail_quad("page_next"))
+	_room._a_press()
+	if _room._page == before and not _room.page_slide_active():
+		_jumpbench_fail("page turn NEXT never started its slide")
+
+
+func _jumpbench_press_the() -> void:
+	_letters_pick("THE")
+	if _room.active_letter_net() != "THE":
+		_jumpbench_fail("pick THE did not raise the net")
+
+
+func _jumpbench_press_hash() -> void:
+	_letters_pick("#")
+	if _room.active_letter_net() != "#":
+		_jumpbench_fail("pick # did not raise the net")
+
+
+func _jumpbench_fail(label: String) -> void:
+	_jumpbench_failures += 1
+	printerr("  FAIL - jumpbench: ", label)
+
+
+func _finish_jumpbench_smoke() -> void:
+	if _jumpbench_failures == 0:
+		print("PVLDS JUMPBENCH: DONE")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS JUMPBENCH: FAILED (%d)" % _jumpbench_failures)
+		get_tree().quit(1)
 
 
 # -------------------------------------------------- boot focus smoke

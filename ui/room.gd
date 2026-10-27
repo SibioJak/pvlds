@@ -239,6 +239,12 @@ var _placeholder_tex: Texture2D = null ## the standing wall's placeholder face (
 ## (fault 1's shape), "pager" drops the page-travel focus
 ## landing (fault 2's shape). Empty in every real run.
 static var debug_focus_nc: String = ""
+## Bench seam (the focus-law round's harness env PVLDS_BENCH,
+## set by Main before any room exists): when true, every wall
+## fill prints its phase timings (banner / furniture / panels)
+## and its factory render + cache-hit counts as BENCH lines -
+## the pick-latency evidence. Silent in every real run.
+static var debug_bench: bool = false
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
@@ -275,6 +281,11 @@ var _rail_quads: Dictionary = {} ## key -> ClickableQuad
 var _rail_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: every rail button face ever rendered, so a rebuild re-dresses the rail in its own frame
 var _strip_quads: Dictionary = {} ## letter key ("A".."Z", "THE", "#") -> ClickableQuad: the alphabet strip, built once with the rail
 var _strip_tex_cache: Dictionary = {} ## "key|state" -> Texture2D: every strip slot face ever rendered (the rail cache's pattern)
+var _banner_tex_cache: Dictionary = {} ## banner line -> Texture2D: the banner's face by its exact line (the pick-latency fix, 2026-10-27 - it re-rendered on every rebuild though the line rarely changes)
+var _btn_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: the panels' Launch/Failed button faces - two textures in existence, once rendered per panel per rebuild before the pick-latency fix
+var _face_tex_cache: Dictionary = {} ## "game_id|art_path|fav" -> [Texture2D, art_aspect]: rendered panel faces (the pick-latency fix - a revisit re-rendered every face from scratch)
+var _face_cache_order: Array[String] = [] ## the face cache's LRU order (oldest first)
+const FACE_CACHE_MAX: int = 48 ## four pages of faces - the working set a browsing session actually revisits
 var _strip_has_number: bool = false ## the library holds a non-letter title, so the "#" slot is laid out (see _refresh_strip)
 var _letter_net: String = "" ## "" | "THE" | "#": the standing net view - the wall shows exactly that net's games, in title order (see _jump_to_letter)
 var _slide_phase: int = 0 ## the page slide: 0 rest, 1 gliding out, 2 gliding back (see _update_slide)
@@ -326,6 +337,11 @@ func setup(factory: TextureFactory, scanner: LibraryScanner, store: StateStore, 
 
 func refresh_library() -> void:
 	_letter_net = "" ## a fresh library lifts any standing net: its set was the old scan's truth
+	# Cached faces belong to the old library's truth (titles,
+	# build counts, art can all change under a game_id across
+	# a rescan): they die with the library that minted them.
+	_face_tex_cache.clear()
+	_face_cache_order.clear()
 	_tune_panel_size()
 	_recompute_visible()
 	_page = 0
@@ -826,8 +842,15 @@ func _refresh_banner() -> void:
 	if _banner_quad == null or _scanner == null:
 		return
 	var gen: int = _gen
-	var tex: Texture2D = await _factory.render_texture(RoomSpecs.banner_spec(_banner_line()), Vector2i(1024, 262))
-	if gen == _gen and _banner_quad != null:
+	var line: String = _banner_line()
+	var tex: Texture2D = _banner_tex_cache.get(line) as Texture2D
+	if tex == null:
+		tex = await _factory.render_texture(RoomSpecs.banner_spec(line), Vector2i(1024, 262))
+		if tex != null:
+			if _banner_tex_cache.size() > 64:
+				_banner_tex_cache.clear()
+			_banner_tex_cache[line] = tex
+	if gen == _gen and _banner_quad != null and tex != null:
 		_banner_quad.set_texture(tex)
 
 
@@ -971,17 +994,29 @@ func _apply_strip_textures(presence: Dictionary) -> void:
 
 ## A strip pick: the jump itself. An ordinary letter files
 ## the wall to title sort (quietly - the banner's sort line
-## says NAME after) and lands on the letter's first page,
-## focus on its first card. A net slot (THE / #) raises the
-## net view instead: page one of exactly its games, focus on
-## the first. Picking a letter from inside a net exits the
-## net at that letter - the games were never moved, only
-## viewed. RECENTS drops to ALL on any pick: a recency list's
-## order is its meaning, and a letter index over it would be
-## a lie - the jump leaves the list for the library, the way
-## picking a filter leaves a sort. Greyed slots are not
-## pickable and never reach here; the no-such-letter landing
-## below is defensive only.
+## says NAME after) and lands on the letter's first page.
+## A net slot (THE / #) raises the net view instead: page
+## one of exactly its games. Picking a letter from inside a
+## net exits the net at that letter - the games were never
+## moved, only viewed. RECENTS drops to ALL on any pick: a
+## recency list's order is its meaning, and a letter index
+## over it would be a lie - the jump leaves the list for the
+## library, the way picking a filter leaves a sort. Greyed
+## slots are not pickable and never reach here; the
+## no-such-letter landing below is defensive only.
+##
+## THE FOCUS LAW (Chris, 2026-10-27, reversing this round's
+## first landing in the field): PICKS MOVE THE WALL, NEVER
+## THE FOCUS. A letter pick used to land focus on the page's
+## first card; from the strip that reads as a theft - the
+## player is pulled off the bar and has to climb back down
+## for the next letter. So every pick lands on the slot that
+## was pressed (see _land_after_letter_pick) - the same rule
+## the rail's stops won in the 2026-10-25 round and page
+## travel in the focus-fix round: a press lands on the stop
+## that was activated, and the letter slot IS the activated
+## stop. Do not re-litigate this in a later round without
+## the player's word.
 func _jump_to_letter(key: String) -> void:
 	_failed_game_id = ""
 	_status_note = ""
@@ -994,8 +1029,7 @@ func _jump_to_letter(key: String) -> void:
 		_recompute_visible()
 		_rebuild_wall()
 		_persist_view()
-		if not _panels.is_empty():
-			_set_focused(_panels[0])
+		_land_after_letter_pick(key, _panels[0] if not _panels.is_empty() else null)
 		return
 	_letter_net = ""
 	_recompute_visible()
@@ -1007,21 +1041,85 @@ func _jump_to_letter(key: String) -> void:
 	if idx < 0:
 		_rebuild_wall()
 		_persist_view()
+		_land_after_letter_pick(key, null)
 		return
 	_page = idx / PAGE_SIZE
 	_rebuild_wall()
 	_persist_view()
 	var slot: int = idx % PAGE_SIZE
-	if slot < _panels.size():
-		_set_focused(_panels[slot])
+	_land_after_letter_pick(key, _panels[slot] if slot < _panels.size() else null)
+
+
+## The letter pick's focus landing - the one place the focus
+## law above is decided. Focus takes the pressed slot (the
+## strip is persistent furniture, so the quad is the same
+## instance the rebuild re-dressed); the wall moved, the
+## player did not. When the slot is somehow not a live focus
+## stop (a defensive path - greyed slots never reach the
+## jump), focus stays wherever the rebuild left it. The NC
+## value "letterland" restores the letter round's original
+## first-card landing for the harness, so the smoke's
+## focus-law legs fail by name against it.
+func _land_after_letter_pick(key: String, nc_fallback: ClickableQuad) -> void:
+	if debug_focus_nc == "letterland":
+		if nc_fallback != null:
+			_set_focused(nc_fallback)
+		return
+	var sq: ClickableQuad = _strip_quads.get(key) as ClickableQuad
+	if sq != null and _focusables.has(sq):
+		_set_focused(sq)
+
+
+## The panel face cache's LRU read: a hit returns
+## [Texture2D, art_aspect] and renews the entry's place.
+func _face_cache_get(key: String) -> Array:
+	if not _face_tex_cache.has(key):
+		return []
+	_face_cache_order.erase(key)
+	_face_cache_order.push_back(key)
+	return _face_tex_cache[key] as Array
+
+
+## The panel face cache's LRU write: past FACE_CACHE_MAX
+## the oldest faces are dropped (their games simply
+## re-render on a later visit - a miss is a cost, never a
+## wrong face, because the key carries the game's art path
+## and favorite flag, and a fresh library clears the cache).
+func _face_cache_put(key: String, tex: Texture2D, aspect: float) -> void:
+	_face_tex_cache[key] = [tex, aspect]
+	_face_cache_order.erase(key)
+	_face_cache_order.push_back(key)
+	while _face_cache_order.size() > FACE_CACHE_MAX:
+		var old: String = _face_cache_order.pop_front()
+		_face_tex_cache.erase(old)
 
 
 func _fill_wall_textures(gen: int) -> void:
+	var bench_t0: int = Time.get_ticks_msec()
+	var bench_renders: int = 0
+	var bench_face_hits: int = 0
+	var bench_btn_hits: int = 0
+	var bench_banner_hit: bool = false
 	# Banner first: it carries the library summary line.
-	var banner_tex: Texture2D = await _factory.render_texture(RoomSpecs.banner_spec(_banner_line()), Vector2i(1024, 262))
+	# The line is the cache key: across page turns and letter
+	# picks it usually does not change, and re-rendering it
+	# cost a factory round-trip on every single rebuild.
+	var banner_line: String = _banner_line()
+	var banner_tex: Texture2D = null
+	if _banner_tex_cache.has(banner_line):
+		banner_tex = _banner_tex_cache[banner_line] as Texture2D
+		bench_banner_hit = true
+	else:
+		bench_renders += 1
+		banner_tex = await _factory.render_texture(RoomSpecs.banner_spec(banner_line), Vector2i(1024, 262))
+		if gen == _gen and banner_tex != null:
+			if _banner_tex_cache.size() > 64:
+				_banner_tex_cache.clear()
+			_banner_tex_cache[banner_line] = banner_tex
 	if gen != _gen or _banner_quad == null:
 		return
 	_banner_quad.set_texture(banner_tex)
+	var bench_t_banner: int = Time.get_ticks_msec()
 	# Rail buttons SECOND - they used to render last, after a
 	# dozen panels and their Launch buttons, which is exactly
 	# why the bar reassembled itself piece by piece on every
@@ -1038,6 +1136,7 @@ func _fill_wall_textures(gen: int) -> void:
 		if _rail_tex_cache.has(ck):
 			quad.set_texture(_rail_tex_cache[ck] as Texture2D)
 			continue
+		bench_renders += 1
 		var btex: Texture2D = await _factory.render_texture(RoomSpecs.button_spec(label, accent), Vector2i(512, 150))
 		if gen != _gen:
 			return
@@ -1059,12 +1158,21 @@ func _fill_wall_textures(gen: int) -> void:
 			squad.set_texture(_strip_tex_cache[sck] as Texture2D)
 			continue
 		var spx: Vector2i = Vector2i(420, 260) if skey == "THE" else Vector2i(190, 260)
+		bench_renders += 1
 		var stex: Texture2D = await _factory.render_texture(RoomSpecs.letter_spec(str(ls[0]), str(ls[1])), spx)
 		if gen != _gen:
 			return
 		_strip_tex_cache[sck] = stex
 		squad.set_texture(stex)
-	# Panels.
+	var bench_t_furniture: int = Time.get_ticks_msec()
+	# Panels. A face is a pure function of (game, its art
+	# file, favorite flag) inside one library adoption, so it
+	# is cached like the furniture's faces are (the pick-
+	# latency fix): a revisit used to re-decode the art and
+	# re-render the face through the serial factory, every
+	# panel, every rebuild - warm pages cost exactly what
+	# cold pages cost, which is the grinding gear the player
+	# reported on letter picks (2026-10-27).
 	var start: int = _page * PAGE_SIZE
 	for i: int in range(_panels.size()):
 		var game: GameEntry = _visible_games[start + i]
@@ -1072,17 +1180,29 @@ func _fill_wall_textures(gen: int) -> void:
 		var tex: Texture2D = null
 		var art_aspect: float = 0.0
 		var art_file: String = game.ensure_art()
-		if art_file != "":
-			var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
-			if art_tex != null:
-				# The card's own art aspect rides along: the
-				# pop-out grows the card to it (sizing half (b)).
-				art_aspect = float(art_tex.get_width()) / float(art_tex.get_height())
-				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store), _panel_face_px)
-		if tex == null:
-			tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), _panel_face_px)
-		if gen != _gen:
-			return
+		var fav: bool = _store != null and _store.is_favorite(game.game_id)
+		var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "")
+		var cached_face: Array = _face_cache_get(fkey)
+		if not cached_face.is_empty():
+			tex = cached_face[0] as Texture2D
+			art_aspect = float(cached_face[1])
+			bench_face_hits += 1
+		else:
+			if art_file != "":
+				var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
+				if art_tex != null:
+					# The card's own art aspect rides along: the
+					# pop-out grows the card to it (sizing half (b)).
+					art_aspect = float(art_tex.get_width()) / float(art_tex.get_height())
+					bench_renders += 1
+					tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store), _panel_face_px)
+			if tex == null:
+				bench_renders += 1
+				tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), _panel_face_px)
+			if gen != _gen:
+				return
+			if tex != null:
+				_face_cache_put(fkey, tex, art_aspect)
 		quad.set_texture(tex)
 		# The face has landed. Two power-on debts settle here
 		# (the boot fault's other half): a performance that
@@ -1108,13 +1228,33 @@ func _fill_wall_textures(gen: int) -> void:
 			_panel_pop_applied[i] = -1.0
 		if i < _panel_launches.size():
 			var failed: bool = game.game_id == _failed_game_id
-			var ltex: Texture2D = await _factory.render_texture(
-				RoomSpecs.button_spec("FAILED" if failed else "LAUNCH", not failed), Vector2i(512, 164))
-			if gen != _gen:
-				return
+			# The Launch/Failed button has exactly two faces in
+			# existence; they are cached like the rail's (the
+			# pick-latency fix - they were twelve of the ~25
+			# serial renders every rebuild paid).
+			var blabel: String = "FAILED" if failed else "LAUNCH"
+			var baccent: bool = not failed
+			var bkey: String = blabel + "|" + ("a" if baccent else "p")
+			var ltex: Texture2D = _btn_tex_cache.get(bkey) as Texture2D
+			if ltex != null:
+				bench_btn_hits += 1
+			else:
+				bench_renders += 1
+				ltex = await _factory.render_texture(
+					RoomSpecs.button_spec(blabel, baccent), Vector2i(512, 164))
+				if gen != _gen:
+					return
+				if ltex != null:
+					_btn_tex_cache[bkey] = ltex
 			_panel_launches[i].set_texture(ltex)
 	if gen == _gen:
 		wall_ready = true
+		if debug_bench:
+			var bench_now: int = Time.get_ticks_msec()
+			print("BENCH: fill gen=%d page=%d banner=%dms furniture=%dms panels=%dms total=%dms renders=%d face_hits=%d btn_hits=%d banner_hit=%s" % [
+				gen, _page, bench_t_banner - bench_t0, bench_t_furniture - bench_t_banner,
+				bench_now - bench_t_furniture, bench_now - bench_t0, bench_renders,
+				bench_face_hits, bench_btn_hits, str(bench_banner_hit)])
 		# The page is settled: ask Main's warmer to bring the
 		# neighbouring pages' art forward (next page first), so a
 		# flip lands on warm art even mid-warm-up.

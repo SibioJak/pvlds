@@ -66,12 +66,41 @@ static func make_solid(color: Color) -> Texture2D:
 	return ImageTexture.create_from_image(img)
 
 
+## Decoded-art cache (the pick-latency fix, 2026-10-27): a
+## wall rebuild used to re-decode and re-downscale every
+## panel's art image from disk, every time - the decode is
+## a pure function of the file's bytes, so it is cached by
+## path and re-verified against the file's mtime + size on
+## every call (a replaced file re-decodes; art-cache paths
+## are content-stamped besides). Bounded FIFO: a miss is a
+## cost, never a wrong image.
+static var _art_decode_cache: Dictionary = {} ## path -> [Texture2D, mtime, size]
+static var _art_decode_order: Array[String] = []
+const ART_DECODE_CACHE_MAX: int = 64
+
+
 ## Loads an image file as a texture, downscaled to a sane VRAM size.
 static func load_art_texture(path: String) -> Texture2D:
+	var mtime: int = FileAccess.get_modified_time(path)
+	var size: int = -1
+	var probe: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if probe != null:
+		size = int(probe.get_length())
+		probe.close()
+	var hit: Variant = _art_decode_cache.get(path)
+	if hit is Array and int(hit[1]) == mtime and int(hit[2]) == size:
+		return hit[0] as Texture2D
 	var img: Image = Image.new()
 	if img.load(path) != OK:
 		return null
 	if img.get_width() > 1024:
 		var ratio: float = 1024.0 / float(img.get_width())
 		img.resize(1024, int(float(img.get_height()) * ratio), Image.INTERPOLATE_LANCZOS)
-	return ImageTexture.create_from_image(img)
+	var tex: Texture2D = ImageTexture.create_from_image(img)
+	_art_decode_cache[path] = [tex, mtime, size]
+	_art_decode_order.erase(path)
+	_art_decode_order.push_back(path)
+	while _art_decode_order.size() > ART_DECODE_CACHE_MAX:
+		var old: String = _art_decode_order.pop_front()
+		_art_decode_cache.erase(old)
+	return tex
