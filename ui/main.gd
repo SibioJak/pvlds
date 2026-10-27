@@ -173,8 +173,8 @@ var _nav_smoke_failures: int = 0
 var _nav_faces_done: bool = false ## the title-card face check (async render) has reported
 var _nav_bumpers_started: bool = false ## the bumper leg runs async (it waits out each page slide); kicked off once
 var _nav_bumpers_done: bool = false ## the bumper leg (async) has reported
-var _nav_y_started: bool = false ## the Y-launch leg runs async (it rides a real launch wait); kicked off once
-var _nav_y_done: bool = false ## the Y-launch leg (async) has reported
+var _nav_y_started: bool = false ## the A/Y-swap leg runs async (it rides real launch waits); kicked off once
+var _nav_y_done: bool = false ## the A/Y-swap leg (async) has reported
 var _nav_rail_started: bool = false ## the rail-focus leg runs async (it waits out each rebuild); kicked off once
 var _nav_rail_done: bool = false ## the rail-focus leg (async) has reported
 var _nav_fav_started: bool = false ## the X-favorites leg runs async (feeds + re-renders); kicked off once
@@ -258,6 +258,12 @@ var _shot_flicker_game: GameEntry = null ## the bulb-bearing fixture game
 var _shot_flicker_saw_partial: bool = false ## a frame with some-but-not-all layers lit was observed
 var _shot_flicker_fixtures: Dictionary = {} ## fix-round legs: fixture title prefix -> {"game": GameEntry, "panel": ClickableQuad}
 var _shot_flicker_spill: int = -1 ## fix round: cascade-driven amber change OUTSIDE the face across the burst (max-min), -1 until measured
+var _shot_flicker_blend_alphas: Array[float] = [] ## pair-strobe leg: the pair layer's alpha, sampled every frame of its live cascade
+var _shot_flicker_probe_wait: int = 0 ## pair-strobe leg: frames waited since parking the cascade clock for a rendered probe
+var _shot_flicker_off_img: Image = null ## pair-strobe leg: the pair card rendered at cascade t=0 (pure Off), popped geometry
+var _shot_flicker_on_img: Image = null ## pair-strobe leg: the pair card rendered at cascade end (pure On), popped geometry
+var _shot_flicker_dip_win: Vector2 = Vector2.ZERO ## pair-strobe leg: the Specter schedule's dip window [dip_end, on_t]
+var _shot_flicker_live_missed: bool = false ## pair-strobe leg: the live cascade finished before a poll saw phase 1 (one giant post-extraction frame) - the sweep and the rendered fit carry the leg instead
 var _shot_flicker_armed: bool = false ## fix-round legs: the current leg's focus has been set
 var _art_bench: bool = false ## --pvlds-art-bench: dev measurement route (cold/warm page-fill timings)
 var _bench_phase: int = -1
@@ -1097,6 +1103,66 @@ func _flicker_rect_mean(q: ClickableQuad) -> float:
 	return sum / float(maxi(1, n))
 
 
+## Least-squares blend fit of a frame against two endpoint
+## frames over a panel's screen rect (the pair-strobe leg):
+## returns (alpha, relative residual). Alpha says where the
+## frame sits on the Off->On line - 0 pure Off, 1 pure On,
+## anything between a blend of the two pictures. The
+## residual says whether the blend model explains the frame
+## at all, relative to the endpoints' own distance: a frame
+## whose geometry moved (mid-pop, mid-slide) fits nothing
+## and must not be judged by its alpha.
+func _flicker_blend_fit(q: ClickableQuad, img: Image, off: Image, on: Image) -> Vector2:
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	if cam == null or off == null or on == null or img.get_size() != off.get_size() or img.get_size() != on.get_size():
+		return Vector2(-1.0, 1.0)
+	var rect: Rect2 = _nav_screen_rect(q, cam)
+	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
+	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
+	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
+	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
+	var num: float = 0.0
+	var den: float = 0.0
+	var y: int = y0
+	while y < y1:
+		var x: int = x0
+		while x < x1:
+			var oc: Color = off.get_pixel(x, y)
+			var nc: Color = on.get_pixel(x, y)
+			var fc: Color = img.get_pixel(x, y)
+			var d: float = (nc.r + nc.g + nc.b) - (oc.r + oc.g + oc.b)
+			var v: float = (fc.r + fc.g + fc.b) - (oc.r + oc.g + oc.b)
+			num += v * d
+			den += d * d
+			x += 2
+		y += 2
+	if den <= 0.0001:
+		return Vector2(-1.0, 1.0)
+	var alpha: float = num / den
+	var res: float = 0.0
+	var cnt: int = 0
+	y = y0
+	while y < y1:
+		var x: int = x0
+		while x < x1:
+			var oc2: Color = off.get_pixel(x, y)
+			var nc2: Color = on.get_pixel(x, y)
+			var fc2: Color = img.get_pixel(x, y)
+			var osum: float = oc2.r + oc2.g + oc2.b
+			var d2: float = (nc2.r + nc2.g + nc2.b) - osum
+			var pred: float = osum + alpha * d2
+			var diff: float = (fc2.r + fc2.g + fc2.b) - pred
+			res += diff * diff
+			cnt += 1
+			x += 2
+		y += 2
+	if cnt == 0:
+		return Vector2(-1.0, 1.0)
+	var rel: float = sqrt(res / float(cnt)) / sqrt(den / float(cnt))
+	return Vector2(alpha, rel)
+
+
+
 func _flicker_finish() -> void:
 	_shot_flicker_phase = -1
 	if _shot_flicker_problems.is_empty():
@@ -1139,8 +1205,17 @@ func _flicker_finish() -> void:
 ## left of center where the On image put it; (9) pair +
 ## plain - a plain backglass with a decoy pair riding in
 ## the same file: both halves ignored, the card cascades
-## on the plain image's two bulbs. Saves PREFIX_base/mid/
-## lit.png plus pair frames.
+## on the plain image's two bulbs; (10) the pair-strobe
+## leg - a content-differing pair (Flicker Specter: the On
+## half shifted +15 px and redrawn bright, its seeded
+## schedule carrying a dip): the pair layer's alpha is
+## {0, 1} ONLY, proven three ways - live per-frame samples,
+## a deterministic sweep of the cascade clock, and
+## rendered blend fits against the Off/On endpoint frames
+## including a frame rendered with the clock parked inside
+## the dip window. Leg (2) carries the counter-guard: a
+## bulb layer's dip still measures 0.12. Saves
+## PREFIX_base/mid/lit.png plus pair frames.
 func _drive_shot_flicker() -> void:
 	var now: int = Time.get_ticks_msec()
 	if now - _shot_flicker_since > 90000 and _shot_flicker_phase > 0:
@@ -1166,7 +1241,7 @@ func _drive_shot_flicker() -> void:
 				for g: GameEntry in _scanner.games:
 					if g.title.begins_with("Flicker Wide"):
 						_shot_flicker_game = g
-					for pre: String in ["Flicker Backdrop Wide", "Flicker Playfield Tall", "Flicker Glass Pop", "Flicker Wart", "Flicker Warmed", "Flicker Pair", "Flicker Pair Plain"]:
+					for pre: String in ["Flicker Backdrop Wide", "Flicker Playfield Tall", "Flicker Glass Pop", "Flicker Wart", "Flicker Warmed", "Flicker Pair", "Flicker Pair Plain", "Flicker Specter"]:
 						# "Flicker Pair" is a prefix of "Flicker
 						# Pair Plain" - the plain game must not
 						# claim the pair's slot.
@@ -1380,6 +1455,27 @@ func _drive_shot_flicker() -> void:
 				var full: Vector2 = _room.panel_full_pop_scale(_shot_flicker_panel)
 				if absf(_shot_flicker_panel.scale.x - full.x) > 0.02 or absf(_shot_flicker_panel.scale.y - full.y) > 0.02:
 					_shot_flicker_problems.append("popped scale %s, want %s (true-aspect pop)" % [str(_shot_flicker_panel.scale), str(full)])
+				# Bulb-dip guard (pair-strobe round): the pair
+				# fix must not overreach - a BULB layer's dip
+				# is still 0.12. Probe the live schedule
+				# deterministically: park the cascade clock
+				# inside a dipped layer's dip window, apply,
+				# and read the material alpha back.
+				var guard_probed: bool = false
+				for gi: int in range(_room._power_schedule.size()):
+					var gs: Array = _room._power_schedule[gi] as Array
+					if float(gs[2]) > float(gs[1]):
+						_room._power_t = (float(gs[1]) + float(gs[2])) * 0.5
+						_room._apply_power()
+						var ga: float = _room.power_layer_alpha(gi)
+						if absf(ga - 0.12) > 0.02:
+							_shot_flicker_problems.append("a bulb layer's dip reads %.2f, want 0.12 - the pair strobe overreached" % ga)
+						guard_probed = true
+						break
+				if not guard_probed:
+					_shot_flicker_problems.append("the bulb fixture's schedule has no dipped layer - the 0.12 guard has nothing to probe")
+				_room._power_t = RoomView.POWER_CASCADE_SEC
+				_room._apply_power()
 				_shot_flicker_min_b = 1.0
 				_shot_flicker_min_mean = -1.0
 				_room._set_focused(_shot_flicker_panel2)
@@ -1702,9 +1798,205 @@ func _drive_shot_flicker() -> void:
 						if cen9.y < 0.0 or cen9.y > 0.38:
 							_shot_flicker_problems.append("the pair+plain's lit amber centroid sits at y %.2f of the face - want the plain glass's top bulbs (0..0.38)" % cen9.y)
 						_shot_flicker_burst[_shot_flicker_burst.size() - 1].save_png(_shot_flicker_prefix + "_pairplain_lit.png")
-					_flicker_finish()
+					_shot_flicker_stage = 0
+					_shot_flicker_armed = false
+					_shot_flicker_burst.clear()
+					_shot_flicker_t0 = 0
+					_shot_flicker_since = now
+					_shot_flicker_phase = 10
 				elif now - _shot_flicker_since > 20000:
 					_shot_flicker_problems.append("the pair+plain card's cascade never ran")
+					_flicker_finish()
+		10:
+			# Pair-strobe leg: the content-differing pair
+			# (Flicker Specter). Its On half is the Off
+			# scene shifted +15 px and redrawn bright, so
+			# ANY fractional alpha doubles outlines - the
+			# ghost twin as a measurable quantity. Stages:
+			# 0 arm + focus; 1 the live cascade (burst
+			# frames plus the layer's alpha sampled every
+			# frame); 2 park the cascade clock at t=0 and
+			# render the pure-Off endpoint in the popped
+			# geometry; 3 park at cascade end for the
+			# pure-On endpoint, run the deterministic alpha
+			# sweep, then park INSIDE the dip window; 4
+			# fit the dip frame and the burst against the
+			# endpoints - every well-explained frame must
+			# sit at alpha 0 or 1.
+			var fx10: Dictionary = _shot_flicker_fixtures["Flicker Specter"] as Dictionary
+			var g10: GameEntry = fx10["game"] as GameEntry
+			var panel10: ClickableQuad = fx10["panel"] as ClickableQuad
+			if not is_instance_valid(panel10):
+				# A scan landing mid-run adopts the library
+				# and rebuilds the wall, freeing every panel
+				# phase 0 collected (the rebuilds land at
+				# unpredictable times - this leg runs last,
+				# so it is the one that meets the stale
+				# reference). Re-resolve this leg's panel
+				# from the room's live wall by payload, the
+				# way phase 0 collected it.
+				panel10 = null
+				for p10: ClickableQuad in _room._panels:
+					if p10.payload == g10.game_id:
+						panel10 = p10
+						break
+				if panel10 != null:
+					fx10["panel"] = panel10
+			if _shot_flicker_stage == 0:
+				if panel10 == null:
+					_shot_flicker_problems.append("the Specter panel is not on the wall - the blend leg has no card")
+					_flicker_finish()
+					return
+				var data10: Dictionary = g10.ensure_flicker()
+				if (data10.get("layers", []) as Array).is_empty():
+					_shot_flicker_problems.append("the Specter fixture's layer set did not extract")
+					_flicker_finish()
+					return
+				if not bool(data10.get("pair", false)):
+					_shot_flicker_problems.append("the Specter fixture's layer set is not a pair set - the blend leg has no subject")
+					_flicker_finish()
+					return
+				# Do NOT focus yet: the extraction above ran
+				# synchronously on this thread, and the
+				# room's next _process would swallow the
+				# whole settle + cascade in one giant delta
+				# frame - unobservable. A few idle frames
+				# first (stage 5), then focus.
+				_shot_flicker_probe_wait = 0
+				_shot_flicker_stage = 5
+				_shot_flicker_since = now
+			elif _shot_flicker_stage == 5:
+				_shot_flicker_probe_wait += 1
+				if _shot_flicker_probe_wait >= 6:
+					_shot_flicker_burst.clear()
+					_shot_flicker_blend_alphas.clear()
+					_shot_flicker_live_missed = false
+					_shot_flicker_t0 = 0
+					_room._set_focused(panel10)
+					_shot_flicker_stage = 1
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the blend leg's warm wait never elapsed")
+					_flicker_finish()
+			elif _shot_flicker_stage == 1:
+				var ph10: int = _room.power_phase()
+				if _shot_flicker_probe_wait != now / 1000:
+					_shot_flicker_probe_wait = now / 1000
+				if _room.power_panel() == panel10 and ph10 == 1:
+					if _shot_flicker_t0 == 0:
+						_shot_flicker_t0 = now
+						_shot_flicker_next_grab = now
+					if _room.power_layer_count() == 1:
+						_shot_flicker_blend_alphas.append(_room.power_layer_alpha(0))
+				if _shot_flicker_t0 == 0 and _room.power_panel() == panel10 and ph10 == 2:
+					# The cascade completed between polls
+					# anyway: proceed on the deterministic
+					# evidence (sweep + rendered fits).
+					_shot_flicker_t0 = now - 2000
+					_shot_flicker_live_missed = true
+				if _shot_flicker_t0 > 0 and now >= _shot_flicker_next_grab and ph10 > 0:
+					_shot_flicker_burst.append(get_viewport().get_texture().get_image())
+					_shot_flicker_next_grab = now + 130
+				if _shot_flicker_t0 > 0 and ph10 == 2 and now > _shot_flicker_t0 + 1900:
+					if _room.power_panel() != panel10 or _room.power_mode() != 1:
+						_shot_flicker_problems.append("the Specter card did not cascade on its pair layer (mode %d)" % _room.power_mode())
+					if _room.power_layer_count() != 1:
+						_shot_flicker_problems.append("the Specter card built %d layer quads, want its one full-frame layer" % _room.power_layer_count())
+					for av: float in _shot_flicker_blend_alphas:
+						if av > 0.02 and av < 0.98:
+							_shot_flicker_problems.append("the pair layer's live alpha took %.2f mid-cascade - a blend frame exists" % av)
+							break
+					if _shot_flicker_blend_alphas.is_empty() and not _shot_flicker_live_missed:
+						_shot_flicker_problems.append("the blend leg sampled no live alphas - the cascade was never observed")
+					if _room._power_schedule.size() == 1:
+						var ss: Array = _room._power_schedule[0] as Array
+						_shot_flicker_dip_win = Vector2(float(ss[1]), float(ss[2]))
+					if _shot_flicker_dip_win.y <= _shot_flicker_dip_win.x:
+						_shot_flicker_problems.append("the Specter schedule has no dip window %s - the blend leg cannot convict" % str(_shot_flicker_dip_win))
+						_flicker_finish()
+						return
+					_room._power_t = 0.0
+					_room._apply_power()
+					_shot_flicker_probe_wait = 0
+					_shot_flicker_stage = 2
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the Specter card's cascade never ran")
+					_flicker_finish()
+			elif _shot_flicker_stage == 2:
+				_shot_flicker_probe_wait += 1
+				if _shot_flicker_probe_wait >= 10:
+					_shot_flicker_off_img = get_viewport().get_texture().get_image()
+					_room._power_t = RoomView.POWER_CASCADE_SEC
+					_room._apply_power()
+					_shot_flicker_probe_wait = 0
+					_shot_flicker_stage = 3
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the blend leg's Off endpoint never rendered")
+					_flicker_finish()
+			elif _shot_flicker_stage == 3:
+				_shot_flicker_probe_wait += 1
+				if _shot_flicker_probe_wait >= 10:
+					_shot_flicker_on_img = get_viewport().get_texture().get_image()
+					# The deterministic sweep: probe the
+					# whole cascade in 4 ms steps through
+					# the room's own apply - no sampling
+					# luck involved.
+					var bad_t: float = -1.0
+					var bad_a: float = -1.0
+					var probe: float = 0.0
+					while probe <= RoomView.POWER_CASCADE_SEC:
+						_room._power_t = probe
+						_room._apply_power()
+						var pa: float = _room.power_layer_alpha(0)
+						if pa > 0.02 and pa < 0.98:
+							bad_t = probe
+							bad_a = pa
+							break
+						probe += 0.004
+					if bad_t >= 0.0:
+						_shot_flicker_problems.append("the pair layer takes alpha %.2f at cascade t=%.3f - pair alphas must be {0, 1} only" % [bad_a, bad_t])
+					_room._power_t = (_shot_flicker_dip_win.x + _shot_flicker_dip_win.y) * 0.5
+					_room._apply_power()
+					_shot_flicker_probe_wait = 0
+					_shot_flicker_stage = 4
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the blend leg's On endpoint never rendered")
+					_flicker_finish()
+			elif _shot_flicker_stage == 4:
+				_shot_flicker_probe_wait += 1
+				if _shot_flicker_probe_wait >= 10:
+					var dip_img: Image = get_viewport().get_texture().get_image()
+					var dfit: Vector2 = _flicker_blend_fit(panel10, dip_img, _shot_flicker_off_img, _shot_flicker_on_img)
+					if dfit.y > 0.35:
+						_shot_flicker_problems.append("the dip-probe frame does not fit the endpoint blend model (residual %.2f) - the leg cannot judge it" % dfit.y)
+					elif dfit.x > 0.06 and dfit.x < 0.94:
+						_shot_flicker_problems.append("the rendered dip frame blends the pair (fitted alpha %.2f) - the ghost twin" % dfit.x)
+					# The live burst, judged the same way:
+					# well-explained frames must sit at an
+					# endpoint.
+					var judged: int = 0
+					for bimg: Image in _shot_flicker_burst:
+						var bfit: Vector2 = _flicker_blend_fit(panel10, bimg, _shot_flicker_off_img, _shot_flicker_on_img)
+						if bfit.y <= 0.35:
+							judged += 1
+							if bfit.x > 0.06 and bfit.x < 0.94:
+								_shot_flicker_problems.append("a burst frame blends the pair (fitted alpha %.2f, residual %.2f)" % [bfit.x, bfit.y])
+								break
+					if judged == 0:
+						_shot_flicker_problems.append("no burst frame fit the endpoint blend model - the burst judged nothing")
+					if _shot_flicker_off_img != null:
+						_shot_flicker_off_img.save_png(_shot_flicker_prefix + "_ghost_off.png")
+					dip_img.save_png(_shot_flicker_prefix + "_ghost_dip.png")
+					if _shot_flicker_on_img != null:
+						_shot_flicker_on_img.save_png(_shot_flicker_prefix + "_ghost_on.png")
+					_room._power_t = RoomView.POWER_CASCADE_SEC
+					_room._apply_power()
+					_flicker_finish()
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the blend leg's dip frame never rendered")
 					_flicker_finish()
 
 
@@ -2608,11 +2900,17 @@ func _drive_shot_setup_panel() -> void:
 ##   leg 6: the cards-only focus contract (Chris's ruling,
 ##          2026-10-24): the wall-mode focusable set holds no
 ##          Launch button, a DOWN walk down one column visits
-##          exactly its three row panels in order, and Y on the
-##          pad launches the focused card's default build
-##          through the Launch button's own path - inert on a
-##          rail stop and in the detail view, while A on a card
-##          still opens More Info. The launch half runs async
+##          exactly its three row panels in order, and the
+##          A/Y assignment (Chris's swap ruling, 2026-10-26:
+##          A starts, Y informs): A on the pad launches the
+##          focused card's default build through the Launch
+##          button's own path, Y opens its More Info - Y inert
+##          on a rail stop and in the detail view, A inert as a
+##          launcher everywhere but a wall card. The leg also
+##          carries the marquee-leak assertions (2026-10-26):
+##          no marquee stands while the detail view is open or
+##          during a launch begun from it; a wall launch
+##          raises it as always. The launch half runs async
 ##          against the harness's never-window stub with a
 ##          zero-length life: the spawn lands in the load wait
 ##          and the dead pid settles it FAILED, browsing resumes.
@@ -2703,11 +3001,11 @@ func _drive_nav_smoke() -> void:
 				return
 			_nav_smoke_wait += 1
 			if _nav_smoke_wait > 7200:
-				_nav_smoke_fail("the Y-launch leg never finished")
+				_nav_smoke_fail("the A/Y-swap leg never finished")
 				_finish_nav_smoke()
 			elif not _nav_y_started and _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
 				_nav_y_started = true
-				_nav_leg_y_launch_async()
+				_nav_leg_ay_swap_async()
 		6:
 			if _nav_rail_done:
 				_nav_smoke_wait = 0
@@ -3100,63 +3398,106 @@ func _nav_feed_button(btn: JoyButton) -> void:
 	await get_tree().process_frame
 
 
-## Leg 6b (async - it rides a real launch wait): Y on the pad
-## launches the focused card's default build through the
-## Launch button's own path. The harness's stub VPX is the
-## never-window build with a zero-length life: the spawn
-## lands in the load wait (the room deaf, the focusable set
+## Leg 6b (async - it rides real launch waits): the A/Y
+## assignment (Chris's swap ruling, 2026-10-26) and the
+## marquee leak. A on the pad launches the focused card's
+## default build through the Launch button's own path; Y
+## opens the card's More Info. The harness's stub VPX is the
+## never-window build with a zero-length life: a spawn lands
+## in the load wait (the room deaf, the focusable set
 ## empty), then the dead pid settles the launch FAILED after
-## its grace - Main's own failure path, no hand-off, browsing
-## resumes. Y on a rail stop and Y in the detail view must
-## start nothing; A on a card must still open More Info.
-func _nav_leg_y_launch_async() -> void:
+## its grace - Main's own failure path, no hand-off,
+## browsing resumes. Y on a rail stop and Y in the detail
+## view must do nothing. The marquee assertions ride along:
+## a launch begun from the detail view (the detail's own
+## Play path, driven directly) must raise NO marquee - the
+## year/designer letters stood behind the info card for the
+## whole wait (field report, 2026-10-26) - while the wall
+## launch below raises it as always.
+func _nav_leg_ay_swap_async() -> void:
+	var game: GameEntry = _room._visible_games[2]
 	# Y on a rail stop is inert.
 	_room._set_focused(_room.rail_quad("sort"))
 	await _nav_feed_button(JOY_BUTTON_Y)
 	_nav_expect(not _launch_pending and _room._mode == "wall",
-		"Y: a rail-focused Y press launches nothing")
+		"A/Y: a rail-focused Y press opens nothing")
 	_nav_expect(_nav_key_of(_room.focused_quad()) == "sort",
-		"Y: focus stays on the rail stop after the inert press")
-	# A on a focused card still opens More Info.
+		"A/Y: focus stays on the rail stop after the inert press")
+	# Y on a focused card opens More Info.
 	_room._set_focused(_room._panels[2])
-	await _nav_feed_button(JOY_BUTTON_A)
-	_nav_expect(_room._mode == "detail", "A: a card-focused A press opens More Info")
+	await _nav_feed_button(JOY_BUTTON_Y)
+	_nav_expect(_room._mode == "detail", "A/Y: a card-focused Y press opens More Info")
+	_nav_expect(not _launch_pending, "A/Y: the Y press starts no launch")
+	_nav_expect(_room.marquee_text().is_empty() and not _room._marquee_up,
+		"marquee: no marquee stands while the detail view is open")
 	# Y in the detail view is inert.
 	await _nav_feed_button(JOY_BUTTON_Y)
 	_nav_expect(not _launch_pending and _room._mode == "detail",
-		"Y: a detail-view Y press launches nothing")
-	_room._on_detail_closed()
-	_nav_expect(_room._mode == "wall", "Y: the detail view closes back to the wall")
-	# Y on a focused card fires its default build.
-	var game: GameEntry = _room._visible_games[2]
-	_room._set_focused(_room._panels[2])
-	await _nav_feed_button(JOY_BUTTON_Y)
+		"A/Y: a detail-view Y press does nothing")
+	# A launch begun from the detail view, through the
+	# detail's own Play path: the room enters the wait, the
+	# detail carries its launching state, and NO marquee
+	# rises behind the info card.
+	var build: TableBuild = game.resolve_default_build(_state)
+	_nav_expect(build != null, "marquee: the detail-leg game resolves a default build")
+	_room._on_detail_play(game, build)
 	var guard: int = 0
 	while not _launch_pending and guard < 600:
 		await get_tree().process_frame
 		guard += 1
-	_nav_expect(_launch_pending, "Y: a card-focused Y press starts a launch")
+	_nav_expect(_launch_pending, "marquee: a detail-view Play starts a launch")
+	_nav_expect(_room.is_launch_in_wait(), "marquee: the room is in the load wait")
+	_nav_expect(_room.marquee_text().is_empty() and not _room._marquee_up,
+		"marquee: no marquee stands during a detail-initiated launch")
+	# The dead stub settles it as a failure; the room hands
+	# the wait back to the detail view, which then closes
+	# to the wall as usual.
+	guard = 0
+	while _launch_pending and guard < 3600:
+		await get_tree().process_frame
+		guard += 1
+	_nav_expect(not _launch_pending, "marquee: the detail-initiated launch settles")
+	_nav_expect(_room._mode == "detail",
+		"marquee: the failed settle lands back on the detail view")
+	# Close the way production does (the detail's own
+	# escape: hide + the closed signal), not by calling the
+	# room's handler directly - the handler alone leaves
+	# the detail node's own open flag set, and the launch
+	# path reads that flag.
+	_room._detail.handle_escape()
+	_nav_expect(_room._mode == "wall", "A/Y: the detail view closes back to the wall")
+	# A on a focused card fires its default build - and a
+	# wall-initiated launch raises the marquee as always.
+	_room._set_focused(_room._panels[2])
+	await _nav_feed_button(JOY_BUTTON_A)
+	guard = 0
+	while not _launch_pending and guard < 600:
+		await get_tree().process_frame
+		guard += 1
+	_nav_expect(_launch_pending, "A/Y: a card-focused A press starts a launch")
 	_nav_expect(_launch_game != null and _launch_game.game_id == game.game_id,
-		"Y: the launch is the focused card's game")
-	_nav_expect(_room.is_launch_in_wait(), "Y: the room is in the load wait")
-	_nav_expect(_room.focusable_count() == 0, "Y: the wait's focusable set is empty")
-	# A second Y inside the wait fires nothing.
+		"A/Y: the launch is the focused card's game")
+	_nav_expect(_room.is_launch_in_wait(), "A/Y: the room is in the load wait")
+	_nav_expect(_room.focusable_count() == 0, "A/Y: the wait's focusable set is empty")
+	_nav_expect(not _room.marquee_text().is_empty(),
+		"marquee: a wall-initiated launch raises the marquee again")
+	# A second A inside the wait fires nothing.
 	var session: int = _launch_session_id
-	await _nav_feed_button(JOY_BUTTON_Y)
+	await _nav_feed_button(JOY_BUTTON_A)
 	_nav_expect(_launch_pending and _launch_session_id == session,
-		"Y: a Y press inside the load wait fires nothing")
+		"A/Y: an A press inside the load wait fires nothing")
 	# The dead stub settles the launch as a failure; browsing
 	# resumes on the wall with the game marked FAILED.
 	guard = 0
 	while _launch_pending and guard < 3600:
 		await get_tree().process_frame
 		guard += 1
-	_nav_expect(not _launch_pending, "Y: the dead-stub launch settles")
+	_nav_expect(not _launch_pending, "A/Y: the dead-stub launch settles")
 	_nav_expect(not _room.is_launch_in_wait() and _room._mode == "wall",
-		"Y: the room browses again after the failed settle")
+		"A/Y: the room browses again after the failed settle")
 	_nav_expect(_room._failed_game_id == game.game_id,
-		"Y: the settled failure marks the focused card's game FAILED")
-	_nav_expect(_room.focusable_count() > 0, "Y: the focus walk is restored after the settle")
+		"A/Y: the settled failure marks the focused card's game FAILED")
+	_nav_expect(_room.focusable_count() > 0, "A/Y: the focus walk is restored after the settle")
 	_nav_y_done = true
 
 

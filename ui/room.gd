@@ -187,6 +187,7 @@ var _power_candidate: ClickableQuad = null ## the pop target the settle debounce
 var _power_candidate_t: float = 0.0 ## seconds the candidate has rested
 var _power_phase: int = 0 ## 0 idle, 1 cascading, 2 settled lit
 var _power_mode: int = 0 ## 0 = whole-face brightness fallback, 1 = real lamp layers
+var _power_pair: bool = false ## the performing set is an on/off pair: its one layer SWAPS between the two printed states, never blends (see _power_layer_alpha)
 var _power_t: float = 0.0 ## seconds into the live cascade
 var _power_game: GameEntry = null ## the performing card's game
 var _power_layers: Array[MeshInstance3D] = [] ## the performing card's lamp layer quads (children of the panel)
@@ -238,7 +239,7 @@ var _focused: ClickableQuad = null
 var _joy_cooldown: float = 0.0
 var _joy_prev_a: bool = false
 var _joy_prev_b: bool = false
-var _joy_prev_y: bool = false ## Y edge tracking: launch the focused card (see _process)
+var _joy_prev_y: bool = false ## Y edge tracking: open the focused card's info (see _process)
 var _joy_prev_x: bool = false ## X edge tracking: favorite the focused card (see _process)
 var _joy_prev_lb: bool = false ## bumper edge tracking: the section slide's page travel (see _process)
 var _joy_prev_rb: bool = false
@@ -870,9 +871,9 @@ func _refresh_focusables() -> void:
 		# card, button - because the button sits directly below
 		# its card in the focus walk. Focus now visits cards and
 		# rail stops only: DOWN travels row to row, RIGHT card to
-		# card, and the pad launches the focused card with Y
-		# (see _launch_focused_card). The button remains the
-		# pointer's target and the card's state label.
+		# card, and the pad starts the focused card with A
+		# (see _a_press). The button remains the pointer's
+		# target and the card's state label.
 		for i: int in range(_panels.size()):
 			_focusables.append(_panels[i])
 		for k: Variant in _rail_quads.keys():
@@ -1051,19 +1052,19 @@ func _activate(quad: ClickableQuad) -> void:
 			_handle_rail(quad.payload)
 
 
-## Y on the pad (and KEY_Y on the keyboard): launch the focused
-## card's default build. This is the pad's answer to the Launch
-## button now that the button is no longer a focus stop - the
-## press routes through _activate on the card's own Launch quad,
-## so the path is literally the button's: the button pulses, the
-## default build resolves, the selection persists, and
-## launch_requested fires. Only a PANEL focused in plain wall
-## mode counts: rail focus, the detail view, and the SETUP
-## placard all leave Y inert, and the load wait refuses twice
-## over - the poll's deaf gate at the call site, then _activate's
-## own refusal. A press that lands mid page-slide fires the card
-## focus still sits on (the page on screen); the slide's pending
-## travel then drops whole at its far point, by its own rule.
+## Launch the focused card's default build. This is the pad's
+## answer to the Launch button now that the button is no longer
+## a focus stop - the press routes through _activate on the
+## card's own Launch quad, so the path is literally the
+## button's: the button pulses, the default build resolves,
+## the selection persists, and launch_requested fires. Only a
+## PANEL focused in plain wall mode counts: rail focus, the
+## detail view, and the SETUP placard all leave it inert, and
+## the load wait refuses twice over - the poll's deaf gate at
+## the call site, then _activate's own refusal. A press that
+## lands mid page-slide fires the card focus still sits on
+## (the page on screen); the slide's pending travel then
+## drops whole at its far point, by its own rule.
 func _launch_focused_card() -> void:
 	if _mode != "wall" or _placard_up or _setup_panel_up or _focused == null:
 		return
@@ -1071,6 +1072,38 @@ func _launch_focused_card() -> void:
 	if idx < 0 or idx >= _panel_launches.size():
 		return
 	_activate(_panel_launches[idx])
+
+
+## A on the pad (and Enter/Space on the keyboard, A's
+## equivalent): the context press. On a wall card, A STARTS
+## the card - it routes to _launch_focused_card above
+## (Chris's ruling, 2026-10-26: "A should start, Y should be
+## more info" - A is the button the thumb expects to mean
+## go). Everywhere else A keeps the meaning it always had:
+## activate the focused quad - rail stops, detail buttons,
+## SETUP panel rows, the placard's BACK.
+func _a_press() -> void:
+	if _focused == null:
+		return
+	if _mode == "wall" and not _placard_up and not _setup_panel_up and _panels.has(_focused):
+		_launch_focused_card()
+	else:
+		_activate(_focused)
+
+
+## Y on the pad (and KEY_Y on the keyboard): More Info for
+## the focused card - the panel's own activation path, which
+## is where A used to go before the swap. Only a PANEL
+## focused in plain wall mode counts: rail focus, the detail
+## view (already looking at the info), the SETUP panel, and
+## the placard all leave Y inert, as does the load wait (the
+## poll's deaf gate at the call site).
+func _info_focused_card() -> void:
+	if _mode != "wall" or _placard_up or _setup_panel_up or _focused == null:
+		return
+	if not _panels.has(_focused):
+		return
+	_activate(_focused)
 
 
 ## Rail handling. Page travel (page_prev / page_next) is the
@@ -1837,13 +1870,23 @@ func begin_launch(game: GameEntry) -> void:
 		q.pick_enabled = false
 	for k: Variant in _rail_quads.keys():
 		_rail_quads[k].pick_enabled = false
-	if _detail != null and _detail.is_open():
+	var detail_open: bool = _detail != null and _detail.is_open()
+	if detail_open:
 		_detail.set_launching(true)
 	_set_focused(null)
 	_refresh_focusables()
 	_swap_launch_textures()
 	_refresh_banner()
-	_raise_marquee(game)
+	# The marquee is the WALL's loading display: it stands at
+	# the wall's settle depth, behind where the detail panel
+	# sits, so a launch begun FROM the detail view raised it
+	# straight into the panel's shadow - the year and designer
+	# letters lurking behind the info card for the whole wait
+	# (field report, 2026-10-26). The detail view carries its
+	# own launching state; a detail-initiated wait raises no
+	# marquee at all. Wall launches are untouched.
+	if not detail_open:
+		_raise_marquee(game)
 
 
 ## VPX died during the load, with the launcher still resident to
@@ -2127,6 +2170,7 @@ func _start_power(panel: ClickableQuad) -> void:
 	_power_t = 0.0
 	_power_phase = 1
 	_power_mode = 0
+	_power_pair = false
 	_power_game = _scanner.game_by_id(panel.payload) if _scanner != null else null
 	if _power_game != null:
 		var src: String = _power_game.flicker_source()
@@ -2134,6 +2178,7 @@ func _start_power(panel: ClickableQuad) -> void:
 			if ArtProvider.has_flicker_layers(src):
 				var data: Dictionary = ArtProvider.extract_flicker_layers(src)
 				if not (data.get("layers", []) as Array).is_empty():
+					_power_pair = bool(data.get("pair", false))
 					_build_power_layers(panel, data)
 					# A set whose every layer lives under the
 					# name strip builds no quads: surge instead
@@ -2289,15 +2334,25 @@ func _apply_power() -> void:
 
 
 ## One layer's alpha at cascade time t: dark until it
-## catches, lit, a dip back to a ghost if its schedule has
-## one, then lit for good.
+## catches, lit, a dip if its schedule has one, then lit
+## for good. The dip's depth is where a pair set parts
+## from a bulb set: for a bulb snippet, 0.12 over its own
+## dark socket reads as a lamp sagging - a feature. For a
+## pair, the "layer" is the WHOLE lit glass, so 0.12 is a
+## full-frame double exposure of two different pictures
+## (the ghost twin, field report 2026-10-26, convicted by
+## rendered blend-fit: the dip frame fits alpha 0.120 with
+## both pictures' edges present). A real B2S server never
+## blends a pair - it swaps state - so a pair layer's dip
+## goes to 0.0 instead: catch, blink off, held on, at the
+## same schedule instants. Pair alphas are {0, 1} only.
 func _power_layer_alpha(sched: Array, t: float) -> float:
 	if t < float(sched[0]):
 		return 0.0
 	if t < float(sched[1]):
 		return 1.0
 	if t < float(sched[2]):
-		return 0.12
+		return 0.0 if _power_pair else 0.12
 	return 1.0
 
 
@@ -2342,6 +2397,7 @@ func _power_reset_state() -> void:
 	_power_candidate_t = 0.0
 	_power_phase = 0
 	_power_mode = 0
+	_power_pair = false
 	_power_t = 0.0
 	_power_game = null
 	_power_layers.clear()
@@ -2433,12 +2489,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_TAB:
 				_cycle_focus(1)
 			KEY_Y:
-				_launch_focused_card() ## keyboard parity with the pad's Y (see _process)
+				_info_focused_card() ## keyboard parity with the pad's Y (see _process)
 			KEY_X:
 				_toggle_focused_favorite() ## keyboard parity with the pad's X (see _process)
 			KEY_ENTER, KEY_KP_ENTER, KEY_SPACE:
-				if _focused != null:
-					_activate(_focused)
+				_a_press() ## keyboard parity with the pad's A (see _process)
 			KEY_ESCAPE:
 				if _mode == "detail":
 					_detail.handle_escape()
@@ -2449,8 +2504,9 @@ func _process(delta: float) -> void:
 	# mouse is a pure pointer there, never a look control. A view that
 	# drifts with the cursor makes every click target swim (field
 	# finding, round 2). XR head tracking owns the view in XR only.
-	# Gamepad: left stick / d-pad moves focus, A selects, B goes
-	# back in the detail view, Y launches the focused card, X
+	# Gamepad: left stick / d-pad moves focus, A starts the
+	# focused card (selects everywhere else), B goes back in
+	# the detail view, Y opens the focused card's info, X
 	# toggles the focused card's favorite.
 	# D-pad Right is NOT a focus direction: it is the BACK button,
 	# with exactly two meanings in the whole app (the player's
@@ -2509,7 +2565,7 @@ func _process(delta: float) -> void:
 		_joy_cooldown = 0.24
 	var a_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_A)
 	if a_now and not _joy_prev_a and _focused != null and not deaf:
-		_activate(_focused)
+		_a_press()
 	_joy_prev_a = a_now
 	var b_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_B)
 	if b_now and not _joy_prev_b and not deaf:
@@ -2518,16 +2574,15 @@ func _process(delta: float) -> void:
 		elif _setup_panel_up:
 			hide_setup_panel() ## B is BACK on the SETUP panel too
 	_joy_prev_b = b_now
-	# Y: launch the focused card's default build (Chris's
-	# cards-only focus ruling, 2026-10-24 - launching is a key
-	# now, not a focus destination). Edge only, like A and B;
-	# the prev-state update runs even while deaf, so a press
-	# held through the load wait can't resurface as a phantom
-	# launch on the other side. The mode/focus gating lives in
-	# _launch_focused_card.
+	# Y: More Info for the focused card (Chris's swap ruling,
+	# 2026-10-26 - A starts, Y informs). Edge only, like A
+	# and B; the prev-state update runs even while deaf, so a
+	# press held through the load wait can't resurface as a
+	# phantom info-open on the other side. The mode/focus
+	# gating lives in _info_focused_card.
 	var y_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_Y)
 	if y_now and not _joy_prev_y and not deaf:
-		_launch_focused_card()
+		_info_focused_card()
 	_joy_prev_y = y_now
 	# X: favorite the focused card (Chris's proposal,
 	# 2026-10-25 - flagging a favorite must not cost a trip
