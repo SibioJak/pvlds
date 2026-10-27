@@ -232,6 +232,13 @@ var _power_game: GameEntry = null ## the performing card's game
 var _power_overlay: MeshInstance3D = null ## the mimic's one quad over the performing face (a child of the panel)
 var _power_mat: ShaderMaterial = null ## the overlay's material - its uniforms are the performance
 var _power_missed: ClickableQuad = null ## a candidate whose face texture was not ready when its settle fired: skipped until focus changes, never retried per frame
+var _placeholder_tex: Texture2D = null ## the standing wall's placeholder face (minted per _rebuild_wall): a panel still wearing it has no face yet
+## Negative-control seam (the focus-fix round's harness env
+## PVLDS_FOCUS_NC, set by Main before any room exists):
+## "visual" starves the strip quads of visual-state refreshes
+## (fault 1's shape), "pager" drops the page-travel focus
+## landing (fault 2's shape). Empty in every real run.
+static var debug_focus_nc: String = ""
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
@@ -678,6 +685,7 @@ func _rebuild_wall() -> void:
 	_set_focused(null)
 
 	var placeholder: Texture2D = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
+	_placeholder_tex = placeholder
 	# Banner: above the eye line (~+23 degrees) with clear air between
 	# its lower edge and the top row of panels - it sits closer than
 	# the wall, so any angular overlap hides the middle panels' tops.
@@ -1076,6 +1084,22 @@ func _fill_wall_textures(gen: int) -> void:
 		if gen != _gen:
 			return
 		quad.set_texture(tex)
+		# The face has landed. Two power-on debts settle here
+		# (the boot fault's other half): a performance that
+		# skipped this card for wearing the placeholder
+		# retries now - its missed mark clears and its settle
+		# clock primes, so the cascade starts on the real
+		# face with no input; and a performance already
+		# standing on this card bound the face it wore then,
+		# so it restarts on the face the card wears now (the
+		# candidate logic re-picks the same card - focus
+		# never moved).
+		if quad == _power_missed:
+			_power_missed = null
+			if _power_candidate == quad:
+				_power_candidate_t = POWER_SETTLE_SEC
+		if quad == _power_panel:
+			_restore_power("face_arrived")
 		_panel_art_aspect[i] = art_aspect
 		if art_aspect > 0.0 and _panel_pop[i] > 0.0:
 			# The card is already popped (focus rested while
@@ -1175,6 +1199,20 @@ func _refresh_quad_states() -> void:
 	all.append_array(_panel_launches)
 	for k: Variant in _rail_quads.keys():
 		all.append(_rail_quads[k])
+	# The strip's slots are focus stops too, so they take
+	# visual state like every other stop. The letter-jump
+	# round forgot them here: focus could LAND on a letter
+	# (the walk, the focusables, the country law all knew
+	# the strip) but set_visual_state never reached it, so
+	# the letter's frame never lit and the rail's frame went
+	# dark in the same step - the highlight "disappeared"
+	# exactly at the strip (Chris, 2026-10-27). The NC value
+	# "visual" restores that omission for the harness.
+	if debug_focus_nc != "visual":
+		for sk: Variant in _strip_quads.keys():
+			var sq: ClickableQuad = _strip_quads[sk] as ClickableQuad
+			if sq != null:
+				all.append(sq)
 	if _detail != null:
 		all.append_array(_detail.get_clickables())
 	if _banner_quad != null:
@@ -1417,10 +1455,10 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 		_land_on_rail_stop(key)
 	elif key == "page_prev":
 		if _page > 0:
-			_begin_page_slide(-1, after_swap)
+			_begin_page_slide(-1, _page_travel_landing(key, after_swap))
 	elif key == "page_next":
 		if _page < page_count() - 1:
-			_begin_page_slide(1, after_swap)
+			_begin_page_slide(1, _page_travel_landing(key, after_swap))
 	elif key == "desk":
 		# SETUP: in the headset the operations live in the room
 		# now (the SETUP panel - the view may bend, it may not
@@ -1450,6 +1488,32 @@ func _land_on_rail_stop(key: String) -> void:
 	var rq: ClickableQuad = _rail_quads.get(key) as ClickableQuad
 	if rq != null:
 		_set_focused(rq)
+
+
+## The focus landing a page-travel press rides with. A press
+## that brings its own (the bumpers') keeps it - focus keeps
+## its PLACE across a bumper flip, untouched. A press without
+## one (the pad or the pointer activating the arrow itself)
+## lands on the arrow that was pressed, at the slide's far
+## point: the landing rule above was wired for filter and
+## sort in the 2026-10-25 round but never for page travel,
+## so an arrow press rebuilt the wall at the far point,
+## the rebuild cleared focus to nothing, and the player's
+## next step landed on the first card at the top of the
+## wall - "tap-tap-tap back down to arrow" (Chris,
+## 2026-10-27). The hole is older than the letter round:
+## the same shape stands at 25fd4e5 (the rebuild's focus
+## clear, the arrow's landingless call, the filter/sort-only
+## landing). A clamped press (first/last page) starts no
+## slide and no rebuild, so focus never leaves the arrow
+## there either. The NC value "pager" drops the landing,
+## restoring the hole for the harness.
+func _page_travel_landing(key: String, after_swap: Callable) -> Callable:
+	if after_swap.is_valid():
+		return after_swap
+	if debug_focus_nc == "pager":
+		return Callable()
+	return Callable(self, "_land_on_rail_stop").bind(key)
 
 
 ## X on the pad (and KEY_X on the keyboard): toggle the
@@ -1516,6 +1580,12 @@ func _rerender_panel_face(idx: int) -> void:
 	if gen != _gen or idx >= _panels.size() or _panels[idx] != quad:
 		return
 	quad.set_texture(tex)
+	# The standing performance (the X'd card is the focused
+	# card, hence the performer) sampled the face as it was;
+	# restart it on the re-rendered face, same rule as the
+	# wall fill's face arrival.
+	if quad == _power_panel:
+		_restore_power("face_arrived")
 
 
 ## A page change's ride (see PAGE_SLIDE_*): the press commits
@@ -2497,6 +2567,21 @@ func _start_power(panel: ClickableQuad) -> void:
 	if face_tex == null:
 		_power_missed = panel
 		print("POWER: start game=\"%s\" skipped (face texture not ready)" % label)
+		return
+	if face_tex == _placeholder_tex:
+		# The panel still wears the wall's placeholder: its
+		# face has not streamed in. Starting here would bind
+		# the overlay to that dark solid for the whole
+		# performance - the boot fault, where focus is
+		# restored onto the last-played card at setup, before
+		# any face has rendered, and the card stood dark
+		# until focus moved (Chris, 2026-10-27). Skip like
+		# the not-ready case above; the face's arrival in
+		# _fill_wall_textures clears the missed mark and the
+		# performance starts on the real face, no input
+		# needed.
+		_power_missed = panel
+		print("POWER: start game=\"%s\" skipped (face still the placeholder)" % label)
 		return
 	var on_tex: Texture2D = null
 	if game != null:

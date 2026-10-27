@@ -203,6 +203,13 @@ var _smoke_letters: bool = false ## --pvlds-smoke-letters: the alphabet strip + 
 var _letters_smoke_phase: int = 0
 var _letters_smoke_wait: int = 0
 var _letters_smoke_failures: int = 0
+var _letters_step: int = 0 ## the focus-fix legs' sub-state (strip visual grab, pager turns)
+var _letters_focus_key: String = "" ## the strip slot the entry walk landed on
+var _smoke_bootfocus: bool = false ## --pvlds-smoke-bootfocus: the boot-focused (last-played) card renders fully with NO input
+var _bootfocus_phase: int = 0
+var _bootfocus_wait: int = 0
+var _bootfocus_failures: int = 0
+var _bootfocus_game: String = "" ## env PVLDS_BOOTFOCUS_GAME: the seeded last-played game id the boot must focus
 var _seated_cam: bool = false ## --pvlds-seated-cam: shots/nav run from a seated eye height
 var _smoke_lockout: bool = false ## --pvlds-smoke-lockout: attack the load wait's input lockout mid-flight
 var _lockout_smoke_pending: bool = false ## a launch fired by the lockout smoke is in its wait; _settle_launch prints its verdict
@@ -369,6 +376,14 @@ func _ready() -> void:
 		# game files under T and the driver's canonical-The
 		# legs fail by name. Set here, before any room exists.
 		LetterIndex.debug_disable_the_strip = OS.get_environment("PVLDS_LJ_NC") == "nostrip"
+	if user_args.has("--pvlds-smoke-bootfocus"):
+		_smoke_bootfocus = true
+		_bootfocus_game = OS.get_environment("PVLDS_BOOTFOCUS_GAME")
+	# The focus-fix round's negative-control seam (harness
+	# env): "visual" starves the strip quads of visual-state
+	# refreshes (fault 1), "pager" drops the page-travel focus
+	# landing (fault 2). Set here, before any room exists.
+	RoomView.debug_focus_nc = OS.get_environment("PVLDS_FOCUS_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -403,7 +418,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_letters or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "") and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_letters or _smoke_bootfocus or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "") and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -538,6 +553,8 @@ func _process(_delta: float) -> void:
 		_drive_nav_smoke()
 	if _smoke_letters:
 		_drive_letters_smoke()
+	if _smoke_bootfocus:
+		_drive_bootfocus_smoke()
 	if _smoke_quitwarm:
 		_drive_quitwarm_smoke()
 	if _art_bench:
@@ -3691,6 +3708,32 @@ func _drive_letters_smoke() -> void:
 				_letters_leg_jump()
 				_letters_leg_the_net()
 				_letters_leg_number_net()
+				_letters_smoke_wait = 0
+				_letters_smoke_phase = 2
+		2:
+			# The focus-fix legs (Chris's field reports on the
+			# letter-jump build, 2026-10-27): the pad's walk
+			# DOWN from a card, through the rail, onto the
+			# strip - and the highlight actually DRAWN there.
+			_letters_leg_strip_entry()
+			_letters_smoke_wait = 0
+			_letters_smoke_phase = 3
+		3:
+			_letters_smoke_wait += 1
+			if _letters_smoke_wait >= 6:
+				_letters_leg_strip_grab()
+				_letters_step = 0
+				_letters_smoke_wait = 0
+				_letters_smoke_phase = 4
+			elif _letters_smoke_wait > 3600:
+				_letters_smoke_fail("strip visual: the grab never came due")
+				_finish_letters_smoke()
+		4:
+			# The pager legs: focus an arrow, press A (the real
+			# pad route), and focus must still be on the arrow
+			# when the slide settles - both directions, and at
+			# both clamped ends.
+			if _letters_leg_pager_step():
 				_finish_letters_smoke()
 
 
@@ -3868,6 +3911,291 @@ func _letters_leg_number_net() -> void:
 	_letters_pick("F")
 	_letters_expect(_room.active_letter_net() == "" and _room.focused_quad() != null and _room.focused_quad().payload == "O1-qbuxg",
 		"# net: picking a letter exits at that letter (Funhouse)")
+
+
+## Fault 1's legs (Chris, 2026-10-27: the highlight "doesn't
+## make it down to letters. It disappears."). The country leg
+## above proved the strip is reachable in STATE; these legs
+## walk the player's actual route - bottom-row card, DOWN to
+## the rail, DOWN to the strip - and then prove the highlight
+## is DRAWN on the letter: the quad's own frame flag, and blue
+## frame pixels in a rendered grab. A focus that exists in
+## state but draws nothing is a failed delivery.
+func _letters_leg_strip_entry() -> void:
+	_letters_pick("A") ## a plain wall: title sort, page 1, no net
+	_room._set_focused(_room._panels[10]) ## a bottom-row card
+	_room._move_focus(Vector2(0.0, 1.0))
+	_letters_expect(_nav_key_of(_room.focused_quad()) != "",
+		"strip entry: DOWN from a bottom-row card lands on the rail (got '%s')" % _nav_key_of(_room.focused_quad()))
+	_room._move_focus(Vector2(0.0, 1.0))
+	var key: String = _letters_key_of(_room.focused_quad())
+	_letters_expect(key != "",
+		"strip entry: DOWN from the rail lands on the strip (got key '%s')" % key)
+	var fq: ClickableQuad = _room.focused_quad()
+	_letters_expect(fq != null and fq.highlight_visible(),
+		"strip visual: the focused letter's highlight frame is flagged showing (key '%s')" % key)
+	# Steer to the wide THE slot for the photograph: its frame
+	# ring is the broadest on the strip.
+	for i: int in range(30):
+		_room._move_focus(Vector2(1.0, 0.0))
+	_letters_focus_key = _letters_key_of(_room.focused_quad())
+	_letters_expect(_letters_focus_key == "THE",
+		"strip visual: the grab walk holds at THE (got '%s')" % _letters_focus_key)
+	_letters_expect(_room.focused_quad() != null and _room.focused_quad().highlight_visible(),
+		"strip visual: THE's highlight frame is flagged showing for the grab")
+
+
+## The rendered half of fault 1: grab the actual frame and
+## count focus-frame-blue pixels in the band the frame ring
+## occupies (the frame quad is 1.055x its face, riding just
+## behind it, so the ring lives between the face's edge and
+## ~7% beyond it). The letter face itself is never that blue.
+func _letters_leg_strip_grab() -> void:
+	var fq: ClickableQuad = _room.focused_quad()
+	if fq == null or _letters_focus_key == "":
+		_letters_smoke_fail("strip visual: no focused letter to photograph")
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	var dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if dir != "":
+		img.save_png(dir.path_join("strip_focus.png"))
+	var blue: int = _letters_ring_blue_count(img, fq, _room._strip_slot_size(_letters_focus_key))
+	_letters_expect(blue >= 6,
+		"strip visual: the rendered frame shows the focus frame around '%s' (%d frame-blue band samples)" % [_letters_focus_key, blue])
+
+
+func _letters_is_frame_blue(img: Image, x: int, y: int) -> bool:
+	if x < 0 or y < 0 or x >= img.get_width() or y >= img.get_height():
+		return false
+	var px: Color = img.get_pixel(x, y)
+	# ClickableQuad.FOCUS_COLOR (0.35, 0.75, 1.0), unshaded.
+	return px.b > 0.8 and px.g > 0.55 and px.r < 0.6 and px.b > px.r + 0.25
+
+
+func _letters_ring_blue_count(img: Image, quad: ClickableQuad, size: Vector2) -> int:
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	if cam == null:
+		return 0
+	var half: Vector2 = size * 0.5
+	var pts: Array[Vector2] = []
+	for c: Vector2 in [Vector2(-half.x, -half.y), Vector2(half.x, -half.y), Vector2(-half.x, half.y), Vector2(half.x, half.y)]:
+		pts.append(cam.unproject_position(quad.global_transform * Vector3(c.x, c.y, 0.0)))
+	var mn: Vector2 = pts[0]
+	var mx: Vector2 = pts[0]
+	for p: Vector2 in pts:
+		mn = mn.min(p)
+		mx = mx.max(p)
+	var inner: Rect2 = Rect2(mn, mx - mn).grow_individual(-2.0, -2.0, -2.0, -2.0)
+	var outer: Rect2 = Rect2(mn, mx - mn)
+	outer = outer.grow_individual(outer.size.x * 0.075, outer.size.y * 0.075, outer.size.x * 0.075, outer.size.y * 0.075)
+	var count: int = 0
+	var x: int = int(outer.position.x)
+	while x < int(outer.position.x + outer.size.x):
+		var y: int = int(outer.position.y)
+		while y < int(outer.position.y + outer.size.y):
+			if not inner.has_point(Vector2(float(x), float(y))):
+				if _letters_is_frame_blue(img, x, y):
+					count += 1
+			y += 1
+		x += 1
+	return count
+
+
+## Fault 2's legs (Chris, 2026-10-27: turning a page with the
+## rail's arrows "resets to wall cards, upper area and you
+## have to tap-tap-tap back down to arrow"). One step per
+## _process call; returns true when the legs are done. Every
+## press is the pad's real route: focus the arrow, press A.
+func _letters_leg_pager_step() -> bool:
+	match _letters_step:
+		0:
+			_letters_pick("A") ## page 1 of 2, title sort, no net
+			_room._set_focused(_room.rail_quad("page_next"))
+			_room._a_press()
+			_letters_step = 1
+			_letters_smoke_wait = 0
+		1:
+			_letters_smoke_wait += 1
+			if _room._slide_phase == 0 and _letters_smoke_wait >= 8:
+				_letters_expect(_room._page == 1,
+					"pager: NEXT turns to the second page (got %d)" % _room._page)
+				_letters_expect(_room.focused_quad() == _room.rail_quad("page_next"),
+					"pager: focus stays on the NEXT arrow across a page turn")
+				_room._a_press() ## clamped: page 2 of 2 is the last
+				_letters_step = 2
+				_letters_smoke_wait = 0
+			elif _letters_smoke_wait > 3600:
+				_letters_smoke_fail("pager: the NEXT slide never settled")
+				return true
+		2:
+			_letters_smoke_wait += 1
+			if _letters_smoke_wait >= 12:
+				_letters_expect(_room._page == 1,
+					"pager: a clamped NEXT stays on the last page (got %d)" % _room._page)
+				_letters_expect(_room.focused_quad() == _room.rail_quad("page_next"),
+					"pager: a clamped NEXT at the last page keeps focus on the arrow")
+				_room._set_focused(_room.rail_quad("page_prev"))
+				_room._a_press()
+				_letters_step = 3
+				_letters_smoke_wait = 0
+		3:
+			_letters_smoke_wait += 1
+			if _room._slide_phase == 0 and _letters_smoke_wait >= 8:
+				_letters_expect(_room._page == 0,
+					"pager: PREV turns back to the first page (got %d)" % _room._page)
+				_letters_expect(_room.focused_quad() == _room.rail_quad("page_prev"),
+					"pager: focus stays on the PREV arrow across a page turn")
+				_room._a_press() ## clamped at the first page
+				_letters_step = 4
+				_letters_smoke_wait = 0
+			elif _letters_smoke_wait > 3600:
+				_letters_smoke_fail("pager: the PREV slide never settled")
+				return true
+		4:
+			_letters_smoke_wait += 1
+			if _letters_smoke_wait >= 12:
+				_letters_expect(_room._page == 0,
+					"pager: a clamped PREV stays on the first page (got %d)" % _room._page)
+				_letters_expect(_room.focused_quad() == _room.rail_quad("page_prev"),
+					"pager: a clamped PREV at the first page keeps focus on the arrow")
+				return true
+	return false
+
+
+# -------------------------------------------------- boot focus smoke
+
+## --pvlds-smoke-bootfocus: fault 3's harness (Chris,
+## 2026-10-27: "Upon initial launch, the highlighter defaults
+## to last played table, but the card is dark and art is not
+## visible till highlighter is moved."). The runner seeds the
+## state file with a last-played record; this driver then
+## touches NOTHING - no _set_focused, no _move_focus, no
+## presses - and judges the room the real boot path built:
+## the boot-focused card must hold the focus, wear its real
+## face, carry the standing power performance ON that face,
+## and render art (pixel variance) in a grab, all with zero
+## input.
+func _drive_bootfocus_smoke() -> void:
+	match _bootfocus_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_bootfocus_phase = 1
+				_bootfocus_wait = 0
+			else:
+				_bootfocus_wait += 1
+				if _bootfocus_wait > 7200:
+					_bootfocus_fail("the room never came up on the real boot path")
+					_finish_bootfocus_smoke()
+		1:
+			_bootfocus_wait += 1
+			var panel: ClickableQuad = _bootfocus_panel()
+			if panel != null and _room.focused_quad() == panel and _room.power_panel() == panel and _room.power_phase() == 2:
+				_bootfocus_phase = 2
+				_bootfocus_wait = 0
+			elif _bootfocus_wait > 7200:
+				_bootfocus_fail("the boot power-on never settled on the last-played card (focused=%s, power panel=%s, phase=%d)" % [
+					_bootfocus_payload_of(_room.focused_quad() if _room != null else null),
+					_bootfocus_payload_of(_room.power_panel() if _room != null else null),
+					_room.power_phase() if _room != null else -1])
+				_finish_bootfocus_smoke()
+		2:
+			# A few frames of slack for the readback to be the
+			# settled frame, then judge and photograph.
+			_bootfocus_wait += 1
+			if _bootfocus_wait >= 6:
+				var panel2: ClickableQuad = _bootfocus_panel()
+				if panel2 != null:
+					_bootfocus_leg(panel2)
+				else:
+					_bootfocus_fail("the last-played panel left the wall before the grab")
+				_finish_bootfocus_smoke()
+
+
+func _bootfocus_panel() -> ClickableQuad:
+	if _room == null:
+		return null
+	for p: ClickableQuad in _room._panels:
+		if p.payload == _bootfocus_game:
+			return p
+	return null
+
+
+func _bootfocus_payload_of(q: ClickableQuad) -> String:
+	return q.payload if q != null else "<none>"
+
+
+func _bootfocus_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - bootfocus smoke: ", label)
+	else:
+		_bootfocus_fail(label)
+
+
+func _bootfocus_fail(label: String) -> void:
+	_bootfocus_failures += 1
+	printerr("  FAIL - bootfocus smoke: ", label)
+
+
+func _finish_bootfocus_smoke() -> void:
+	if _bootfocus_failures == 0:
+		print("PVLDS BOOTFOCUS SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS BOOTFOCUS SMOKE: FAIL (%d)" % _bootfocus_failures)
+		get_tree().quit(1)
+
+
+func _bootfocus_leg(panel: ClickableQuad) -> void:
+	_bootfocus_expect(_room.focused_quad() == panel,
+		"boot focus: the last-played card holds the boot focus (no input given)")
+	_bootfocus_expect(panel.highlight_visible(),
+		"boot focus: the boot-focused card's highlight frame shows")
+	var mat: ShaderMaterial = _room._power_mat as ShaderMaterial
+	var atlas: AtlasTexture = null
+	if mat != null:
+		atlas = mat.get_shader_parameter("face_tex") as AtlasTexture
+	_bootfocus_expect(atlas != null and atlas.atlas == panel.current_texture(),
+		"boot focus: the standing power overlay samples the face the card actually wears")
+	var img: Image = get_viewport().get_texture().get_image()
+	var dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if dir != "":
+		img.save_png(dir.path_join("boot_focus.png"))
+	var rect: Rect2i = _mimic_art_screen_rect(panel)
+	# Judge the art's interior only: the focus frame rings the
+	# rect's edge and the Launch button stands over its lower
+	# rows - either would lend a flat fill a fake variance
+	# (the first cut of this leg passed on exactly that).
+	var inner: Rect2i = Rect2i(
+		rect.position.x + rect.size.x / 4, rect.position.y,
+		rect.size.x / 2, rect.size.y * 55 / 100)
+	var sd: float = _bootfocus_region_stdev(img, inner)
+	_bootfocus_expect(sd > 0.005,
+		"boot focus: the boot-focused card's art renders its face, not a flat dark fill (interior stdev %.4f)" % sd)
+
+
+## Luma stdev over a screen rect (stride 2): a flat fill -
+## the placeholder, graded or not - has none; a rendered
+## face (art or title card) always has some.
+func _bootfocus_region_stdev(img: Image, rect: Rect2i) -> float:
+	var n: int = 0
+	var mean: float = 0.0
+	var m2: float = 0.0
+	var x: int = rect.position.x
+	while x < rect.position.x + rect.size.x:
+		var y: int = rect.position.y
+		while y < rect.position.y + rect.size.y:
+			if x >= 0 and y >= 0 and x < img.get_width() and y < img.get_height():
+				var px: Color = img.get_pixel(x, y)
+				var lum: float = 0.2126 * px.r + 0.7152 * px.g + 0.0722 * px.b
+				n += 1
+				var d1: float = lum - mean
+				mean += d1 / float(n)
+				m2 += d1 * (lum - mean)
+			y += 2
+		x += 2
+	if n < 2:
+		return 0.0
+	return sqrt(m2 / float(n))
 
 
 # -------------------------------------------------- desk smoke
