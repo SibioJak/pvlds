@@ -255,6 +255,7 @@ var _shot_pop_frames: int = 0
 var _shot_pop_panel: ClickableQuad = null
 var _shot_pop_since_msec: int = 0
 var _shot_flicker_prefix: String = "" ## --pvlds-shot-flicker PREFIX: the power-on flicker's QA hook (needs the harness's bulb fixture folder)
+var _shot_anim_prefix: String = "" ## --pvlds-shot-anim PREFIX: the animation leg's own boot - same driver, but phase 0 registers only the Flicker Anim fixture (its own folder: the flicker wall's first page holds twelve cards and a thirteenth Flicker title pushed Flicker Wide onto page two) and hands straight to the animation leg (phase 13)
 var _shot_flicker_phase: int = -1
 var _shot_flicker_frames: int = 0
 var _shot_flicker_panel: ClickableQuad = null ## the bulb-bearing fixture card (layers leg)
@@ -279,6 +280,9 @@ var _shot_flicker_on_img: Image = null ## pair-strobe leg: the pair card rendere
 var _shot_flicker_dip_win: Vector2 = Vector2.ZERO ## pair-strobe leg: the Specter schedule's dip window [dip_end, on_t]
 var _shot_flicker_live_missed: bool = false ## pair-strobe leg: the live cascade finished before a poll saw phase 1 (one giant post-extraction frame) - the sweep and the rendered fit carry the leg instead
 var _shot_flicker_flasher_idx: int = -1 ## flasher leg: the performing set's flasher layer index (-1 until the cascade builds it)
+var _shot_flicker_anim_idx: int = -1 ## animation leg: the performing set's giant member layer index (-1 until the cascade builds it)
+var _shot_flicker_anim_idxs: Array[int] = [] ## animation leg: every member layer index in the performing set (the parked probes walk them all)
+var _shot_flicker_anim_strike: Array[int] = [0, 0] ## animation leg: the two strike frames' member-color counts [green, cyan], accumulated across both parked instants
 var _shot_flicker_away_panel: ClickableQuad = null ## kick leg: a live non-subject panel to park focus on (re-resolved at the leg, after the wall rebuilds)
 var _shot_flicker_armed: bool = false ## fix-round legs: the current leg's focus has been set
 var _art_bench: bool = false ## --pvlds-art-bench: dev measurement route (cold/warm page-fill timings)
@@ -319,6 +323,11 @@ func _ready() -> void:
 	var shot_flicker_idx: int = user_args.find("--pvlds-shot-flicker")
 	if shot_flicker_idx >= 0 and shot_flicker_idx + 1 < user_args.size():
 		_shot_flicker_prefix = user_args[shot_flicker_idx + 1]
+		_shot_flicker_phase = 0
+	var shot_anim_idx: int = user_args.find("--pvlds-shot-anim")
+	if shot_anim_idx >= 0 and shot_anim_idx + 1 < user_args.size():
+		_shot_anim_prefix = user_args[shot_anim_idx + 1]
+		_shot_flicker_prefix = _shot_anim_prefix
 		_shot_flicker_phase = 0
 	if user_args.has("--pvlds-smoke-placard"):
 		_smoke_placard = true
@@ -1080,6 +1089,61 @@ func _flicker_red_count_img(q: ClickableQuad, img: Image) -> int:
 	return n
 
 
+## Anim-green pixel count inside a panel's screen rect over
+## a GIVEN frame - the animation leg's visible-evidence
+## measure for its giant member (the fixture's member paints
+## a bold semi-transparent green band across the glass;
+## nothing else on the card is green - the base is navy, the
+## lamps are amber, whose red channel keeps it out of this
+## test).
+func _flicker_green_count_img(q: ClickableQuad, img: Image) -> int:
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	if cam == null:
+		return -1
+	var rect: Rect2 = _nav_screen_rect(q, cam)
+	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
+	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
+	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
+	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
+	var n: int = 0
+	var y: int = y0
+	while y < y1:
+		var x: int = x0
+		while x < x1:
+			var px: Color = img.get_pixel(x, y)
+			if px.g > 0.55 and px.r < 0.42 and px.b < 0.42:
+				n += 1
+			x += 2
+		y += 2
+	return n
+
+
+## Anim-cyan pixel count inside a panel's screen rect over
+## a GIVEN frame - the animation leg's measure for its small
+## member (solid cyan art the navy base does not carry; the
+## amber lamps' low blue keeps them out of this test).
+func _flicker_cyan_count_img(q: ClickableQuad, img: Image) -> int:
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	if cam == null:
+		return -1
+	var rect: Rect2 = _nav_screen_rect(q, cam)
+	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
+	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
+	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
+	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
+	var n: int = 0
+	var y: int = y0
+	while y < y1:
+		var x: int = x0
+		while x < x1:
+			var px: Color = img.get_pixel(x, y)
+			if px.b > 0.6 and px.g > 0.5 and px.r < 0.42:
+				n += 1
+			x += 2
+		y += 2
+	return n
+
+
 ## Amber pixels in the band AROUND a panel's screen rect -
 ## the spill measure. The band holds neighbouring cards and
 ## room, whose own amber content is constant across the
@@ -1210,6 +1274,14 @@ func _flicker_blend_fit(q: ClickableQuad, img: Image, off: Image, on: Image) -> 
 
 func _flicker_finish() -> void:
 	_shot_flicker_phase = -1
+	if _shot_anim_prefix != "":
+		if _shot_flicker_problems.is_empty():
+			print("PVLDS ANIM SHOT: PASS")
+			get_tree().quit(0)
+		else:
+			printerr("PVLDS ANIM SHOT: FAIL - ", "; ".join(PackedStringArray(_shot_flicker_problems)))
+			get_tree().quit(1)
+		return
 	if _shot_flicker_problems.is_empty():
 		print("PVLDS FLICKER SHOT: PASS counts=", _shot_flicker_counts, " min_brightness=", snappedf(_shot_flicker_min_b, 0.01), " spill=", _shot_flicker_spill)
 		get_tree().quit(0)
@@ -1272,8 +1344,24 @@ func _flicker_finish() -> void:
 ## again, so the fixture builds the cold state directly):
 ## its focus must surge (the honest cold visit) while the
 ## kick lands the set in the background, and the NEXT
-## visit cascades. The run's log carries the POWER lines
-## for every leg above; the harness greps them by family.
+## visit cascades. The animation leg (animation-release
+## round) runs as phase 13 of this same driver but under
+## its OWN boot, --pvlds-shot-anim (run_anim_shots.sh):
+## its fixture lives in its own folder, because a
+## thirteenth Flicker title in this suite's folder pushed
+## Flicker Wide off the wall's first page. The leg: a
+## glass whose file sequences two of
+## its four bulbs in an <Animations> section (a giant
+## RomIDType-1 snippet painting a green band, a small
+## untyped bulb painting cyan; two named-by-nothing amber
+## lamps hold): the members extract as ANIM, render
+## mid-cascade, and are gone from the settled card - the
+## settled frame holds zero member content (green and cyan
+## counts) while the lamps stay lit (parked alpha probes
+## on a member's schedule + rendered strike/settled
+## frames, the flasher leg's shape). The run's log
+## carries the POWER lines for every leg above; the
+## harness greps them by family.
 ## Saves PREFIX_base/mid/lit.png plus pair/flasher frames.
 func _drive_shot_flicker() -> void:
 	var now: int = Time.get_ticks_msec()
@@ -1295,6 +1383,31 @@ func _drive_shot_flicker() -> void:
 				# round's fuller wall put a card under it).
 				get_viewport().warp_mouse(Vector2(4, 4))
 				_shot_flicker_stage = 1
+				return
+			if _shot_anim_prefix != "":
+				# The animation leg's own boot: the library
+				# is the dummy folder plus the Anim fixture
+				# alone (one page), so phase 0 only registers
+				# that fixture, waits for its panel, and
+				# hands straight to the animation leg.
+				if not _shot_flicker_fixtures.has("Flicker Anim"):
+					for ga: GameEntry in _scanner.games:
+						if ga.title.begins_with("Flicker Anim"):
+							_shot_flicker_fixtures["Flicker Anim"] = {"game": ga}
+					if not _shot_flicker_fixtures.has("Flicker Anim"):
+						if not _scan_active:
+							_shot_flicker_problems.append("the Flicker Anim fixture game is not in the library (the harness config names its folder)")
+							_flicker_finish()
+						return
+				var fxa: Dictionary = _shot_flicker_fixtures["Flicker Anim"] as Dictionary
+				for pa2: ClickableQuad in _room._panels:
+					if pa2.payload == (fxa["game"] as GameEntry).game_id:
+						fxa["panel"] = pa2
+				if not fxa.has("panel"):
+					return
+				_shot_flicker_stage = 0
+				_shot_flicker_since = now
+				_shot_flicker_phase = 13
 				return
 			if _shot_flicker_game == null:
 				for g: GameEntry in _scanner.games:
@@ -2319,9 +2432,217 @@ func _drive_shot_flicker() -> void:
 						_shot_flicker_problems.append("the visit after the kick surged again (mode %d) - the landed set did not cascade" % _room.power_mode())
 					elif _room.power_layer_count() != 5:
 						_shot_flicker_problems.append("the post-kick cascade built %d layer quads, want the Wide five" % _room.power_layer_count())
+					# The animation leg used to chain on
+					# here as phase 13; it runs under its
+					# own boot now (--pvlds-shot-anim, the
+					# harness's run_anim_shots.sh), so the
+					# flicker suite ends with the kick leg.
 					_flicker_finish()
 				elif now - _shot_flicker_since > 10000:
 					_shot_flicker_problems.append("the kick leg's return power-on never started")
+					_flicker_finish()
+		13:
+			# Animation leg (animation-release round) -
+			# reached only under the --pvlds-shot-anim boot
+			# (phase 0 hands straight here). The
+			# Flicker Anim glass carries four bulbs - two
+			# small amber lamps named by no animation step
+			# (they hold), one giant RomIDType-1 full-glass
+			# snippet painting a semi-transparent GREEN band,
+			# and one small untyped bulb painting solid CYAN -
+			# the two the file's <Animations> section
+			# sequences by name. A decoy Parent="DMD"
+			# animation names one lamp and must confer
+			# nothing. The card must cascade all four layers,
+			# the members VISIBLE mid-cascade, and settle to
+			# the lamps only: members fully released (the
+			# settled frame holds zero member content - no
+			# green, no cyan), lamps held lit. Proven by the
+			# parked alpha probes on the giant member's
+			# schedule and by rendered frames, the flasher
+			# leg's shape. Stages: 0 verify the extracted
+			# set (kinds by the file's own sections), 5 idle
+			# frames then focus, 1 the live cascade and the
+			# parked probes, 2 the rendered strike frame,
+			# 3 the rendered settled frame.
+			if not _shot_flicker_fixtures.has("Flicker Anim"):
+				_shot_flicker_problems.append("the Flicker Anim fixture game is not in the library - the animation leg has no subject")
+				_flicker_finish()
+				return
+			var fx13: Dictionary = _shot_flicker_fixtures["Flicker Anim"] as Dictionary
+			var g13: GameEntry = fx13["game"] as GameEntry
+			var panel13: ClickableQuad = fx13.get("panel", null) as ClickableQuad
+			if not is_instance_valid(panel13):
+				panel13 = null
+				for p13: ClickableQuad in _room._panels:
+					if p13.payload == g13.game_id:
+						panel13 = p13
+						break
+				if panel13 != null:
+					fx13["panel"] = panel13
+			if _shot_flicker_stage == 0:
+				if panel13 == null:
+					_shot_flicker_problems.append("the Anim panel is not on the wall - the animation leg has no card")
+					_flicker_finish()
+					return
+				var data13: Dictionary = g13.ensure_flicker()
+				var layers13: Array = data13.get("layers", []) as Array
+				var n_anim13: int = 0
+				var n_lamp13: int = 0
+				var n_flash13: int = 0
+				var giant13: bool = false
+				var bsz13: Vector2i = data13.get("base_size", Vector2i.ZERO) as Vector2i
+				for item13: Variant in layers13:
+					var ld13: Dictionary = item13 as Dictionary
+					var kind13: String = str(ld13.get("kind", ""))
+					if kind13 == ArtProvider.LAYER_KIND_ANIM:
+						n_anim13 += 1
+						var r13: Rect2 = ld13["rect"] as Rect2
+						if r13.size.x > float(bsz13.x) * 0.95 and r13.size.y > float(bsz13.y) * 0.95:
+							giant13 = true
+					elif kind13 == ArtProvider.LAYER_KIND_FLASHER:
+						n_flash13 += 1
+					else:
+						n_lamp13 += 1
+				if bool(data13.get("pair", false)) or layers13.size() != 4 or n_anim13 != 2 or n_lamp13 != 2 or n_flash13 != 0 or not giant13:
+					_shot_flicker_problems.append("the anim fixture extracted wrong (pair %s, layers %d, anim %d, lamps %d, flashers %d, giant %s) - want a bulb set of two sequenced members (one full-glass) over two held lamps" % [str(data13.get("pair", false)), layers13.size(), n_anim13, n_lamp13, n_flash13, str(giant13)])
+					_flicker_finish()
+					return
+				_shot_flicker_probe_wait = 0
+				_shot_flicker_stage = 5
+				_shot_flicker_since = now
+			elif _shot_flicker_stage == 5:
+				_shot_flicker_probe_wait += 1
+				if _shot_flicker_probe_wait >= 6:
+					_shot_flicker_anim_idx = -1
+					_shot_flicker_anim_idxs.clear()
+					_shot_flicker_anim_strike = [0, 0]
+					_room._set_focused(panel13)
+					_shot_flicker_stage = 1
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the animation leg's warm wait never elapsed")
+					_flicker_finish()
+			elif _shot_flicker_stage == 1:
+				var ph13: int = _room.power_phase()
+				if _room.power_panel() == panel13 and ph13 > 0 and _shot_flicker_anim_idxs.is_empty():
+					# Every member's quad: the layers whose
+					# kind is ANIM (both members release on
+					# the same contract; the probes below
+					# walk them all, and the rendered frames
+					# convict each by its own color).
+					for li13: int in range(_room.power_layer_count()):
+						if _room.power_layer_kind(li13) == ArtProvider.LAYER_KIND_ANIM:
+							_shot_flicker_anim_idxs.append(li13)
+				if _room.power_panel() == panel13 and ph13 == 2:
+					if _room.power_layer_count() != 4:
+						_shot_flicker_problems.append("the anim card built %d layer quads, want 4 (two lamps + two members)" % _room.power_layer_count())
+					if _shot_flicker_anim_idxs.size() != 2:
+						_shot_flicker_problems.append("the anim card's layers carry %d members, want 2 - the room never learned the membership" % _shot_flicker_anim_idxs.size())
+						_flicker_finish()
+						return
+					# Parked alpha probes, per member: each
+					# schedule must carry a release; at its
+					# own strike the member reads lit; inside
+					# its fade, mid; at the cascade's end,
+					# exactly out - while the lamps hold.
+					for mi13: int in _shot_flicker_anim_idxs:
+						var sched13: Array = _room._power_schedule[mi13] as Array
+						var rel13: float = float(sched13[3]) if sched13.size() > 3 else -1.0
+						if rel13 < 0.0:
+							_shot_flicker_problems.append("a member's schedule carries no release (layer %d) - it would hold like a lamp" % mi13)
+							_flicker_finish()
+							return
+						_room._power_t = float(sched13[0]) + 0.05
+						_room._apply_power()
+						var struck13: float = _room.power_layer_alpha(mi13)
+						if struck13 < 0.9:
+							_shot_flicker_problems.append("parked at its strike member %d reads alpha %.2f, want it lit" % [mi13, struck13])
+						_room._power_t = rel13 + RoomView.POWER_FLASHER_FADE_SEC * 0.5
+						_room._apply_power()
+						var midfade13: float = _room.power_layer_alpha(mi13)
+						if midfade13 < 0.05 or midfade13 > 0.95:
+							_shot_flicker_problems.append("parked mid-release member %d reads alpha %.2f - the release is not a fade in flight" % [mi13, midfade13])
+						_room._power_t = RoomView.POWER_CASCADE_SEC
+						_room._apply_power()
+						var settled13: float = _room.power_layer_alpha(mi13)
+						if settled13 != 0.0:
+							_shot_flicker_problems.append("member %d is still lit at the cascade's end (alpha %.2f) - it never released" % [mi13, settled13])
+					for li13b: int in range(_room.power_layer_count()):
+						if _room.power_layer_kind(li13b) == ArtProvider.LAYER_KIND_LAMP and _room.power_layer_alpha(li13b) != 1.0:
+							_shot_flicker_problems.append("a lamp is not held lit at the cascade's end (layer %d alpha %.2f)" % [li13b, _room.power_layer_alpha(li13b)])
+					# The first rendered strike frame: park
+					# the clock at the first member's strike.
+					_shot_flicker_anim_idx = _shot_flicker_anim_idxs[0]
+					var sched13a: Array = _room._power_schedule[_shot_flicker_anim_idx] as Array
+					_room._power_t = float(sched13a[0]) + 0.05
+					_room._apply_power()
+					_shot_flicker_probe_wait = 0
+					_shot_flicker_stage = 2
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the anim card's cascade never ran")
+					_flicker_finish()
+			elif _shot_flicker_stage == 2:
+				_shot_flicker_probe_wait += 1
+				if _shot_flicker_probe_wait >= 10:
+					var on_img13: Image = get_viewport().get_texture().get_image()
+					_shot_flicker_anim_strike[0] += _flicker_green_count_img(panel13, on_img13)
+					_shot_flicker_anim_strike[1] += _flicker_cyan_count_img(panel13, on_img13)
+					on_img13.save_png(_shot_flicker_prefix + "_anim_on_a.png")
+					# The second strike frame: the other
+					# member at ITS strike (the two strike at
+					# different instants by schedule, so one
+					# parked frame cannot promise both).
+					_shot_flicker_anim_idx = _shot_flicker_anim_idxs[1]
+					var sched13b: Array = _room._power_schedule[_shot_flicker_anim_idx] as Array
+					_room._power_t = float(sched13b[0]) + 0.05
+					_room._apply_power()
+					_shot_flicker_probe_wait = 0
+					_shot_flicker_stage = 4
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the animation leg's first strike frame never rendered")
+					_flicker_finish()
+			elif _shot_flicker_stage == 4:
+				_shot_flicker_probe_wait += 1
+				if _shot_flicker_probe_wait >= 10:
+					var on_img13b: Image = get_viewport().get_texture().get_image()
+					_shot_flicker_anim_strike[0] += _flicker_green_count_img(panel13, on_img13b)
+					_shot_flicker_anim_strike[1] += _flicker_cyan_count_img(panel13, on_img13b)
+					on_img13b.save_png(_shot_flicker_prefix + "_anim_on_b.png")
+					# Across their own strike frames, BOTH
+					# members must have rendered - the giant
+					# by its green, the small by its cyan.
+					if _shot_flicker_anim_strike[0] < 150:
+						_shot_flicker_problems.append("no strike frame shows the giant member (green px %d) - it never rendered" % _shot_flicker_anim_strike[0])
+					if _shot_flicker_anim_strike[1] < 40:
+						_shot_flicker_problems.append("no strike frame shows the small member (cyan px %d) - it never rendered" % _shot_flicker_anim_strike[1])
+					_room._power_t = RoomView.POWER_CASCADE_SEC
+					_room._apply_power()
+					_shot_flicker_probe_wait = 0
+					_shot_flicker_stage = 3
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the animation leg's second strike frame never rendered")
+					_flicker_finish()
+			elif _shot_flicker_stage == 3:
+				_shot_flicker_probe_wait += 1
+				if _shot_flicker_probe_wait >= 10:
+					var settled_img13: Image = get_viewport().get_texture().get_image()
+					var green_off13: int = _flicker_green_count_img(panel13, settled_img13)
+					if green_off13 > 10:
+						_shot_flicker_problems.append("the settled card still shows the giant member (green px %d) - the animation frame is still held" % green_off13)
+					var cyan_off13: int = _flicker_cyan_count_img(panel13, settled_img13)
+					if cyan_off13 > 10:
+						_shot_flicker_problems.append("the settled card still shows the small member (cyan px %d) - the animation frame is still held" % cyan_off13)
+					var amber_set13: int = _flicker_amber_count_img(panel13, settled_img13)
+					if amber_set13 < 100:
+						_shot_flicker_problems.append("the settled card's lamps are not lit (amber px %d) - the release took the lamps with it" % amber_set13)
+					settled_img13.save_png(_shot_flicker_prefix + "_anim_settled.png")
+					_flicker_finish()
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the animation leg's settled frame never rendered")
 					_flicker_finish()
 
 
@@ -5503,6 +5824,72 @@ func _run_core_test() -> void:
 	_expect(kind_meta is Dictionary and int((kind_meta as Dictionary).get("lv", 0)) == ArtProvider.LAYERS_VERSION
 		and kind_meta_flashers == 1,
 		"the layer meta carries the kinds under generation lv%d (one flasher of three)" % ArtProvider.LAYERS_VERSION, failures)
+	# Animation membership (animation-release round): a bulb
+	# whose Name an <Animation> step enumerates is a sequenced
+	# frame (ANIM) - the room strikes and releases it like a
+	# flasher, because the file only ever shows one frame of
+	# the sequence at a time. A bulb no step names stays a
+	# lamp; a solenoid a step also names stays a FLASHER (the
+	# ROM channel is the file's stronger word); an animation
+	# over another surface (Parent="DMD") confers nothing on
+	# the glass's bulbs. Step lists are comma-separated and
+	# tolerate spaces, like the real files' own.
+	var anim_bulb: Callable = func(bname: String, rom_type: String, x: int, y: int, img: Image) -> String:
+		var rt: String = (" RomIDType=\"%s\"" % rom_type) if rom_type != "" else ""
+		return "<Bulb Parent=\"Backglass\" ID=\"7\" Name=\"%s\" RomID=\"3\"%s RomInverted=\"0\" InitialState=\"0\" DualMode=\"0\" Intensity=\"5\" Visible=\"1\" LocX=\"%d\" LocY=\"%d\" Width=\"300\" Height=\"120\" IsImageSnippit=\"1\" Image=\"%s\" />" % [bname, rt, x, y, _b2s_wrap_b64(img)]
+	var anim_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(fl_glass.save_png_to_buffer()) + "\" /></Images><Illumination>"
+	anim_text += anim_bulb.call("HeldLamp", "1", 60, 60, amber_img) as String
+	anim_text += anim_bulb.call("DmdNamed", "1", 420, 60, amber_img) as String
+	anim_text += anim_bulb.call("SeqFrame", "1", 60, 300, amber_img) as String
+	anim_text += anim_bulb.call("SeqSol", "2", 420, 300, amber_img) as String
+	anim_text += "</Illumination><Animations>"
+	anim_text += "<Animation Name=\"seq\" Parent=\"Backglass\" Interval=\"100\"><AnimationStep Step=\"1\" On=\"SeqFrame, SeqSol\" Off=\"SeqFrame\" /></Animation>"
+	anim_text += "<Animation Name=\"other\" Parent=\"DMD\" Interval=\"100\"><AnimationStep Step=\"1\" On=\"DmdNamed\" Off=\"DmdNamed\" /></Animation>"
+	anim_text += "</Animations></DirectB2SData>"
+	var b2s_anim: String = art_dir.path_join("Anim Table.directb2s")
+	_expect(_write_text_file(b2s_anim, anim_text), "anim fixture written", failures)
+	var anim_fl: Dictionary = ArtProvider.extract_flicker_layers(b2s_anim)
+	var anim_layers: Array = anim_fl["layers"] as Array
+	# The bulbs sit at the glass's four quadrants (fitted by
+	# 0.512): match each layer to its bulb by rect position.
+	var anim_want: Dictionary = {
+		Vector2(60, 60): ArtProvider.LAYER_KIND_LAMP,
+		Vector2(420, 60): ArtProvider.LAYER_KIND_LAMP,
+		Vector2(60, 300): ArtProvider.LAYER_KIND_ANIM,
+		Vector2(420, 300): ArtProvider.LAYER_KIND_FLASHER,
+	}
+	var anim_matched: int = 0
+	var anim_kinds_ok: bool = anim_layers.size() == 4
+	for anim_item: Variant in anim_layers:
+		var ad: Dictionary = anim_item as Dictionary
+		var arect: Rect2 = ad["rect"] as Rect2
+		var best: Vector2 = Vector2(-1, -1)
+		var best_d: float = 1e9
+		for want_pos: Variant in anim_want.keys():
+			var wp: Vector2 = want_pos as Vector2
+			var d: float = arect.position.distance_to(wp * 0.512)
+			if d < best_d:
+				best_d = d
+				best = wp
+		if best_d > 2.0:
+			anim_kinds_ok = false
+		else:
+			anim_matched += 1
+			if str(ad.get("kind", "")) != str(anim_want[best]):
+				anim_kinds_ok = false
+	_expect(anim_kinds_ok and anim_matched == 4,
+		"animation membership classifies the layers: the stepped lamp is anim, the stepped solenoid stays flasher, the unstepped and DMD-stepped bulbs stay lamps", failures)
+	var anim_meta: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.layers_meta_path(b2s_anim)))
+	var anim_meta_kinds: Dictionary = {ArtProvider.LAYER_KIND_LAMP: 0, ArtProvider.LAYER_KIND_FLASHER: 0, ArtProvider.LAYER_KIND_ANIM: 0}
+	if anim_meta is Dictionary:
+		for am_item: Variant in (anim_meta as Dictionary).get("layers", []):
+			var amk: String = str((am_item as Dictionary).get("kind", ""))
+			if anim_meta_kinds.has(amk):
+				anim_meta_kinds[amk] = int(anim_meta_kinds[amk]) + 1
+	_expect(anim_meta is Dictionary and int((anim_meta as Dictionary).get("lv", 0)) == ArtProvider.LAYERS_VERSION
+		and int(anim_meta_kinds[ArtProvider.LAYER_KIND_ANIM]) == 1 and int(anim_meta_kinds[ArtProvider.LAYER_KIND_FLASHER]) == 1
+		and int(anim_meta_kinds[ArtProvider.LAYER_KIND_LAMP]) == 2,
+		"the layer meta carries the membership kinds under generation lv%d (one anim of four)" % ArtProvider.LAYERS_VERSION, failures)
 	# No illumination at all: a plain still, stamped no_layers.
 	var b2s_fl_none: String = art_dir.path_join("Plain Table.directb2s")
 	_expect(_write_text_file(b2s_fl_none, "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(pair_off2.save_png_to_buffer()) + "\" /></Images><Illumination></Illumination></DirectB2SData>"),

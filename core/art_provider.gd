@@ -503,8 +503,18 @@ const LAYERS_DIR: String = CACHE_DIR + "/layers"
 ## the whole dwell stacked their translucent lit copies over
 ## the base forever - the field ghost). A v2 meta carries no
 ## kinds, so it reads as no set and re-extracts once. Older
-## stamps and metas retry once.
-const LAYERS_VERSION: int = 3
+## stamps and metas retry once. v4 (animation-release
+## round): the reader also parses the file's <Animations>
+## section - a bulb whose Name an animation step enumerates
+## is a sequenced frame (kind ANIM), and the room releases
+## it like a flasher, because the file only ever shows one
+## frame of a sequence at a time (the Goonies conviction:
+## an old-format file with no RomIDType anywhere, all 22
+## layers animation frames, stacked and held into a settled
+## card that permanently double-printed its own subjects).
+## A v3 meta carries no membership, so it reads as no set
+## and re-extracts once, like every generation before it.
+const LAYERS_VERSION: int = 4
 const LAYER_CAP: int = 40
 const STATUS_NO_LAYERS: String = "no_layers"
 ## Attempts a FAILED layer extraction gets under one reader
@@ -521,9 +531,13 @@ const FLICKER_FAILED_MAX_TRIES: int = 2
 ## Layer kinds (see the generation note above). A pair set's
 ## one full-frame layer is a LAMP by construction: the pair
 ## IS the glass's lit state, not a momentary device, and it
-## holds exactly as it always has.
+## holds exactly as it always has. An ANIM layer is a bulb
+## the file's own <Animations> section sequences: a frame,
+## not a state - the room strikes it in the cascade and
+## releases it on the flasher schedule, never holds it.
 const LAYER_KIND_LAMP: String = "lamp"
 const LAYER_KIND_FLASHER: String = "flasher"
+const LAYER_KIND_ANIM: String = "anim"
 
 
 static func layers_dir_for(b2s_path: String) -> String:
@@ -820,7 +834,16 @@ static func _extract_flicker_uncached(b2s_path: String) -> Dictionary:
 ## the layer is a FLASHER. Anything else - type 1, a missing
 ## attribute, a word instead of a number (designer files in
 ## the wild carry all three shapes) - is a LAMP, the state a
-## power-on may hold.
+## power-on may hold - UNLESS the file's <Animations> section
+## sequences the bulb by name: then the bulb is one frame of
+## a sequence the file only ever shows one-at-a-time (the
+## server runs these in attract, at most one frame per group
+## at any instant), so the layer is ANIM and releases like a
+## flasher. A solenoid an animation also names stays a
+## FLASHER - the ROM channel is the file's stronger word for
+## the device - and the room cannot tell the two apart
+## anyway: both release. Only a bulb nothing sequences and
+## no solenoid claims is a lamp.
 static func _b2s_bulbs(text: String) -> Array:
 	var out: Array = []
 	var sec_start: int = text.find("<Illumination")
@@ -829,6 +852,7 @@ static func _b2s_bulbs(text: String) -> Array:
 	var sec_end: int = text.find("</Illumination>", sec_start)
 	if sec_end < 0:
 		sec_end = text.length()
+	var members: Dictionary = _b2s_animation_members(text)
 	var from: int = sec_start
 	while true:
 		var at: int = text.find("<Bulb", from)
@@ -852,9 +876,76 @@ static func _b2s_bulbs(text: String) -> Array:
 		var blob: String = _xml_unescape(_xml_attr(tag, "Image")).replace(" ", "").replace("\t", "").replace("\r", "").replace("\n", "")
 		if blob.length() < 100:
 			continue
-		var kind: String = LAYER_KIND_FLASHER if int(_xml_attr(tag, "RomIDType")) == 2 else LAYER_KIND_LAMP
+		var kind: String = LAYER_KIND_LAMP
+		if int(_xml_attr(tag, "RomIDType")) == 2:
+			kind = LAYER_KIND_FLASHER
+		else:
+			var bulb_name: String = _xml_attr(tag, "Name")
+			if bulb_name != "" and members.has(bulb_name):
+				kind = LAYER_KIND_ANIM
 		out.append({"rect": rect, "blob": blob, "kind": kind})
 	return out
+
+
+## The names the file's <Animations> section sequences: every
+## bulb name enumerated in any <AnimationStep>'s On or Off
+## set of an animation over the glass itself (Parent absent
+## or "Backglass" - an animation a file aims at its DMD or
+## grill sequences that surface's bulbs, never these). The
+## step sets are comma-separated name lists ("1,2,1,2,1" is
+## one real file's whole choreography). Both censused real
+## files carry Parent="Backglass" on every animation; an
+## animation with no Parent at all is included - releasing
+## a frame too many is the safe error, holding one is the
+## ghost. Tag-scoped reads in the same tolerance style as
+## _b2s_bulbs: a malformed animation is skipped, never fatal.
+static func _b2s_animation_members(text: String) -> Dictionary:
+	var members: Dictionary = {}
+	var sec_start: int = text.find("<Animations")
+	if sec_start < 0:
+		return members
+	var sec_end: int = text.find("</Animations>", sec_start)
+	if sec_end < 0:
+		sec_end = text.length()
+	var from: int = sec_start
+	while true:
+		var at: int = text.find("<Animation", from)
+		if at < 0 or at >= sec_end:
+			return members
+		from = at + 10
+		# The element itself only: "<Animation " (or a bare
+		# "<Animation>") opens an animation; the section tag
+		# and the step tags are stepped over.
+		var after: String = text.substr(at + 10, 1)
+		if after != " " and after != "\t" and after != ">":
+			continue
+		var close: int = text.find(">", at)
+		if close < 0 or close > sec_end:
+			return members
+		from = close
+		var tag: String = text.substr(at, close - at)
+		var parent: String = _xml_attr(tag, "Parent")
+		if parent != "" and parent != "Backglass":
+			continue
+		var body_end: int = text.find("</Animation>", close)
+		if body_end < 0 or body_end > sec_end:
+			body_end = sec_end
+		var step_from: int = close
+		while true:
+			var sat: int = text.find("<AnimationStep", step_from)
+			if sat < 0 or sat >= body_end:
+				break
+			var sclose: int = text.find(">", sat)
+			if sclose < 0 or sclose > body_end:
+				break
+			var stag: String = text.substr(sat, sclose - sat)
+			for attr: String in ["On", "Off"]:
+				for tok: String in _xml_attr(stag, attr).split(","):
+					var member_name: String = tok.strip_edges()
+					if member_name != "":
+						members[member_name] = true
+			step_from = sclose
+	return members
 
 
 ## One attribute's value from a tag's text ("" when absent).

@@ -643,7 +643,24 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   over the unlit base for the whole dwell (×1.73 mean
   luminance); the settled card is now base + lamps (×1.01).
   Layer sets carry their kinds from extraction (layer cache
-  generation lv3, so kind-less sets re-extract once).
+  generation lv3, so kind-less sets re-extract once). The
+  **animation-release round** (2026-10-27) adds the file's
+  other declaration: a bulb named by an `<Animations>` step
+  is a sequenced *frame* (kind `anim`), and it releases on
+  the flasher schedule too — the server only ever shows one
+  frame of a sequence at a time, so a settled card may hold
+  none of them. Holding frames was the Goonies ghost: that
+  old-format file carries no RomIDType at all, and all 22 of
+  its layers are animation frames (a 7-frame sparkle over
+  76% of the glass; three 5-step opacity ramps redrawing
+  the ship, the key and Willy) — PVLDS stacked and held
+  every frame at once, so the card permanently double-
+  printed its own subjects. Its settled card is now the
+  bare base, pixel for pixel. On Taxi the same parse moves
+  the two "light" lamps the file itself blinks in attract
+  to the release class (17 layers: 7 flashers + 2 anim +
+  8 lamps). Layer cache generation lv4, so membership-less
+  sets re-extract once.
 - **One input model.** VR controller laser, mouse ray, and
   gamepad/keyboard focus all pick from the same surfaces. Mouse can
   drive the whole UI flat at the desk — the flat camera is static at

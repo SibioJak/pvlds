@@ -106,6 +106,10 @@ const POP_FULL_X_MAX: float = 1.5 ## a true-aspect pop's widest horizontal growt
 ## with the cascade but release before it ends - they are
 ## momentary devices, and holding them stacked the field
 ## ghost (the flasher-release round; POWER_FLASHER_* below).
+## Layers the file's own animation section sequences are
+## frames, not states, and release on the same schedule -
+## holding every frame of a sequence double-prints the
+## glass (the animation-release round).
 const POWER_SETTLE_SEC: float = 0.2 ## focus must rest this long before the power-on starts
 const POWER_CASCADE_SEC: float = 1.05 ## the power-on's full run, seconds
 const POWER_DARK: float = 0.22 ## the brightness fallback's floor (and its curve's low key)
@@ -126,7 +130,13 @@ const POWER_BRIGHTNESS_KEYS: Array = [
 ## clamped so every flasher is fully out by the cascade's
 ## end - the settled card is lamps over base, never a stack
 ## of translucent flasher copies (the Taxi ghost: seven
-## passenger flashers held lit for the whole dwell).
+## passenger flashers held lit for the whole dwell). The
+## animation-release round (same day) put ArtProvider's ANIM
+## kind - a frame the file's <Animations> section sequences -
+## on this same schedule: the file shows one frame of a
+## sequence at a time, so a settled card may hold none of
+## them (the Goonies ghost: 22 animation frames, every layer
+## the file carries, stacked and held at once).
 const POWER_FLASHER_HOLD_SEC: float = 0.30 ## a struck flasher's hold before its release begins
 const POWER_FLASHER_FADE_SEC: float = 0.15 ## the release's fade length
 
@@ -210,7 +220,8 @@ var _power_game: GameEntry = null ## the performing card's game
 var _power_layers: Array[MeshInstance3D] = [] ## the performing card's lamp layer quads (children of the panel)
 var _power_mats: Array[StandardMaterial3D] = [] ## their materials, parallel to _power_layers
 var _power_schedule: Array = [] ## per layer: [catch_t, dip_end_t, on_t, release_t] cascade times, parallel to _power_layers; release_t < 0 for a layer that holds
-var _power_flasher: Array[bool] = [] ## per layer: a solenoid flasher (strikes, then releases), parallel to _power_layers
+var _power_flasher: Array[bool] = [] ## per layer: release-class (a solenoid flasher or an animation frame - strikes, then releases instead of holding), parallel to _power_layers
+var _power_kinds: Array[String] = [] ## per layer: its ArtProvider kind, parallel to _power_layers
 var _power_kicked: Dictionary = {} ## game_id -> true: a background layer extraction was kicked for this game this session
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
@@ -2198,11 +2209,20 @@ func _start_power(panel: ClickableQuad) -> void:
 	_power_game = _scanner.game_by_id(panel.payload) if _scanner != null else null
 	var src: String = ""
 	var kicked: bool = false
+	var n_kinds: Array[int] = [0, 0, 0] ## the set's composition: lamps, flashers, animation frames
 	if _power_game != null:
 		src = _power_game.flicker_source()
 		if src != "":
 			if ArtProvider.has_flicker_layers(src):
 				var data: Dictionary = ArtProvider.extract_flicker_layers(src)
+				for ld: Variant in data.get("layers", []) as Array:
+					var lkind: String = str((ld as Dictionary).get("kind", ArtProvider.LAYER_KIND_LAMP))
+					if lkind == ArtProvider.LAYER_KIND_FLASHER:
+						n_kinds[1] += 1
+					elif lkind == ArtProvider.LAYER_KIND_ANIM:
+						n_kinds[2] += 1
+					else:
+						n_kinds[0] += 1
 				if not (data.get("layers", []) as Array).is_empty():
 					_power_pair = bool(data.get("pair", false))
 					_build_power_layers(panel, data)
@@ -2215,15 +2235,18 @@ func _start_power(panel: ClickableQuad) -> void:
 	# The field trap (half-2 round): every start states what
 	# it found and what it did - the source in play, whether
 	# the set stood warm, the stamp that stands, the mode it
-	# chose, the quads it built, and whether it kicked. A
-	# visit that surged when it should have cascaded convicts
-	# itself in one line.
+	# chose, the quads it built, whether it kicked, and the
+	# set's kind composition (the animation-release round: a
+	# card that ghosted with anim:22 stands convicted in the
+	# same one line). A visit that surged when it should
+	# have cascaded convicts itself in one line.
 	var label: String = _power_game.title if _power_game != null else panel.payload
-	print("POWER: start game=\"%s\" source=\"%s\" has_layers=%s outcome=%s mode=%d quads=%d kicks=%d" % [
+	print("POWER: start game=\"%s\" source=\"%s\" has_layers=%s outcome=%s mode=%d quads=%d kicks=%d kinds=lamp:%d,flasher:%d,anim:%d" % [
 		label, src,
 		str(src != "" and ArtProvider.has_flicker_layers(src)),
 		ArtProvider.flicker_outcome(src) if src != "" else "",
-		_power_mode, _power_layers.size(), 1 if kicked else 0])
+		_power_mode, _power_layers.size(), 1 if kicked else 0,
+		n_kinds[0], n_kinds[1], n_kinds[2]])
 	print("POWER: phase 0->1 game=\"%s\"" % label)
 	_apply_power()
 
@@ -2334,7 +2357,9 @@ func _build_power_layers(panel: ClickableQuad, data: Dictionary) -> void:
 		panel.add_child(mi)
 		_power_layers.append(mi)
 		_power_mats.append(mat)
-		_power_flasher.append(str(ld.get("kind", ArtProvider.LAYER_KIND_LAMP)) == ArtProvider.LAYER_KIND_FLASHER)
+		var kind: String = str(ld.get("kind", ArtProvider.LAYER_KIND_LAMP))
+		_power_kinds.append(kind)
+		_power_flasher.append(power_layer_releases(kind))
 	# The cascade schedule, from the game's own seed (the
 	# same card flickers the same way every visit): the
 	# layers draw STRATIFIED slots of the power-on window -
@@ -2388,6 +2413,16 @@ func _apply_power() -> void:
 			_power_mats[i].albedo_color.a = _power_layer_alpha(sched, _power_t)
 	else:
 		_power_panel.set_face_brightness(power_brightness_at(_power_t))
+
+
+## Whether a layer of this kind releases after its strike
+## instead of holding for the dwell: anything that is not a
+## LAMP - a solenoid FLASHER and an animation frame (ANIM)
+## alike, the two momentary shapes a file declares. Static
+## and pure so the harness's alpha check can pin the
+## predicate itself, not only its downstream effects.
+static func power_layer_releases(kind: String) -> bool:
+	return kind != ArtProvider.LAYER_KIND_LAMP
 
 
 ## One layer's alpha at cascade time t: dark until it
@@ -2480,6 +2515,7 @@ func _power_reset_state() -> void:
 	_power_mats.clear()
 	_power_schedule.clear()
 	_power_flasher.clear()
+	_power_kinds.clear()
 
 
 ## Power-on queries (the flicker shot reads the effect the
@@ -2513,12 +2549,22 @@ func power_layer_alpha(i: int) -> float:
 	return _power_mats[i].albedo_color.a
 
 
-## Whether layer i is a solenoid flasher (strikes with the
-## cascade, then releases) rather than a lamp (holds).
+## Whether layer i is release-class (a solenoid flasher or
+## an animation frame - strikes with the cascade, then
+## releases) rather than a lamp (holds). The name is the
+## flasher round's; the meaning widened with the ANIM kind.
 func power_layer_is_flasher(i: int) -> bool:
 	if i < 0 or i >= _power_flasher.size():
 		return false
 	return _power_flasher[i]
+
+
+## Layer i's kind, as the file declared it (ArtProvider's
+## LAYER_KIND_* strings; "" when no such layer performs).
+func power_layer_kind(i: int) -> String:
+	if i < 0 or i >= _power_kinds.size():
+		return ""
+	return _power_kinds[i]
 
 
 ## Page-slide queries (the nav smoke and the slide shot read
