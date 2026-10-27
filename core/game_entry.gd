@@ -81,7 +81,12 @@ func ensure_art() -> String:
 ## image inside the .vpx); a cold source is claimed and extracted
 ## here, or joined if the warmer is already extracting it.
 func _ensure_from_source(src: String) -> String:
-	if ArtProvider.is_cached(src):
+	# is_cache_current, not is_cached: a cache file written by
+	# an older extractor generation must not serve (its image
+	# can be a successful extraction of the wrong thing - a
+	# pair file's lit On face under v2); the extraction path
+	# below refreshes it once and records the new generation.
+	if ArtProvider.is_cache_current(src):
 		return ArtProvider.cache_path_for(src)
 	if ArtProvider.is_negative_outcome(ArtProvider.outcome_for_source(src)):
 		return ""

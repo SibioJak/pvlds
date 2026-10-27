@@ -990,6 +990,39 @@ func _flicker_amber_count_img(q: ClickableQuad, img: Image) -> int:
 	return n
 
 
+## The amber centroid inside a panel's screen rect, as
+## fractions of the rect (0..1 across, 0..1 down), or
+## (-1, -1) when the rect holds no amber. The pair legs'
+## registration measure: WHERE the lit amber sits testifies
+## which image's space the layer was composed in.
+func _flicker_amber_centroid_img(q: ClickableQuad, img: Image) -> Vector2:
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	if cam == null:
+		return Vector2(-1, -1)
+	var rect: Rect2 = _nav_screen_rect(q, cam)
+	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
+	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
+	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
+	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
+	var sx: float = 0.0
+	var sy: float = 0.0
+	var n: int = 0
+	var y: int = y0
+	while y < y1:
+		var x: int = x0
+		while x < x1:
+			if _flicker_is_amber(img.get_pixel(x, y)):
+				sx += float(x)
+				sy += float(y)
+				n += 1
+			x += 2
+		y += 2
+	if n == 0 or rect.size.x <= 0.0 or rect.size.y <= 0.0:
+		return Vector2(-1, -1)
+	return Vector2((sx / float(n) - rect.position.x) / rect.size.x,
+		(sy / float(n) - rect.position.y) / rect.size.y)
+
+
 ## The amber test itself, shared by the in-rect count and
 ## the spill measure below.
 func _flicker_is_amber(px: Color) -> bool:
@@ -1092,12 +1125,22 @@ func _flicker_finish() -> void:
 ## (4) the fix round's pop gates - a wide embedded card and
 ## a tall playfield card pop at the uniform 1.08, a glass-
 ## shaped card at its true aspect within the cap; (5) the
-## gate wart - a game whose flat B2S extraction failed
-## still extracts its lamps and cascades on its second
-## visit; (6) the warmer's second phase - a never-focused
-## B2S card's first focus cascades immediately; (7)
-## opening the detail view mid-cascade cancels cleanly.
-## Saves PREFIX_base/mid/lit.png.
+## wart - a game whose backglass hides its base behind a
+## corrupt designated element wears that base as its face
+## (phase 0 proves pixel equality with the layer set's
+## base) and cascades on it; (6) the warmer's second
+## phase - a never-focused B2S card's first focus cascades
+## immediately; (7) opening the detail view mid-cascade
+## cancels cleanly; (8) the adversarial pair (fix round
+## 2) - halves of different aspects, no plain image: the
+## card rests on the dark Off glass (phase 0 measures the
+## face's pixels) and its one full-frame layer lights it
+## in the Off glass's own space, the lit amber's centroid
+## left of center where the On image put it; (9) pair +
+## plain - a plain backglass with a decoy pair riding in
+## the same file: both halves ignored, the card cascades
+## on the plain image's two bulbs. Saves PREFIX_base/mid/
+## lit.png plus pair frames.
 func _drive_shot_flicker() -> void:
 	var now: int = Time.get_ticks_msec()
 	if now - _shot_flicker_since > 90000 and _shot_flicker_phase > 0:
@@ -1123,7 +1166,12 @@ func _drive_shot_flicker() -> void:
 				for g: GameEntry in _scanner.games:
 					if g.title.begins_with("Flicker Wide"):
 						_shot_flicker_game = g
-					for pre: String in ["Flicker Backdrop Wide", "Flicker Playfield Tall", "Flicker Glass Pop", "Flicker Wart", "Flicker Warmed"]:
+					for pre: String in ["Flicker Backdrop Wide", "Flicker Playfield Tall", "Flicker Glass Pop", "Flicker Wart", "Flicker Warmed", "Flicker Pair", "Flicker Pair Plain"]:
+						# "Flicker Pair" is a prefix of "Flicker
+						# Pair Plain" - the plain game must not
+						# claim the pair's slot.
+						if pre == "Flicker Pair" and g.title.begins_with("Flicker Pair Plain"):
+							continue
 						if g.title.begins_with(pre):
 							_shot_flicker_fixtures[pre] = {"game": g}
 			if _shot_flicker_game == null:
@@ -1152,10 +1200,17 @@ func _drive_shot_flicker() -> void:
 					_shot_flicker_problems.append("fixture %s is not on the wall" % pre3)
 					_flicker_finish()
 					return
-			# The wart must be CONSTRUCTED as a wart before
-			# any leg trusts it: a backglass in hand, but a
-			# face that is NOT that backglass's extraction
-			# (its flat extraction failed and fell through).
+			# The wart must be CONSTRUCTED as the deep-fixed
+			# wart before any leg trusts it: a backglass in
+			# hand whose designated DMD image is corrupt, and
+			# - the fix - a face that IS its own backglass
+			# extraction, pixel for pixel the layer set's
+			# base (the blob fallback's find, shared by both
+			# readers now). (Under the split readers this
+			# check ran the other way: the flat reader failed
+			# the file, so the face had to NOT be its
+			# extraction while its lamps composited over a
+			# stranger's face.)
 			var wart0: Dictionary = _shot_flicker_fixtures.get("Flicker Wart", {}) as Dictionary
 			if not wart0.is_empty():
 				var wg0: GameEntry = wart0["game"] as GameEntry
@@ -1164,8 +1219,58 @@ func _drive_shot_flicker() -> void:
 					_shot_flicker_problems.append("the wart fixture game has no flicker source - the wart is not constructed")
 					_flicker_finish()
 					return
-				if wg0.art_path == ArtProvider.cache_path_for(wg0.flicker_source()):
-					_shot_flicker_problems.append("the wart fixture's face IS its backglass extraction - the wart is not constructed")
+				if wg0.art_path != ArtProvider.cache_path_for(wg0.flicker_source()):
+					_shot_flicker_problems.append("the wart fixture's face is not its backglass extraction - the deep fix did not land")
+					_flicker_finish()
+					return
+				var wdata: Dictionary = wg0.ensure_flicker()
+				var wface: Image = Image.new()
+				var wbase: Image = Image.new()
+				if wdata.is_empty() or wface.load(wg0.art_path) != OK or wbase.load(str(wdata.get("base_path", ""))) != OK or wface.get_data() != wbase.get_data():
+					_shot_flicker_problems.append("the wart fixture's face and its layer base are not the same image")
+					_flicker_finish()
+					return
+			# The pair fixtures, constructed: the adversarial
+			# pair must rest on its OFF glass and the pair+
+			# plain on its plain image - measured on the face
+			# cache's own pixels: the 1000x800 glass fitted
+			# (512x410), dark navy (blue clearly over red, red
+			# low), and NO amber anywhere. A face wearing the
+			# lit On half, the decoy On (solid amber), or the
+			# decoy Off (dark red, red over blue) fails here,
+			# before any rendered leg runs.
+			for pre4: String in ["Flicker Pair", "Flicker Pair Plain"]:
+				var pf0: Dictionary = _shot_flicker_fixtures.get(pre4, {}) as Dictionary
+				if pf0.is_empty():
+					continue
+				var pg0: GameEntry = pf0["game"] as GameEntry
+				pg0.ensure_art()
+				if pg0.art_path != ArtProvider.cache_path_for(pg0.flicker_source()):
+					_shot_flicker_problems.append("the %s fixture's face is not its backglass extraction" % pre4)
+					_flicker_finish()
+					return
+				var pimg: Image = Image.new()
+				if pimg.load(pg0.art_path) != OK or pimg.get_size() != Vector2i(512, 410):
+					_shot_flicker_problems.append("the %s fixture's face is not its 1000x800 glass fitted (512x410)" % pre4)
+					_flicker_finish()
+					return
+				var pmean: Vector3 = Vector3.ZERO
+				var pcount: int = 0
+				var pamber: int = 0
+				var pyy: int = 0
+				while pyy < pimg.get_height():
+					var pxx: int = 0
+					while pxx < pimg.get_width():
+						var pc: Color = pimg.get_pixel(pxx, pyy)
+						pmean += Vector3(pc.r, pc.g, pc.b)
+						pcount += 1
+						if _flicker_is_amber(pc):
+							pamber += 1
+						pxx += 4
+					pyy += 4
+				pmean /= float(maxi(1, pcount))
+				if pamber > 0 or pmean.z < pmean.x + 0.03 or pmean.x > 0.12:
+					_shot_flicker_problems.append("the %s fixture does not rest dark (mean %s, amber px %d) - it is wearing a lit or decoy image" % [pre4, str(pmean), pamber])
 					_flicker_finish()
 					return
 			var data: Dictionary = _shot_flicker_game.ensure_flicker()
@@ -1356,13 +1461,13 @@ func _drive_shot_flicker() -> void:
 				_room._set_focused(_shot_flicker_panel2)
 				_shot_flicker_phase = 5
 		5:
-			# Gate-wart leg: the wart game's face is NOT its
-			# backglass's extraction (phase 0 proved it), yet
-			# its lamps must still extract and cascade. First
-			# settle may surge while the set is cold - the
-			# point is the kick FIRES (pre-fix it never did):
-			# wait for the set to land, settle again, and the
-			# second visit must run the layers.
+			# Wart leg: the wart game's face IS its own base
+			# now (phase 0 proved pixel equality with the
+			# layer set's base), and its lamps must cascade
+			# over it here in the room. First settle may
+			# surge while the set is cold: wait for the set
+			# to land, settle again, and the second visit
+			# must run the layers.
 			var fx5: Dictionary = _shot_flicker_fixtures["Flicker Wart"] as Dictionary
 			var g5: GameEntry = fx5["game"] as GameEntry
 			var panel5: ClickableQuad = fx5["panel"] as ClickableQuad
@@ -1449,10 +1554,158 @@ func _drive_shot_flicker() -> void:
 					_shot_flicker_problems.append("opening detail did not cancel the cascade (phase %d, layers %d)" % [_room.power_phase(), _room.power_layer_count()])
 				if absf(_shot_flicker_panel.face_brightness() - 1.0) > 0.001:
 					_shot_flicker_problems.append("the cancelled card's face did not restore to full brightness")
-				_flicker_finish()
+				_shot_flicker_stage = 0
+				_shot_flicker_armed = false
+				_shot_flicker_since = now
+				_shot_flicker_phase = 8
 			elif _shot_flicker_stage != 2 and now - _shot_flicker_since > 10000:
 				_shot_flicker_problems.append("the cancel leg's cascade never started")
 				_flicker_finish()
+		8:
+			# Pair leg (fix round 2): close the detail view
+			# the cancel leg left open (its close rebuilds
+			# the wall - the fixture panels are re-resolved
+			# by payload), settle on the adversarial pair,
+			# and burst-sample its cascade. The card rests
+			# on the dark Off glass (phase 0 measured it);
+			# its one layer must light the On image IN THE
+			# OFF GLASS'S SPACE: amber rising from ~none to
+			# a left-of-center mass (the On image's amber is
+			# its left half, mapped through the Off cover),
+			# and nothing outside the face.
+			var fx8: Dictionary = _shot_flicker_fixtures["Flicker Pair"] as Dictionary
+			var g8: GameEntry = fx8["game"] as GameEntry
+			if _shot_flicker_stage == 0:
+				if not _shot_flicker_armed:
+					# The detail's own escape: hides the view
+					# AND emits closed (the room's handler
+					# then rebuilds the wall). Calling the
+					# handler alone leaves the view standing
+					# over the wall - the pair cards performed
+					# behind it, occluded.
+					_room._detail.handle_escape()
+					_shot_flicker_armed = true
+					_shot_flicker_since = now
+					return
+				var fx9r: Dictionary = _shot_flicker_fixtures["Flicker Pair Plain"] as Dictionary
+				var p8: ClickableQuad = null
+				var p9: ClickableQuad = null
+				for p: ClickableQuad in _room._panels:
+					if p.payload == g8.game_id:
+						p8 = p
+					elif p.payload == (fx9r["game"] as GameEntry).game_id:
+						p9 = p
+				if p8 == null or p9 == null:
+					if now - _shot_flicker_since > 15000:
+						_shot_flicker_problems.append("the pair fixtures fell off the wall after the detail close")
+						_flicker_finish()
+					return
+				fx8["panel"] = p8
+				fx9r["panel"] = p9
+				if (g8.ensure_flicker().get("layers", []) as Array).is_empty():
+					_shot_flicker_problems.append("the pair fixture's layer set did not extract")
+					_flicker_finish()
+					return
+				_shot_flicker_burst.clear()
+				_shot_flicker_t0 = 0
+				_room._set_focused(p8)
+				_shot_flicker_stage = 1
+				_shot_flicker_since = now
+			elif _shot_flicker_stage == 1:
+				var panel8: ClickableQuad = fx8["panel"] as ClickableQuad
+				var ph8: int = _room.power_phase()
+				if _room.power_panel() == panel8 and ph8 == 1 and _shot_flicker_t0 == 0:
+					_shot_flicker_t0 = now
+					_shot_flicker_next_grab = now
+				if _shot_flicker_t0 > 0 and now >= _shot_flicker_next_grab and ph8 > 0:
+					_shot_flicker_burst.append(get_viewport().get_texture().get_image())
+					_shot_flicker_next_grab = now + 130
+				if _shot_flicker_t0 > 0 and ph8 == 2 and now > _shot_flicker_t0 + 1900:
+					if _room.power_panel() != panel8 or _room.power_mode() != 1:
+						_shot_flicker_problems.append("the pair card did not cascade on its layer (mode %d)" % _room.power_mode())
+					if _room.power_layer_count() != 1:
+						_shot_flicker_problems.append("the pair card built %d layer quads, want its one full-frame layer" % _room.power_layer_count())
+					var series8: Array[int] = []
+					for fimg8: Image in _shot_flicker_burst:
+						series8.append(_flicker_amber_count_img(panel8, fimg8))
+					var base8: int = series8[0] if series8.size() > 0 else -1
+					var lit8: int = series8[series8.size() - 1] if series8.size() > 0 else -1
+					if base8 < 0 or lit8 < base8 + 500:
+						_shot_flicker_problems.append("the pair's lit frame is not visibly lit over its dark rest (series %s)" % str(series8))
+					if not _shot_flicker_burst.is_empty():
+						var cen8: Vector2 = _flicker_amber_centroid_img(panel8, _shot_flicker_burst[_shot_flicker_burst.size() - 1])
+						if cen8.x < 0.10 or cen8.x > 0.42:
+							_shot_flicker_problems.append("the pair's lit amber centroid sits at x %.2f of the face - the On layer is not composed in the Off glass's space (want 0.10..0.42)" % cen8.x)
+						var band8: Array[int] = []
+						for fimg8b: Image in _shot_flicker_burst:
+							band8.append(_flicker_spill_band_count(panel8, fimg8b))
+						var bmin8: int = band8[0]
+						var bmax8: int = band8[0]
+						for bv8: int in band8:
+							bmin8 = mini(bmin8, bv8)
+							bmax8 = maxi(bmax8, bv8)
+						if bmax8 - bmin8 != 0:
+							_shot_flicker_problems.append("the pair's layer spills outside the face (burst band counts %s)" % str(band8))
+						_shot_flicker_burst[0].save_png(_shot_flicker_prefix + "_pair_base.png")
+						_shot_flicker_burst[_shot_flicker_burst.size() - 1].save_png(_shot_flicker_prefix + "_pair_lit.png")
+					_shot_flicker_stage = 0
+					_shot_flicker_armed = false
+					_shot_flicker_burst.clear()
+					_shot_flicker_t0 = 0
+					_shot_flicker_since = now
+					_shot_flicker_phase = 9
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the pair card's cascade never ran")
+					_flicker_finish()
+		9:
+			# Pair+plain leg: settle on the pair+plain
+			# card. The decoy pair is ignored, so the
+			# cascade is the plain glass's TWO bulbs, up
+			# at the top of the glass - one full-frame
+			# layer, or amber centered in the face, would
+			# convict the pair path at once.
+			var fx9: Dictionary = _shot_flicker_fixtures["Flicker Pair Plain"] as Dictionary
+			var g9: GameEntry = fx9["game"] as GameEntry
+			var panel9: ClickableQuad = fx9["panel"] as ClickableQuad
+			if _shot_flicker_stage == 0:
+				if (g9.ensure_flicker().get("layers", []) as Array).is_empty():
+					_shot_flicker_problems.append("the pair+plain fixture's layer set did not extract")
+					_flicker_finish()
+					return
+				_shot_flicker_burst.clear()
+				_shot_flicker_t0 = 0
+				_room._set_focused(panel9)
+				_shot_flicker_stage = 1
+				_shot_flicker_since = now
+			elif _shot_flicker_stage == 1:
+				var ph9: int = _room.power_phase()
+				if _room.power_panel() == panel9 and ph9 == 1 and _shot_flicker_t0 == 0:
+					_shot_flicker_t0 = now
+					_shot_flicker_next_grab = now
+				if _shot_flicker_t0 > 0 and now >= _shot_flicker_next_grab and ph9 > 0:
+					_shot_flicker_burst.append(get_viewport().get_texture().get_image())
+					_shot_flicker_next_grab = now + 130
+				if _shot_flicker_t0 > 0 and ph9 == 2 and now > _shot_flicker_t0 + 1900:
+					if _room.power_panel() != panel9 or _room.power_mode() != 1:
+						_shot_flicker_problems.append("the pair+plain card did not cascade on its bulbs (mode %d)" % _room.power_mode())
+					if _room.power_layer_count() != 2:
+						_shot_flicker_problems.append("the pair+plain card built %d layer quads, want the plain glass's 2 bulbs" % _room.power_layer_count())
+					var series9: Array[int] = []
+					for fimg9: Image in _shot_flicker_burst:
+						series9.append(_flicker_amber_count_img(panel9, fimg9))
+					var base9: int = series9[0] if series9.size() > 0 else -1
+					var lit9: int = series9[series9.size() - 1] if series9.size() > 0 else -1
+					if base9 < 0 or lit9 < base9 + 100:
+						_shot_flicker_problems.append("the pair+plain's lit frame is not visibly lit over its rest (series %s)" % str(series9))
+					if not _shot_flicker_burst.is_empty():
+						var cen9: Vector2 = _flicker_amber_centroid_img(panel9, _shot_flicker_burst[_shot_flicker_burst.size() - 1])
+						if cen9.y < 0.0 or cen9.y > 0.38:
+							_shot_flicker_problems.append("the pair+plain's lit amber centroid sits at y %.2f of the face - want the plain glass's top bulbs (0..0.38)" % cen9.y)
+						_shot_flicker_burst[_shot_flicker_burst.size() - 1].save_png(_shot_flicker_prefix + "_pairplain_lit.png")
+					_flicker_finish()
+				elif now - _shot_flicker_since > 20000:
+					_shot_flicker_problems.append("the pair+plain card's cascade never ran")
+					_flicker_finish()
 
 
 func _save_shot_png(path: String) -> Error:
@@ -4272,8 +4525,14 @@ func _run_core_test() -> void:
 	var bad_entry: GameEntry = GameEntry.new()
 	bad_entry.art_source_path = b2s_bad
 	# Variant 1 (B2S server reader): the on/off pair replaces
-	# BackglassImage in dual files. The lit (On) half is the panel
-	# art: 800x1000 fitted to 512x640, not the Off half's 400x500.
+	# BackglassImage in dual files. The panel art is the OFF
+	# half - the unlit glass at rest, in its own shape (400x500,
+	# which fits the panel unfitted) - never the lit On half:
+	# the On image is the flicker's one layer over this face,
+	# and the two halves may disagree in shape entirely (here
+	# 800x1000 against 400x500). (Pre-fix the flat reader
+	# served the On image: 512x640, already lit, in the On
+	# half's proportions.)
 	var pair_off: Image = mk_img.call(400, 500) as Image
 	var pair_on: Image = mk_img.call(800, 1000) as Image
 	var b2s_pair: String = art_dir.path_join("Pair Table.directb2s")
@@ -4281,8 +4540,8 @@ func _run_core_test() -> void:
 		"on/off pair fixture written", failures)
 	var pair_cache: String = ArtProvider.extract_directb2s_image(b2s_pair)
 	var pair_img: Image = Image.new()
-	_expect(pair_cache != "" and pair_img.load(pair_cache) == OK and pair_img.get_width() == 512 and pair_img.get_height() == 640,
-		"the on/off pair variant extracts its On image (800x1000 -> 512x640)", failures)
+	_expect(pair_cache != "" and pair_img.load(pair_cache) == OK and pair_img.get_width() == 400 and pair_img.get_height() == 500,
+		"the on/off pair variant extracts its Off image (400x500, the unlit glass at rest)", failures)
 	# Variant 2: a BMP-encoded backglass (older designer files) -
 	# hand-built BMP bytes, the way an external tool writes them.
 	var b2s_bmp: String = art_dir.path_join("Bmp Table.directb2s")
@@ -4475,6 +4734,55 @@ func _run_core_test() -> void:
 	var flp_layers: Array = flp["layers"] as Array
 	_expect(bool(flp["pair"]) and flp_layers.size() == 1 and ((flp_layers[0] as Dictionary)["rect"] as Rect2) == Rect2(0, 0, 400, 500),
 		"an on/off pair yields base + one full-frame lit layer", failures)
+	# The pair's halves in DIFFERENT shapes, solid colors so
+	# the content itself testifies (flicker fix round 2): the
+	# flat face is the Off image (400x500, dark), not the On
+	# image resampled into anything; the layer set's base is
+	# that same Off glass and its one layer covers it whole.
+	var adv_off: Image = fl_solid.call(400, 500, Color(0.04, 0.04, 0.08)) as Image
+	var adv_on: Image = fl_solid.call(800, 1000, Color(1.0, 0.75, 0.16)) as Image
+	var b2s_adv_pair: String = art_dir.path_join("Adversarial Pair Table.directb2s")
+	_expect(_write_text_file(b2s_adv_pair, "<DirectB2SData><Images><BackglassOffImage Value=\"" + Marshalls.raw_to_base64(adv_off.save_png_to_buffer()) + "\" /><BackglassOnImage Value=\"" + Marshalls.raw_to_base64(adv_on.save_png_to_buffer()) + "\" /></Images></DirectB2SData>"),
+		"adversarial pair fixture written", failures)
+	var adv_cache: String = ArtProvider.extract_directb2s_image(b2s_adv_pair)
+	var adv_img: Image = Image.new()
+	var adv_px: Color = Color(1, 1, 1)
+	if adv_cache != "" and adv_img.load(adv_cache) == OK:
+		adv_px = adv_img.get_pixel(200, 250)
+	_expect(adv_img.get_size() == Vector2i(400, 500) and adv_px.r < 0.1 and adv_px.b > adv_px.r + 0.02,
+		"an adversarial pair's face is its Off half (400x500, dark), not the On half in any shape", failures)
+	var adv_fl: Dictionary = ArtProvider.extract_flicker_layers(b2s_adv_pair)
+	var adv_fl_layers: Array = adv_fl["layers"] as Array
+	_expect(bool(adv_fl["pair"]) and (adv_fl["base_size"] as Vector2i) == Vector2i(400, 500)
+		and adv_fl_layers.size() == 1 and ((adv_fl_layers[0] as Dictionary)["rect"] as Rect2) == Rect2(0, 0, 400, 500),
+		"an adversarial pair's layer set bases on the Off glass in its own space", failures)
+	# Pair + plain - the triple divergence: a plain backglass
+	# AND a decoy pair in one file. Both readers must ignore
+	# the halves entirely: face and base are the plain image,
+	# the layers are its bulbs, the set is not a pair. (The
+	# v1 readers split three ways here - face from the plain
+	# image, base from the decoy Off, layer from the decoy On.)
+	var pp_plain: Image = fl_solid.call(400, 500, Color(0.06, 0.08, 0.19)) as Image
+	var pp_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(pp_plain.save_png_to_buffer()) + "\" /><BackglassOffImage Value=\"" + Marshalls.raw_to_base64((fl_solid.call(300, 300, Color(0.35, 0.08, 0.08)) as Image).save_png_to_buffer()) + "\" /><BackglassOnImage Value=\"" + Marshalls.raw_to_base64((fl_solid.call(300, 300, Color(1.0, 0.75, 0.16)) as Image).save_png_to_buffer()) + "\" /></Images><Illumination>"
+	pp_text += _b2s_bulb_xml("Backglass", "1", 60, 60, 300, 120, amber_img)
+	pp_text += _b2s_bulb_xml("Backglass", "1", 60, 300, 300, 120, amber_img)
+	pp_text += "</Illumination></DirectB2SData>"
+	var b2s_pp: String = art_dir.path_join("Pair Plain Table.directb2s")
+	_expect(_write_text_file(b2s_pp, pp_text), "pair+plain fixture written", failures)
+	var pp_cache: String = ArtProvider.extract_directb2s_image(b2s_pp)
+	var pp_img: Image = Image.new()
+	var pp_px: Color = Color(1, 1, 1)
+	if pp_cache != "" and pp_img.load(pp_cache) == OK:
+		pp_px = pp_img.get_pixel(200, 250)
+	_expect(pp_img.get_size() == Vector2i(400, 500) and pp_px.b > pp_px.r + 0.05,
+		"pair+plain: the flat face is the plain image (navy), not either pair half", failures)
+	var pp_fl: Dictionary = ArtProvider.extract_flicker_layers(b2s_pp)
+	_expect(not bool(pp_fl["pair"]) and (pp_fl["layers"] as Array).size() == 2
+		and (pp_fl["base_size"] as Vector2i) == Vector2i(400, 500),
+		"pair+plain: the layer set is bulb-style over the plain image, the decoy pair ignored", failures)
+	var pp_base: Image = Image.new()
+	_expect(pp_cache != "" and pp_base.load(str(pp_fl["base_path"])) == OK and pp_base.get_data() == pp_img.get_data(),
+		"pair+plain: the layer set's base and the flat face are the same image", failures)
 	# No illumination at all: a plain still, stamped no_layers.
 	var b2s_fl_none: String = art_dir.path_join("Plain Table.directb2s")
 	_expect(_write_text_file(b2s_fl_none, "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(pair_off2.save_png_to_buffer()) + "\" /></Images><Illumination></Illumination></DirectB2SData>"),
@@ -4536,14 +4844,20 @@ func _run_core_test() -> void:
 	_expect(not FileAccess.file_exists(ArtProvider.layers_meta_path(b2s_fl_pair)) and ArtProvider.flicker_outcome(b2s_fl_pair) == "",
 		"prune removes an orphaned layer set and its outcome", failures)
 
-	# --- The gate wart + warmer phase two (flicker fix round).
-	# The wart: a .directb2s whose designated DMDImage is
-	# corrupt - the flat reader convicts the file at the
-	# designated step and never reaches its blob fallback,
-	# while the layers reader (no BackglassImage present)
-	# falls back to the largest blob and finds a healthy base
-	# under healthy bulbs. One file, two verdicts: flat
-	# FAILED, layers OK.
+	# --- The wart, deep-fixed (flicker fix round 2) + warmer
+	# phase two. The wart: a .directb2s whose designated
+	# DMDImage is corrupt and whose real glass lives in a
+	# non-designated blob (a ReelImage). Under the split
+	# readers the flat path convicted the file at the
+	# designated step and never reached its blob fallback -
+	# flat FAILED, face fell through to another source -
+	# while the layers reader, whose narrower designated
+	# search saw nothing, fell back and found the base, so
+	# the lamps composited over a stranger's face. One
+	# finder now: a corrupt designated element does not
+	# veto the fallback, the flat face IS the base the
+	# lamps extract over (same image, pixel for pixel),
+	# and the game wears its own glass.
 	var wart_noise: Image = mk_img.call(600, 400) as Image
 	var wart_text: String = "<DirectB2SData><Images><DMDImage Value=\"" + Marshalls.raw_to_base64(_zero_bytes(300)) + "\" /><ReelImage Value=\"" + Marshalls.raw_to_base64(wart_noise.save_png_to_buffer()) + "\" /></Images><Illumination>"
 	wart_text += _b2s_bulb_xml("Backglass", "1", 0, 0, 600, 400, fl_solid.call(600, 400, Color(1.0, 0.75, 0.16)) as Image)
@@ -4552,15 +4866,21 @@ func _run_core_test() -> void:
 	wart_text += "</Illumination></DirectB2SData>"
 	var b2s_wart: String = art_dir.path_join("Wart Table.directb2s")
 	_expect(_write_text_file(b2s_wart, wart_text), "wart fixture written", failures)
-	_expect(ArtProvider.extract_art_image(b2s_wart) == "" and ArtProvider.outcome_for_source(b2s_wart) == ArtProvider.STATUS_FAILED,
-		"wart: the flat extraction fails on the corrupt designated DMD image", failures)
+	var wart_face: String = ArtProvider.extract_art_image(b2s_wart)
+	_expect(wart_face == ArtProvider.cache_path_for(b2s_wart) and ArtProvider.outcome_for_source(b2s_wart) == ArtProvider.STATUS_OK,
+		"wart: the flat extraction finds the base behind the corrupt designated DMD image", failures)
 	var wart_layers: Dictionary = ArtProvider.extract_flicker_layers(b2s_wart)
 	_expect(str(wart_layers["status"]) == ArtProvider.STATUS_OK and (wart_layers["layers"] as Array).size() == 3,
-		"wart: the same file's layers extract (base from the blob fallback)", failures)
+		"wart: the same file's layers extract over that base", failures)
+	var wart_face_img: Image = Image.new()
+	var wart_base_img: Image = Image.new()
+	_expect(wart_face_img.load(wart_face) == OK and wart_base_img.load(str(wart_layers["base_path"])) == OK
+		and wart_face_img.get_data() == wart_base_img.get_data(),
+		"wart: the flat face and the layer set's base are the same image", failures)
 	var wart_entry: GameEntry = GameEntry.new()
 	wart_entry.art_source_path = b2s_wart
-	_expect(wart_entry.ensure_art() == "" and wart_entry.flicker_source() == b2s_wart and not wart_entry.ensure_flicker().is_empty(),
-		"wart: the entry's face fell through while its layers serve - the room's gate keys on the source alone", failures)
+	_expect(wart_entry.ensure_art() == wart_face and wart_entry.flicker_source() == b2s_wart and not wart_entry.ensure_flicker().is_empty(),
+		"wart: the entry's face is its own backglass and its layers serve", failures)
 	# Warmer phase two: a bulb-bearing game is warmed flat
 	# first, layers second, in ONE pass - polled, so the order
 	# is observed, not assumed.
@@ -4599,9 +4919,11 @@ func _run_core_test() -> void:
 		pf_waited += 20
 	_expect(pf_warmer2.is_idle() and pf_warmer2.last_pass_items == 0,
 		"warmer phase two: stamped layer outcomes are never re-queued", failures)
-	# The wart under the warmer: a fresh wart file's flat
-	# extraction fails during the pass, and its layers are
-	# STILL prefetched - FAILED is not the no_image skip.
+	# The wart under the warmer: a fresh wart file warms
+	# flat in the pass (the unified finder reads its base
+	# through the blob fallback, where the split readers
+	# stamped it FAILED) and its layers are prefetched in
+	# the same pass.
 	var b2s_wart2: String = art_dir.path_join("Wart Warm Table.directb2s")
 	_expect(_write_text_file(b2s_wart2, wart_text), "wart warm fixture written", failures)
 	var wart2_entry: GameEntry = GameEntry.new()
@@ -4613,8 +4935,8 @@ func _run_core_test() -> void:
 		OS.delay_msec(20)
 		pf_waited += 20
 	_expect(wart_warmer.is_idle() and ArtProvider.has_flicker_layers(b2s_wart2)
-		and ArtProvider.outcome_for_source(b2s_wart2) == ArtProvider.STATUS_FAILED,
-		"warmer phase two: a flat-failed backglass still gets its layers prefetched (the wart)", failures)
+		and ArtProvider.outcome_for_source(b2s_wart2) == ArtProvider.STATUS_OK,
+		"warmer phase two: the wart warms flat and layers in one pass", failures)
 
 	# --- Embedded art: images extracted from inside .vpx files.
 	# The fixtures are REAL compound files written by

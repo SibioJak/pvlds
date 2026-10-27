@@ -96,20 +96,33 @@ const STATUS_LEGACY: String = "legacy_format"
 ## The extractor's format version, stamped into every outcome-index
 ## entry as "v". v1: the original reader (no unescaping - it
 ## refused entity-escaped backglass payloads whole). v2: attribute
-## values are XML-unescaped before decoding. Bump this whenever the
+## values are XML-unescaped before decoding. v3 (flicker fix
+## round 2): the unified base finder (_find_base_image), shared
+## with the layers reader - a plain backglass image beats an
+## on/off pair entirely, a true pair's face is its OFF half (the
+## unlit glass at rest, not the lit On image v2 served), and a
+## corrupt designated element no longer vetoes the largest-blob
+## fallback, so the wart class (a corrupt DMDImage hiding a
+## healthy base in a non-designated blob) reads its face from
+## the same image its lamps extract over. Bump this whenever the
 ## reader learns to read something a previous version stamped
 ## negatively; older entries then count as untried and are retried
-## once under the new reader.
-const EXTRACTOR_VERSION: int = 2
+## once under the new reader. (Positive caches are generation-
+## gated too - see is_cache_current: a v2 pair face is the WRONG
+## image, not a stale verdict, and no negative retry reaches it.)
+const EXTRACTOR_VERSION: int = 3
 
 ## The embedded (.vpx) reader's generation - see the class doc.
 ## 0 = the offset-0 probe reader (stamps carry no "ev"); 1 = the
 ## BIFF walker (_walk_vpx_image_stream).
 const VPX_READER_VERSION: int = 1
 
-## Designated image elements, in the server's own precedence: the
-## plain backglass; the lit half of an on/off pair; the dark half;
-## the DMD art (better than a title card).
+## The designated image elements a .directb2s can carry: the
+## plain backglass; the two halves of an on/off pair; the DMD
+## art. _find_base_image defines how they combine into the one
+## base image both readers share - the precedence is a property
+## of the combination (plain beats pair, a pair rests on its
+## Off half), not of this list's order.
 const DESIGNATED_ELEMENTS: Array[String] = [
 	"BackglassImage", "BackglassOnImage", "BackglassOffImage", "DMDImage",
 ]
@@ -166,6 +179,34 @@ static func cache_path_for(b2s_path: String) -> String:
 
 static func is_cached(b2s_path: String) -> bool:
 	return FileAccess.file_exists(cache_path_for(b2s_path))
+
+
+## Whether a source's cached extraction may be SERVED as it
+## stands: the cache file exists, and for a .directb2s it was
+## written under the current extractor generation - its outcome
+## entry carries EXTRACTOR_VERSION or newer. A cache from an
+## older generation (or predating the index) is NOT served:
+## the readers' results changed across generations in ways a
+## negative-outcome retry can never reach - under v2 a pair
+## file's cached face is its lit On image, a successful but
+## wrong extraction. Serving paths (extract_directb2s_image,
+## GameEntry's warm serve, the warmer's skips) consult this,
+## so a stale cache is refreshed exactly once, by the next
+## extraction, and then stands. Other source kinds (.vpx -
+## the embedded reader's "ev" gate is its own affair) keep the
+## plain existence probe.
+static func is_cache_current(source_path: String) -> bool:
+	if not FileAccess.file_exists(cache_path_for(source_path)):
+		return false
+	if source_path.get_extension().to_lower() != "directb2s":
+		return true
+	_index_mutex.lock()
+	_load_index_locked()
+	var entry: Variant = _index.get(stamp_key_for(source_path), null)
+	_index_mutex.unlock()
+	if entry is Dictionary:
+		return int((entry as Dictionary).get("v", 1)) >= EXTRACTOR_VERSION
+	return false
 
 
 ## The recorded extraction outcome for the file's CURRENT stamp:
@@ -378,12 +419,18 @@ static func prune_cache(keep_paths: Dictionary) -> void:
 
 static func extract_directb2s_image(b2s_path: String) -> String:
 	var cache_path: String = cache_path_for(b2s_path)
-	if FileAccess.file_exists(cache_path):
-		# Warm hit. Self-heal the index for caches written before
-		# the index existed (or after it was pruned).
+	if is_cache_current(b2s_path):
+		# Warm hit under the current reader. Self-heal the index
+		# for caches written before the index existed (or after
+		# it was pruned).
 		if outcome_for(b2s_path) != STATUS_OK:
 			_record_outcome(b2s_path, STATUS_OK)
 		return cache_path
+	# A cache file from an older reader generation falls through
+	# to a real extraction (which overwrites the same stamped
+	# path): its image may be a successful extraction of the
+	# WRONG thing - a pair file's lit On face under v2 - and no
+	# outcome gate would ever revisit it.
 	var result: Dictionary = _extract_uncached(b2s_path, cache_path)
 	_record_outcome(b2s_path, str(result["status"]))
 	return str(result["path"])
@@ -424,7 +471,15 @@ static func extract_directb2s_image(b2s_path: String) -> String:
 ## bulbs light the DMD/grill area, not the glass - excluded.
 ## Dual (on/off pair) files have no per-bulb art to preserve:
 ## their layer set is the single full-frame On image over the
-## Off base, which the effect drives the same way.
+## Off base, which the effect drives the same way. A pair
+## only exists when the file carries NO plain backglass
+## image: with one, the file is a bulb file over that image
+## and the pair halves are ignored entirely (flicker fix
+## round 2 - under v1 the pair test fired on the pair blobs
+## alone, so a file carrying both read its face from the
+## plain image, its base from the Off half, and its one
+## layer from the On half resampled into the Off space:
+## three images, one card, a ghost fight).
 ##
 ## The cap: real glasses carry a few dozen bulbs at most (8-30
 ## in the censused files); a pathological file keeps the LARGEST
@@ -432,7 +487,15 @@ static func extract_directb2s_image(b2s_path: String) -> String:
 ## dropped count rides in the meta.
 
 const LAYERS_DIR: String = CACHE_DIR + "/layers"
-const LAYERS_VERSION: int = 1
+## The layer reader's generation, stamped as "lv" in outcome
+## entries and in each set's meta (a meta below this reads as
+## no set at all). v1: the first reader - pair detection fired
+## on the pair blobs alone (see the section doc's ghost
+## fight), and the flat reader's base could disagree with
+## this reader's. v2 (flicker fix round 2): both readers
+## share _find_base_image, so a set's base IS the wall's face
+## by construction. Older stamps and metas retry once.
+const LAYERS_VERSION: int = 2
 const LAYER_CAP: int = 40
 const STATUS_NO_LAYERS: String = "no_layers"
 
@@ -590,47 +653,25 @@ static func _extract_flicker_uncached(b2s_path: String) -> Dictionary:
 	var text: String = _decode_xml_text(bytes)
 	if text == "":
 		return empty
-	# The base: the Off half of an on/off pair when the pair
-	# exists (the pair's layer is its On half), else the plain
-	# backglass image - the flat extractor's designated order.
-	var off_blobs: Array[String] = _element_value_blobs(text, "BackglassOffImage")
-	var on_blobs: Array[String] = _element_value_blobs(text, "BackglassOnImage")
-	var pair: bool = not off_blobs.is_empty() and not on_blobs.is_empty()
-	var base_img: Image = null
-	var designated_seen: bool = false
-	if pair:
-		designated_seen = true
-		base_img = _decode_blob_image(off_blobs[0])
-	else:
-		for blob: String in _element_value_blobs(text, "BackglassImage"):
-			designated_seen = true
-			base_img = _decode_blob_image(blob)
-			if base_img != null:
-				break
-	if base_img == null and not designated_seen:
-		# No designated element at all: the flat extractor's
-		# fallback (largest image blob in the file) is the last
-		# base candidate before this file counts as imageless.
-		for blob2: String in _base64_candidates(text):
-			base_img = _decode_blob_image(blob2)
-			if base_img != null:
-				break
+	# The base: the unified finder both readers share, so the
+	# set's base IS the wall's face by construction - a plain
+	# image beats a pair entirely, and a true pair's base is
+	# its Off half in the Off glass's own space.
+	var found: Dictionary = _find_base_image(text)
+	var base_img: Image = found["img"] as Image
 	if base_img == null:
 		# A designated image that will not decode is corruption
 		# (failed, like the flat path); no image anywhere is
 		# no_layers - the file is a fine backglass, it just has
 		# nothing for the flicker to light.
-		empty["status"] = STATUS_FAILED if designated_seen else STATUS_NO_LAYERS
+		empty["status"] = STATUS_FAILED if bool(found["seen"]) else STATUS_NO_LAYERS
 		return empty
+	var pair: bool = bool(found["pair"])
 	var glass: Vector2i = base_img.get_size()
 	# Collect the layers in glass coordinates.
 	var raw_layers: Array = [] ## [{img, rect}]
 	if pair:
-		var on_img: Image = _decode_blob_image(on_blobs[0])
-		if on_img == null:
-			empty["status"] = STATUS_FAILED
-			return empty
-		raw_layers.append({"img": on_img, "rect": Rect2i(0, 0, glass.x, glass.y)})
+		raw_layers.append({"img": found["on_img"] as Image, "rect": Rect2i(0, 0, glass.x, glass.y)})
 	else:
 		for bulb: Dictionary in _b2s_bulbs(text):
 			var bimg: Image = _decode_blob_image(str(bulb["blob"]))
@@ -801,7 +842,7 @@ static func library_art_aspect_samples(games: Array[GameEntry]) -> Array[float]:
 		var path: String = g.art_path
 		if path == "":
 			for src: String in g.art_sources():
-				if is_cached(src):
+				if is_cache_current(src):
 					path = cache_path_for(src)
 					break
 		if path == "":
@@ -1351,6 +1392,121 @@ static func _be_u32(bytes: PackedByteArray, off: int) -> int:
 	return (int(bytes[off]) << 24) | (int(bytes[off + 1]) << 16) | (int(bytes[off + 2]) << 8) | int(bytes[off + 3])
 
 
+## THE base finder - the one search both backglass readers
+## (the flat still and the flicker layers) share, so the face
+## the wall shows and the base the lamps compose over are the
+## same image by construction (flicker fix round 2; before
+## it, each reader searched on its own and they could - and
+## did - disagree). Returns:
+##   {img, pair, on_img, seen}
+## img is the base image or null; pair marks a true on/off
+## pair, whose base is the OFF half and whose on_img (the lit
+## half, the pair file's one "layer") rides along; seen says
+## any designated element was present at all (the callers'
+## failed-vs-nothing distinction).
+##
+## The combination rules, in order:
+## 1. A plain BackglassImage, when present, IS the glass:
+##    its first decodable blob wins, and an on/off pair
+##    riding in the same file is ignored ENTIRELY - the
+##    halves are never consulted, not even as a fallback
+##    (the fallback below skips every designated blob).
+## 2. With no plain image, a complete pair (both halves
+##    present) is a pair: base = the first decodable Off
+##    blob, layer = the first decodable On blob. A pair
+##    rests DARK: the wall face is the unlit glass, the
+##    way a real machine shows it, and the On layer lights
+##    it in its own space. (The v2 flat reader served the
+##    On image as the face while the layers reader based
+##    on Off - two differently-shaped copies of one glass
+##    on one card.) A half-broken pair degrades to whichever
+##    half decodes, as a plain base with no pair layer.
+## 3. Otherwise the remaining designated elements in the
+##    server's own precedence: a lone On half, a lone Off
+##    half, the DMD art.
+## 4. The fallback: any image blob anywhere in the file
+##    (reel art included), largest first, skipping every
+##    designated blob already tried. A corrupt designated
+##    element does NOT veto this step (the wart: a designer
+##    file whose DMDImage is garbage can still carry its
+##    real glass as an unnamed blob - the layers reader
+##    found wart bases here all along while the flat reader
+##    stamped the file failed and fell through to another
+##    face entirely). NOTE: the fallback reads the raw
+##    text as-is - it does NOT XML-unescape, so an entity-
+##    escaped payload's base64 runs stay broken up by the
+##    entity text and are not candidates here. The
+##    designated steps above are the ones that unescape; a
+##    file whose designated image is escaped-but-decodable
+##    never reaches this fallback.
+static func _find_base_image(text: String) -> Dictionary:
+	var found: Dictionary = {"img": null, "pair": false, "on_img": null, "seen": false}
+	var blobs: Dictionary = {}
+	var tried: Dictionary = {}
+	for element: String in DESIGNATED_ELEMENTS:
+		var list: Array[String] = _element_value_blobs(text, element)
+		blobs[element] = list
+		for b: String in list:
+			tried[b] = true
+			found["seen"] = true
+	var plain: Array = blobs["BackglassImage"] as Array
+	var on: Array = blobs["BackglassOnImage"] as Array
+	var off: Array = blobs["BackglassOffImage"] as Array
+	var dmd: Array = blobs["DMDImage"] as Array
+	if not plain.is_empty():
+		for pb: Variant in plain:
+			var pimg: Image = _decode_blob_image(str(pb))
+			if pimg != null:
+				found["img"] = pimg
+				return found
+	elif not on.is_empty() and not off.is_empty():
+		var off_img: Image = null
+		for fb: Variant in off:
+			off_img = _decode_blob_image(str(fb))
+			if off_img != null:
+				break
+		var on_img: Image = null
+		for nb: Variant in on:
+			on_img = _decode_blob_image(str(nb))
+			if on_img != null:
+				break
+		if off_img != null and on_img != null:
+			found["img"] = off_img
+			found["pair"] = true
+			found["on_img"] = on_img
+			return found
+		if off_img != null:
+			found["img"] = off_img
+			return found
+		if on_img != null:
+			found["img"] = on_img
+			return found
+	else:
+		for xb: Variant in on:
+			var ximg: Image = _decode_blob_image(str(xb))
+			if ximg != null:
+				found["img"] = ximg
+				return found
+		for yb: Variant in off:
+			var yimg: Image = _decode_blob_image(str(yb))
+			if yimg != null:
+				found["img"] = yimg
+				return found
+	for db: Variant in dmd:
+		var dimg: Image = _decode_blob_image(str(db))
+		if dimg != null:
+			found["img"] = dimg
+			return found
+	for cand: String in _base64_candidates(text):
+		if tried.has(cand):
+			continue
+		var cimg: Image = _decode_blob_image(cand)
+		if cimg != null:
+			found["img"] = cimg
+			return found
+	return found
+
+
 ## One real extraction attempt. Returns {"path", "status"}.
 static func _extract_uncached(b2s_path: String, cache_path: String) -> Dictionary:
 	var bytes: PackedByteArray = FileAccess.get_file_as_bytes(b2s_path)
@@ -1359,36 +1515,15 @@ static func _extract_uncached(b2s_path: String, cache_path: String) -> Dictionar
 	var text: String = _decode_xml_text(bytes)
 	if text == "":
 		return {"path": "", "status": STATUS_FAILED} ## undecodable: a parse failure
-	# 1. The designated elements, in the server's precedence. The
-	# designated backglass being present but undecodable is data
-	# corruption - a failure, not "no image in file".
-	var designated_seen: bool = false
-	for element: String in DESIGNATED_ELEMENTS:
-		for blob: String in _element_value_blobs(text, element):
-			designated_seen = true
-			var img: Image = _decode_blob_image(blob)
-			if img != null:
-				return _store_extracted(img, cache_path)
-	if designated_seen:
-		return {"path": "", "status": STATUS_FAILED}
-	# 2. Fallback: any image blob anywhere in the file (reel and
-	# illumination art included), largest first. NOTE: this path
-	# reads the raw text as-is - it does NOT XML-unescape, so an
-	# entity-escaped payload's base64 runs stay broken up by the
-	# entity text and are not candidates here. The designated path
-	# above is the one that unescapes; a file whose designated
-	# image is escaped-but-decodable never reaches this fallback.
-	var tried: Dictionary = {}
-	for element2: String in DESIGNATED_ELEMENTS:
-		for blob2: String in _element_value_blobs(text, element2):
-			tried[blob2] = true
-	for blob3: String in _base64_candidates(text):
-		if tried.has(blob3):
-			continue
-		var img2: Image = _decode_blob_image(blob3)
-		if img2 != null:
-			return _store_extracted(img2, cache_path)
-	return {"path": "", "status": STATUS_NO_IMAGE}
+	# The unified base finder. A file whose designated
+	# elements were present but nothing anywhere decoded is
+	# data corruption - a failure, not "no image in file";
+	# a file with no image in it at all is no_image.
+	var found: Dictionary = _find_base_image(text)
+	var img: Image = found["img"] as Image
+	if img != null:
+		return _store_extracted(img, cache_path)
+	return {"path": "", "status": STATUS_FAILED if bool(found["seen"]) else STATUS_NO_IMAGE}
 
 
 static func _store_extracted(img: Image, cache_path: String) -> Dictionary:

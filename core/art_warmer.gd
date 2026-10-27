@@ -33,11 +33,16 @@ extends RefCounted
 ## re-queued, and a set extracted by a focus visit meanwhile
 ## is skipped when its turn comes. One flat outcome DOES
 ## skip a game here: a stamped no_image means the file was
-## read and holds no usable image anywhere - no base for
-## lamps to light over, so there is nothing to extract. A
-## FAILED flat read (the wart: a corrupt designated element
-## hiding healthy lamps behind the blob fallback) stays
-## queued - that distinction is the wart's whole lesson.
+## read end to end and holds no usable image anywhere - no
+## base for lamps to light over, so there is nothing to
+## extract. Any other outcome stays queued: the two readers
+## stamp independently, and one reader's failure is not
+## evidence about the other. (Before flicker fix round 2
+## the wart lived in exactly that gap - a corrupt designated
+## DMD stamped the flat read FAILED while the layers reader
+## found the base in the blob fallback. The readers share
+## one base finder now, so the wart's flat read finds the
+## same base its lamps use; the queue rule stays regardless.)
 
 ## Set by the owner; fired (deferred to the main thread) when a pass
 ## empties its queue.
@@ -75,11 +80,10 @@ func warm_library(games: Array[GameEntry]) -> void:
 	for g: GameEntry in games:
 		# Phase two's queue, built alongside phase one's: every
 		# B2S-backed game whose layer set has never been tried.
-		# (A FAILED flat extraction does not skip a game - a
-		# backglass can fail flat and still hold lamps; the
-		# wart fixture is exactly that game. A stamped
-		# no_image does: no usable image anywhere in the file
-		# means no base exists for lamps to light over.)
+		# (A FAILED flat extraction does not skip a game - the
+		# readers stamp independently. A stamped no_image does:
+		# no usable image anywhere in the file means no base
+		# exists for lamps to light over.)
 		var fsrc: String = g.flicker_source()
 		if fsrc != "" and ArtProvider.flicker_outcome(fsrc) == "" \
 				and ArtProvider.outcome_for_source(fsrc) != ArtProvider.STATUS_NO_IMAGE \
@@ -90,7 +94,10 @@ func warm_library(games: Array[GameEntry]) -> void:
 		var sources: Array[String] = g.art_sources()
 		for i: int in range(sources.size()):
 			var src: String = sources[i]
-			if _queued.has(src) or ArtProvider.is_cached(src):
+			# is_cache_current, not is_cached: a stale-generation
+			# cache (a v2 pair face, say) is queued for its one
+			# refresh under the current reader, like any cold file.
+			if _queued.has(src) or ArtProvider.is_cache_current(src):
 				continue
 			# A stamped negative (no usable image / failed, for
 			# this exact file version) is never re-queued:
@@ -182,7 +189,7 @@ static func art_health(games: Array[GameEntry]) -> Dictionary:
 		if g.art_source_path == "" or g.art_source_path.get_extension().to_lower() != "directb2s":
 			continue
 		health["total"] = int(health["total"]) + 1
-		if ArtProvider.is_cached(g.art_source_path):
+		if ArtProvider.is_cache_current(g.art_source_path):
 			health["ok"] = int(health["ok"]) + 1
 			continue
 		match ArtProvider.outcome_for_source(g.art_source_path):
@@ -253,7 +260,7 @@ static func cache_coverage(games: Array[GameEntry]) -> Vector2i:
 			have += 1
 			continue
 		for src: String in g.art_sources():
-			if ArtProvider.is_cached(src):
+			if ArtProvider.is_cache_current(src):
 				have += 1
 				break
 	return Vector2i(have, want)
@@ -317,7 +324,7 @@ func _run_pass() -> void:
 		if layer_game != null:
 			_warm_layers(layer_game)
 			continue
-		if ArtProvider.is_cached(src):
+		if ArtProvider.is_cache_current(src):
 			continue
 		if ArtProvider.is_negative_outcome(ArtProvider.outcome_for_source(src)):
 			# Recorded (by a panel, most likely) after this pass
