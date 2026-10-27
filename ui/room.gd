@@ -12,6 +12,7 @@ signal setup_panel_scan_requested ## the SETUP panel's SCAN LIBRARY: Main owns t
 signal launch_requested(game: GameEntry, build: TableBuild) ## card Launch / detail Play - Main owns the launch + exit
 signal exit_requested ## rail EXIT: Main disarms the watchdog and quits
 signal art_prefetch_requested(games: Array) ## a page settled: Main's warmer should bring the neighbouring pages' art forward
+signal art_kick_requested(game: GameEntry) ## a power-on kick fired for this game: Main's warmer should bring its layer set forward
 
 const PAGE_COLS: int = 4
 const PAGE_ROWS: int = 3
@@ -2156,7 +2157,12 @@ func _update_power(delta: float) -> void:
 	else:
 		_power_candidate_t += delta
 	if _power_panel != null and cand != _power_panel:
-		_restore_power()
+		var trigger: String = "focus_moved"
+		if _slide_phase != 0:
+			trigger = "page_slide"
+		elif cand == null:
+			trigger = "focus_cleared"
+		_restore_power(trigger)
 	if _power_panel == null and cand != null and _power_candidate_t >= POWER_SETTLE_SEC:
 		_start_power(cand)
 	if _power_panel != null and _power_phase == 1:
@@ -2164,6 +2170,7 @@ func _update_power(delta: float) -> void:
 		_apply_power()
 		if _power_t >= POWER_CASCADE_SEC:
 			_power_phase = 2
+			print("POWER: phase 1->2 game=\"%s\"" % (_power_game.title if _power_game != null else ""))
 			_apply_power()
 
 
@@ -2189,8 +2196,10 @@ func _start_power(panel: ClickableQuad) -> void:
 	_power_mode = 0
 	_power_pair = false
 	_power_game = _scanner.game_by_id(panel.payload) if _scanner != null else null
+	var src: String = ""
+	var kicked: bool = false
 	if _power_game != null:
-		var src: String = _power_game.flicker_source()
+		src = _power_game.flicker_source()
 		if src != "":
 			if ArtProvider.has_flicker_layers(src):
 				var data: Dictionary = ArtProvider.extract_flicker_layers(src)
@@ -2202,7 +2211,20 @@ func _start_power(panel: ClickableQuad) -> void:
 					# of sitting on the unlit base all focus.
 					_power_mode = 1 if not _power_layers.is_empty() else 0
 			else:
-				_kick_power_extraction(_power_game)
+				kicked = _kick_power_extraction(_power_game)
+	# The field trap (half-2 round): every start states what
+	# it found and what it did - the source in play, whether
+	# the set stood warm, the stamp that stands, the mode it
+	# chose, the quads it built, and whether it kicked. A
+	# visit that surged when it should have cascaded convicts
+	# itself in one line.
+	var label: String = _power_game.title if _power_game != null else panel.payload
+	print("POWER: start game=\"%s\" source=\"%s\" has_layers=%s outcome=%s mode=%d quads=%d kicks=%d" % [
+		label, src,
+		str(src != "" and ArtProvider.has_flicker_layers(src)),
+		ArtProvider.flicker_outcome(src) if src != "" else "",
+		_power_mode, _power_layers.size(), 1 if kicked else 0])
+	print("POWER: phase 0->1 game=\"%s\"" % label)
 	_apply_power()
 
 
@@ -2211,12 +2233,21 @@ func _start_power(panel: ClickableQuad) -> void:
 ## discipline inside ensure_flicker arbitrates with any
 ## other claimant). The layers land for the next focus
 ## visit; nothing here blocks or restarts this visit's
-## surge.
-func _kick_power_extraction(game: GameEntry) -> void:
+## surge. Returns true when this call actually issued the
+## kick (the start's POWER line counts it). The kick also
+## asks Main's warmer to bring the game's layer item to the
+## front of its phase-two queue (art_kick_requested): the
+## two extractions race under the claim registry, never
+## duplicate, and whichever lands first warms the set.
+func _kick_power_extraction(game: GameEntry) -> bool:
 	if _power_kicked.has(game.game_id):
-		return
+		return false
 	_power_kicked[game.game_id] = true
-	WorkerThreadPool.add_task(Callable(game, "ensure_flicker"))
+	art_kick_requested.emit(game)
+	WorkerThreadPool.add_task(Callable(game, "kick_flicker"))
+	return true
+
+
 
 
 ## Build the lamp layer quads over the performing card: one
@@ -2419,8 +2450,12 @@ static func power_brightness_at(t: float) -> float:
 ## Focus left the performer (or a cancel fired): the card
 ## goes back to its normal still - brightness restored,
 ## layer quads freed - and the machine idles. Exactly one
-## performer ever exists, so restore is total.
-func _restore_power() -> void:
+## performer ever exists, so restore is total. Every
+## restore logs its trigger (the field trap: a cascade
+## that dies early should say what killed it).
+func _restore_power(trigger: String) -> void:
+	print("POWER: restore trigger=%s game=\"%s\"" % [
+		trigger, _power_game.title if _power_game != null else ""])
 	if _power_panel != null and is_instance_valid(_power_panel):
 		_power_panel.set_face_brightness(1.0)
 	for mi: MeshInstance3D in _power_layers:

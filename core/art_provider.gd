@@ -507,6 +507,17 @@ const LAYERS_DIR: String = CACHE_DIR + "/layers"
 const LAYERS_VERSION: int = 3
 const LAYER_CAP: int = 40
 const STATUS_NO_LAYERS: String = "no_layers"
+## Attempts a FAILED layer extraction gets under one reader
+## generation: the first try plus ONE retry (half-2 round).
+## A failure can be transient - the file was mid-replacement
+## when first read, a decode fault on a loaded machine - and
+## the pre-round rule exiled that game's lamps for the whole
+## generation on one bad read. The attempt count rides the
+## stamp itself ("tries"), so the budget survives restarts
+## and resets with the generation like every other stamp
+## rule. no_layers never retries: it is a finding (the file
+## was read end to end and holds no lamps), not a failure.
+const FLICKER_FAILED_MAX_TRIES: int = 2
 ## Layer kinds (see the generation note above). A pair set's
 ## one full-frame layer is a LAMP by construction: the pair
 ## IS the glass's lit state, not a momentary device, and it
@@ -551,17 +562,60 @@ static func is_flicker_negative(status: String) -> bool:
 	return status == STATUS_NO_LAYERS or status == STATUS_FAILED
 
 
+## Attempts a FAILED layer stamp has had under the current
+## reader generation (0 when the stamp is not a current
+## failed). Stamps written before the counter existed carry
+## one attempt by definition - they record one real try.
+static func _flicker_failed_tries(b2s_path: String) -> int:
+	_index_mutex.lock()
+	_load_index_locked()
+	var entry: Variant = _index.get("L" + stamp_key_for(b2s_path), null)
+	_index_mutex.unlock()
+	if entry is Dictionary:
+		var d: Dictionary = entry as Dictionary
+		if int(d.get("lv", 0)) >= LAYERS_VERSION and str(d.get("status", "")) == STATUS_FAILED:
+			return int(d.get("tries", 1))
+	return 0
+
+
+## The layer outcome the app ACTS on (queueing, panel
+## answers): flicker_outcome with the failed-retry rule
+## applied - a FAILED stamp whose one per-generation retry
+## is still unused reads as untried (""), so the warmer
+## re-queues it and a focus visit re-attempts it, exactly
+## once. The retry is spent by the attempt itself (the
+## stamp counts attempts), so a genuinely broken file
+## settles to failed after FLICKER_FAILED_MAX_TRIES real
+## extractions and no stampede is possible. flicker_outcome
+## stays the raw record - the desk's counts and the POWER
+## log read what actually stands.
+static func flicker_actionable_outcome(b2s_path: String) -> String:
+	var raw: String = flicker_outcome(b2s_path)
+	if raw == STATUS_FAILED and _flicker_failed_tries(b2s_path) < FLICKER_FAILED_MAX_TRIES:
+		return ""
+	return raw
+
+
 static func _record_flicker_outcome(b2s_path: String, status: String, layer_count: int) -> void:
 	var key: String = "L" + stamp_key_for(b2s_path)
 	_index_mutex.lock()
 	_load_index_locked()
+	var tries: int = 1
 	var entry: Variant = _index.get(key, null)
 	if entry is Dictionary:
 		var d: Dictionary = entry as Dictionary
-		if str(d.get("status", "")) == status and int(d.get("lv", 0)) >= LAYERS_VERSION:
-			_index_mutex.unlock()
-			return
-	_index[key] = {"status": status, "src": b2s_path, "v": EXTRACTOR_VERSION, "lv": LAYERS_VERSION, "n": layer_count}
+		if int(d.get("lv", 0)) >= LAYERS_VERSION:
+			# Same reader generation: this record is another
+			# attempt under it, and the count is the retry
+			# budget's memory. A FAILED record therefore
+			# always lands (it spends budget); any other
+			# status keeps the same-status shortcut, so a
+			# warm serve never rewrites the index.
+			tries = int(d.get("tries", 1)) + 1
+			if status != STATUS_FAILED and str(d.get("status", "")) == status:
+				_index_mutex.unlock()
+				return
+	_index[key] = {"status": status, "src": b2s_path, "v": EXTRACTOR_VERSION, "lv": LAYERS_VERSION, "n": layer_count, "tries": tries}
 	_save_index_locked()
 	_index_mutex.unlock()
 

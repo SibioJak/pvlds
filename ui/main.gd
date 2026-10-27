@@ -189,6 +189,20 @@ var _lockout_smoke_pending: bool = false ## a launch fired by the lockout smoke 
 var _smoke_quitwarm: bool = false ## --pvlds-smoke-quitwarm: exit mid-warm-pass through the real Exit path (mode via PVLDS_QUITWARM_MODE)
 var _quitwarm_fired: bool = false
 var _quitwarm_started_msec: int = 0
+## The drain deadline is a per-item budget, not a wall clock
+## (half-2 round): the old flat 300 s was set when a pass was
+## flat-only, and phase 2 (c35d2b9) legitimately doubled the
+## per-file work - each fixture is read and decoded twice,
+## flat then layers - so the honest pass outgrew the number
+## and the smoke false-failed at c35d2b9. Measured on this
+## box: ~5 s per ~14 MB file on a good night (148.9 s for
+## 30), >10 s per file under load in the c35d2b9 run. 20 s
+## per item is ~2x the worst observed per-item cost, so a
+## healthy pass cannot trip it at any library size, while a
+## HUNG pass (no progress at all - the fault this smoke
+## exists to catch) still trips it in bounded time. The
+## harness's shell timeout scales with the same formula.
+const QUITWARM_PER_ITEM_BUDGET_MSEC: int = 20000
 var _lockout_smoke_phase: int = 0
 var _lockout_smoke_wait: int = 0
 var _lockout_smoke_failures: int = 0
@@ -265,6 +279,7 @@ var _shot_flicker_on_img: Image = null ## pair-strobe leg: the pair card rendere
 var _shot_flicker_dip_win: Vector2 = Vector2.ZERO ## pair-strobe leg: the Specter schedule's dip window [dip_end, on_t]
 var _shot_flicker_live_missed: bool = false ## pair-strobe leg: the live cascade finished before a poll saw phase 1 (one giant post-extraction frame) - the sweep and the rendered fit carry the leg instead
 var _shot_flicker_flasher_idx: int = -1 ## flasher leg: the performing set's flasher layer index (-1 until the cascade builds it)
+var _shot_flicker_away_panel: ClickableQuad = null ## kick leg: a live non-subject panel to park focus on (re-resolved at the leg, after the wall rebuilds)
 var _shot_flicker_armed: bool = false ## fix-round legs: the current leg's focus has been set
 var _art_bench: bool = false ## --pvlds-art-bench: dev measurement route (cold/warm page-fill timings)
 var _bench_phase: int = -1
@@ -724,6 +739,7 @@ func _enter_room() -> void:
 		_room.launch_requested.connect(_on_launch_requested)
 		_room.exit_requested.connect(_on_exit_requested)
 		_room.art_prefetch_requested.connect(_on_art_prefetch)
+		_room.art_kick_requested.connect(_on_art_kick)
 	else:
 		_room.adopt_library(_scanner)
 		# Entering the room (e.g. Enter the Room on the desk while a
@@ -1250,6 +1266,14 @@ func _flicker_finish() -> void:
 ## declares, the flasher renders mid-cascade, and the
 ## settled card is lamps only - the flasher fully released
 ## (parked alpha probes + rendered strike/settled frames).
+## (12) the kick leg (half-2 round) - the Wide card's set
+## is un-warmed by hand (cache, stamp, entry memo, kick
+## record: no production path makes a warm card cold
+## again, so the fixture builds the cold state directly):
+## its focus must surge (the honest cold visit) while the
+## kick lands the set in the background, and the NEXT
+## visit cascades. The run's log carries the POWER lines
+## for every leg above; the harness greps them by family.
 ## Saves PREFIX_base/mid/lit.png plus pair/flasher frames.
 func _drive_shot_flicker() -> void:
 	var now: int = Time.get_ticks_msec()
@@ -2194,9 +2218,110 @@ func _drive_shot_flicker() -> void:
 					if amber_set11 < 100:
 						_shot_flicker_problems.append("the settled card's lamps are not lit (amber px %d) - the release took the lamps with it" % amber_set11)
 					settled_img11.save_png(_shot_flicker_prefix + "_flasher_settled.png")
-					_flicker_finish()
+					_shot_flicker_stage = 0
+					_shot_flicker_armed = false
+					_shot_flicker_since = now
+					_shot_flicker_phase = 12
 				elif now - _shot_flicker_since > 20000:
 					_shot_flicker_problems.append("the flasher leg's settled frame never rendered")
+					_flicker_finish()
+		12:
+			# Kick leg (half-2 round): the Wide card's set
+			# is un-warmed by hand - cache wiped, stamp
+			# erased, entry memo and kick record cleared
+			# (no production path makes a warm card cold
+			# again, so the fixture builds the cold state
+			# directly). Its focus must then surge, the
+			# honest cold visit, while the kick lands the
+			# set in the background; the NEXT visit must
+			# cascade on it. Stages: 0 the surgery + focus
+			# away, 1 focus the cold card, 2 the cold visit
+			# reads as a surge, 3 wait for the kick to land
+			# the set, 4 focus away (the restore), 5 the
+			# return visit cascades.
+			var g12: GameEntry = _shot_flicker_game
+			var src12: String = g12.flicker_source() if g12 != null else ""
+			if g12 == null or src12 == "":
+				_shot_flicker_problems.append("the kick leg has no subject (the Wide fixture game or its backglass is missing)")
+				_flicker_finish()
+				return
+			var panel12: ClickableQuad = null
+			for p12: ClickableQuad in _room._panels:
+				if p12.payload == g12.game_id:
+					panel12 = p12
+					break
+			if panel12 == null:
+				_shot_flicker_problems.append("the Wide panel is not on the wall - the kick leg has no card")
+				_flicker_finish()
+				return
+			if _shot_flicker_stage == 0:
+				if is_instance_valid(_shot_flicker_panel2):
+					_shot_flicker_away_panel = _shot_flicker_panel2
+				else:
+					for pa: ClickableQuad in _room._panels:
+						if pa != panel12:
+							_shot_flicker_away_panel = pa
+							break
+				_wipe_tree(ProjectSettings.globalize_path(ArtProvider.layers_dir_for(src12)))
+				var idx12: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.INDEX_PATH))
+				if idx12 is Dictionary:
+					(idx12 as Dictionary).erase("L" + ArtProvider.stamp_key_for(src12))
+					var f12: FileAccess = FileAccess.open(ArtProvider.INDEX_PATH, FileAccess.WRITE)
+					if f12 != null:
+						f12.store_string(JSON.stringify(idx12))
+						f12.close()
+					ArtProvider.reload_index()
+				g12._flicker_data = {}
+				g12._flicker_attempted = false
+				_room._power_kicked.erase(g12.game_id)
+				if ArtProvider.has_flicker_layers(src12):
+					_shot_flicker_problems.append("the kick leg's un-warming did not take - the Wide set still reads warm")
+					_flicker_finish()
+					return
+				_room._set_focused(_shot_flicker_away_panel)
+				_shot_flicker_stage = 1
+				_shot_flicker_since = now
+			elif _shot_flicker_stage == 1:
+				if _room.power_panel() == _shot_flicker_away_panel or now - _shot_flicker_since > 4000:
+					_room._set_focused(panel12)
+					_shot_flicker_stage = 2
+					_shot_flicker_since = now
+			elif _shot_flicker_stage == 2:
+				if _room.power_panel() == panel12:
+					if _room.power_mode() != 0:
+						_shot_flicker_problems.append("the cold Wide visit cascaded (mode %d) - the un-warming did not hold" % _room.power_mode())
+						_flicker_finish()
+						return
+					_shot_flicker_stage = 3
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 10000:
+					_shot_flicker_problems.append("the kick leg's cold power-on never started")
+					_flicker_finish()
+			elif _shot_flicker_stage == 3:
+				if ArtProvider.has_flicker_layers(src12):
+					_room._set_focused(_shot_flicker_away_panel)
+					_shot_flicker_stage = 4
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 30000:
+					_shot_flicker_problems.append("the kick never landed the Wide set (30s) - the cold card would surge on every visit")
+					_flicker_finish()
+			elif _shot_flicker_stage == 4:
+				if _room.power_panel() != panel12:
+					_room._set_focused(panel12)
+					_shot_flicker_stage = 5
+					_shot_flicker_since = now
+				elif now - _shot_flicker_since > 10000:
+					_shot_flicker_problems.append("the kick leg's restore never landed")
+					_flicker_finish()
+			elif _shot_flicker_stage == 5:
+				if _room.power_panel() == panel12 and _room.power_phase() > 0:
+					if _room.power_mode() != 1:
+						_shot_flicker_problems.append("the visit after the kick surged again (mode %d) - the landed set did not cascade" % _room.power_mode())
+					elif _room.power_layer_count() != 5:
+						_shot_flicker_problems.append("the post-kick cascade built %d layer quads, want the Wide five" % _room.power_layer_count())
+					_flicker_finish()
+				elif now - _shot_flicker_since > 10000:
+					_shot_flicker_problems.append("the kick leg's return power-on never started")
 					_flicker_finish()
 
 
@@ -4255,6 +4380,14 @@ func _on_art_prefetch(games: Array) -> void:
 	_art_warmer.prioritize(typed)
 
 
+## Room power-on kick: the kicked game's layer set jumps the
+## warmer's phase-two queue, so the extraction the kick races
+## and the queue's own item are the same front-of-line work.
+func _on_art_kick(game: GameEntry) -> void:
+	if _art_warmer != null and game != null:
+		_art_warmer.prioritize_layers([game])
+
+
 ## A warm pass drained: refresh the desk's coverage line so the
 ## art-cache stat reads current when the player next visits it.
 func _on_art_warm_drained() -> void:
@@ -4289,9 +4422,9 @@ func _drive_quitwarm_smoke() -> void:
 			_quitwarm_fired = true
 			print("PVLDS QUITWARM: drained pass_msec=%d cached=%d of %d" % [_art_warmer.last_pass_msec, cached, total])
 			_on_exit_requested()
-		elif elapsed > 300000:
+		elif elapsed > total * QUITWARM_PER_ITEM_BUDGET_MSEC:
 			_quitwarm_fired = true
-			printerr("PVLDS QUITWARM: FAIL - the warm did not drain in 300s (cached %d of %d)" % [cached, total])
+			printerr("PVLDS QUITWARM: FAIL - the warm did not drain in %ds (cached %d of %d)" % [total * QUITWARM_PER_ITEM_BUDGET_MSEC / 1000, cached, total])
 			get_tree().quit(1)
 		return
 	if cached >= 3 and not _art_warmer.is_idle():
@@ -5524,6 +5657,167 @@ func _run_core_test() -> void:
 	_expect(wart_warmer.is_idle() and ArtProvider.has_flicker_layers(b2s_wart2)
 		and ArtProvider.outcome_for_source(b2s_wart2) == ArtProvider.STATUS_OK,
 		"warmer phase two: the wart warms flat and layers in one pass", failures)
+
+	# --- Half 2: layer-queue priority, the kick wait, and
+	# the failed-stamp retry (the intermittent-firing round).
+	# Queue legs: six games whose layer sets all stand
+	# untried, warmed in library order. The pass chews the
+	# flat queue first - and the first fixture is fat - so
+	# the layer queue's order is observable while it works.
+	var h2_queue_games: Array[GameEntry] = []
+	for qi: int in range(6):
+		var qp: String = art_dir.path_join("Half2 Queue Table %d.directb2s" % qi)
+		_expect(bool(mk_b2s.call(qp, 2400 if qi == 0 else 1000 + qi, 3000 if qi == 0 else 1300)),
+			"half2 queue fixture %d written" % qi, failures)
+		var qe: GameEntry = GameEntry.new()
+		qe.game_id = "half2-queue-%d" % qi
+		qe.title = "Half2 Queue Table %d" % qi
+		qe.art_source_path = qp
+		h2_queue_games.append(qe)
+	var h2_warmer: ArtWarmer = ArtWarmer.new()
+	h2_warmer.warm_library(h2_queue_games)
+	var h2_layer_ids: Callable = func() -> Array:
+		var ids: Array = []
+		for ge: GameEntry in h2_warmer._layer_queue:
+			ids.append(ge.game_id)
+		return ids
+	_expect(h2_layer_ids.call() == ["half2-queue-0", "half2-queue-1", "half2-queue-2", "half2-queue-3", "half2-queue-4", "half2-queue-5"],
+		"half2: the layer queue starts in library order", failures)
+	h2_warmer.prioritize_layers([h2_queue_games[3], h2_queue_games[1]])
+	_expect(h2_layer_ids.call() == ["half2-queue-3", "half2-queue-1", "half2-queue-0", "half2-queue-2", "half2-queue-4", "half2-queue-5"],
+		"half2: prioritize_layers moves exactly the named games to the layer queue's front, order preserved, nothing duplicated", failures)
+	h2_warmer.prioritize([h2_queue_games[5]])
+	_expect(h2_warmer._queue[0] == h2_queue_games[5].art_source_path
+		and h2_layer_ids.call() == ["half2-queue-5", "half2-queue-3", "half2-queue-1", "half2-queue-0", "half2-queue-2", "half2-queue-4"],
+		"half2: a page settle (prioritize) brings the game's flat art AND its layer item forward - the flat front is the same behavior as always", failures)
+	h2_warmer.prioritize_layers([h2_queue_games[2]])
+	_expect(h2_layer_ids.call() == ["half2-queue-2", "half2-queue-5", "half2-queue-3", "half2-queue-1", "half2-queue-0", "half2-queue-4"],
+		"half2: a kick's game jumps the layer queue ahead of the settled page's games", failures)
+	h2_warmer.request_stop()
+	var h2_waited: int = 0
+	while not h2_warmer.is_idle() and h2_waited < 30000:
+		OS.delay_msec(20)
+		h2_waited += 20
+	_expect(h2_warmer.is_idle(), "half2: the queue leg's warmer stops clean", failures)
+	# The kick wait: a rival claimant holds the file's layer
+	# claim and finishes its (slow) extraction at ~4.5 s.
+	# The kick's join must ride it out and land the set; a
+	# caller at the panel cap resolves empty at ~3 s.
+	var h2_slow_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(fl_glass.save_png_to_buffer()) + "\" /></Images><Illumination>"
+	h2_slow_text += _b2s_bulb_xml("Backglass", "1", 60, 60, 300, 120, amber_img)
+	h2_slow_text += "</Illumination></DirectB2SData>"
+	var b2s_slow: String = art_dir.path_join("Half2 Slow Layers Table.directb2s")
+	_expect(_write_text_file(b2s_slow, h2_slow_text), "half2 slow fixture written", failures)
+	var slow_entry: GameEntry = GameEntry.new()
+	slow_entry.game_id = "half2-slow"
+	slow_entry.title = "Half2 Slow Layers Table"
+	slow_entry.art_source_path = b2s_slow
+	var slow_key: String = ArtProvider.flicker_claim_key(b2s_slow)
+	_expect(ArtProvider.claim_extract(slow_key), "half2 kick leg: the rival claimant holds the file", failures)
+	var slow_thread: Thread = Thread.new()
+	slow_thread.start(func() -> void:
+		OS.delay_msec(4500)
+		ArtProvider.extract_flicker_layers(b2s_slow)
+		ArtProvider.release_extract(slow_key))
+	var kick_t0: int = Time.get_ticks_msec()
+	var kick_data: Dictionary = slow_entry.ensure_flicker(GameEntry.KICK_WAIT_MSEC)
+	var kick_elapsed: int = Time.get_ticks_msec() - kick_t0
+	slow_thread.wait_to_finish()
+	_expect((kick_data.get("layers", []) as Array).size() == 1 and kick_elapsed >= 4000,
+		"half2: the kick wait rides out a >3s in-flight extraction and lands the set (layers %d after %d ms) - at the 3s panel cap the kick dies empty and the set never lands" % [(kick_data.get("layers", []) as Array).size(), kick_elapsed], failures)
+	var b2s_slow2: String = art_dir.path_join("Half2 Slow Two Table.directb2s")
+	_expect(_write_text_file(b2s_slow2, h2_slow_text), "half2 slow-two fixture written", failures)
+	var slow2_entry: GameEntry = GameEntry.new()
+	slow2_entry.game_id = "half2-slow-2"
+	slow2_entry.title = "Half2 Slow Two Table"
+	slow2_entry.art_source_path = b2s_slow2
+	var slow2_key: String = ArtProvider.flicker_claim_key(b2s_slow2)
+	_expect(ArtProvider.claim_extract(slow2_key), "half2 cap leg: the rival claimant holds the second file", failures)
+	var slow2_thread: Thread = Thread.new()
+	slow2_thread.start(func() -> void:
+		OS.delay_msec(8000)
+		ArtProvider.release_extract(slow2_key))
+	var cap_t0: int = Time.get_ticks_msec()
+	var cap_data: Dictionary = slow2_entry.ensure_flicker()
+	var cap_elapsed: int = Time.get_ticks_msec() - cap_t0
+	slow2_thread.wait_to_finish()
+	_expect(cap_data.is_empty() and cap_elapsed >= 2800 and cap_elapsed <= 6000,
+		"half2: a non-kick caller still resolves at the 3s cap (empty after %d ms) - the long wait belongs to the kick alone" % cap_elapsed, failures)
+	# The failed-stamp retry: a corrupt base stamps failed;
+	# the actionable outcome reads untried while the one
+	# per-generation retry stands; the attempt itself spends
+	# it; the stamp then settles. The index entry is the
+	# evidence (its "tries" count is the budget's memory).
+	var h2_read_stamp: Callable = func(path: String) -> Dictionary:
+		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.INDEX_PATH))
+		if parsed is Dictionary:
+			var e: Variant = (parsed as Dictionary).get("L" + ArtProvider.stamp_key_for(path), null)
+			if e is Dictionary:
+				return e as Dictionary
+		return {}
+	var bad2_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(_zero_bytes(300)) + "\" /></Images><Illumination>"
+	bad2_text += _b2s_bulb_xml("Backglass", "1", 60, 60, 300, 120, amber_img)
+	bad2_text += "</Illumination></DirectB2SData>"
+	var b2s_retry: String = art_dir.path_join("Half2 Flaky Layers Table.directb2s")
+	_expect(_write_text_file(b2s_retry, bad2_text), "half2 flaky fixture written", failures)
+	_expect(str(ArtProvider.extract_flicker_layers(b2s_retry)["status"]) == ArtProvider.STATUS_FAILED
+		and ArtProvider.flicker_outcome(b2s_retry) == ArtProvider.STATUS_FAILED
+		and ArtProvider.flicker_actionable_outcome(b2s_retry) == "",
+		"half2: a fresh failed stamp reads failed in the record but untried to act on - the retry stands", failures)
+	_expect(int((h2_read_stamp.call(b2s_retry) as Dictionary).get("tries", 0)) == 1,
+		"half2: the stamp counts its first attempt", failures)
+	var retry_entry: GameEntry = GameEntry.new()
+	retry_entry.game_id = "half2-flaky"
+	retry_entry.art_source_path = b2s_retry
+	_expect((retry_entry.ensure_flicker().get("layers", []) as Array).is_empty()
+		and ArtProvider.flicker_actionable_outcome(b2s_retry) == ArtProvider.STATUS_FAILED
+		and int((h2_read_stamp.call(b2s_retry) as Dictionary).get("tries", 0)) == 2,
+		"half2: the retry fires exactly once through the entry path and the stamp settles to failed", failures)
+	var retry_entry2: GameEntry = GameEntry.new()
+	retry_entry2.game_id = "half2-flaky-2"
+	retry_entry2.art_source_path = b2s_retry
+	_expect(retry_entry2.ensure_flicker().is_empty()
+		and int((h2_read_stamp.call(b2s_retry) as Dictionary).get("tries", 0)) == 2,
+		"half2: a spent retry does not fire again (no third attempt)", failures)
+	# A generation bump re-arms the rule: age the stamp by
+	# hand (the migration the lv gate exists for); the next
+	# attempt records under the current generation with a
+	# fresh count and its own retry standing.
+	var idx_parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.INDEX_PATH))
+	var idx_ok: bool = idx_parsed is Dictionary and (idx_parsed as Dictionary).has("L" + ArtProvider.stamp_key_for(b2s_retry))
+	if idx_ok:
+		var aged: Dictionary = (idx_parsed as Dictionary)["L" + ArtProvider.stamp_key_for(b2s_retry)] as Dictionary
+		aged["lv"] = ArtProvider.LAYERS_VERSION - 1
+		(idx_parsed as Dictionary)["L" + ArtProvider.stamp_key_for(b2s_retry)] = aged
+		var idx_file: FileAccess = FileAccess.open(ArtProvider.INDEX_PATH, FileAccess.WRITE)
+		if idx_file != null:
+			idx_file.store_string(JSON.stringify(idx_parsed))
+			idx_file.close()
+		ArtProvider.reload_index()
+	_expect(idx_ok and ArtProvider.flicker_outcome(b2s_retry) == "",
+		"half2: an older-generation failed stamp reads untried (the lv gate)", failures)
+	var retry_entry3: GameEntry = GameEntry.new()
+	retry_entry3.game_id = "half2-flaky-3"
+	retry_entry3.art_source_path = b2s_retry
+	retry_entry3.ensure_flicker()
+	var retry_stamp3: Dictionary = h2_read_stamp.call(b2s_retry) as Dictionary
+	_expect(int(retry_stamp3.get("lv", 0)) == ArtProvider.LAYERS_VERSION and int(retry_stamp3.get("tries", 0)) == 1
+		and ArtProvider.flicker_actionable_outcome(b2s_retry) == "",
+		"half2: after a generation bump the stamp retries again under the new generation, count reset, retry standing", failures)
+	# no_layers is a finding, not a failure: no retry, ever.
+	var b2s_nolayer2: String = art_dir.path_join("Half2 Plain Layers Table.directb2s")
+	_expect(_write_text_file(b2s_nolayer2, "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(pair_off2.save_png_to_buffer()) + "\" /></Images><Illumination></Illumination></DirectB2SData>"),
+		"half2 layerless fixture written", failures)
+	_expect(str(ArtProvider.extract_flicker_layers(b2s_nolayer2)["status"]) == ArtProvider.STATUS_NO_LAYERS
+		and ArtProvider.flicker_actionable_outcome(b2s_nolayer2) == ArtProvider.STATUS_NO_LAYERS,
+		"half2: no_layers reads the same to act on - it is never retried", failures)
+	var nolayer_entry: GameEntry = GameEntry.new()
+	nolayer_entry.game_id = "half2-plain"
+	nolayer_entry.art_source_path = b2s_nolayer2
+	var nolayer_stamp_before: Dictionary = h2_read_stamp.call(b2s_nolayer2) as Dictionary
+	nolayer_entry.ensure_flicker()
+	_expect((h2_read_stamp.call(b2s_nolayer2) as Dictionary) == nolayer_stamp_before,
+		"half2: the entry path leaves a no_layers stamp untouched", failures)
 
 	# --- Embedded art: images extracted from inside .vpx files.
 	# The fixtures are REAL compound files written by
