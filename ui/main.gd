@@ -254,37 +254,32 @@ var _shot_pop_phase: int = -1
 var _shot_pop_frames: int = 0
 var _shot_pop_panel: ClickableQuad = null
 var _shot_pop_since_msec: int = 0
-var _shot_flicker_prefix: String = "" ## --pvlds-shot-flicker PREFIX: the power-on flicker's QA hook (needs the harness's bulb fixture folder)
-var _shot_anim_prefix: String = "" ## --pvlds-shot-anim PREFIX: the animation leg's own boot - same driver, but phase 0 registers only the Flicker Anim fixture (its own folder: the flicker wall's first page holds twelve cards and a thirteenth Flicker title pushed Flicker Wide onto page two) and hands straight to the animation leg (phase 13)
-var _shot_flicker_phase: int = -1
-var _shot_flicker_frames: int = 0
-var _shot_flicker_panel: ClickableQuad = null ## the bulb-bearing fixture card (layers leg)
-var _shot_flicker_panel2: ClickableQuad = null ## a title-card panel (brightness fallback leg)
-var _shot_flicker_since: int = 0
-var _shot_flicker_counts: Array[int] = [] ## amber pixel counts across the layers cascade: [base, mid, lit]
-var _shot_flicker_burst: Array[Image] = [] ## frames grabbed across the layers cascade, counted after settle (readbacks lag state under software rendering; the burst spans the lag)
-var _shot_flicker_t0: int = 0 ## when the layers cascade was first seen
-var _shot_flicker_next_grab: int = 0 ## next burst grab time
-var _shot_flicker_min_b: float = 1.0 ## darkest face brightness seen during the fallback cascade
-var _shot_flicker_min_mean: float = -1.0 ## darkest rendered mean luminance inside the fallback card's rect during its cascade
-var _shot_flicker_problems: Array[String] = []
-var _shot_flicker_stage: int = 0 ## sub-state inside the current phase
-var _shot_flicker_game: GameEntry = null ## the bulb-bearing fixture game
-var _shot_flicker_saw_partial: bool = false ## a frame with some-but-not-all layers lit was observed
-var _shot_flicker_fixtures: Dictionary = {} ## fix-round legs: fixture title prefix -> {"game": GameEntry, "panel": ClickableQuad}
-var _shot_flicker_spill: int = -1 ## fix round: cascade-driven amber change OUTSIDE the face across the burst (max-min), -1 until measured
-var _shot_flicker_blend_alphas: Array[float] = [] ## pair-strobe leg: the pair layer's alpha, sampled every frame of its live cascade
-var _shot_flicker_probe_wait: int = 0 ## pair-strobe leg: frames waited since parking the cascade clock for a rendered probe
-var _shot_flicker_off_img: Image = null ## pair-strobe leg: the pair card rendered at cascade t=0 (pure Off), popped geometry
-var _shot_flicker_on_img: Image = null ## pair-strobe leg: the pair card rendered at cascade end (pure On), popped geometry
-var _shot_flicker_dip_win: Vector2 = Vector2.ZERO ## pair-strobe leg: the Specter schedule's dip window [dip_end, on_t]
-var _shot_flicker_live_missed: bool = false ## pair-strobe leg: the live cascade finished before a poll saw phase 1 (one giant post-extraction frame) - the sweep and the rendered fit carry the leg instead
-var _shot_flicker_flasher_idx: int = -1 ## flasher leg: the performing set's flasher layer index (-1 until the cascade builds it)
-var _shot_flicker_anim_idx: int = -1 ## animation leg: the performing set's giant member layer index (-1 until the cascade builds it)
-var _shot_flicker_anim_idxs: Array[int] = [] ## animation leg: every member layer index in the performing set (the parked probes walk them all)
-var _shot_flicker_anim_strike: Array[int] = [0, 0] ## animation leg: the strike bursts' best single-frame member-color counts [green, magenta], kept across both parked instants
-var _shot_flicker_away_panel: ClickableQuad = null ## kick leg: a live non-subject panel to park focus on (re-resolved at the leg, after the wall rebuilds)
-var _shot_flicker_armed: bool = false ## fix-round legs: the current leg's focus has been set
+var _shot_mimic_prefix: String = "" ## --pvlds-shot-mimic PREFIX: the power-on mimic's QA hook (the swap round) - fixture assertion suite by default, real-table stills under PVLDS_MIMIC_REAL=1
+var _shot_mimic_phase: int = -1
+var _shot_mimic_stage: int = 0 ## sub-state inside the current phase
+var _shot_mimic_since: int = 0
+var _shot_mimic_wait: int = 0
+var _shot_mimic_problems: Array[String] = []
+var _shot_mimic_nc: String = "" ## PVLDS_MIMIC_NC: the harness's negative control ("grade" | "pair")
+var _shot_mimic_real: bool = false ## PVLDS_MIMIC_REAL=1: the real-table stills boot
+var _shot_mimic_wide: GameEntry = null ## the bulb-bearing fixture game (full mimic leg)
+var _shot_mimic_wide_panel: ClickableQuad = null
+var _shot_mimic_panel2: ClickableQuad = null ## the Cinder Peak panel (debounce partner, plain-face uniformity leg)
+var _shot_mimic_title_panel: ClickableQuad = null ## a true title-card panel when one stands on the wall
+var _shot_mimic_partner: ClickableQuad = null ## the debounce leg's fast-pass partner: any other panel on the wide card's page
+var _shot_mimic_flip_tried: bool = false ## the wide fixture stood on page two (13 fixture titles, 12 slots): the driver flipped once to find it
+var _shot_mimic_on_page2: bool = false ## the wide legs ran on page two; leg 4 flips back before resolving its subjects
+var _shot_mimic_fixtures: Dictionary = {} ## fixture title prefix -> {"game": GameEntry, "panel": ClickableQuad}
+var _shot_mimic_base_children: int = 0 ## the wide panel's child count at rest (the one-overlay assertion's baseline)
+var _shot_mimic_saw_power: bool = false ## debounce leg: a power-on was seen during the fast pass
+var _shot_mimic_parks: Array = [] ## the current leg's parked probes: [[cascade_t, grab_key], ...]
+var _shot_mimic_park: int = 0
+var _shot_mimic_grabs: Dictionary = {} ## grab_key -> Image (parked frames of the current leg)
+var _shot_mimic_rest_img: Image = null ## the current leg's rest grab (the restore identity comparison)
+var _shot_mimic_quick: Array = [] ## leg 4's subjects: [label, panel, want_mode]
+var _shot_mimic_quick_i: int = 0
+var _shot_mimic_subjects: Array = [] ## real boot: [{key, game, panel}] in judging order
+var _shot_mimic_idx: int = 0
 var _art_bench: bool = false ## --pvlds-art-bench: dev measurement route (cold/warm page-fill timings)
 var _bench_phase: int = -1
 var _bench_t_room: int = 0
@@ -320,15 +315,12 @@ func _ready() -> void:
 	if shot_slide_idx >= 0 and shot_slide_idx + 1 < user_args.size():
 		_shot_slide_path = user_args[shot_slide_idx + 1]
 		_shot_slide_phase = 0
-	var shot_flicker_idx: int = user_args.find("--pvlds-shot-flicker")
-	if shot_flicker_idx >= 0 and shot_flicker_idx + 1 < user_args.size():
-		_shot_flicker_prefix = user_args[shot_flicker_idx + 1]
-		_shot_flicker_phase = 0
-	var shot_anim_idx: int = user_args.find("--pvlds-shot-anim")
-	if shot_anim_idx >= 0 and shot_anim_idx + 1 < user_args.size():
-		_shot_anim_prefix = user_args[shot_anim_idx + 1]
-		_shot_flicker_prefix = _shot_anim_prefix
-		_shot_flicker_phase = 0
+	var shot_mimic_idx: int = user_args.find("--pvlds-shot-mimic")
+	if shot_mimic_idx >= 0 and shot_mimic_idx + 1 < user_args.size():
+		_shot_mimic_prefix = user_args[shot_mimic_idx + 1]
+		_shot_mimic_phase = 0
+		_shot_mimic_nc = OS.get_environment("PVLDS_MIMIC_NC")
+		_shot_mimic_real = OS.get_environment("PVLDS_MIMIC_REAL") == "1"
 	if user_args.has("--pvlds-smoke-placard"):
 		_smoke_placard = true
 	if user_args.has("--pvlds-smoke-setup-panel"):
@@ -384,7 +376,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _shot_pop_prefix != "" or _shot_flicker_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "") and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "") and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -525,8 +517,8 @@ func _process(_delta: float) -> void:
 		_drive_shot_pop()
 	if _shot_slide_phase >= 0:
 		_drive_shot_slide()
-	if _shot_flicker_phase >= 0:
-		_drive_shot_flicker()
+	if _shot_mimic_phase >= 0:
+		_drive_shot_mimic()
 	if _shot_path != "" and _shot_ready():
 		_shot_frames += 1
 		if _shot_frames >= 8:
@@ -748,7 +740,6 @@ func _enter_room() -> void:
 		_room.launch_requested.connect(_on_launch_requested)
 		_room.exit_requested.connect(_on_exit_requested)
 		_room.art_prefetch_requested.connect(_on_art_prefetch)
-		_room.art_kick_requested.connect(_on_art_kick)
 	else:
 		_room.adopt_library(_scanner)
 		# Entering the room (e.g. Enter the Room on the desk while a
@@ -989,1697 +980,880 @@ func _drive_shot_pop() -> void:
 
 
 ## Amber-ish pixel count inside a panel's screen rect - the
-## flicker shot's visible-evidence measure (the fixture bulbs
-## are amber; the unlit glass and the room are not).
-func _flicker_amber_count(q: ClickableQuad) -> int:
-	return _flicker_amber_count_img(q, get_viewport().get_texture().get_image())
-
-
-## The count over a GIVEN frame (the burst analysis counts
-## frames it grabbed earlier; the panel's rect is read live,
-## valid while the panel stands popped and focused).
-func _flicker_amber_count_img(q: ClickableQuad, img: Image) -> int:
-	# The viewport's ACTIVE camera: the desk camera's rects are
-	# only ever read relatively (the nav clearance legs); pixel
-	# sampling needs the projection the frame was rendered with.
-	var cam: Camera3D = get_viewport().get_camera_3d()
-	if cam == null:
-		return -1
-	var rect: Rect2 = _nav_screen_rect(q, cam)
-	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
-	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
-	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
-	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
+## The mimic shot's visible-evidence measure: mean colour and
+## per-quadrant mean luminance over a screen rect of a grabbed
+## frame (stride 2 - statistics, not pixels; the identity legs
+## use _mimic_max_diff for the pixel claim).
+func _mimic_region_stats(img: Image, rect: Rect2i) -> Dictionary:
+	var sum: Color = Color(0, 0, 0, 0)
+	var quads: Array[float] = [0.0, 0.0, 0.0, 0.0]
+	var quad_n: Array[int] = [0, 0, 0, 0]
 	var n: int = 0
-	var y: int = y0
-	while y < y1:
-		var x: int = x0
-		while x < x1:
-			if _flicker_is_amber(img.get_pixel(x, y)):
+	var mid: Vector2 = Vector2(rect.get_center())
+	var x: int = rect.position.x
+	while x < rect.position.x + rect.size.x:
+		var y: int = rect.position.y
+		while y < rect.position.y + rect.size.y:
+			if x >= 0 and y >= 0 and x < img.get_width() and y < img.get_height():
+				var px: Color = img.get_pixel(x, y)
+				sum += px
+				var lum: float = 0.2126 * px.r + 0.7152 * px.g + 0.0722 * px.b
+				var qi: int = (1 if float(x) >= mid.x else 0) + (2 if float(y) >= mid.y else 0)
+				quads[qi] += lum
+				quad_n[qi] += 1
 				n += 1
-			x += 2
-		y += 2
-	return n
+			y += 2
+		x += 2
+	if n == 0:
+		return {"mean": Color(0, 0, 0), "luma": 0.0, "quads": quads}
+	for qi2: int in range(4):
+		if quad_n[qi2] > 0:
+			quads[qi2] /= float(quad_n[qi2])
+	return {"mean": sum / float(n), "luma": 0.2126 * (sum.r / float(n)) + 0.7152 * (sum.g / float(n)) + 0.0722 * (sum.b / float(n)), "quads": quads}
 
 
-## The amber centroid inside a panel's screen rect, as
-## fractions of the rect (0..1 across, 0..1 down), or
-## (-1, -1) when the rect holds no amber. The pair legs'
-## registration measure: WHERE the lit amber sits testifies
-## which image's space the layer was composed in.
-func _flicker_amber_centroid_img(q: ClickableQuad, img: Image) -> Vector2:
+## The largest per-channel difference between two grabbed
+## frames over a rect, in 0-255 steps (stride 2).
+func _mimic_max_diff(a: Image, b: Image, rect: Rect2i) -> int:
+	var worst: int = 0
+	var x: int = rect.position.x
+	while x < rect.position.x + rect.size.x:
+		var y: int = rect.position.y
+		while y < rect.position.y + rect.size.y:
+			if x >= 0 and y >= 0 and x < a.get_width() and y < a.get_height() and x < b.get_width() and y < b.get_height():
+				var pa: Color = a.get_pixel(x, y)
+				var pb: Color = b.get_pixel(x, y)
+				worst = maxi(worst, int(round(maxf(absf(pa.r - pb.r), maxf(absf(pa.g - pb.g), absf(pa.b - pb.b))) * 255.0)))
+			y += 2
+		x += 2
+	return worst
+
+
+## The performing panel's art area as a screen rect: the
+## panel's projected corners (the crop the prototype printed
+## as MIMIC_CROP), cut to the face above the name strip and
+## inset so edge filtering never pollutes a statistic.
+func _mimic_art_screen_rect(panel: ClickableQuad) -> Rect2i:
 	var cam: Camera3D = get_viewport().get_camera_3d()
 	if cam == null:
-		return Vector2(-1, -1)
-	var rect: Rect2 = _nav_screen_rect(q, cam)
-	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
-	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
-	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
-	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
-	var sx: float = 0.0
-	var sy: float = 0.0
+		return Rect2i()
+	var half: Vector2 = _room._panel_size * 0.5
+	var pts: Array[Vector2] = []
+	for c: Vector2 in [Vector2(-half.x, -half.y), Vector2(half.x, -half.y), Vector2(-half.x, half.y), Vector2(half.x, half.y)]:
+		pts.append(cam.unproject_position(panel.global_transform * Vector3(c.x, c.y, 0.0)))
+	var mn: Vector2 = pts[0]
+	var mx: Vector2 = pts[0]
+	for p: Vector2 in pts:
+		mn = mn.min(p)
+		mx = mx.max(p)
+	# The stats window is the face's top 396 rows (of 640):
+	# the whole art area would include the Launch button
+	# standing over the card's lower third.
+	var art_h: float = (mx.y - mn.y) * (396.0 / 640.0)
+	var r: Rect2 = Rect2(mn, Vector2(mx.x - mn.x, art_h))
+	r = r.grow_individual(-r.size.x * 0.05, -r.size.y * 0.05, -r.size.x * 0.05, -r.size.y * 0.05)
+	return Rect2i(int(r.position.x), int(r.position.y), int(r.size.x), int(r.size.y))
+
+
+## The shader's soft shoulder, mirrored (the reference grade
+## below must be an independent statement of the same math).
+func _mimic_shoulder(c: float) -> float:
+	var knee: float = 0.92
+	var cap: float = 0.99
+	if c <= knee:
+		return c
+	var span: float = cap - knee
+	return knee + span * (1.0 - exp(-(c - knee) / span))
+
+
+## One pixel of the settled reference grade: the mimic
+## shader's math at power 1, sweep complete (front = 1
+## across the whole glass there).
+func _mimic_ref_grade_pixel(src: Color) -> Color:
+	var lum: float = 0.2126 * src.r + 0.7152 * src.g + 0.0722 * src.b
+	var mx: float = maxf(src.r, maxf(src.g, src.b))
+	var mn: float = minf(src.r, minf(src.g, src.b))
+	var sat: float = (mx - mn) / mx if mx > 0.001 else 0.0
+	var head: float = clampf((1.0 - lum) / 0.35, 0.15, 1.0)
+	var drive: float = head * (0.50 * pow(lum, 0.75) + 0.90 * sat * (0.25 + 0.75 * lum))
+	var glow: float = 0.40 * head * smoothstep(0.70, 1.0, lum)
+	var act: float = clampf(drive + glow, 0.0, 1.0)
+	var out: Color = Color()
+	for ch: int in range(3):
+		var s: float = src[ch]
+		var g: float = s * (1.0 + drive) + s * glow
+		out[ch] = lerpf(s, _mimic_shoulder(g), act)
+	out.a = 1.0
+	return out
+
+
+## Reference statistics for a face image AS THE FACE DRAWS
+## IT: the art cover-fit into the 512x640 face frame (the
+## rule CardFace and the retired layers both used), sampled
+## over the visible art window (the face above the strip).
+## grade=true applies the settled reference grade per pixel
+## (the mimic's settled claim); grade=false reads the plain
+## face (the rest claim, and a pair On's settled claim).
+func _mimic_ref_stats(art: Image, grade: bool) -> Dictionary:
+	var face: Vector2 = Vector2(512.0, 640.0)
+	var win_h: float = 396.0 ## the stats window (see _mimic_art_screen_rect): the face's top rows, above the Launch button
+	var aw: float = float(art.get_width())
+	var ah: float = float(art.get_height())
+	var cover: float = maxf(face.x / aw, face.y / ah)
+	var ox: float = (face.x - aw * cover) * 0.5
+	var oy: float = (face.y - ah * cover) * 0.5
+	var sum: Color = Color(0, 0, 0, 0)
+	var quads: Array[float] = [0.0, 0.0, 0.0, 0.0]
+	var quad_n: Array[int] = [0, 0, 0, 0]
 	var n: int = 0
-	var y: int = y0
-	while y < y1:
-		var x: int = x0
-		while x < x1:
-			if _flicker_is_amber(img.get_pixel(x, y)):
-				sx += float(x)
-				sy += float(y)
-				n += 1
-			x += 2
-		y += 2
-	if n == 0 or rect.size.x <= 0.0 or rect.size.y <= 0.0:
-		return Vector2(-1, -1)
-	return Vector2((sx / float(n) - rect.position.x) / rect.size.x,
-		(sy / float(n) - rect.position.y) / rect.size.y)
-
-
-## The amber test itself, shared by the in-rect count and
-## the spill measure below.
-func _flicker_is_amber(px: Color) -> bool:
-	return px.r > 0.72 and px.g > 0.42 and px.g < 0.92 and px.b < 0.45 and px.r > px.b + 0.3
-
-
-## Flasher-red pixel count inside a panel's screen rect over
-## a GIVEN frame - the flasher leg's visible-evidence measure
-## (the fixture's flasher paints a bold semi-transparent red
-## band across the glass; nothing else on the card is red -
-## the base is navy, the lamps are amber, whose green channel
-## keeps it out of this test).
-func _flicker_red_count_img(q: ClickableQuad, img: Image) -> int:
-	var cam: Camera3D = get_viewport().get_camera_3d()
-	if cam == null:
-		return -1
-	var rect: Rect2 = _nav_screen_rect(q, cam)
-	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
-	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
-	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
-	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
-	var n: int = 0
-	var y: int = y0
-	while y < y1:
-		var x: int = x0
-		while x < x1:
-			var px: Color = img.get_pixel(x, y)
-			if px.r > 0.55 and px.g < 0.32 and px.b < 0.32:
-				n += 1
-			x += 2
-		y += 2
-	return n
-
-
-## Anim-green pixel count inside a panel's screen rect over
-## a GIVEN frame - the animation leg's visible-evidence
-## measure for its giant member (the fixture's member paints
-## a bold semi-transparent green band across the glass;
-## nothing else on the card is green - the base is navy, the
-## lamps are amber, whose red channel keeps it out of this
-## test).
-func _flicker_green_count_img(q: ClickableQuad, img: Image) -> int:
-	var cam: Camera3D = get_viewport().get_camera_3d()
-	if cam == null:
-		return -1
-	var rect: Rect2 = _nav_screen_rect(q, cam)
-	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
-	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
-	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
-	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
-	var n: int = 0
-	var y: int = y0
-	while y < y1:
-		var x: int = x0
-		while x < x1:
-			var px: Color = img.get_pixel(x, y)
-			if px.g > 0.55 and px.r < 0.42 and px.b < 0.42:
-				n += 1
-			x += 2
-		y += 2
-	return n
-
-
-## Anim-magenta pixel count inside a panel's screen rect over
-## a GIVEN frame - the animation leg's measure for its small
-## member (solid magenta art the navy base does not carry).
-## Magenta, not the cyan this leg first used: the room's
-## focus frame is cyan-blue and rings the panel INSIDE this
-## rect, so a cyan test counts the frame itself on every
-## frame - the settled card measured a held member that
-## was only the frame (493 px, first anim run). Magenta
-## collides with nothing the room draws: the frame's red
-## is low, the amber lamps' blue is low, the base is navy.
-func _flicker_magenta_count_img(q: ClickableQuad, img: Image) -> int:
-	var cam: Camera3D = get_viewport().get_camera_3d()
-	if cam == null:
-		return -1
-	var rect: Rect2 = _nav_screen_rect(q, cam)
-	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
-	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
-	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
-	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
-	var n: int = 0
-	var y: int = y0
-	while y < y1:
-		var x: int = x0
-		while x < x1:
-			var px: Color = img.get_pixel(x, y)
-			if px.r > 0.6 and px.b > 0.45 and px.g < 0.4:
-				n += 1
-			x += 2
-		y += 2
-	return n
-
-
-## Amber pixels in the band AROUND a panel's screen rect -
-## the spill measure. The band holds neighbouring cards and
-## room, whose own amber content is constant across the
-## burst, so the burst's max-min difference isolates what
-## the performer's layers add out there. Post-fix the layers
-## are clipped to the face, so the difference must be zero;
-## pre-fix the cover transform parks two bulbs' worth of lit
-## glass in the band (the build's own pre-fix shot measured
-## lit amber 44 px left of the face).
-func _flicker_spill_band_count(q: ClickableQuad, img: Image) -> int:
-	var cam: Camera3D = get_viewport().get_camera_3d()
-	if cam == null:
-		return -1
-	var rect: Rect2 = _nav_screen_rect(q, cam)
-	# The face's own bounds, with a 1 px tolerance for edge
-	# anti-aliasing (and the layer quads' 5 mm forward offset,
-	# a sub-pixel projection growth at room distance). An
-	# earlier cut shrank the inner rect by several px, which
-	# counted the face's own lit edge ring as "spill" - the
-	# measure was wrong, not the clipping: the burst's newly
-	# lit amber sits entirely inside the face rect.
-	var inner: Rect2 = rect.grow(-1.0)
-	var outer: Rect2 = rect.grow(90.0)
-	var x0: int = clampi(int(outer.position.x), 0, img.get_width() - 1)
-	var y0: int = clampi(int(outer.position.y), 0, img.get_height() - 1)
-	var x1: int = clampi(int(outer.end.x), 0, img.get_width())
-	var y1: int = clampi(int(outer.end.y), 0, img.get_height())
-	var n: int = 0
-	var y: int = y0
-	while y < y1:
-		var x: int = x0
-		while x < x1:
-			if not inner.has_point(Vector2(x, y)) and _flicker_is_amber(img.get_pixel(x, y)):
-				n += 1
-			x += 2
-		y += 2
-	return n
-
-
-## Mean luminance inside a panel's screen rect - the
-## fallback leg's rendered evidence (a surging face darkens
-## the whole rect measurably, whatever its art).
-func _flicker_rect_mean(q: ClickableQuad) -> float:
-	var cam: Camera3D = get_viewport().get_camera_3d()
-	if cam == null:
-		return -1.0
-	var rect: Rect2 = _nav_screen_rect(q, cam)
-	var img: Image = get_viewport().get_texture().get_image()
-	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
-	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
-	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
-	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
-	if x1 <= x0 or y1 <= y0:
-		return -1.0
-	var sum: float = 0.0
-	var n: int = 0
-	var y: int = y0
-	while y < y1:
-		var x: int = x0
-		while x < x1:
-			var px: Color = img.get_pixel(x, y)
-			sum += px.r * 0.3 + px.g * 0.5 + px.b * 0.2
+	var y: int = 0
+	while y < int(win_h):
+		var x: int = 0
+		while x < int(face.x):
+			var ax: int = clampi(int((float(x) - ox) / cover), 0, art.get_width() - 1)
+			var ay: int = clampi(int((float(y) - oy) / cover), 0, art.get_height() - 1)
+			var px: Color = art.get_pixel(ax, ay)
+			if grade:
+				px = _mimic_ref_grade_pixel(px)
+			sum += px
+			var lum: float = 0.2126 * px.r + 0.7152 * px.g + 0.0722 * px.b
+			var qi: int = (1 if float(x) >= face.x * 0.5 else 0) + (2 if float(y) >= win_h * 0.5 else 0)
+			quads[qi] += lum
+			quad_n[qi] += 1
 			n += 1
-			x += 3
-		y += 3
-	return sum / float(maxi(1, n))
+			x += 4
+		y += 4
+	for qi2: int in range(4):
+		if quad_n[qi2] > 0:
+			quads[qi2] /= float(quad_n[qi2])
+	return {"mean": sum / float(n), "luma": 0.2126 * (sum.r / float(n)) + 0.7152 * (sum.g / float(n)) + 0.0722 * (sum.b / float(n)), "quads": quads}
 
 
-## Least-squares blend fit of a frame against two endpoint
-## frames over a panel's screen rect (the pair-strobe leg):
-## returns (alpha, relative residual). Alpha says where the
-## frame sits on the Off->On line - 0 pure Off, 1 pure On,
-## anything between a blend of the two pictures. The
-## residual says whether the blend model explains the frame
-## at all, relative to the endpoints' own distance: a frame
-## whose geometry moved (mid-pop, mid-slide) fits nothing
-## and must not be judged by its alpha.
-func _flicker_blend_fit(q: ClickableQuad, img: Image, off: Image, on: Image) -> Vector2:
-	var cam: Camera3D = get_viewport().get_camera_3d()
-	if cam == null or off == null or on == null or img.get_size() != off.get_size() or img.get_size() != on.get_size():
-		return Vector2(-1.0, 1.0)
-	var rect: Rect2 = _nav_screen_rect(q, cam)
-	var x0: int = clampi(int(rect.position.x), 0, img.get_width() - 1)
-	var y0: int = clampi(int(rect.position.y), 0, img.get_height() - 1)
-	var x1: int = clampi(int(rect.end.x), 0, img.get_width())
-	var y1: int = clampi(int(rect.end.y), 0, img.get_height())
-	var num: float = 0.0
-	var den: float = 0.0
-	var y: int = y0
-	while y < y1:
-		var x: int = x0
-		while x < x1:
-			var oc: Color = off.get_pixel(x, y)
-			var nc: Color = on.get_pixel(x, y)
-			var fc: Color = img.get_pixel(x, y)
-			var d: float = (nc.r + nc.g + nc.b) - (oc.r + oc.g + oc.b)
-			var v: float = (fc.r + fc.g + fc.b) - (oc.r + oc.g + oc.b)
-			num += v * d
-			den += d * d
-			x += 2
-		y += 2
-	if den <= 0.0001:
-		return Vector2(-1.0, 1.0)
-	var alpha: float = num / den
-	var res: float = 0.0
-	var cnt: int = 0
-	y = y0
-	while y < y1:
-		var x: int = x0
-		while x < x1:
-			var oc2: Color = off.get_pixel(x, y)
-			var nc2: Color = on.get_pixel(x, y)
-			var fc2: Color = img.get_pixel(x, y)
-			var osum: float = oc2.r + oc2.g + oc2.b
-			var d2: float = (nc2.r + nc2.g + nc2.b) - osum
-			var pred: float = osum + alpha * d2
-			var diff: float = (fc2.r + fc2.g + fc2.b) - pred
-			res += diff * diff
-			cnt += 1
-			x += 2
-		y += 2
-	if cnt == 0:
-		return Vector2(-1.0, 1.0)
-	var rel: float = sqrt(res / float(cnt)) / sqrt(den / float(cnt))
-	return Vector2(alpha, rel)
-
-
-
-func _flicker_finish() -> void:
-	_shot_flicker_phase = -1
-	if _shot_anim_prefix != "":
-		if _shot_flicker_problems.is_empty():
-			print("PVLDS ANIM SHOT: PASS")
-			get_tree().quit(0)
-		else:
-			printerr("PVLDS ANIM SHOT: FAIL - ", "; ".join(PackedStringArray(_shot_flicker_problems)))
-			get_tree().quit(1)
-		return
-	if _shot_flicker_problems.is_empty():
-		print("PVLDS FLICKER SHOT: PASS counts=", _shot_flicker_counts, " min_brightness=", snappedf(_shot_flicker_min_b, 0.01), " spill=", _shot_flicker_spill)
+func _mimic_finish() -> void:
+	_shot_mimic_phase = -2
+	if _shot_mimic_problems.is_empty():
+		print("PVLDS MIMIC SHOT: PASS")
 		get_tree().quit(0)
 	else:
-		printerr("PVLDS FLICKER SHOT: FAIL - ", "; ".join(PackedStringArray(_shot_flicker_problems)))
+		printerr("PVLDS MIMIC SHOT: FAIL - ", "; ".join(PackedStringArray(_shot_mimic_problems)))
 		get_tree().quit(1)
 
 
-## --pvlds-shot-flicker PREFIX: the power-on flicker's QA
-## hook (the flicker round). Needs the harness's bulb-bearing
-## fixture folder (its config names the folder beside the
-## dummy library): a "Flicker Wide" table whose .directb2s
-## carries five visible amber bulbs over a dark glass (one
-## straddling the name strip, one wholly beneath it). Legs:
-## (1) a fast focus pass never starts a power-on (the settle
-## debounce); (2) settled focus on the fixture card runs the
-## LAYER cascade - sampled frames go dark -> partial -> lit
-## with strictly rising amber counts, five layer quads (the
-## sub-strip bulb skipped), ZERO cascade-driven amber
-## outside the face (the fix round's spill measure), and
-## the popped card stands at its art's true aspect within
-## the cap; (3) a title card runs the brightness fallback
-## on the same trigger (face dips dark, ends at full);
-## (4) the fix round's pop gates - a wide embedded card and
-## a tall playfield card pop at the uniform 1.08, a glass-
-## shaped card at its true aspect within the cap; (5) the
-## wart - a game whose backglass hides its base behind a
-## corrupt designated element wears that base as its face
-## (phase 0 proves pixel equality with the layer set's
-## base) and cascades on it; (6) the warmer's second
-## phase - a never-focused B2S card's first focus cascades
-## immediately; (7) opening the detail view mid-cascade
-## cancels cleanly; (8) the adversarial pair (fix round
-## 2) - halves of different aspects, no plain image: the
-## card rests on the dark Off glass (phase 0 measures the
-## face's pixels) and its one full-frame layer lights it
-## in the Off glass's own space, the lit amber's centroid
-## left of center where the On image put it; (9) pair +
-## plain - a plain backglass with a decoy pair riding in
-## the same file: both halves ignored, the card cascades
-## on the plain image's two bulbs; (10) the pair-strobe
-## leg - a content-differing pair (Flicker Specter: the On
-## half shifted +15 px and redrawn bright, its seeded
-## schedule carrying a dip): the pair layer's alpha is
-## {0, 1} ONLY, proven three ways - live per-frame samples,
-## a deterministic sweep of the cascade clock, and
-## rendered blend fits against the Off/On endpoint frames
-## including a frame rendered with the clock parked inside
-## the dip window. Leg (2) carries the counter-guard: a
-## bulb layer's dip still measures 0.12. (11) the flasher
-## leg - a glass with two RomIDType-1 lamps and one giant
-## RomIDType-2 solenoid snippet (a red band the base does
-## not carry): the set extracts with the kinds the file
-## declares, the flasher renders mid-cascade, and the
-## settled card is lamps only - the flasher fully released
-## (parked alpha probes + rendered strike/settled frames).
-## (12) the kick leg (half-2 round) - the Wide card's set
-## is un-warmed by hand (cache, stamp, entry memo, kick
-## record: no production path makes a warm card cold
-## again, so the fixture builds the cold state directly):
-## its focus must surge (the honest cold visit) while the
-## kick lands the set in the background, and the NEXT
-## visit cascades. The animation leg (animation-release
-## round) runs as phase 13 of this same driver but under
-## its OWN boot, --pvlds-shot-anim (run_anim_shots.sh):
-## its fixture lives in its own folder, because a
-## thirteenth Flicker title in this suite's folder pushed
-## Flicker Wide off the wall's first page. The leg: a
-## glass whose file sequences two of
-## its four bulbs in an <Animations> section (a giant
-## RomIDType-1 snippet painting a green band, a small
-## untyped bulb painting magenta; two named-by-nothing amber
-## lamps hold): the members extract as ANIM, render
-## mid-cascade, and are gone from the settled card - the
-## settled frame holds zero member content (green and magenta
-## counts) while the lamps stay lit (parked alpha probes
-## on a member's schedule + rendered strike/settled
-## frames, the flasher leg's shape). The run's log
-## carries the POWER lines for every leg above; the
-## harness greps them by family.
-## Saves PREFIX_base/mid/lit.png plus pair/flasher frames.
-func _drive_shot_flicker() -> void:
+## --pvlds-shot-mimic PREFIX: the power-on mimic's QA hook
+## (the swap round). Two boots share this driver:
+##  * the fixture boot (default): the harness's fixture
+##    folder beside the dummy library. The fixture FILES
+##    survive the swap (they are real .directb2s shapes);
+##    what they exercise changed entirely. Legs: (1) the
+##    settle debounce - a fast focus pass never starts a
+##    power-on; (2) the wide bulb fixture's full mimic leg -
+##    rest identity at power 0 across a restore, the sag dip
+##    present at 0.34 s, the diagonal sweep (TL lifted
+##    before BR mid-sweep), settled = the grade (against a
+##    reference grade of the face computed here), exactly
+##    ONE overlay quad on the performing panel, restore
+##    returns the plain face; (3) the Specter pair leg -
+##    rest is the Off face, settled is the author's On
+##    image, restore returns to Off; (4) quick uniformity
+##    legs - the plain pair (mode 3) and the flasher,
+##    animation, wart and warmed fixtures and title faces
+##    (mode 2) all take the same performance and settle;
+##    (5) opening detail mid-cascade cancels cleanly;
+##    (6) the structural assertion: after every focus above,
+##    no layer cache exists on disk - the snippet stack is
+##    gone, not dormant. Parked probes freeze the room's
+##    cascade clock the prototype's way (phase pinned to 2,
+##    the driver the only writer of _power_t).
+##    Negative controls (harness env PVLDS_MIMIC_NC):
+##    "grade" pins the cascade clock at 0 through leg 2, so
+##    its settled-grade assertion must fail by name; "pair"
+##    pins it at the crossfade's start through leg 3, so
+##    its settled-On assertion must fail by name.
+##  * the real boot (env PVLDS_MIMIC_REAL=1): the harness's
+##    three-table library of REAL .directb2s files (Taxi,
+##    Goonies, Bride). Assertions stop at mode 2 + started:
+##    the driver parks the clock at the envelope's named
+##    instants and saves PREFIX_<key>_<still>.png stills
+##    plus a MIMIC_CROP line per subject; the harness's
+##    Python post-check verifies the settled frames against
+##    an independent reference grade of each real face.
+## Resolve the subjects standing on the wall's CURRENT page
+## (panels are rebuilt per page; a subject not standing here
+## keeps whatever reference it had - callers re-resolve after
+## every flip).
+func _mimic_resolve_panels() -> void:
+	for p: ClickableQuad in _room._panels:
+		if _shot_mimic_wide != null and p.payload == _shot_mimic_wide.game_id:
+			_shot_mimic_wide_panel = p
+		elif p.payload == "dg-cinder-peak":
+			_shot_mimic_panel2 = p
+		for pre2: String in _shot_mimic_fixtures.keys():
+			var fx0: Dictionary = _shot_mimic_fixtures[pre2] as Dictionary
+			if p.payload == (fx0["game"] as GameEntry).game_id:
+				fx0["panel"] = p
+		if _shot_mimic_title_panel == null:
+			var tg: GameEntry = _scanner.game_by_id(p.payload)
+			if tg != null and not tg.has_art_available():
+				_shot_mimic_title_panel = p
+
+
+func _drive_shot_mimic() -> void:
 	var now: int = Time.get_ticks_msec()
-	if now - _shot_flicker_since > 90000 and _shot_flicker_phase > 0:
-		_shot_flicker_problems.append("timed out in phase %d" % _shot_flicker_phase)
-		_flicker_finish()
+	if _shot_mimic_real:
+		_drive_shot_mimic_real(now)
 		return
-	match _shot_flicker_phase:
+	if now - _shot_mimic_since > 120000 and _shot_mimic_phase > 0:
+		_shot_mimic_problems.append("timed out in phase %d" % _shot_mimic_phase)
+		_mimic_finish()
+		return
+	match _shot_mimic_phase:
 		0:
 			if _room == null or not _room.visible or not _room.wall_ready or _scanner == null:
 				return
-			if _shot_flicker_stage == 0:
+			if _shot_mimic_stage == 0:
 				_room._handle_rail("filter:all")
-				# Park the harness pointer in a corner: the
-				# room's pop target prefers the pointer's hover
-				# over pad focus, and a pointer left sitting on
-				# a popped card holds the performance there
-				# against every focus change below (the fix
-				# round's fuller wall put a card under it).
 				get_viewport().warp_mouse(Vector2(4, 4))
-				_shot_flicker_stage = 1
+				_shot_mimic_stage = 1
+				_shot_mimic_since = now
 				return
-			if _shot_anim_prefix != "":
-				# The animation leg's own boot: the library
-				# is the dummy folder plus the Anim fixture
-				# alone (one page), so phase 0 only registers
-				# that fixture, waits for its panel, and
-				# hands straight to the animation leg.
-				if not _shot_flicker_fixtures.has("Flicker Anim"):
-					for ga: GameEntry in _scanner.games:
-						if ga.title.begins_with("Flicker Anim"):
-							_shot_flicker_fixtures["Flicker Anim"] = {"game": ga}
-					if not _shot_flicker_fixtures.has("Flicker Anim"):
-						if not _scan_active:
-							_shot_flicker_problems.append("the Flicker Anim fixture game is not in the library (the harness config names its folder)")
-							_flicker_finish()
-						return
-				var fxa: Dictionary = _shot_flicker_fixtures["Flicker Anim"] as Dictionary
-				for pa2: ClickableQuad in _room._panels:
-					if pa2.payload == (fxa["game"] as GameEntry).game_id:
-						fxa["panel"] = pa2
-				if not fxa.has("panel"):
-					return
-				_shot_flicker_stage = 0
-				_shot_flicker_since = now
-				_shot_flicker_phase = 13
-				return
-			if _shot_flicker_game == null:
+			if _shot_mimic_wide == null:
 				for g: GameEntry in _scanner.games:
 					if g.title.begins_with("Flicker Wide"):
-						_shot_flicker_game = g
-					for pre: String in ["Flicker Backdrop Wide", "Flicker Playfield Tall", "Flicker Glass Pop", "Flicker Wart", "Flicker Warmed", "Flicker Pair", "Flicker Pair Plain", "Flicker Specter", "Flicker Flasher"]:
-						# "Flicker Pair" is a prefix of "Flicker
-						# Pair Plain" - the plain game must not
-						# claim the pair's slot.
+						_shot_mimic_wide = g
+					for pre: String in ["Flicker Specter", "Flicker Pair", "Flicker Flasher", "Flicker Anim", "Flicker Wart", "Flicker Warmed"]:
 						if pre == "Flicker Pair" and g.title.begins_with("Flicker Pair Plain"):
 							continue
 						if g.title.begins_with(pre):
-							_shot_flicker_fixtures[pre] = {"game": g}
-			if _shot_flicker_game == null:
+							_shot_mimic_fixtures[pre] = {"game": g}
+			if _shot_mimic_wide == null:
 				if not _scan_active:
-					_shot_flicker_problems.append("the Flicker Wide fixture game is not in the library (the harness config names its folder)")
-					_flicker_finish()
+					_shot_mimic_problems.append("the Flicker Wide fixture game is not in the library (the harness config names its folder)")
+					_mimic_finish()
 				return
-			for p: ClickableQuad in _room._panels:
-				if p.payload == _shot_flicker_game.game_id:
-					_shot_flicker_panel = p
-				elif p.payload == "dg-cinder-peak":
-					_shot_flicker_panel2 = p
-				for pre2: String in _shot_flicker_fixtures.keys():
-					var fx0: Dictionary = _shot_flicker_fixtures[pre2] as Dictionary
-					if p.payload == (fx0["game"] as GameEntry).game_id:
-						fx0["panel"] = p
-			if _shot_flicker_panel == null or _shot_flicker_panel2 == null:
-				var payloads: Array = []
+			if _shot_mimic_stage == 3:
+				# Returning from the page flip: wait for the
+				# slide and the rebuild to land, then resolve.
+				if _room.page_slide_active() or not _room.wall_ready:
+					return
+				_shot_mimic_stage = 2
+			_mimic_resolve_panels()
+			if _shot_mimic_wide_panel == null:
+				if not _shot_mimic_flip_tried:
+					# Thirteen fixture titles chase twelve
+					# slots: the wide card may stand on page
+					# two. Flip once and look again.
+					_shot_mimic_flip_tried = true
+					_shot_mimic_on_page2 = true
+					_room._bumper_page(1)
+					_shot_mimic_stage = 3
+					return
+				_shot_mimic_problems.append("the wide fixture panel is not on either page")
+				_mimic_finish()
+				return
+			# The debounce partner: any other panel standing
+			# on the wide card's page.
+			if _shot_mimic_partner == null:
 				for p2: ClickableQuad in _room._panels:
-					payloads.append(p2.payload)
-				_shot_flicker_problems.append("fixture/title panels not on the wall (flicker=%s title=%s) panels=%s" % [_shot_flicker_panel != null, _shot_flicker_panel2 != null, str(payloads)])
-				_flicker_finish()
-				return
-			for pre3: String in _shot_flicker_fixtures.keys():
-				if not (_shot_flicker_fixtures[pre3] as Dictionary).has("panel"):
-					_shot_flicker_problems.append("fixture %s is not on the wall" % pre3)
-					_flicker_finish()
-					return
-			# The wart must be CONSTRUCTED as the deep-fixed
-			# wart before any leg trusts it: a backglass in
-			# hand whose designated DMD image is corrupt, and
-			# - the fix - a face that IS its own backglass
-			# extraction, pixel for pixel the layer set's
-			# base (the blob fallback's find, shared by both
-			# readers now). (Under the split readers this
-			# check ran the other way: the flat reader failed
-			# the file, so the face had to NOT be its
-			# extraction while its lamps composited over a
-			# stranger's face.)
-			var wart0: Dictionary = _shot_flicker_fixtures.get("Flicker Wart", {}) as Dictionary
-			if not wart0.is_empty():
-				var wg0: GameEntry = wart0["game"] as GameEntry
-				wg0.ensure_art()
-				if wg0.flicker_source() == "":
-					_shot_flicker_problems.append("the wart fixture game has no flicker source - the wart is not constructed")
-					_flicker_finish()
-					return
-				if wg0.art_path != ArtProvider.cache_path_for(wg0.flicker_source()):
-					_shot_flicker_problems.append("the wart fixture's face is not its backglass extraction - the deep fix did not land")
-					_flicker_finish()
-					return
-				var wdata: Dictionary = wg0.ensure_flicker()
-				var wface: Image = Image.new()
-				var wbase: Image = Image.new()
-				if wdata.is_empty() or wface.load(wg0.art_path) != OK or wbase.load(str(wdata.get("base_path", ""))) != OK or wface.get_data() != wbase.get_data():
-					_shot_flicker_problems.append("the wart fixture's face and its layer base are not the same image")
-					_flicker_finish()
-					return
-			# The pair fixtures, constructed: the adversarial
-			# pair must rest on its OFF glass and the pair+
-			# plain on its plain image - measured on the face
-			# cache's own pixels: the 1000x800 glass fitted
-			# (512x410), dark navy (blue clearly over red, red
-			# low), and NO amber anywhere. A face wearing the
-			# lit On half, the decoy On (solid amber), or the
-			# decoy Off (dark red, red over blue) fails here,
-			# before any rendered leg runs.
-			for pre4: String in ["Flicker Pair", "Flicker Pair Plain"]:
-				var pf0: Dictionary = _shot_flicker_fixtures.get(pre4, {}) as Dictionary
-				if pf0.is_empty():
-					continue
-				var pg0: GameEntry = pf0["game"] as GameEntry
-				pg0.ensure_art()
-				if pg0.art_path != ArtProvider.cache_path_for(pg0.flicker_source()):
-					_shot_flicker_problems.append("the %s fixture's face is not its backglass extraction" % pre4)
-					_flicker_finish()
-					return
-				var pimg: Image = Image.new()
-				if pimg.load(pg0.art_path) != OK or pimg.get_size() != Vector2i(512, 410):
-					_shot_flicker_problems.append("the %s fixture's face is not its 1000x800 glass fitted (512x410)" % pre4)
-					_flicker_finish()
-					return
-				var pmean: Vector3 = Vector3.ZERO
-				var pcount: int = 0
-				var pamber: int = 0
-				var pyy: int = 0
-				while pyy < pimg.get_height():
-					var pxx: int = 0
-					while pxx < pimg.get_width():
-						var pc: Color = pimg.get_pixel(pxx, pyy)
-						pmean += Vector3(pc.r, pc.g, pc.b)
-						pcount += 1
-						if _flicker_is_amber(pc):
-							pamber += 1
-						pxx += 4
-					pyy += 4
-				pmean /= float(maxi(1, pcount))
-				if pamber > 0 or pmean.z < pmean.x + 0.03 or pmean.x > 0.12:
-					_shot_flicker_problems.append("the %s fixture does not rest dark (mean %s, amber px %d) - it is wearing a lit or decoy image" % [pre4, str(pmean), pamber])
-					_flicker_finish()
-					return
-			var data: Dictionary = _shot_flicker_game.ensure_flicker()
-			if (data.get("layers", []) as Array).is_empty():
-				_shot_flicker_problems.append("the fixture game's layer set did not extract")
-				_flicker_finish()
-				return
-			_room._set_focused(_shot_flicker_panel)
-			_shot_flicker_frames = 0
-			_shot_flicker_since = now
-			_shot_flicker_phase = 1
+					if p2 != _shot_mimic_wide_panel:
+						_shot_mimic_partner = p2
+						break
+			_shot_mimic_base_children = _shot_mimic_wide_panel.get_child_count()
+			_shot_mimic_phase = 1
+			_shot_mimic_stage = 0
+			_shot_mimic_since = now
 		1:
-			# Debounce leg: a ~90 ms rest on the fixture card
+			# Debounce leg: a ~90 ms rest on the wide card
 			# (well inside the settle window, and time-based -
 			# a frame count would straddle the window at
 			# software-render frame rates), then focus moves
-			# on. The passed card may never perform (the card
-			# focus lands on may - it gets its own settle;
-			# that is the next legs' business, and phase 2's
-			# focus change restores it).
-			_shot_flicker_frames += 1
-			if _room.power_panel() == _shot_flicker_panel:
-				_shot_flicker_problems.append("a fast focus pass started a power-on on the passed card (debounce failed)")
-				_flicker_finish()
-				return
-			if now - _shot_flicker_since > 90 and _shot_flicker_frames >= 1:
-				_room._set_focused(_shot_flicker_panel2)
-			if now - _shot_flicker_since > 450:
-				_shot_flicker_counts.clear()
-				_shot_flicker_saw_partial = false
-				_room._set_focused(_shot_flicker_panel)
-				_shot_flicker_since = now
-				_shot_flicker_phase = 2
+			# on. The passed card may never perform; the card
+			# focus lands on may (it gets its own settle -
+			# leg 2's focus change restores it).
+			match _shot_mimic_stage:
+				0:
+					_room._set_focused(_shot_mimic_wide_panel)
+					_shot_mimic_stage = 1
+					_shot_mimic_wait = 0
+					_shot_mimic_since = now
+				1:
+					_shot_mimic_wait += 1
+					if _room.power_panel() == _shot_mimic_wide_panel:
+						_shot_mimic_problems.append("debounce leg: a fast focus pass started a power-on on the passed card (the settle debounce is broken)")
+						_mimic_finish()
+						return
+					if now - _shot_mimic_since > 90 and _shot_mimic_wait >= 1:
+						_room._set_focused(_shot_mimic_partner)
+						_shot_mimic_stage = 2
+						_shot_mimic_since = now
+				2:
+					if _room.power_panel() == _shot_mimic_wide_panel:
+						_shot_mimic_problems.append("debounce leg: a fast focus pass started a power-on on the passed card (the settle debounce is broken)")
+						_mimic_finish()
+						return
+					if now - _shot_mimic_since > 350:
+						_room._set_focused(null)
+						_shot_mimic_phase = 2
+						_shot_mimic_stage = 0
+						_shot_mimic_since = now
 		2:
-			# Layers leg: grab a BURST of frames on a wall-
-			# clock cadence across the cascade and past its
-			# settle, then count them all once the pressure
-			# is off. Rendered readbacks lag the room's state
-			# by several frames under software rendering, so
-			# no single triggered sample can be trusted to
-			# land mid-cascade - but a burst spanning the
-			# lag must contain the dark -> partial -> lit arc
-			# if the effect truly renders as a cascade.
-			var ph: int = _room.power_phase()
-			if ph == 1 or (ph == 2 and _shot_flicker_t0 > 0 and now < _shot_flicker_t0 + 1900):
-				if ph == 1:
-					var lit_n: int = 0
-					for li: int in range(_room.power_layer_count()):
-						if _room.power_layer_alpha(li) > 0.5:
-							lit_n += 1
-					if lit_n > 0 and lit_n < _room.power_layer_count():
-						_shot_flicker_saw_partial = true
-					if _shot_flicker_t0 == 0:
-						_shot_flicker_t0 = now
-						_shot_flicker_next_grab = now
-				if _shot_flicker_t0 > 0 and now >= _shot_flicker_next_grab:
-					_shot_flicker_burst.append(get_viewport().get_texture().get_image())
-					_shot_flicker_next_grab = now + 130
-			elif ph == 2 and _shot_flicker_t0 > 0:
-				var series: Array[int] = []
-				for fimg: Image in _shot_flicker_burst:
-					series.append(_flicker_amber_count_img(_shot_flicker_panel, fimg))
-				var base_c: int = series[0] if series.size() > 0 else -1
-				var lit_c: int = series[series.size() - 1] if series.size() > 0 else -1
-				var mid_c: int = -1
-				var mid_idx: int = -1
-				for si: int in range(series.size()):
-					if series[si] > base_c and series[si] < lit_c and (mid_idx < 0 or abs(series[si] - (base_c + lit_c) / 2) < abs(mid_c - (base_c + lit_c) / 2)):
-						mid_c = series[si]
-						mid_idx = si
-				_shot_flicker_counts = [base_c, mid_c, lit_c]
-				# Spill: amber in the band around the face,
-				# differenced across the burst (the band's own
-				# constant content cancels). Zero is the only
-				# passing value - the layers are clipped to
-				# the face on every edge now.
-				var band: Array[int] = []
-				for fimg2: Image in _shot_flicker_burst:
-					band.append(_flicker_spill_band_count(_shot_flicker_panel, fimg2))
-				if not band.is_empty():
-					var bmin: int = band[0]
-					var bmax: int = band[0]
-					for bv: int in band:
-						bmin = mini(bmin, bv)
-						bmax = maxi(bmax, bv)
-					_shot_flicker_spill = bmax - bmin
-					if _shot_flicker_spill != 0:
-						_shot_flicker_problems.append("lamp layers spill outside the face (burst band counts %s)" % str(band))
-				if not _shot_flicker_burst.is_empty():
-					_shot_flicker_burst[0].save_png(_shot_flicker_prefix + "_base.png")
-					_shot_flicker_burst[_shot_flicker_burst.size() - 1].save_png(_shot_flicker_prefix + "_lit.png")
-				if mid_idx >= 0:
-					_shot_flicker_burst[mid_idx].save_png(_shot_flicker_prefix + "_mid.png")
-				if _room.power_mode() != 1:
-					_shot_flicker_problems.append("the B2S-backed card did not use its lamp layers (mode %d)" % _room.power_mode())
-				if _room.power_layer_count() != 5:
-					_shot_flicker_problems.append("layer quads %d, want 5 (sixth bulb lives under the name strip)" % _room.power_layer_count())
-				if not _shot_flicker_saw_partial:
-					_shot_flicker_problems.append("no partial-lit state observed - the cascade read as a switch, not a cascade")
-				if base_c < 0 or lit_c < base_c + 100:
-					_shot_flicker_problems.append("the lit card is not visibly brighter than the unlit base (base %d, lit %d)" % [base_c, lit_c])
-				if mid_c <= base_c or mid_c >= lit_c:
-					_shot_flicker_problems.append("no rendered partial frame between dark and lit (series %s)" % str(series))
-				var asp: float = _room.panel_art_aspect(_shot_flicker_panel)
-				if absf(asp - 1.25) > 0.03:
-					_shot_flicker_problems.append("fixture art aspect %.3f, want 1.25" % asp)
-				var full: Vector2 = _room.panel_full_pop_scale(_shot_flicker_panel)
-				if absf(_shot_flicker_panel.scale.x - full.x) > 0.02 or absf(_shot_flicker_panel.scale.y - full.y) > 0.02:
-					_shot_flicker_problems.append("popped scale %s, want %s (true-aspect pop)" % [str(_shot_flicker_panel.scale), str(full)])
-				# Bulb-dip guard (pair-strobe round): the pair
-				# fix must not overreach - a BULB layer's dip
-				# is still 0.12. Probe the live schedule
-				# deterministically: park the cascade clock
-				# inside a dipped layer's dip window, apply,
-				# and read the material alpha back.
-				var guard_probed: bool = false
-				for gi: int in range(_room._power_schedule.size()):
-					var gs: Array = _room._power_schedule[gi] as Array
-					if float(gs[2]) > float(gs[1]):
-						_room._power_t = (float(gs[1]) + float(gs[2])) * 0.5
-						_room._apply_power()
-						var ga: float = _room.power_layer_alpha(gi)
-						if absf(ga - 0.12) > 0.02:
-							_shot_flicker_problems.append("a bulb layer's dip reads %.2f, want 0.12 - the pair strobe overreached" % ga)
-						guard_probed = true
-						break
-				if not guard_probed:
-					_shot_flicker_problems.append("the bulb fixture's schedule has no dipped layer - the 0.12 guard has nothing to probe")
-				_room._power_t = RoomView.POWER_CASCADE_SEC
-				_room._apply_power()
-				_shot_flicker_min_b = 1.0
-				_shot_flicker_min_mean = -1.0
-				_room._set_focused(_shot_flicker_panel2)
-				_shot_flicker_since = now
-				_shot_flicker_phase = 3
-			elif now - _shot_flicker_since > 10000:
-				_shot_flicker_problems.append("the layers cascade never ran")
-				_flicker_finish()
+			_drive_mimic_wide_leg(now)
 		3:
-			# Fallback leg: the title card surges its face.
-			# Evidence is twofold - the face-brightness state
-			# AND the rendered mean luminance in the card's
-			# rect (the surge darkens the whole face, so the
-			# mean must dip against its resting value).
-			var ph2: int = _room.power_phase()
-			if ph2 == 1 and _room.power_panel() == _shot_flicker_panel2:
-				_shot_flicker_min_b = minf(_shot_flicker_min_b, _shot_flicker_panel2.face_brightness())
-				var m: float = _flicker_rect_mean(_shot_flicker_panel2)
-				if m >= 0.0 and (_shot_flicker_min_mean < 0.0 or m < _shot_flicker_min_mean):
-					_shot_flicker_min_mean = m
-			elif ph2 == 2 and _room.power_panel() == _shot_flicker_panel2:
-				# The honest denominator: the same card, in the
-				# same popped geometry, at full brightness.
-				var end_mean: float = _flicker_rect_mean(_shot_flicker_panel2)
-				if _room.power_mode() != 0:
-					_shot_flicker_problems.append("the title card did not use the brightness fallback (mode %d)" % _room.power_mode())
-				if _shot_flicker_min_b > 0.85:
-					_shot_flicker_problems.append("the fallback's face never dipped (min brightness %.2f)" % _shot_flicker_min_b)
-				if _shot_flicker_min_mean < 0.0 or end_mean <= 0.0 or _shot_flicker_min_mean > end_mean * 0.8:
-					_shot_flicker_problems.append("the fallback's rendered face never darkened (min mean %.3f, settled mean %.3f)" % [_shot_flicker_min_mean, end_mean])
-				if absf(_shot_flicker_panel2.face_brightness() - 1.0) > 0.001:
-					_shot_flicker_problems.append("the fallback did not end at full brightness (%.3f)" % _shot_flicker_panel2.face_brightness())
-				_shot_flicker_stage = 0
-				_shot_flicker_armed = false
-				_shot_flicker_since = now
-				_shot_flicker_phase = 4
-			elif now - _shot_flicker_since > 10000:
-				_shot_flicker_problems.append("the fallback cascade never ran")
-				_flicker_finish()
+			_drive_mimic_pair_leg(now)
 		4:
-			# Fix-round pop gates: settle on each pop subject
-			# in turn and read its scale. The wide embedded
-			# card and the tall playfield card are NOT glass
-			# shapes - both must pop at the uniform 1.08 (no
-			# neighbour swallowed, no shrink). The glass-
-			# shaped card keeps its true-aspect grow, bounded
-			# by the cap.
-			var order: Array[String] = ["Flicker Backdrop Wide", "Flicker Playfield Tall", "Flicker Glass Pop"]
-			var fx4: Dictionary = _shot_flicker_fixtures[order[_shot_flicker_stage]] as Dictionary
-			var panel4: ClickableQuad = fx4["panel"] as ClickableQuad
-			if not _shot_flicker_armed:
-				_room._set_focused(panel4)
-				_shot_flicker_since = now
-				_shot_flicker_armed = true
-				return
-			if now - _shot_flicker_since < 700:
-				return
-			var full4: Vector2 = _room.panel_full_pop_scale(panel4)
-			var asp4: float = _room.panel_art_aspect(panel4)
-			if order[_shot_flicker_stage] == "Flicker Glass Pop":
-				if absf(asp4 - 1.2) > 0.03:
-					_shot_flicker_problems.append("glass fixture aspect %.3f, want 1.2 (the fixture is not what it claims)" % asp4)
-				if full4.x <= RoomView.POP_OUT_SCALE or full4.x > RoomView.POP_FULL_X_MAX + 0.001 or absf(full4.y - RoomView.POP_OUT_SCALE) > 0.001:
-					_shot_flicker_problems.append("glass pop %s: want x in (1.08, cap %.2f], y = 1.08" % [str(full4), RoomView.POP_FULL_X_MAX])
-			else:
-				if order[_shot_flicker_stage] == "Flicker Backdrop Wide" and asp4 < 1.6:
-					_shot_flicker_problems.append("wide fixture aspect %.3f, want ~1.71 (the fixture is not what it claims)" % asp4)
-				if order[_shot_flicker_stage] == "Flicker Playfield Tall" and (asp4 < 0.45 or asp4 > 0.55):
-					_shot_flicker_problems.append("tall fixture aspect %.3f, want ~0.5 (the fixture is not what it claims)" % asp4)
-				if full4 != Vector2(RoomView.POP_OUT_SCALE, RoomView.POP_OUT_SCALE):
-					_shot_flicker_problems.append("%s pops at %s, want the uniform 1.08 (aspect %.3f is no glass's shape)" % [order[_shot_flicker_stage], str(full4), asp4])
-			if absf(panel4.scale.x - full4.x) > 0.02 or absf(panel4.scale.y - full4.y) > 0.02:
-				_shot_flicker_problems.append("%s settled scale %s, want %s" % [order[_shot_flicker_stage], str(panel4.scale), str(full4)])
-			_shot_flicker_stage += 1
-			_shot_flicker_armed = false
-			_shot_flicker_since = now
-			if _shot_flicker_stage >= order.size():
-				_shot_flicker_stage = 0
-				_room._set_focused(_shot_flicker_panel2)
-				_shot_flicker_phase = 5
+			_drive_mimic_quick_leg(now)
 		5:
-			# Wart leg: the wart game's face IS its own base
-			# now (phase 0 proved pixel equality with the
-			# layer set's base), and its lamps must cascade
-			# over it here in the room. First settle may
-			# surge while the set is cold: wait for the set
-			# to land, settle again, and the second visit
-			# must run the layers.
-			var fx5: Dictionary = _shot_flicker_fixtures["Flicker Wart"] as Dictionary
-			var g5: GameEntry = fx5["game"] as GameEntry
-			var panel5: ClickableQuad = fx5["panel"] as ClickableQuad
-			if _shot_flicker_stage == 0:
-				if not _shot_flicker_armed:
-					_room._set_focused(panel5)
-					_shot_flicker_since = now
-					_shot_flicker_armed = true
-					return
-				if _room.power_panel() == panel5:
-					_room._set_focused(_shot_flicker_panel2)
-					_shot_flicker_armed = false
-					_shot_flicker_stage = 1
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 10000:
-					_shot_flicker_problems.append("the wart leg's first power-on never started")
-					_flicker_finish()
-			elif _shot_flicker_stage == 1:
-				if ArtProvider.has_flicker_layers(g5.flicker_source()):
-					_shot_flicker_stage = 2
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 30000:
-					_shot_flicker_problems.append("the wart game's layers were never extracted - the kick never fired")
-					_flicker_finish()
-			elif _shot_flicker_stage == 2:
-				if not _shot_flicker_armed:
-					_room._set_focused(panel5)
-					_shot_flicker_since = now
-					_shot_flicker_armed = true
-					return
-				if _room.power_panel() == panel5:
-					if _room.power_mode() != 1:
-						_shot_flicker_problems.append("the wart game surged on its second visit too (mode %d) - its lamps never cascade" % _room.power_mode())
-					elif _room.power_layer_count() <= 0:
-						_shot_flicker_problems.append("the wart game claims layers mode with no layer quads")
-					_shot_flicker_armed = false
-					_shot_flicker_stage = 0
-					_shot_flicker_since = now
-					_shot_flicker_phase = 6
-				elif now - _shot_flicker_since > 10000:
-					_shot_flicker_problems.append("the wart leg's second power-on never started")
-					_flicker_finish()
+			# Detail-cancel leg: open detail mid-cascade; the
+			# performer restores in the same breath. The
+			# subject is the Specter pair (a page-one card;
+			# the wide card may stand on page two).
+			var dfx: Dictionary = _shot_mimic_fixtures.get("Flicker Specter", {}) as Dictionary
+			var dpanel: ClickableQuad = dfx.get("panel", null) as ClickableQuad
+			match _shot_mimic_stage:
+				0:
+					_room._set_focused(dpanel)
+					_shot_mimic_stage = 1
+					_shot_mimic_since = now
+				1:
+					if _room.power_panel() == dpanel and _room.power_phase() == 1:
+						_room._open_detail(dfx["game"] as GameEntry)
+						_shot_mimic_stage = 2
+						_shot_mimic_since = now
+					elif now - _shot_mimic_since > 15000:
+						_shot_mimic_problems.append("detail-cancel leg: the cascade never started")
+						_mimic_finish()
+				2:
+					if now - _shot_mimic_since > 150:
+						if _room.power_phase() != 0 or _room.power_overlay_count() != 0:
+							_shot_mimic_problems.append("detail-cancel leg: opening detail did not cancel the power-on (phase %d, overlays %d)" % [_room.power_phase(), _room.power_overlay_count()])
+						_room._detail.handle_escape()
+						_room._on_detail_closed()
+						_shot_mimic_stage = 3
+						_shot_mimic_since = now
+				3:
+					if _room.wall_ready and now - _shot_mimic_since > 300:
+						_shot_mimic_phase = 6
+						_shot_mimic_since = now
 		6:
-			# Warmer leg: nobody has focused the Warmed card
-			# in this run - if its layer set is waiting, only
-			# the warmer's second phase can have put it there.
-			# Its FIRST focus must then cascade immediately,
-			# no settle-kick, no surge.
-			var fx6: Dictionary = _shot_flicker_fixtures["Flicker Warmed"] as Dictionary
-			var g6: GameEntry = fx6["game"] as GameEntry
-			var panel6: ClickableQuad = fx6["panel"] as ClickableQuad
-			if not ArtProvider.has_flicker_layers(g6.flicker_source()):
-				if now - _shot_flicker_since > 90000:
-					_shot_flicker_problems.append("the warmer never prefetched the Warmed fixture's layers")
-					_flicker_finish()
-				return
-			if not _shot_flicker_armed:
-				_room._set_focused(panel6)
-				_shot_flicker_since = now
-				_shot_flicker_armed = true
-				return
-			if _room.power_panel() == panel6:
-				if _room.power_mode() != 1:
-					_shot_flicker_problems.append("the warmed card's first focus surged instead of cascading (mode %d)" % _room.power_mode())
-				elif _room.power_layer_count() != 5:
-					_shot_flicker_problems.append("the warmed card built %d layer quads, want 5" % _room.power_layer_count())
-				_shot_flicker_armed = false
-				_shot_flicker_stage = 0
-				_shot_flicker_since = now
-				_room._set_focused(_shot_flicker_panel)
-				_shot_flicker_phase = 7
-			elif now - _shot_flicker_since > 10000:
-				_shot_flicker_problems.append("the warmed leg's power-on never started")
-				_flicker_finish()
-		7:
-			# Cancel leg: detail opens mid-cascade; the
-			# performer restores in the same breath.
-			if _room.power_phase() == 1 and _room.power_layer_count() > 0:
-				_room._open_detail(_shot_flicker_game)
-				_shot_flicker_stage = 2
-				_shot_flicker_since = now
-			elif _shot_flicker_stage == 2 and now - _shot_flicker_since > 120:
-				if _room.power_phase() != 0 or _room.power_layer_count() != 0:
-					_shot_flicker_problems.append("opening detail did not cancel the cascade (phase %d, layers %d)" % [_room.power_phase(), _room.power_layer_count()])
-				if absf(_shot_flicker_panel.face_brightness() - 1.0) > 0.001:
-					_shot_flicker_problems.append("the cancelled card's face did not restore to full brightness")
-				_shot_flicker_stage = 0
-				_shot_flicker_armed = false
-				_shot_flicker_since = now
-				_shot_flicker_phase = 8
-			elif _shot_flicker_stage != 2 and now - _shot_flicker_since > 10000:
-				_shot_flicker_problems.append("the cancel leg's cascade never started")
-				_flicker_finish()
-		8:
-			# Pair leg (fix round 2): close the detail view
-			# the cancel leg left open (its close rebuilds
-			# the wall - the fixture panels are re-resolved
-			# by payload), settle on the adversarial pair,
-			# and burst-sample its cascade. The card rests
-			# on the dark Off glass (phase 0 measured it);
-			# its one layer must light the On image IN THE
-			# OFF GLASS'S SPACE: amber rising from ~none to
-			# a left-of-center mass (the On image's amber is
-			# its left half, mapped through the Off cover),
-			# and nothing outside the face.
-			var fx8: Dictionary = _shot_flicker_fixtures["Flicker Pair"] as Dictionary
-			var g8: GameEntry = fx8["game"] as GameEntry
-			if _shot_flicker_stage == 0:
-				if not _shot_flicker_armed:
-					# The detail's own escape: hides the view
-					# AND emits closed (the room's handler
-					# then rebuilds the wall). Calling the
-					# handler alone leaves the view standing
-					# over the wall - the pair cards performed
-					# behind it, occluded.
-					_room._detail.handle_escape()
-					_shot_flicker_armed = true
-					_shot_flicker_since = now
-					return
-				var fx9r: Dictionary = _shot_flicker_fixtures["Flicker Pair Plain"] as Dictionary
-				var p8: ClickableQuad = null
-				var p9: ClickableQuad = null
-				for p: ClickableQuad in _room._panels:
-					if p.payload == g8.game_id:
-						p8 = p
-					elif p.payload == (fx9r["game"] as GameEntry).game_id:
-						p9 = p
-				if p8 == null or p9 == null:
-					if now - _shot_flicker_since > 15000:
-						_shot_flicker_problems.append("the pair fixtures fell off the wall after the detail close")
-						_flicker_finish()
-					return
-				fx8["panel"] = p8
-				fx9r["panel"] = p9
-				if (g8.ensure_flicker().get("layers", []) as Array).is_empty():
-					_shot_flicker_problems.append("the pair fixture's layer set did not extract")
-					_flicker_finish()
-					return
-				_shot_flicker_burst.clear()
-				_shot_flicker_t0 = 0
-				_room._set_focused(p8)
-				_shot_flicker_stage = 1
-				_shot_flicker_since = now
-			elif _shot_flicker_stage == 1:
-				var panel8: ClickableQuad = fx8["panel"] as ClickableQuad
-				var ph8: int = _room.power_phase()
-				if _room.power_panel() == panel8 and ph8 == 1 and _shot_flicker_t0 == 0:
-					_shot_flicker_t0 = now
-					_shot_flicker_next_grab = now
-				if _shot_flicker_t0 > 0 and now >= _shot_flicker_next_grab and ph8 > 0:
-					_shot_flicker_burst.append(get_viewport().get_texture().get_image())
-					_shot_flicker_next_grab = now + 130
-				if _shot_flicker_t0 > 0 and ph8 == 2 and now > _shot_flicker_t0 + 1900:
-					if _room.power_panel() != panel8 or _room.power_mode() != 1:
-						_shot_flicker_problems.append("the pair card did not cascade on its layer (mode %d)" % _room.power_mode())
-					if _room.power_layer_count() != 1:
-						_shot_flicker_problems.append("the pair card built %d layer quads, want its one full-frame layer" % _room.power_layer_count())
-					var series8: Array[int] = []
-					for fimg8: Image in _shot_flicker_burst:
-						series8.append(_flicker_amber_count_img(panel8, fimg8))
-					var base8: int = series8[0] if series8.size() > 0 else -1
-					var lit8: int = series8[series8.size() - 1] if series8.size() > 0 else -1
-					if base8 < 0 or lit8 < base8 + 500:
-						_shot_flicker_problems.append("the pair's lit frame is not visibly lit over its dark rest (series %s)" % str(series8))
-					if not _shot_flicker_burst.is_empty():
-						var cen8: Vector2 = _flicker_amber_centroid_img(panel8, _shot_flicker_burst[_shot_flicker_burst.size() - 1])
-						if cen8.x < 0.10 or cen8.x > 0.42:
-							_shot_flicker_problems.append("the pair's lit amber centroid sits at x %.2f of the face - the On layer is not composed in the Off glass's space (want 0.10..0.42)" % cen8.x)
-						var band8: Array[int] = []
-						for fimg8b: Image in _shot_flicker_burst:
-							band8.append(_flicker_spill_band_count(panel8, fimg8b))
-						var bmin8: int = band8[0]
-						var bmax8: int = band8[0]
-						for bv8: int in band8:
-							bmin8 = mini(bmin8, bv8)
-							bmax8 = maxi(bmax8, bv8)
-						if bmax8 - bmin8 != 0:
-							_shot_flicker_problems.append("the pair's layer spills outside the face (burst band counts %s)" % str(band8))
-						_shot_flicker_burst[0].save_png(_shot_flicker_prefix + "_pair_base.png")
-						_shot_flicker_burst[_shot_flicker_burst.size() - 1].save_png(_shot_flicker_prefix + "_pair_lit.png")
-					_shot_flicker_stage = 0
-					_shot_flicker_armed = false
-					_shot_flicker_burst.clear()
-					_shot_flicker_t0 = 0
-					_shot_flicker_since = now
-					_shot_flicker_phase = 9
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the pair card's cascade never ran")
-					_flicker_finish()
-		9:
-			# Pair+plain leg: settle on the pair+plain
-			# card. The decoy pair is ignored, so the
-			# cascade is the plain glass's TWO bulbs, up
-			# at the top of the glass - one full-frame
-			# layer, or amber centered in the face, would
-			# convict the pair path at once.
-			var fx9: Dictionary = _shot_flicker_fixtures["Flicker Pair Plain"] as Dictionary
-			var g9: GameEntry = fx9["game"] as GameEntry
-			var panel9: ClickableQuad = fx9["panel"] as ClickableQuad
-			if _shot_flicker_stage == 0:
-				if (g9.ensure_flicker().get("layers", []) as Array).is_empty():
-					_shot_flicker_problems.append("the pair+plain fixture's layer set did not extract")
-					_flicker_finish()
-					return
-				_shot_flicker_burst.clear()
-				_shot_flicker_t0 = 0
-				_room._set_focused(panel9)
-				_shot_flicker_stage = 1
-				_shot_flicker_since = now
-			elif _shot_flicker_stage == 1:
-				var ph9: int = _room.power_phase()
-				if _room.power_panel() == panel9 and ph9 == 1 and _shot_flicker_t0 == 0:
-					_shot_flicker_t0 = now
-					_shot_flicker_next_grab = now
-				if _shot_flicker_t0 > 0 and now >= _shot_flicker_next_grab and ph9 > 0:
-					_shot_flicker_burst.append(get_viewport().get_texture().get_image())
-					_shot_flicker_next_grab = now + 130
-				if _shot_flicker_t0 > 0 and ph9 == 2 and now > _shot_flicker_t0 + 1900:
-					if _room.power_panel() != panel9 or _room.power_mode() != 1:
-						_shot_flicker_problems.append("the pair+plain card did not cascade on its bulbs (mode %d)" % _room.power_mode())
-					if _room.power_layer_count() != 2:
-						_shot_flicker_problems.append("the pair+plain card built %d layer quads, want the plain glass's 2 bulbs" % _room.power_layer_count())
-					var series9: Array[int] = []
-					for fimg9: Image in _shot_flicker_burst:
-						series9.append(_flicker_amber_count_img(panel9, fimg9))
-					var base9: int = series9[0] if series9.size() > 0 else -1
-					var lit9: int = series9[series9.size() - 1] if series9.size() > 0 else -1
-					if base9 < 0 or lit9 < base9 + 100:
-						_shot_flicker_problems.append("the pair+plain's lit frame is not visibly lit over its rest (series %s)" % str(series9))
-					if not _shot_flicker_burst.is_empty():
-						var cen9: Vector2 = _flicker_amber_centroid_img(panel9, _shot_flicker_burst[_shot_flicker_burst.size() - 1])
-						if cen9.y < 0.0 or cen9.y > 0.38:
-							_shot_flicker_problems.append("the pair+plain's lit amber centroid sits at y %.2f of the face - want the plain glass's top bulbs (0..0.38)" % cen9.y)
-						_shot_flicker_burst[_shot_flicker_burst.size() - 1].save_png(_shot_flicker_prefix + "_pairplain_lit.png")
-					_shot_flicker_stage = 0
-					_shot_flicker_armed = false
-					_shot_flicker_burst.clear()
-					_shot_flicker_t0 = 0
-					_shot_flicker_since = now
-					_shot_flicker_phase = 10
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the pair+plain card's cascade never ran")
-					_flicker_finish()
-		10:
-			# Pair-strobe leg: the content-differing pair
-			# (Flicker Specter). Its On half is the Off
-			# scene shifted +15 px and redrawn bright, so
-			# ANY fractional alpha doubles outlines - the
-			# ghost twin as a measurable quantity. Stages:
-			# 0 arm + focus; 1 the live cascade (burst
-			# frames plus the layer's alpha sampled every
-			# frame); 2 park the cascade clock at t=0 and
-			# render the pure-Off endpoint in the popped
-			# geometry; 3 park at cascade end for the
-			# pure-On endpoint, run the deterministic alpha
-			# sweep, then park INSIDE the dip window; 4
-			# fit the dip frame and the burst against the
-			# endpoints - every well-explained frame must
-			# sit at alpha 0 or 1.
-			var fx10: Dictionary = _shot_flicker_fixtures["Flicker Specter"] as Dictionary
-			var g10: GameEntry = fx10["game"] as GameEntry
-			var panel10: ClickableQuad = fx10["panel"] as ClickableQuad
-			if not is_instance_valid(panel10):
-				# A scan landing mid-run adopts the library
-				# and rebuilds the wall, freeing every panel
-				# phase 0 collected (the rebuilds land at
-				# unpredictable times - this leg runs last,
-				# so it is the one that meets the stale
-				# reference). Re-resolve this leg's panel
-				# from the room's live wall by payload, the
-				# way phase 0 collected it.
-				panel10 = null
-				for p10: ClickableQuad in _room._panels:
-					if p10.payload == g10.game_id:
-						panel10 = p10
-						break
-				if panel10 != null:
-					fx10["panel"] = panel10
-			if _shot_flicker_stage == 0:
-				if panel10 == null:
-					_shot_flicker_problems.append("the Specter panel is not on the wall - the blend leg has no card")
-					_flicker_finish()
-					return
-				var data10: Dictionary = g10.ensure_flicker()
-				if (data10.get("layers", []) as Array).is_empty():
-					_shot_flicker_problems.append("the Specter fixture's layer set did not extract")
-					_flicker_finish()
-					return
-				if not bool(data10.get("pair", false)):
-					_shot_flicker_problems.append("the Specter fixture's layer set is not a pair set - the blend leg has no subject")
-					_flicker_finish()
-					return
-				# Do NOT focus yet: the extraction above ran
-				# synchronously on this thread, and the
-				# room's next _process would swallow the
-				# whole settle + cascade in one giant delta
-				# frame - unobservable. A few idle frames
-				# first (stage 5), then focus.
-				_shot_flicker_probe_wait = 0
-				_shot_flicker_stage = 5
-				_shot_flicker_since = now
-			elif _shot_flicker_stage == 5:
-				_shot_flicker_probe_wait += 1
-				if _shot_flicker_probe_wait >= 6:
-					_shot_flicker_burst.clear()
-					_shot_flicker_blend_alphas.clear()
-					_shot_flicker_live_missed = false
-					_shot_flicker_t0 = 0
-					_room._set_focused(panel10)
-					_shot_flicker_stage = 1
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the blend leg's warm wait never elapsed")
-					_flicker_finish()
-			elif _shot_flicker_stage == 1:
-				var ph10: int = _room.power_phase()
-				if _shot_flicker_probe_wait != now / 1000:
-					_shot_flicker_probe_wait = now / 1000
-				if _room.power_panel() == panel10 and ph10 == 1:
-					if _shot_flicker_t0 == 0:
-						_shot_flicker_t0 = now
-						_shot_flicker_next_grab = now
-					if _room.power_layer_count() == 1:
-						_shot_flicker_blend_alphas.append(_room.power_layer_alpha(0))
-				if _shot_flicker_t0 == 0 and _room.power_panel() == panel10 and ph10 == 2:
-					# The cascade completed between polls
-					# anyway: proceed on the deterministic
-					# evidence (sweep + rendered fits).
-					_shot_flicker_t0 = now - 2000
-					_shot_flicker_live_missed = true
-				if _shot_flicker_t0 > 0 and now >= _shot_flicker_next_grab and ph10 > 0:
-					_shot_flicker_burst.append(get_viewport().get_texture().get_image())
-					_shot_flicker_next_grab = now + 130
-				if _shot_flicker_t0 > 0 and ph10 == 2 and now > _shot_flicker_t0 + 1900:
-					if _room.power_panel() != panel10 or _room.power_mode() != 1:
-						_shot_flicker_problems.append("the Specter card did not cascade on its pair layer (mode %d)" % _room.power_mode())
-					if _room.power_layer_count() != 1:
-						_shot_flicker_problems.append("the Specter card built %d layer quads, want its one full-frame layer" % _room.power_layer_count())
-					for av: float in _shot_flicker_blend_alphas:
-						if av > 0.02 and av < 0.98:
-							_shot_flicker_problems.append("the pair layer's live alpha took %.2f mid-cascade - a blend frame exists" % av)
-							break
-					if _shot_flicker_blend_alphas.is_empty() and not _shot_flicker_live_missed:
-						_shot_flicker_problems.append("the blend leg sampled no live alphas - the cascade was never observed")
-					if _room._power_schedule.size() == 1:
-						var ss: Array = _room._power_schedule[0] as Array
-						_shot_flicker_dip_win = Vector2(float(ss[1]), float(ss[2]))
-					if _shot_flicker_dip_win.y <= _shot_flicker_dip_win.x:
-						_shot_flicker_problems.append("the Specter schedule has no dip window %s - the blend leg cannot convict" % str(_shot_flicker_dip_win))
-						_flicker_finish()
-						return
+			# The structural assertion: the whole suite above
+			# focused B2S cards repeatedly - if any snippet
+			# machinery survived, its cache would exist.
+			if DirAccess.dir_exists_absolute(ProjectSettings.globalize_path("user://art_cache/layers")):
+				_shot_mimic_problems.append("no-layer-machinery assertion: user://art_cache/layers exists after the suite's focuses - the snippet stack is dormant, not gone")
+			_mimic_finish()
+
+
+## Leg 2's sub-driver (see _drive_shot_mimic's doc): the wide
+## fixture's full mimic leg, on parked probes.
+func _drive_mimic_wide_leg(now: int) -> void:
+	var panel: ClickableQuad = _shot_mimic_wide_panel
+	match _shot_mimic_stage:
+		0:
+			_room._set_focused(panel)
+			_shot_mimic_stage = 1
+			_shot_mimic_since = now
+		1:
+			if _shot_mimic_nc == "grade":
+				# Negative control: the cascade clock is
+				# pinned at 0, so the performance can never
+				# settle - the settled-grade leg MUST fail.
+				if _room.power_panel() == panel:
 					_room._power_t = 0.0
-					_room._apply_power()
-					_shot_flicker_probe_wait = 0
-					_shot_flicker_stage = 2
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the Specter card's cascade never ran")
-					_flicker_finish()
-			elif _shot_flicker_stage == 2:
-				_shot_flicker_probe_wait += 1
-				if _shot_flicker_probe_wait >= 10:
-					_shot_flicker_off_img = get_viewport().get_texture().get_image()
-					_room._power_t = RoomView.POWER_CASCADE_SEC
-					_room._apply_power()
-					_shot_flicker_probe_wait = 0
-					_shot_flicker_stage = 3
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the blend leg's Off endpoint never rendered")
-					_flicker_finish()
-			elif _shot_flicker_stage == 3:
-				_shot_flicker_probe_wait += 1
-				if _shot_flicker_probe_wait >= 10:
-					_shot_flicker_on_img = get_viewport().get_texture().get_image()
-					# The deterministic sweep: probe the
-					# whole cascade in 4 ms steps through
-					# the room's own apply - no sampling
-					# luck involved.
-					var bad_t: float = -1.0
-					var bad_a: float = -1.0
-					var probe: float = 0.0
-					while probe <= RoomView.POWER_CASCADE_SEC:
-						_room._power_t = probe
-						_room._apply_power()
-						var pa: float = _room.power_layer_alpha(0)
-						if pa > 0.02 and pa < 0.98:
-							bad_t = probe
-							bad_a = pa
-							break
-						probe += 0.004
-					if bad_t >= 0.0:
-						_shot_flicker_problems.append("the pair layer takes alpha %.2f at cascade t=%.3f - pair alphas must be {0, 1} only" % [bad_a, bad_t])
-					_room._power_t = (_shot_flicker_dip_win.x + _shot_flicker_dip_win.y) * 0.5
-					_room._apply_power()
-					_shot_flicker_probe_wait = 0
-					_shot_flicker_stage = 4
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the blend leg's On endpoint never rendered")
-					_flicker_finish()
-			elif _shot_flicker_stage == 4:
-				_shot_flicker_probe_wait += 1
-				if _shot_flicker_probe_wait >= 10:
-					var dip_img: Image = get_viewport().get_texture().get_image()
-					var dfit: Vector2 = _flicker_blend_fit(panel10, dip_img, _shot_flicker_off_img, _shot_flicker_on_img)
-					if dfit.y > 0.35:
-						_shot_flicker_problems.append("the dip-probe frame does not fit the endpoint blend model (residual %.2f) - the leg cannot judge it" % dfit.y)
-					elif dfit.x > 0.06 and dfit.x < 0.94:
-						_shot_flicker_problems.append("the rendered dip frame blends the pair (fitted alpha %.2f) - the ghost twin" % dfit.x)
-					# The live burst, judged the same way:
-					# well-explained frames must sit at an
-					# endpoint.
-					var judged: int = 0
-					for bimg: Image in _shot_flicker_burst:
-						var bfit: Vector2 = _flicker_blend_fit(panel10, bimg, _shot_flicker_off_img, _shot_flicker_on_img)
-						if bfit.y <= 0.35:
-							judged += 1
-							if bfit.x > 0.06 and bfit.x < 0.94:
-								_shot_flicker_problems.append("a burst frame blends the pair (fitted alpha %.2f, residual %.2f)" % [bfit.x, bfit.y])
-								break
-					if judged == 0:
-						_shot_flicker_problems.append("no burst frame fit the endpoint blend model - the burst judged nothing")
-					if _shot_flicker_off_img != null:
-						_shot_flicker_off_img.save_png(_shot_flicker_prefix + "_ghost_off.png")
-					dip_img.save_png(_shot_flicker_prefix + "_ghost_dip.png")
-					if _shot_flicker_on_img != null:
-						_shot_flicker_on_img.save_png(_shot_flicker_prefix + "_ghost_on.png")
-					_room._power_t = RoomView.POWER_CASCADE_SEC
-					_room._apply_power()
-					_shot_flicker_stage = 0
-					_shot_flicker_armed = false
-					_shot_flicker_since = now
-					_shot_flicker_phase = 11
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the blend leg's dip frame never rendered")
-					_flicker_finish()
-		11:
-			# Flasher leg (flasher-release round): the
-			# Flicker Flasher glass carries two small
-			# RomIDType-1 lamps and one giant RomIDType-2
-			# solenoid snippet - a bold semi-transparent
-			# red band across the whole glass, content the
-			# navy base does not carry. The card must
-			# cascade all three layers, the flasher
-			# VISIBLE mid-cascade, and settle to lamps
-			# only: flasher fully released, lamps held
-			# lit. Proven by the layer alphas with the
-			# cascade clock parked (at the strike, inside
-			# the release fade, at the end) and by
-			# rendered frames - the red band present in
-			# the parked strike frame, absent from the
-			# settled frame, whose amber says the lamps
-			# stayed. Stages: 0 verify the extracted set
-			# (kinds by the file's own RomIDType), 5 idle
-			# frames then focus, 1 the live cascade and
-			# the parked alpha probes, 2 the rendered
-			# strike frame, 3 the rendered settled frame.
-			if not _shot_flicker_fixtures.has("Flicker Flasher"):
-				_shot_flicker_problems.append("the Flicker Flasher fixture game is not in the library - the flasher leg has no subject")
-				_flicker_finish()
+				if now - _shot_mimic_since > 12000:
+					_shot_mimic_problems.append("settled = grade leg failed: the cascade never settled (power pinned at 0)")
+					_mimic_finish()
 				return
-			var fx11: Dictionary = _shot_flicker_fixtures["Flicker Flasher"] as Dictionary
-			var g11: GameEntry = fx11["game"] as GameEntry
-			var panel11: ClickableQuad = fx11.get("panel", null) as ClickableQuad
-			if not is_instance_valid(panel11):
-				# Same stale-panel exposure as the blend
-				# leg (a scan landing mid-run rebuilds the
-				# wall): re-resolve from the live wall.
-				panel11 = null
-				for p11: ClickableQuad in _room._panels:
-					if p11.payload == g11.game_id:
-						panel11 = p11
-						break
-				if panel11 != null:
-					fx11["panel"] = panel11
-			if _shot_flicker_stage == 0:
-				if panel11 == null:
-					_shot_flicker_problems.append("the Flasher panel is not on the wall - the flasher leg has no card")
-					_flicker_finish()
+			if _room.power_panel() == panel and _room.power_phase() >= 1:
+				if _room.power_mode() != 2 or _room.power_is_pair():
+					_shot_mimic_problems.append("wide leg: the bulb fixture did not take the mimic grade (mode %d)" % _room.power_mode())
+					_mimic_finish()
 					return
-				var data11: Dictionary = g11.ensure_flicker()
-				var layers11: Array = data11.get("layers", []) as Array
-				var n_flash11: int = 0
-				var n_lamp11: int = 0
-				var giant11: bool = false
-				var bsz11: Vector2i = data11.get("base_size", Vector2i.ZERO) as Vector2i
-				for item11: Variant in layers11:
-					var ld11: Dictionary = item11 as Dictionary
-					if str(ld11.get("kind", "")) == ArtProvider.LAYER_KIND_FLASHER:
-						n_flash11 += 1
-						var r11: Rect2 = ld11["rect"] as Rect2
-						giant11 = r11.size.x > float(bsz11.x) * 0.95 and r11.size.y > float(bsz11.y) * 0.95
-					else:
-						n_lamp11 += 1
-				if bool(data11.get("pair", false)) or layers11.size() != 3 or n_flash11 != 1 or n_lamp11 != 2 or not giant11:
-					_shot_flicker_problems.append("the flasher fixture extracted wrong (pair %s, layers %d, flashers %d, lamps %d, giant %s) - want a bulb set of one full-glass flasher over two lamps" % [str(data11.get("pair", false)), layers11.size(), n_flash11, n_lamp11, str(giant11)])
-					_flicker_finish()
-					return
-				# Idle frames before focusing, the blend
-				# leg's lesson: a synchronous extraction on
-				# this thread must not swallow the settle +
-				# cascade into one giant delta frame.
-				_shot_flicker_probe_wait = 0
-				_shot_flicker_stage = 5
-				_shot_flicker_since = now
-			elif _shot_flicker_stage == 5:
-				_shot_flicker_probe_wait += 1
-				if _shot_flicker_probe_wait >= 6:
-					_shot_flicker_flasher_idx = -1
-					_room._set_focused(panel11)
-					_shot_flicker_stage = 1
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the flasher leg's warm wait never elapsed")
-					_flicker_finish()
-			elif _shot_flicker_stage == 1:
-				var ph11: int = _room.power_phase()
-				if _room.power_panel() == panel11 and ph11 > 0 and _shot_flicker_flasher_idx < 0:
-					for li11: int in range(_room.power_layer_count()):
-						if _room.power_layer_is_flasher(li11):
-							_shot_flicker_flasher_idx = li11
-							break
-				if _room.power_panel() == panel11 and ph11 == 2:
-					if _room.power_layer_count() != 3:
-						_shot_flicker_problems.append("the flasher card built %d layer quads, want 3 (two lamps + the giant flasher)" % _room.power_layer_count())
-					if _shot_flicker_flasher_idx < 0:
-						_shot_flicker_problems.append("the flasher card's layers carry no flasher - the room never learned the kind")
-						_flicker_finish()
-						return
-					var sched11: Array = _room._power_schedule[_shot_flicker_flasher_idx] as Array
-					var rel11: float = float(sched11[3]) if sched11.size() > 3 else -1.0
-					if rel11 < 0.0:
-						_shot_flicker_problems.append("the flasher's schedule carries no release - it would hold like a lamp")
-						_flicker_finish()
-						return
-					# Parked alpha probes, deterministic:
-					# struck just after its catch, mid-fade
-					# inside its release, gone at the
-					# cascade's end while the lamps hold.
-					_room._power_t = float(sched11[0]) + 0.05
-					_room._apply_power()
-					var struck11: float = _room.power_layer_alpha(_shot_flicker_flasher_idx)
-					if struck11 < 0.9:
-						_shot_flicker_problems.append("parked at its strike the flasher reads alpha %.2f, want it lit" % struck11)
-					_room._power_t = rel11 + RoomView.POWER_FLASHER_FADE_SEC * 0.5
-					_room._apply_power()
-					var midfade11: float = _room.power_layer_alpha(_shot_flicker_flasher_idx)
-					if midfade11 < 0.05 or midfade11 > 0.95:
-						_shot_flicker_problems.append("parked mid-release the flasher reads alpha %.2f - the release is not a fade in flight" % midfade11)
-					_room._power_t = RoomView.POWER_CASCADE_SEC
-					_room._apply_power()
-					var settled11: float = _room.power_layer_alpha(_shot_flicker_flasher_idx)
-					if settled11 != 0.0:
-						_shot_flicker_problems.append("the flasher is still lit at the cascade's end (alpha %.2f) - it never released" % settled11)
-					for li11b: int in range(_room.power_layer_count()):
-						if li11b != _shot_flicker_flasher_idx and _room.power_layer_alpha(li11b) != 1.0:
-							_shot_flicker_problems.append("a lamp is not held lit at the cascade's end (layer %d alpha %.2f)" % [li11b, _room.power_layer_alpha(li11b)])
-					# The rendered strike frame: park the
-					# clock back at the strike, let it draw.
-					_room._power_t = float(sched11[0]) + 0.05
-					_room._apply_power()
-					_shot_flicker_probe_wait = 0
-					_shot_flicker_stage = 2
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the flasher card's cascade never ran")
-					_flicker_finish()
-			elif _shot_flicker_stage == 2:
-				_shot_flicker_probe_wait += 1
-				if _shot_flicker_probe_wait >= 10:
-					var on_img11: Image = get_viewport().get_texture().get_image()
-					var red_on11: int = _flicker_red_count_img(panel11, on_img11)
-					if red_on11 < 150:
-						_shot_flicker_problems.append("the parked strike frame shows no flasher (red px %d) - the giant never rendered" % red_on11)
-					on_img11.save_png(_shot_flicker_prefix + "_flasher_on.png")
-					_room._power_t = RoomView.POWER_CASCADE_SEC
-					_room._apply_power()
-					_shot_flicker_probe_wait = 0
-					_shot_flicker_stage = 3
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the flasher leg's strike frame never rendered")
-					_flicker_finish()
-			elif _shot_flicker_stage == 3:
-				_shot_flicker_probe_wait += 1
-				if _shot_flicker_probe_wait >= 10:
-					var settled_img11: Image = get_viewport().get_texture().get_image()
-					var red_off11: int = _flicker_red_count_img(panel11, settled_img11)
-					if red_off11 > 10:
-						_shot_flicker_problems.append("the settled card still shows the flasher (red px %d) - the ghost stack is still held" % red_off11)
-					var amber_set11: int = _flicker_amber_count_img(panel11, settled_img11)
-					if amber_set11 < 100:
-						_shot_flicker_problems.append("the settled card's lamps are not lit (amber px %d) - the release took the lamps with it" % amber_set11)
-					settled_img11.save_png(_shot_flicker_prefix + "_flasher_settled.png")
-					_shot_flicker_stage = 0
-					_shot_flicker_armed = false
-					_shot_flicker_since = now
-					_shot_flicker_phase = 12
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the flasher leg's settled frame never rendered")
-					_flicker_finish()
-		12:
-			# Kick leg (half-2 round): the Wide card's set
-			# is un-warmed by hand - cache wiped, stamp
-			# erased, entry memo and kick record cleared
-			# (no production path makes a warm card cold
-			# again, so the fixture builds the cold state
-			# directly). Its focus must then surge, the
-			# honest cold visit, while the kick lands the
-			# set in the background; the NEXT visit must
-			# cascade on it. Stages: 0 the surgery + focus
-			# away, 1 focus the cold card, 2 the cold visit
-			# reads as a surge, 3 wait for the kick to land
-			# the set, 4 focus away (the restore), 5 the
-			# return visit cascades.
-			var g12: GameEntry = _shot_flicker_game
-			var src12: String = g12.flicker_source() if g12 != null else ""
-			if g12 == null or src12 == "":
-				_shot_flicker_problems.append("the kick leg has no subject (the Wide fixture game or its backglass is missing)")
-				_flicker_finish()
+				# Freeze the room's clock (the prototype's
+				# trick): from here the driver's pins are the
+				# only writer of the cascade time.
+				_room._power_phase = 2
+				_shot_mimic_parks = [[0.0, "rest"], [0.27, "catch3"], [0.34, "sag"], [0.44, "mid"], [1.05, "settled"]]
+				_shot_mimic_park = 0
+				_shot_mimic_stage = 2
+				_shot_mimic_wait = 0
+			elif now - _shot_mimic_since > 20000:
+				_shot_mimic_problems.append("wide leg: the power-on never started")
+				_mimic_finish()
+		2:
+			var pk: Array = _shot_mimic_parks[_shot_mimic_park] as Array
+			_room._power_t = float(pk[0])
+			_room._apply_power()
+			_shot_mimic_wait += 1
+			if _room.power_overlay_count() != 1:
+				_shot_mimic_problems.append("wide leg: the performance stands on %d overlay quads, want exactly 1" % _room.power_overlay_count())
+				_mimic_finish()
 				return
-			var panel12: ClickableQuad = null
-			for p12: ClickableQuad in _room._panels:
-				if p12.payload == g12.game_id:
-					panel12 = p12
-					break
-			if panel12 == null:
-				_shot_flicker_problems.append("the Wide panel is not on the wall - the kick leg has no card")
-				_flicker_finish()
+			if panel.get_child_count() != _shot_mimic_base_children + 1:
+				_shot_mimic_problems.append("wide leg: the performing panel carries %d children, want baseline+1 (one overlay, no layer quads)" % panel.get_child_count())
+				_mimic_finish()
 				return
-			if _shot_flicker_stage == 0:
-				if is_instance_valid(_shot_flicker_panel2):
-					_shot_flicker_away_panel = _shot_flicker_panel2
-				else:
-					for pa: ClickableQuad in _room._panels:
-						if pa != panel12:
-							_shot_flicker_away_panel = pa
-							break
-				_wipe_tree(ProjectSettings.globalize_path(ArtProvider.layers_dir_for(src12)))
-				var idx12: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.INDEX_PATH))
-				if idx12 is Dictionary:
-					(idx12 as Dictionary).erase("L" + ArtProvider.stamp_key_for(src12))
-					var f12: FileAccess = FileAccess.open(ArtProvider.INDEX_PATH, FileAccess.WRITE)
-					if f12 != null:
-						f12.store_string(JSON.stringify(idx12))
-						f12.close()
-					ArtProvider.reload_index()
-				g12._flicker_data = {}
-				g12._flicker_attempted = false
-				_room._power_kicked.erase(g12.game_id)
-				if ArtProvider.has_flicker_layers(src12):
-					_shot_flicker_problems.append("the kick leg's un-warming did not take - the Wide set still reads warm")
-					_flicker_finish()
-					return
-				_room._set_focused(_shot_flicker_away_panel)
-				_shot_flicker_stage = 1
-				_shot_flicker_since = now
-			elif _shot_flicker_stage == 1:
-				if _room.power_panel() == _shot_flicker_away_panel or now - _shot_flicker_since > 4000:
-					_room._set_focused(panel12)
-					_shot_flicker_stage = 2
-					_shot_flicker_since = now
-			elif _shot_flicker_stage == 2:
-				if _room.power_panel() == panel12:
-					if _room.power_mode() != 0:
-						_shot_flicker_problems.append("the cold Wide visit cascaded (mode %d) - the un-warming did not hold" % _room.power_mode())
-						_flicker_finish()
-						return
-					_shot_flicker_stage = 3
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 10000:
-					_shot_flicker_problems.append("the kick leg's cold power-on never started")
-					_flicker_finish()
-			elif _shot_flicker_stage == 3:
-				if ArtProvider.has_flicker_layers(src12):
-					_room._set_focused(_shot_flicker_away_panel)
-					_shot_flicker_stage = 4
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 30000:
-					_shot_flicker_problems.append("the kick never landed the Wide set (30s) - the cold card would surge on every visit")
-					_flicker_finish()
-			elif _shot_flicker_stage == 4:
-				if _room.power_panel() != panel12:
-					_room._set_focused(panel12)
-					_shot_flicker_stage = 5
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 10000:
-					_shot_flicker_problems.append("the kick leg's restore never landed")
-					_flicker_finish()
-			elif _shot_flicker_stage == 5:
-				if _room.power_panel() == panel12 and _room.power_phase() > 0:
-					if _room.power_mode() != 1:
-						_shot_flicker_problems.append("the visit after the kick surged again (mode %d) - the landed set did not cascade" % _room.power_mode())
-					elif _room.power_layer_count() != 5:
-						_shot_flicker_problems.append("the post-kick cascade built %d layer quads, want the Wide five" % _room.power_layer_count())
-					# The animation leg used to chain on
-					# here as phase 13; it runs under its
-					# own boot now (--pvlds-shot-anim, the
-					# harness's run_anim_shots.sh), so the
-					# flicker suite ends with the kick leg.
-					_flicker_finish()
-				elif now - _shot_flicker_since > 10000:
-					_shot_flicker_problems.append("the kick leg's return power-on never started")
-					_flicker_finish()
-		13:
-			# Animation leg (animation-release round) -
-			# reached only under the --pvlds-shot-anim boot
-			# (phase 0 hands straight here). The
-			# Flicker Anim glass carries four bulbs - two
-			# small amber lamps named by no animation step
-			# (they hold), one giant RomIDType-1 snippet
-			# painting a semi-transparent GREEN band,
-			# and one small untyped bulb painting solid MAGENTA -
-			# the two the file's <Animations> section
-			# sequences by name. A decoy Parent="DMD"
-			# animation names one lamp and must confer
-			# nothing. The card must cascade all four layers,
-			# the members VISIBLE mid-cascade, and settle to
-			# the lamps only: members fully released (the
-			# settled frame holds zero member content - no
-			# green, no magenta), lamps held lit. Proven by the
-			# parked alpha probes on the giant member's
-			# schedule and by rendered frames, the flasher
-			# leg's shape. Stages: 0 verify the extracted
-			# set (kinds by the file's own sections), 5 idle
-			# frames then focus, 1 the live cascade and the
-			# parked probes, 2 the rendered strike frame,
-			# 3 the rendered settled frame.
-			if not _shot_flicker_fixtures.has("Flicker Anim"):
-				_shot_flicker_problems.append("the Flicker Anim fixture game is not in the library - the animation leg has no subject")
-				_flicker_finish()
+			if _shot_mimic_wait >= 5:
+				var img: Image = get_viewport().get_texture().get_image()
+				_shot_mimic_grabs[str(pk[1])] = img
+				_shot_mimic_park += 1
+				_shot_mimic_wait = 0
+				if _shot_mimic_park >= _shot_mimic_parks.size():
+					_shot_mimic_stage = 3
+		3:
+			# Judge the parked frames.
+			var rect: Rect2i = _mimic_art_screen_rect(panel)
+			var rest: Dictionary = _mimic_region_stats(_shot_mimic_grabs["rest"] as Image, rect)
+			var catch3: Dictionary = _mimic_region_stats(_shot_mimic_grabs["catch3"] as Image, rect)
+			var sag: Dictionary = _mimic_region_stats(_shot_mimic_grabs["sag"] as Image, rect)
+			var mid: Dictionary = _mimic_region_stats(_shot_mimic_grabs["mid"] as Image, rect)
+			var settled: Dictionary = _mimic_region_stats(_shot_mimic_grabs["settled"] as Image, rect)
+			var art_path: String = _shot_mimic_wide.ensure_art()
+			var art_img: Image = Image.new()
+			if art_path == "" or art_img.load(art_path) != OK:
+				_shot_mimic_problems.append("wide leg: the fixture's face art is unreadable for the reference grade")
+				_mimic_finish()
 				return
-			var fx13: Dictionary = _shot_flicker_fixtures["Flicker Anim"] as Dictionary
-			var g13: GameEntry = fx13["game"] as GameEntry
-			var panel13: ClickableQuad = fx13.get("panel", null) as ClickableQuad
-			if not is_instance_valid(panel13):
-				panel13 = null
-				for p13: ClickableQuad in _room._panels:
-					if p13.payload == g13.game_id:
-						panel13 = p13
-						break
-				if panel13 != null:
-					fx13["panel"] = panel13
-			if _shot_flicker_stage == 0:
-				if panel13 == null:
-					_shot_flicker_problems.append("the Anim panel is not on the wall - the animation leg has no card")
-					_flicker_finish()
-					return
-				var data13: Dictionary = g13.ensure_flicker()
-				var layers13: Array = data13.get("layers", []) as Array
-				var n_anim13: int = 0
-				var n_lamp13: int = 0
-				var n_flash13: int = 0
-				var giant13: bool = false
-				var bsz13: Vector2i = data13.get("base_size", Vector2i.ZERO) as Vector2i
-				for item13: Variant in layers13:
-					var ld13: Dictionary = item13 as Dictionary
-					var kind13: String = str(ld13.get("kind", ""))
-					if kind13 == ArtProvider.LAYER_KIND_ANIM:
-						n_anim13 += 1
-						var r13: Rect2 = ld13["rect"] as Rect2
-						if r13.get_area() > float(bsz13.x * bsz13.y) * 0.5:
-							giant13 = true
-					elif kind13 == ArtProvider.LAYER_KIND_FLASHER:
-						n_flash13 += 1
-					else:
-						n_lamp13 += 1
-				if bool(data13.get("pair", false)) or layers13.size() != 4 or n_anim13 != 2 or n_lamp13 != 2 or n_flash13 != 0 or not giant13:
-					_shot_flicker_problems.append("the anim fixture extracted wrong (pair %s, layers %d, anim %d, lamps %d, flashers %d, giant %s) - want a bulb set of two sequenced members (one giant, over half the glass) over two held lamps" % [str(data13.get("pair", false)), layers13.size(), n_anim13, n_lamp13, n_flash13, str(giant13)])
-					_flicker_finish()
-					return
-				_shot_flicker_probe_wait = 0
-				_shot_flicker_stage = 5
-				_shot_flicker_since = now
-			elif _shot_flicker_stage == 5:
-				_shot_flicker_probe_wait += 1
-				if _shot_flicker_probe_wait >= 6:
-					_shot_flicker_anim_idx = -1
-					_shot_flicker_anim_idxs.clear()
-					_shot_flicker_anim_strike = [0, 0]
-					_room._set_focused(panel13)
-					_shot_flicker_stage = 1
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the animation leg's warm wait never elapsed")
-					_flicker_finish()
-			elif _shot_flicker_stage == 1:
-				var ph13: int = _room.power_phase()
-				if _room.power_panel() == panel13 and ph13 > 0 and _shot_flicker_anim_idxs.is_empty():
-					# Every member's quad: the layers whose
-					# kind is ANIM (both members release on
-					# the same contract; the probes below
-					# walk them all, and the rendered frames
-					# convict each by its own color).
-					for li13: int in range(_room.power_layer_count()):
-						if _room.power_layer_kind(li13) == ArtProvider.LAYER_KIND_ANIM:
-							_shot_flicker_anim_idxs.append(li13)
-				if _room.power_panel() == panel13 and ph13 == 2:
-					if _room.power_layer_count() != 4:
-						_shot_flicker_problems.append("the anim card built %d layer quads, want 4 (two lamps + two members)" % _room.power_layer_count())
-					if _shot_flicker_anim_idxs.size() != 2:
-						_shot_flicker_problems.append("the anim card's layers carry %d members, want 2 - the room never learned the membership" % _shot_flicker_anim_idxs.size())
-						_flicker_finish()
-						return
-					# Parked alpha probes, per member: each
-					# schedule must carry a release; at its
-					# own strike the member reads lit; inside
-					# its fade, mid; at the cascade's end,
-					# exactly out - while the lamps hold.
-					for mi13: int in _shot_flicker_anim_idxs:
-						var sched13: Array = _room._power_schedule[mi13] as Array
-						var rel13: float = float(sched13[3]) if sched13.size() > 3 else -1.0
-						if rel13 < 0.0:
-							_shot_flicker_problems.append("a member's schedule carries no release (layer %d) - it would hold like a lamp" % mi13)
-							_flicker_finish()
-							return
-						_room._power_t = float(sched13[0]) + 0.05
-						_room._apply_power()
-						var struck13: float = _room.power_layer_alpha(mi13)
-						if struck13 < 0.9:
-							_shot_flicker_problems.append("parked at its strike member %d reads alpha %.2f, want it lit" % [mi13, struck13])
-						_room._power_t = rel13 + RoomView.POWER_FLASHER_FADE_SEC * 0.5
-						_room._apply_power()
-						var midfade13: float = _room.power_layer_alpha(mi13)
-						if midfade13 < 0.05 or midfade13 > 0.95:
-							_shot_flicker_problems.append("parked mid-release member %d reads alpha %.2f - the release is not a fade in flight" % [mi13, midfade13])
-						_room._power_t = RoomView.POWER_CASCADE_SEC
-						_room._apply_power()
-						var settled13: float = _room.power_layer_alpha(mi13)
-						if settled13 != 0.0:
-							_shot_flicker_problems.append("member %d is still lit at the cascade's end (alpha %.2f) - it never released" % [mi13, settled13])
-					for li13b: int in range(_room.power_layer_count()):
-						if _room.power_layer_kind(li13b) == ArtProvider.LAYER_KIND_LAMP and _room.power_layer_alpha(li13b) != 1.0:
-							_shot_flicker_problems.append("a lamp is not held lit at the cascade's end (layer %d alpha %.2f)" % [li13b, _room.power_layer_alpha(li13b)])
-					# The first rendered strike frame: park
-					# the clock at the first member's strike.
-					_shot_flicker_anim_idx = _shot_flicker_anim_idxs[0]
-					var sched13a: Array = _room._power_schedule[_shot_flicker_anim_idx] as Array
-					_room._power_t = float(sched13a[0]) + 0.05
-					_room._apply_power()
-					_shot_flicker_probe_wait = 0
-					_shot_flicker_stage = 2
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 20000:
-					_shot_flicker_problems.append("the anim card's cascade never ran")
-					_flicker_finish()
-			elif _shot_flicker_stage == 2:
-				# A BURST, not a single grab: rendered
-				# readbacks lag the applied state by many
-				# frames under software rendering, so one
-				# grab ten frames after the park can still
-				# return a pre-park frame (the magenta run's
-				# strike frames showed no member at all,
-				# though the parked probes had it lit). The
-				# park is re-pinned every frame and every
-				# grab from the third on is counted, keeping
-				# the BEST single frame per color - a burst
-				# spanning the lag must contain the parked
-				# state, the layers leg's own pattern.
-				_shot_flicker_probe_wait += 1
-				var sched13a2: Array = _room._power_schedule[_shot_flicker_anim_idx] as Array
-				_room._power_t = float(sched13a2[0]) + 0.05
+			var ref_rest: Dictionary = _mimic_ref_stats(art_img, false)
+			var ref_settled: Dictionary = _mimic_ref_stats(art_img, true)
+			if absf(float(rest["luma"]) - float(ref_rest["luma"])) > 0.02:
+				_shot_mimic_problems.append("rest identity leg: the power-0 frame's art luma %.3f is not the face's %.3f" % [float(rest["luma"]), float(ref_rest["luma"])])
+			var sq0: Array = sag["quads"] as Array
+			var cq0: Array = catch3["quads"] as Array
+			var rq0: Array = rest["quads"] as Array
+			var stq0: Array = settled["quads"] as Array
+			var sag_lift: float = float(sq0[0]) - float(rq0[0])
+			var catch_lift: float = float(cq0[0]) - float(rq0[0])
+			var settled_lift: float = float(stq0[0]) - float(rq0[0])
+			if not (sag_lift < catch_lift + 0.002 and sag_lift < settled_lift - 0.002):
+				_shot_mimic_problems.append("sag leg: no dip at 0.34s in the TL quadrant (lifts: catch3 %+.3f, sag %+.3f, settled %+.3f)" % [catch_lift, sag_lift, settled_lift])
+			var rq: Array = rest["quads"] as Array
+			var mq: Array = mid["quads"] as Array
+			var tl_lift: float = float(mq[0]) - float(rq[0])
+			var br_lift: float = float(mq[3]) - float(rq[3])
+			if not (tl_lift > br_lift + 0.003):
+				_shot_mimic_problems.append("sweep leg: the diagonal front is not TL-first at 0.44s (TL lift %.3f, BR lift %.3f)" % [tl_lift, br_lift])
+			if absf(float(settled["luma"]) - float(ref_settled["luma"])) > 0.02:
+				_shot_mimic_problems.append("settled = grade leg failed: settled art luma %.3f, reference grade %.3f" % [float(settled["luma"]), float(ref_settled["luma"])])
+			var sq: Array = settled["quads"] as Array
+			var refq: Array = ref_settled["quads"] as Array
+			for qi: int in range(4):
+				if absf(float(sq[qi]) - float(refq[qi])) > 0.035:
+					_shot_mimic_problems.append("settled = grade leg failed: quadrant %d luma %.3f, reference %.3f" % [qi, float(sq[qi]), float(refq[qi])])
+			_shot_mimic_rest_img = _shot_mimic_grabs["rest"] as Image
+			_room._set_focused(null)
+			_shot_mimic_stage = 4
+			_shot_mimic_since = now
+		4:
+			if _room.power_phase() == 0 and _room.power_overlay_count() == 0:
+				_room._set_focused(panel)
+				_shot_mimic_stage = 5
+				_shot_mimic_since = now
+			elif now - _shot_mimic_since > 10000:
+				_shot_mimic_problems.append("wide leg: restore after the parked probes never completed")
+				_mimic_finish()
+		5:
+			if _room.power_panel() == panel and _room.power_phase() >= 1:
+				_room._power_phase = 2
+				_room._power_t = 0.0
 				_room._apply_power()
-				if _shot_flicker_probe_wait >= 3:
-					var on_img13: Image = get_viewport().get_texture().get_image()
-					_shot_flicker_anim_strike[0] = maxi(_shot_flicker_anim_strike[0], _flicker_green_count_img(panel13, on_img13))
-					_shot_flicker_anim_strike[1] = maxi(_shot_flicker_anim_strike[1], _flicker_magenta_count_img(panel13, on_img13))
-					if _shot_flicker_probe_wait == 3:
-						on_img13.save_png(_shot_flicker_prefix + "_anim_on_a.png")
-				if _shot_flicker_probe_wait >= 24:
-					# The second strike burst: the other
-					# member at ITS strike (the two strike at
-					# different instants by schedule, so one
-					# parked frame cannot promise both).
-					_shot_flicker_anim_idx = _shot_flicker_anim_idxs[1]
-					var sched13b: Array = _room._power_schedule[_shot_flicker_anim_idx] as Array
-					_room._power_t = float(sched13b[0]) + 0.05
-					_room._apply_power()
-					_shot_flicker_probe_wait = 0
-					_shot_flicker_stage = 4
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 40000:
-					_shot_flicker_problems.append("the animation leg's first strike burst never rendered")
-					_flicker_finish()
-			elif _shot_flicker_stage == 4:
-				_shot_flicker_probe_wait += 1
-				var sched13b2: Array = _room._power_schedule[_shot_flicker_anim_idx] as Array
-				_room._power_t = float(sched13b2[0]) + 0.05
+				_shot_mimic_stage = 6
+				_shot_mimic_wait = 0
+			elif now - _shot_mimic_since > 20000:
+				_shot_mimic_problems.append("wide leg: the second visit never started its power-on")
+				_mimic_finish()
+		6:
+			_shot_mimic_wait += 1
+			if _shot_mimic_wait >= 5:
+				var img2: Image = get_viewport().get_texture().get_image()
+				var rect2: Rect2i = _mimic_art_screen_rect(panel)
+				var d: int = _mimic_max_diff(_shot_mimic_rest_img, img2, rect2)
+				if d > 3:
+					_shot_mimic_problems.append("restore leg: the face after restore differs from the first rest frame by %d/255 - the restore left residue" % d)
+				_room._set_focused(null)
+				_shot_mimic_phase = 3
+				_shot_mimic_stage = 90
+				_shot_mimic_since = now
+
+
+## Leg 3's sub-driver: the Specter pair leg, on parked probes.
+func _drive_mimic_pair_leg(now: int) -> void:
+	if _shot_mimic_stage == 90:
+		# Entry: the wide legs may have run on page two -
+		# flip home and re-resolve (the page-one panel
+		# objects died with that wall).
+		if _shot_mimic_on_page2:
+			_room._bumper_page(-1)
+			_shot_mimic_on_page2 = false
+			_shot_mimic_stage = 91
+		else:
+			_shot_mimic_stage = 0
+		_shot_mimic_since = now
+		return
+	if _shot_mimic_stage == 91:
+		if not _room.page_slide_active() and _room.wall_ready:
+			_mimic_resolve_panels()
+			_shot_mimic_stage = 0
+			_shot_mimic_since = now
+		return
+	var fx: Dictionary = _shot_mimic_fixtures.get("Flicker Specter", {}) as Dictionary
+	if fx.is_empty():
+		_shot_mimic_problems.append("pair leg: the Specter fixture is missing")
+		_mimic_finish()
+		return
+	var game: GameEntry = fx["game"] as GameEntry
+	var panel: ClickableQuad = fx["panel"] as ClickableQuad
+	match _shot_mimic_stage:
+		0:
+			_room._set_focused(panel)
+			_shot_mimic_stage = 1
+			_shot_mimic_since = now
+		1:
+			if _shot_mimic_nc == "pair":
+				# Negative control: the clock is pinned at
+				# the crossfade's first instant, so the pair
+				# can never settle onto its On image - the
+				# settled-On leg MUST fail.
+				if _room.power_panel() == panel:
+					_room._power_t = RoomView.PAIR_MIX_T0
+				if now - _shot_mimic_since > 12000:
+					_shot_mimic_problems.append("pair settled = On leg failed: the cascade never settled (crossfade pinned at its start)")
+					_mimic_finish()
+				return
+			if _room.power_panel() == panel and _room.power_phase() >= 1:
+				if _room.power_mode() != 3 or not _room.power_is_pair():
+					_shot_mimic_problems.append("pair leg: the Specter card did not take the pair crossfade (mode %d)" % _room.power_mode())
+					_mimic_finish()
+					return
+				if game.pair_on_art() == "":
+					_shot_mimic_problems.append("pair leg: the Specter game serves no pair On half - its extraction never cached one")
+					_mimic_finish()
+					return
+				_room._power_phase = 2
+				_shot_mimic_parks = [[0.0, "rest"], [1.05, "settled"]]
+				_shot_mimic_park = 0
+				_shot_mimic_stage = 2
+				_shot_mimic_wait = 0
+			elif now - _shot_mimic_since > 20000:
+				_shot_mimic_problems.append("pair leg: the power-on never started")
+				_mimic_finish()
+		2:
+			var pk: Array = _shot_mimic_parks[_shot_mimic_park] as Array
+			_room._power_t = float(pk[0])
+			_room._apply_power()
+			_shot_mimic_wait += 1
+			if _room.power_overlay_count() != 1:
+				_shot_mimic_problems.append("pair leg: the performance stands on %d overlay quads, want exactly 1" % _room.power_overlay_count())
+				_mimic_finish()
+				return
+			if _shot_mimic_wait >= 5:
+				_shot_mimic_grabs[str(pk[1])] = get_viewport().get_texture().get_image()
+				_shot_mimic_park += 1
+				_shot_mimic_wait = 0
+				if _shot_mimic_park >= _shot_mimic_parks.size():
+					_shot_mimic_stage = 3
+		3:
+			var rect: Rect2i = _mimic_art_screen_rect(panel)
+			var rest: Dictionary = _mimic_region_stats(_shot_mimic_grabs["rest"] as Image, rect)
+			var settled: Dictionary = _mimic_region_stats(_shot_mimic_grabs["settled"] as Image, rect)
+			var off_img: Image = Image.new()
+			var on_img: Image = Image.new()
+			if off_img.load(game.ensure_art()) != OK or on_img.load(game.pair_on_art()) != OK:
+				_shot_mimic_problems.append("pair leg: the pair's halves are unreadable for the reference check")
+				_mimic_finish()
+				return
+			var ref_off: Dictionary = _mimic_ref_stats(off_img, false)
+			if absf(float(rest["luma"]) - float(ref_off["luma"])) > 0.02:
+				_shot_mimic_problems.append("pair rest leg: the resting art luma %.3f is not the Off face's %.3f" % [float(rest["luma"]), float(ref_off["luma"])])
+			# The On reference rides the overlay's own window:
+			# the fitted On cover-fit into the art rect (not
+			# the whole face frame).
+			var on_mean: Color = _mimic_on_window_mean(on_img)
+			var sm: Color = settled["mean"] as Color
+			if absf(sm.r - on_mean.r) > 0.05 or absf(sm.g - on_mean.g) > 0.05 or absf(sm.b - on_mean.b) > 0.05:
+				_shot_mimic_problems.append("pair settled = On leg failed: settled art colour (%.3f, %.3f, %.3f), the On image's window (%.3f, %.3f, %.3f)" % [sm.r, sm.g, sm.b, on_mean.r, on_mean.g, on_mean.b])
+			if absf(float(settled["luma"]) - float(rest["luma"])) < 0.04:
+				_shot_mimic_problems.append("pair settled = On leg failed: the settled frame barely differs from the Off rest (luma %.3f vs %.3f) - no crossfade happened" % [float(settled["luma"]), float(rest["luma"])])
+			_shot_mimic_rest_img = _shot_mimic_grabs["rest"] as Image
+			_room._set_focused(null)
+			_shot_mimic_stage = 4
+			_shot_mimic_since = now
+		4:
+			if _room.power_phase() == 0 and _room.power_overlay_count() == 0:
+				_room._set_focused(panel)
+				_shot_mimic_stage = 5
+				_shot_mimic_since = now
+			elif now - _shot_mimic_since > 10000:
+				_shot_mimic_problems.append("pair leg: restore never completed")
+				_mimic_finish()
+		5:
+			if _room.power_panel() == panel and _room.power_phase() >= 1:
+				_room._power_phase = 2
+				_room._power_t = 0.0
 				_room._apply_power()
-				if _shot_flicker_probe_wait >= 3:
-					var on_img13b: Image = get_viewport().get_texture().get_image()
-					_shot_flicker_anim_strike[0] = maxi(_shot_flicker_anim_strike[0], _flicker_green_count_img(panel13, on_img13b))
-					_shot_flicker_anim_strike[1] = maxi(_shot_flicker_anim_strike[1], _flicker_magenta_count_img(panel13, on_img13b))
-					if _shot_flicker_probe_wait == 3:
-						on_img13b.save_png(_shot_flicker_prefix + "_anim_on_b.png")
-				if _shot_flicker_probe_wait >= 24:
-					# Across their own strike bursts, BOTH
-					# members must have rendered - the giant
-					# by its green, the small by its magenta.
-					if _shot_flicker_anim_strike[0] < 150:
-						_shot_flicker_problems.append("no strike frame shows the giant member (green px %d) - it never rendered" % _shot_flicker_anim_strike[0])
-					if _shot_flicker_anim_strike[1] < 40:
-						_shot_flicker_problems.append("no strike frame shows the small member (magenta px %d) - it never rendered" % _shot_flicker_anim_strike[1])
-					_room._power_t = RoomView.POWER_CASCADE_SEC
-					_room._apply_power()
-					_shot_flicker_probe_wait = 0
-					_shot_flicker_stage = 3
-					_shot_flicker_since = now
-				elif now - _shot_flicker_since > 40000:
-					_shot_flicker_problems.append("the animation leg's second strike burst never rendered")
-					_flicker_finish()
-			elif _shot_flicker_stage == 3:
-				# The settled burst: the end state re-pinned
-				# every frame, frames grabbed across the
-				# readback lag, and only the LAST grab counts
-				# - by then the pipeline has long flushed to
-				# the parked end state, so what it shows is
-				# the settled card itself, not a stale strike.
-				_shot_flicker_probe_wait += 1
-				_room._power_t = RoomView.POWER_CASCADE_SEC
-				_room._apply_power()
-				if _shot_flicker_probe_wait >= 24:
-					var settled_img13: Image = get_viewport().get_texture().get_image()
-					var green_off13: int = _flicker_green_count_img(panel13, settled_img13)
-					if green_off13 > 10:
-						_shot_flicker_problems.append("the settled card still shows the giant member (green px %d) - the animation frame is still held" % green_off13)
-					var magenta_off13: int = _flicker_magenta_count_img(panel13, settled_img13)
-					if magenta_off13 > 10:
-						_shot_flicker_problems.append("the settled card still shows the small member (magenta px %d) - the animation frame is still held" % magenta_off13)
-					var amber_set13: int = _flicker_amber_count_img(panel13, settled_img13)
-					if amber_set13 < 100:
-						_shot_flicker_problems.append("the settled card's lamps are not lit (amber px %d) - the release took the lamps with it" % amber_set13)
-					settled_img13.save_png(_shot_flicker_prefix + "_anim_settled.png")
-					_flicker_finish()
-				elif now - _shot_flicker_since > 40000:
-					_shot_flicker_problems.append("the animation leg's settled burst never rendered")
-					_flicker_finish()
+				_shot_mimic_stage = 6
+				_shot_mimic_wait = 0
+			elif now - _shot_mimic_since > 20000:
+				_shot_mimic_problems.append("pair leg: the second visit never started its power-on")
+				_mimic_finish()
+		6:
+			_shot_mimic_wait += 1
+			if _shot_mimic_wait >= 5:
+				var img2: Image = get_viewport().get_texture().get_image()
+				var d: int = _mimic_max_diff(_shot_mimic_rest_img, img2, _mimic_art_screen_rect(panel))
+				if d > 3:
+					_shot_mimic_problems.append("pair restore leg: focus loss did not return the card to its Off face (max diff %d/255)" % d)
+				_room._set_focused(null)
+				_shot_mimic_phase = 4
+				_shot_mimic_stage = 90
+				_shot_mimic_since = now
+
+
+## The mean colour of a pair On image through the overlay's
+## own window: the fitted On cover-fit into the face's art
+## rect (512 x (640 - strip)), centred - the same rule
+## RoomView._build_power_overlay windows it with.
+func _mimic_on_window_mean(on_img: Image) -> Color:
+	var art: Vector2 = Vector2(512.0, 640.0 - float(CardFace.ART_STRIP_HEIGHT_PX))
+	var ow: float = float(on_img.get_width())
+	var oh: float = float(on_img.get_height())
+	var cover: float = maxf(art.x / ow, art.y / oh)
+	var win: Vector2 = art / cover
+	var org: Vector2 = (Vector2(ow, oh) - win) * 0.5
+	# The stats window is the face's top 396 rows; in the
+	# overlay window's own space that is its top 396/548.
+	win.y *= 396.0 / art.y
+	var sum: Color = Color(0, 0, 0, 0)
+	var n: int = 0
+	var gy: int = 0
+	while gy < 24:
+		var gx: int = 0
+		while gx < 24:
+			var px: int = clampi(int(org.x + win.x * (float(gx) + 0.5) / 24.0), 0, on_img.get_width() - 1)
+			var py: int = clampi(int(org.y + win.y * (float(gy) + 0.5) / 24.0), 0, on_img.get_height() - 1)
+			sum += on_img.get_pixel(px, py)
+			n += 1
+			gx += 1
+		gy += 1
+	return sum / float(n)
+
+
+## Leg 4's subject list: [name, panel, want_mode].
+func _mimic_quick_subjects() -> Array:
+	var out: Array = []
+	var pair_fx: Dictionary = _shot_mimic_fixtures.get("Flicker Pair", {}) as Dictionary
+	if not pair_fx.is_empty() and pair_fx.get("panel") != null:
+		out.append(["Flicker Pair", pair_fx["panel"], 3])
+	for pre: String in ["Flicker Flasher", "Flicker Anim", "Flicker Wart", "Flicker Warmed"]:
+		var fx: Dictionary = _shot_mimic_fixtures.get(pre, {}) as Dictionary
+		if not fx.is_empty() and fx.get("panel") != null:
+			out.append([pre, fx["panel"], 2])
+	if _shot_mimic_panel2 != null:
+		out.append(["Cinder Peak (plain face)", _shot_mimic_panel2, 2])
+	if _shot_mimic_title_panel != null:
+		out.append(["title card", _shot_mimic_title_panel, 2])
+	return out
+
+
+## Leg 4's sub-driver: every remaining face class takes the
+## same performance and settles on it.
+func _drive_mimic_quick_leg(now: int) -> void:
+	if _shot_mimic_stage == 90:
+		# Entry: the wide legs may have run on page two -
+		# flip home and re-resolve this leg's subjects on
+		# page one before building the list.
+		if _shot_mimic_on_page2:
+			_room._bumper_page(-1)
+			_shot_mimic_on_page2 = false
+			_shot_mimic_stage = 91
+		else:
+			_mimic_resolve_panels()
+			_shot_mimic_quick = _mimic_quick_subjects()
+			_shot_mimic_quick_i = 0
+			_shot_mimic_stage = 0
+		_shot_mimic_since = now
+		return
+	if _shot_mimic_stage == 91:
+		if not _room.page_slide_active() and _room.wall_ready:
+			_mimic_resolve_panels()
+			_shot_mimic_quick = _mimic_quick_subjects()
+			_shot_mimic_quick_i = 0
+			_shot_mimic_stage = 0
+			_shot_mimic_since = now
+		return
+	if _shot_mimic_quick_i >= _shot_mimic_quick.size():
+		_shot_mimic_phase = 5
+		_shot_mimic_stage = 0
+		_shot_mimic_since = now
+		return
+	var item: Array = _shot_mimic_quick[_shot_mimic_quick_i] as Array
+	var label: String = str(item[0])
+	var panel: ClickableQuad = item[1] as ClickableQuad
+	var want_mode: int = int(item[2])
+	match _shot_mimic_stage:
+		0:
+			_room._set_focused(panel)
+			_shot_mimic_stage = 1
+			_shot_mimic_since = now
+		1:
+			if _room.power_panel() == panel and _room.power_phase() == 2:
+				if _room.power_mode() != want_mode:
+					_shot_mimic_problems.append("uniformity leg: %s settled in mode %d, want %d" % [label, _room.power_mode(), want_mode])
+				if _room.power_overlay_count() != 1:
+					_shot_mimic_problems.append("uniformity leg: %s settled on %d overlay quads, want 1" % [label, _room.power_overlay_count()])
+				_room._set_focused(null)
+				_shot_mimic_stage = 2
+				_shot_mimic_since = now
+			elif now - _shot_mimic_since > 25000:
+				_shot_mimic_problems.append("uniformity leg: %s never settled (phase %d)" % [label, _room.power_phase()])
+				_mimic_finish()
+		2:
+			if _room.power_phase() == 0:
+				_shot_mimic_quick_i += 1
+				_shot_mimic_stage = 0
+				_shot_mimic_since = now
+			elif now - _shot_mimic_since > 10000:
+				_shot_mimic_problems.append("uniformity leg: %s never restored" % label)
+				_mimic_finish()
+
+
+## The real boot's driver (PVLDS_MIMIC_REAL=1): the
+## prototype's, carried into production - three real tables,
+## parked stills at the envelope's named instants, a
+## MIMIC_CROP line per subject for the harness's post-check.
+## The clip frames are the prototype's judging artifact; the
+## production suite keeps stills only (the post-check reads
+## numbers, not movies).
+func _drive_shot_mimic_real(now: int) -> void:
+	if _shot_mimic_phase == 0:
+		if _room == null or not _room.visible or not _room.wall_ready or _scanner == null:
+			return
+		if _shot_mimic_stage == 0:
+			_room._handle_rail("filter:all")
+			get_viewport().warp_mouse(Vector2(4, 4))
+			_shot_mimic_stage = 1
+			_shot_mimic_since = now
+			return
+		if _shot_mimic_stage == 1:
+			var specs: Array = [["taxi", "Taxi"], ["goonies", "Goonies"], ["bride", "Bride"]]
+			var by_key: Dictionary = {}
+			for g: GameEntry in _scanner.games:
+				for sp: Array in specs:
+					if g.title.contains(str(sp[1])):
+						by_key[str(sp[0])] = g
+			_shot_mimic_subjects.clear()
+			for sp2: Array in specs:
+				if by_key.has(str(sp2[0])):
+					_shot_mimic_subjects.append({"key": str(sp2[0]), "game": by_key[str(sp2[0])]})
+			_shot_mimic_stage = 2
+			_shot_mimic_since = now
+			return
+		var missing: bool = _shot_mimic_subjects.size() < 3
+		for s: Dictionary in _shot_mimic_subjects:
+			if not s.has("panel"):
+				for p: ClickableQuad in _room._panels:
+					if p.payload == (s["game"] as GameEntry).game_id:
+						s["panel"] = p
+			if not s.has("panel"):
+				missing = true
+		if missing:
+			if not _scan_active and now - _shot_mimic_since > 20000:
+				_shot_mimic_problems.append("real subjects missing from the wall (registered %d of 3)" % _shot_mimic_subjects.size())
+				_mimic_finish()
+			return
+		_shot_mimic_phase = 1
+		_shot_mimic_idx = 0
+		_shot_mimic_stage = 0
+		_shot_mimic_since = now
+		return
+	if _shot_mimic_phase != 1:
+		return
+	if now - _shot_mimic_since > 300000:
+		_shot_mimic_problems.append("real driver timed out on subject %d stage %d" % [_shot_mimic_idx, _shot_mimic_stage])
+		_mimic_finish()
+		return
+	var subj: Dictionary = _shot_mimic_subjects[_shot_mimic_idx] as Dictionary
+	var panel: ClickableQuad = subj["panel"] as ClickableQuad
+	var key: String = str(subj["key"])
+	match _shot_mimic_stage:
+		0:
+			_room._set_focused(panel)
+			_shot_mimic_stage = 1
+			_shot_mimic_wait = 0
+			_shot_mimic_since = now
+		1:
+			if _room.power_panel() == panel and _room.power_phase() >= 1:
+				if _room.power_mode() != 2:
+					_shot_mimic_problems.append("%s did not take the mimic grade (mode %d) - its stills would lie" % [key, _room.power_mode()])
+					_mimic_finish()
+					return
+				_room._power_phase = 2
+				_shot_mimic_stage = 2
+				_shot_mimic_park = 0
+				_shot_mimic_wait = 0
+			elif now - _shot_mimic_since > 20000:
+				_shot_mimic_problems.append("%s never started its power-on" % key)
+				_mimic_finish()
+		2:
+			var stills: Array = [["rest", 0.0], ["sag", 0.34], ["mid", 0.44], ["settled", 1.05]]
+			var pk: Array = stills[_shot_mimic_park] as Array
+			_room._power_t = float(pk[1])
+			_room._apply_power()
+			_shot_mimic_wait += 1
+			if _shot_mimic_wait >= 5:
+				var img: Image = get_viewport().get_texture().get_image()
+				img.save_png(_shot_mimic_prefix + "_" + key + "_" + str(pk[0]) + ".png")
+				if str(pk[0]) == "settled":
+					_mimic_print_crop(key, panel)
+				_shot_mimic_park += 1
+				_shot_mimic_wait = 0
+				if _shot_mimic_park >= stills.size():
+					_room._set_focused(null)
+					_shot_mimic_stage = 3
+					_shot_mimic_wait = 0
+		3:
+			_shot_mimic_wait += 1
+			if _shot_mimic_wait >= 12:
+				_shot_mimic_idx += 1
+				_shot_mimic_stage = 0
+				_shot_mimic_wait = 0
+				_shot_mimic_since = now
+				if _shot_mimic_idx >= _shot_mimic_subjects.size():
+					_mimic_finish()
+
+
+func _mimic_print_crop(key: String, panel: ClickableQuad) -> void:
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var half: Vector2 = _room._panel_size * 0.5
+	var pts: Array[Vector2] = []
+	for c: Vector2 in [Vector2(-half.x, -half.y), Vector2(half.x, -half.y), Vector2(-half.x, half.y), Vector2(half.x, half.y)]:
+		pts.append(cam.unproject_position(panel.global_transform * Vector3(c.x, c.y, 0.0)))
+	var mn: Vector2 = pts[0]
+	var mx: Vector2 = pts[0]
+	for p: Vector2 in pts:
+		mn = mn.min(p)
+		mx = mx.max(p)
+	var pad: Vector2 = (mx - mn) * 0.10
+	mn -= pad
+	mx += pad
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	mn.x = clampf(mn.x, 0.0, vp.x)
+	mn.y = clampf(mn.y, 0.0, vp.y)
+	mx.x = clampf(mx.x, 0.0, vp.x)
+	mx.y = clampf(mx.y, 0.0, vp.y)
+	print("MIMIC_CROP %s %d %d %d %d" % [key, int(mn.x), int(mn.y), int(mx.x - mn.x), int(mx.y - mn.y)])
+	# The art area's own projected corners (TL TR BR BL): the
+	# post-check masks to this polygon - the bounding crop
+	# above also catches the focus frame and the room around
+	# the perspective-tilted card, which are not the face and
+	# must not be graded by the reference.
+	var art_bot: float = half.y * (1.0 - 2.0 * float(_room._panel_face_px.y - CardFace.ART_STRIP_HEIGHT_PX) / float(_room._panel_face_px.y))
+	var poly: Array[Vector2] = []
+	for c2: Vector2 in [Vector2(-half.x, half.y), Vector2(half.x, half.y), Vector2(half.x, art_bot), Vector2(-half.x, art_bot)]:
+		poly.append(cam.unproject_position(panel.global_transform * Vector3(c2.x, c2.y, 0.0)))
+	print("MIMIC_POLY %s %d %d %d %d %d %d %d %d" % [key,
+		int(poly[0].x), int(poly[0].y), int(poly[1].x), int(poly[1].y),
+		int(poly[2].x), int(poly[2].y), int(poly[3].x), int(poly[3].y)])
 
 
 func _save_shot_png(path: String) -> Error:
@@ -4737,14 +3911,6 @@ func _on_art_prefetch(games: Array) -> void:
 	_art_warmer.prioritize(typed)
 
 
-## Room power-on kick: the kicked game's layer set jumps the
-## warmer's phase-two queue, so the extraction the kick races
-## and the queue's own item are the same front-of-line work.
-func _on_art_kick(game: GameEntry) -> void:
-	if _art_warmer != null and game != null:
-		_art_warmer.prioritize_layers([game])
-
-
 ## A warm pass drained: refresh the desk's coverage line so the
 ## art-cache stat reads current when the player next visits it.
 func _on_art_warm_drained() -> void:
@@ -5443,7 +4609,7 @@ func _run_core_test() -> void:
 		OS.delay_msec(20)
 		waited += 20
 	_expect(warmer.is_idle() and ArtProvider.is_cached(b2s_b), "the warmer pre-extracts the library in the background", failures)
-	_expect(warmer.last_pass_items == 2, "the warm pass performed one flat extraction and one (bulb-less) layer extraction - phase two warms the flicker set too", failures)
+	_expect(warmer.last_pass_items == 1, "the warm pass performed one flat extraction and nothing else (the swap round: there is no phase two)", failures)
 	_expect(ArtWarmer.cache_coverage(warm_games) == Vector2i(1, 1), "cache coverage reports have/want", failures)
 	# The stop request (exit-hang round): a pass abandoned at an
 	# item boundary leaves the rest of its queue unextracted, keeps
@@ -5532,9 +4698,8 @@ func _run_core_test() -> void:
 	ok_entry.art_source_path = b2s_ok
 	# The warmer never re-queues a stamped negative (nor a cached
 	# file's flat art): a library of just those two performs no
-	# FLAT extraction. The cached game's untried layer set is
-	# phase two's one extraction; the no-image file is never
-	# layer-queued at all (no base anywhere in it).
+	# extraction at all (the swap round: flat is the only queue -
+	# there is no layer set to warm behind it).
 	var warmer3: ArtWarmer = ArtWarmer.new()
 	var skip_games: Array[GameEntry] = [neg_entry, ok_entry]
 	warmer3.warm_library(skip_games)
@@ -5542,10 +4707,8 @@ func _run_core_test() -> void:
 	while not warmer3.is_idle() and waited < 20000:
 		OS.delay_msec(20)
 		waited += 20
-	_expect(warmer3.is_idle() and warmer3.last_pass_items == 1
-		and ArtProvider.flicker_outcome(b2s_ok) == ArtProvider.STATUS_NO_LAYERS
-		and ArtProvider.flicker_outcome(b2s_neg) == "",
-		"the warmer skips stamped negatives and cached flat art; the cached game's layers are phase two's one extraction", failures)
+	_expect(warmer3.is_idle() and warmer3.last_pass_items == 0,
+		"the warmer skips stamped negatives and cached flat art entirely", failures)
 	# A designated backglass element whose payload will not decode
 	# is corruption: the failed class, not no_image.
 	var b2s_bad: String = art_dir.path_join("Corrupt Table.directb2s")
@@ -5559,8 +4722,9 @@ func _run_core_test() -> void:
 	# BackglassImage in dual files. The panel art is the OFF
 	# half - the unlit glass at rest, in its own shape (400x500,
 	# which fits the panel unfitted) - never the lit On half:
-	# the On image is the flicker's one layer over this face,
-	# and the two halves may disagree in shape entirely (here
+	# the On image is cached beside the face (the pair On) for
+	# the power-on crossfade, and the two halves may disagree
+	# in shape entirely (here
 	# 800x1000 against 400x500). (Pre-fix the flat reader
 	# served the On image: 512x640, already lit, in the On
 	# half's proportions.)
@@ -5573,6 +4737,23 @@ func _run_core_test() -> void:
 	var pair_img: Image = Image.new()
 	_expect(pair_cache != "" and pair_img.load(pair_cache) == OK and pair_img.get_width() == 400 and pair_img.get_height() == 500,
 		"the on/off pair variant extracts its Off image (400x500, the unlit glass at rest)", failures)
+	# The swap round's pair cache: the same extraction wrote the
+	# On half beside the face, panel-fitted like the face
+	# (800x1000 -> 512x640), and serves it while the face cache
+	# it belongs to is current.
+	_expect(ArtProvider.has_pair_on(b2s_pair), "the pair extraction caches its On half beside the face", failures)
+	var pair_on_img: Image = Image.new()
+	_expect(pair_on_img.load(ArtProvider.pair_on_path_for(b2s_pair)) == OK
+		and pair_on_img.get_width() == 512 and pair_on_img.get_height() == 640,
+		"the cached On half is the On image at panel fit (800x1000 -> 512x640)", failures)
+	var pair_entry: GameEntry = GameEntry.new()
+	pair_entry.art_source_path = b2s_pair
+	_expect(pair_entry.ensure_art() == pair_cache and pair_entry.pair_on_art() == ArtProvider.pair_on_path_for(b2s_pair),
+		"a pair game serves its On half for the power-on crossfade", failures)
+	var nonpair_entry: GameEntry = GameEntry.new()
+	nonpair_entry.art_source_path = b2s_ok
+	_expect(nonpair_entry.ensure_art() != "" and nonpair_entry.pair_on_art() == "" and not ArtProvider.has_pair_on(b2s_ok),
+		"a plain backglass has no pair On half (it takes the mimic grade)", failures)
 	# Variant 2: a BMP-encoded backglass (older designer files) -
 	# hand-built BMP bytes, the way an external tool writes them.
 	var b2s_bmp: String = art_dir.path_join("Bmp Table.directb2s")
@@ -5684,87 +4865,21 @@ func _run_core_test() -> void:
 	_expect(after_entry is Dictionary and int((after_entry as Dictionary).get("v", 0)) == ArtProvider.EXTRACTOR_VERSION,
 		"the retried entry is stamped with the current extractor version", failures)
 
-	# --- Flicker layers (flicker round): the B2S lamp layers
-	# the power-on plays, preserved beside the flattened still.
-	# Fixtures are built from the REAL .directb2s structure:
-	# base image in <Images>, bulbs under <Illumination> with
-	# entity-wrapped base64 snippets and glass-pixel rects.
+	# --- Pair halves under the flat reader (kept flat coverage
+	# from the retired flicker sections): a pair file's face is
+	# its OFF half in its own shape, a plain image in the same
+	# file beats a decoy pair entirely, and the library's
+	# median art aspect feeds the wall's sizing. The snippet
+	# layers these fixtures once also exercised are GONE (the
+	# swap round): nothing extracts, caches, or classifies
+	# bulbs any more - the power-on is the mimic's grade, and
+	# a pair's On half rides as a face texture (pair_on, above).
 	var fl_solid: Callable = func(w: int, h: int, c: Color) -> Image:
 		var im: Image = Image.create(w, h, false, Image.FORMAT_RGBA8)
 		im.fill(c)
 		return im
 	var fl_glass: Image = fl_solid.call(1000, 800, Color(0.06, 0.08, 0.19)) as Image
 	var amber_img: Image = fl_solid.call(300, 120, Color(1.0, 0.75, 0.16)) as Image
-	var fl_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(fl_glass.save_png_to_buffer()) + "\" /></Images><Illumination>"
-	fl_text += _b2s_bulb_xml("Backglass", "1", 60, 60, 300, 120, amber_img)
-	fl_text += _b2s_bulb_xml("Backglass", "1", 420, 60, 300, 120, amber_img)
-	fl_text += _b2s_bulb_xml("Backglass", "1", 60, 300, 300, 120, amber_img)
-	fl_text += _b2s_bulb_xml("DMD", "1", 10, 10, 100, 50, amber_img)
-	fl_text += _b2s_bulb_xml("Backglass", "0", 500, 500, 100, 100, amber_img)
-	fl_text += "</Illumination></DirectB2SData>"
-	var b2s_fl: String = art_dir.path_join("Layered Table.directb2s")
-	_expect(_write_text_file(b2s_fl, fl_text), "layered fixture written", failures)
-	var fl: Dictionary = ArtProvider.extract_flicker_layers(b2s_fl)
-	_expect(str(fl["status"]) == ArtProvider.STATUS_OK and not bool(fl["pair"]),
-		"a layered backglass extracts its layers (status ok, not a pair)", failures)
-	_expect((fl["glass_size"] as Vector2i) == Vector2i(1000, 800) and (fl["base_size"] as Vector2i) == Vector2i(512, 410),
-		"layer extraction reports the glass size and the fitted base size (1000x800 -> 512x410)", failures)
-	var fl_layers: Array = fl["layers"] as Array
-	_expect(fl_layers.size() == 3,
-		"three glass bulbs become layers - the DMD-parent and Visible=0 bulbs are excluded (%d)" % fl_layers.size(), failures)
-	var fl_expect: Array = [[30.72, 30.72, 153.6, 61.44], [215.04, 30.72, 153.6, 61.44], [30.72, 153.6, 153.6, 61.44]]
-	var fl_rects_ok: bool = fl_layers.size() == 3
-	for fe: Variant in fl_expect:
-		var fea: Array = fe as Array
-		var found: bool = false
-		for fl_item: Variant in fl_layers:
-			var rr: Rect2 = (fl_item as Dictionary)["rect"] as Rect2
-			if absf(rr.position.x - float(fea[0])) < 0.2 and absf(rr.position.y - float(fea[1])) < 0.2 \
-					and absf(rr.size.x - float(fea[2])) < 0.2 and absf(rr.size.y - float(fea[3])) < 0.2:
-				found = true
-		fl_rects_ok = fl_rects_ok and found
-	_expect(fl_rects_ok, "layer rects are carried in fitted coordinates (glass px x 0.512)", failures)
-	_expect(ArtProvider.has_flicker_layers(b2s_fl) and ArtProvider.flicker_outcome(b2s_fl) == ArtProvider.STATUS_OK,
-		"the layer set reads back as a warm cache hit with an ok outcome", failures)
-	var fl_meta_text: String = FileAccess.get_file_as_string(ArtProvider.layers_meta_path(b2s_fl))
-	var fl2: Dictionary = ArtProvider.extract_flicker_layers(b2s_fl)
-	_expect((fl2["layers"] as Array).size() == 3 and FileAccess.get_file_as_string(ArtProvider.layers_meta_path(b2s_fl)) == fl_meta_text,
-		"a second extraction serves the sibling cache untouched (extracted once)", failures)
-	var fl_entry: GameEntry = GameEntry.new()
-	fl_entry.art_source_path = b2s_fl
-	_expect(fl_entry.flicker_source() == b2s_fl and (fl_entry.ensure_flicker()["layers"] as Array).size() == 3,
-		"GameEntry.ensure_flicker serves the layer set under the claim discipline", failures)
-	var fl_side_entry: GameEntry = GameEntry.new()
-	fl_side_entry.art_path = art_dir.path_join("side.png")
-	_expect(fl_side_entry.flicker_source() == "" and fl_side_entry.ensure_flicker().is_empty(),
-		"a side-image game has no flicker layers (the brightness fallback's country)", failures)
-	# A full-glass-sized bulb image: the layer is its rect region.
-	var full_glass: Image = fl_solid.call(400, 500, Color(1.0, 0.75, 0.16)) as Image
-	var fg_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64((fl_solid.call(400, 500, Color(0.05, 0.05, 0.1)) as Image).save_png_to_buffer()) + "\" /></Images><Illumination>"
-	fg_text += _b2s_bulb_xml("Backglass", "1", 100, 100, 200, 150, full_glass)
-	fg_text += "</Illumination></DirectB2SData>"
-	var b2s_fg: String = art_dir.path_join("Full Glass Bulb Table.directb2s")
-	_expect(_write_text_file(b2s_fg, fg_text), "full-glass bulb fixture written", failures)
-	var fg: Dictionary = ArtProvider.extract_flicker_layers(b2s_fg)
-	var fg_layers: Array = fg["layers"] as Array
-	var fg_img: Image = Image.new()
-	_expect(fg_layers.size() == 1 and fg_img.load(str((fg_layers[0] as Dictionary)["path"])) == OK
-		and fg_img.get_size() == Vector2i(200, 150),
-		"a full-glass bulb image is cropped to its rect (200x150 layer)", failures)
-	var fg_px: Color = fg_img.get_pixel(100, 75)
-	_expect(fg_px.r > 0.9 and fg_px.g > 0.6 and fg_px.g < 0.85 and fg_px.b < 0.3,
-		"the cropped layer carries the bulb's lit art (amber)", failures)
-	# An on/off pair: base is the Off image, the one layer is the
-	# full-frame On image.
-	var pair_off2: Image = fl_solid.call(400, 500, Color(0.04, 0.04, 0.08)) as Image
-	var pair_on2: Image = fl_solid.call(400, 500, Color(1.0, 0.75, 0.16)) as Image
-	var b2s_fl_pair: String = art_dir.path_join("Flicker Pair Table.directb2s")
-	_expect(_write_text_file(b2s_fl_pair, "<DirectB2SData><Images><BackglassOffImage Value=\"" + Marshalls.raw_to_base64(pair_off2.save_png_to_buffer()) + "\" /><BackglassOnImage Value=\"" + Marshalls.raw_to_base64(pair_on2.save_png_to_buffer()) + "\" /></Images></DirectB2SData>"),
-		"pair fixture written", failures)
-	var flp: Dictionary = ArtProvider.extract_flicker_layers(b2s_fl_pair)
-	var flp_layers: Array = flp["layers"] as Array
-	_expect(bool(flp["pair"]) and flp_layers.size() == 1 and ((flp_layers[0] as Dictionary)["rect"] as Rect2) == Rect2(0, 0, 400, 500),
-		"an on/off pair yields base + one full-frame lit layer", failures)
 	# The pair's halves in DIFFERENT shapes, solid colors so
 	# the content itself testifies (flicker fix round 2): the
 	# flat face is the Off image (400x500, dark), not the On
@@ -5782,11 +4897,6 @@ func _run_core_test() -> void:
 		adv_px = adv_img.get_pixel(200, 250)
 	_expect(adv_img.get_size() == Vector2i(400, 500) and adv_px.r < 0.1 and adv_px.b > adv_px.r + 0.02,
 		"an adversarial pair's face is its Off half (400x500, dark), not the On half in any shape", failures)
-	var adv_fl: Dictionary = ArtProvider.extract_flicker_layers(b2s_adv_pair)
-	var adv_fl_layers: Array = adv_fl["layers"] as Array
-	_expect(bool(adv_fl["pair"]) and (adv_fl["base_size"] as Vector2i) == Vector2i(400, 500)
-		and adv_fl_layers.size() == 1 and ((adv_fl_layers[0] as Dictionary)["rect"] as Rect2) == Rect2(0, 0, 400, 500),
-		"an adversarial pair's layer set bases on the Off glass in its own space", failures)
 	# Pair + plain - the triple divergence: a plain backglass
 	# AND a decoy pair in one file. Both readers must ignore
 	# the halves entirely: face and base are the plain image,
@@ -5807,160 +4917,6 @@ func _run_core_test() -> void:
 		pp_px = pp_img.get_pixel(200, 250)
 	_expect(pp_img.get_size() == Vector2i(400, 500) and pp_px.b > pp_px.r + 0.05,
 		"pair+plain: the flat face is the plain image (navy), not either pair half", failures)
-	var pp_fl: Dictionary = ArtProvider.extract_flicker_layers(b2s_pp)
-	_expect(not bool(pp_fl["pair"]) and (pp_fl["layers"] as Array).size() == 2
-		and (pp_fl["base_size"] as Vector2i) == Vector2i(400, 500),
-		"pair+plain: the layer set is bulb-style over the plain image, the decoy pair ignored", failures)
-	var pp_base: Image = Image.new()
-	_expect(pp_cache != "" and pp_base.load(str(pp_fl["base_path"])) == OK and pp_base.get_data() == pp_img.get_data(),
-		"pair+plain: the layer set's base and the flat face are the same image", failures)
-	# Layer kinds (flasher-release round): the file's own
-	# RomIDType classifies each layer - 2 is a solenoid
-	# FLASHER (momentary on the machine; the room flashes
-	# and releases it), anything else a LAMP. The pair's one
-	# layer is a lamp by construction. The meta on disk
-	# carries the kinds under the current layer generation,
-	# so a kind-less cached set can never be served.
-	_expect(str(((flp["layers"] as Array)[0] as Dictionary).get("kind", "")) == ArtProvider.LAYER_KIND_LAMP,
-		"a pair set's one layer is a lamp (it holds)", failures)
-	var kind_bulb: Callable = func(rom_type: String, x: int, y: int, w: int, h: int, img: Image) -> String:
-		var rt: String = (" RomIDType=\"%s\"" % rom_type) if rom_type != "" else ""
-		return "<Bulb Parent=\"Backglass\" ID=\"7\" Name=\"Lamp\" RomID=\"3\"%s RomInverted=\"0\" InitialState=\"0\" DualMode=\"0\" Intensity=\"5\" Visible=\"1\" LocX=\"%d\" LocY=\"%d\" Width=\"%d\" Height=\"%d\" IsImageSnippit=\"1\" Image=\"%s\" />" % [rt, x, y, w, h, _b2s_wrap_b64(img)]
-	var kind_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(fl_glass.save_png_to_buffer()) + "\" /></Images><Illumination>"
-	kind_text += kind_bulb.call("1", 60, 60, 300, 120, amber_img) as String
-	kind_text += kind_bulb.call("2", 0, 0, 1000, 800, fl_solid.call(1000, 800, Color(1.0, 0.16, 0.16, 0.66)) as Image) as String
-	kind_text += kind_bulb.call("", 420, 300, 300, 120, amber_img) as String
-	kind_text += "</Illumination></DirectB2SData>"
-	var b2s_kind: String = art_dir.path_join("Kind Table.directb2s")
-	_expect(_write_text_file(b2s_kind, kind_text), "kind fixture written", failures)
-	var kind_fl: Dictionary = ArtProvider.extract_flicker_layers(b2s_kind)
-	var kind_layers: Array = kind_fl["layers"] as Array
-	var kind_flashers: int = 0
-	var kind_lamps: int = 0
-	var kind_giant_is_flasher: bool = false
-	for kind_item: Variant in kind_layers:
-		var kd: Dictionary = kind_item as Dictionary
-		var krect: Rect2 = kd["rect"] as Rect2
-		if str(kd.get("kind", "")) == ArtProvider.LAYER_KIND_FLASHER:
-			kind_flashers += 1
-			# The flasher is the full-glass snippet (1000x800
-			# in glass px, ~512x410 fitted); a small bulb
-			# wearing the kind would fail here.
-			kind_giant_is_flasher = krect.size.x > 480.0 and krect.size.y > 390.0
-		else:
-			kind_lamps += 1
-	_expect(kind_layers.size() == 3 and kind_flashers == 1 and kind_lamps == 2 and kind_giant_is_flasher,
-		"RomIDType classifies the layers: the type-2 full-glass bulb is the one flasher, the type-1 and untyped bulbs are lamps", failures)
-	var kind_meta: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.layers_meta_path(b2s_kind)))
-	var kind_meta_flashers: int = 0
-	if kind_meta is Dictionary:
-		for km_item: Variant in (kind_meta as Dictionary).get("layers", []):
-			if str((km_item as Dictionary).get("kind", "")) == ArtProvider.LAYER_KIND_FLASHER:
-				kind_meta_flashers += 1
-	_expect(kind_meta is Dictionary and int((kind_meta as Dictionary).get("lv", 0)) == ArtProvider.LAYERS_VERSION
-		and kind_meta_flashers == 1,
-		"the layer meta carries the kinds under generation lv%d (one flasher of three)" % ArtProvider.LAYERS_VERSION, failures)
-	# Animation membership (animation-release round): a bulb
-	# whose Name an <Animation> step enumerates is a sequenced
-	# frame (ANIM) - the room strikes and releases it like a
-	# flasher, because the file only ever shows one frame of
-	# the sequence at a time. A bulb no step names stays a
-	# lamp; a solenoid a step also names stays a FLASHER (the
-	# ROM channel is the file's stronger word); an animation
-	# over another surface (Parent="DMD") confers nothing on
-	# the glass's bulbs. Step lists are comma-separated and
-	# tolerate spaces, like the real files' own.
-	var anim_bulb: Callable = func(bname: String, rom_type: String, x: int, y: int, img: Image) -> String:
-		var rt: String = (" RomIDType=\"%s\"" % rom_type) if rom_type != "" else ""
-		return "<Bulb Parent=\"Backglass\" ID=\"7\" Name=\"%s\" RomID=\"3\"%s RomInverted=\"0\" InitialState=\"0\" DualMode=\"0\" Intensity=\"5\" Visible=\"1\" LocX=\"%d\" LocY=\"%d\" Width=\"300\" Height=\"120\" IsImageSnippit=\"1\" Image=\"%s\" />" % [bname, rt, x, y, _b2s_wrap_b64(img)]
-	var anim_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(fl_glass.save_png_to_buffer()) + "\" /></Images><Illumination>"
-	anim_text += anim_bulb.call("HeldLamp", "1", 60, 60, amber_img) as String
-	anim_text += anim_bulb.call("DmdNamed", "1", 420, 60, amber_img) as String
-	anim_text += anim_bulb.call("SeqFrame", "1", 60, 300, amber_img) as String
-	anim_text += anim_bulb.call("SeqSol", "2", 420, 300, amber_img) as String
-	anim_text += "</Illumination><Animations>"
-	anim_text += "<Animation Name=\"seq\" Parent=\"Backglass\" Interval=\"100\"><AnimationStep Step=\"1\" On=\"SeqFrame, SeqSol\" Off=\"SeqFrame\" /></Animation>"
-	anim_text += "<Animation Name=\"other\" Parent=\"DMD\" Interval=\"100\"><AnimationStep Step=\"1\" On=\"DmdNamed\" Off=\"DmdNamed\" /></Animation>"
-	anim_text += "</Animations></DirectB2SData>"
-	var b2s_anim: String = art_dir.path_join("Anim Table.directb2s")
-	_expect(_write_text_file(b2s_anim, anim_text), "anim fixture written", failures)
-	var anim_fl: Dictionary = ArtProvider.extract_flicker_layers(b2s_anim)
-	var anim_layers: Array = anim_fl["layers"] as Array
-	# The bulbs sit at the glass's four quadrants (fitted by
-	# 0.512): match each layer to its bulb by rect position.
-	var anim_want: Dictionary = {
-		Vector2(60, 60): ArtProvider.LAYER_KIND_LAMP,
-		Vector2(420, 60): ArtProvider.LAYER_KIND_LAMP,
-		Vector2(60, 300): ArtProvider.LAYER_KIND_ANIM,
-		Vector2(420, 300): ArtProvider.LAYER_KIND_FLASHER,
-	}
-	var anim_matched: int = 0
-	var anim_kinds_ok: bool = anim_layers.size() == 4
-	for anim_item: Variant in anim_layers:
-		var ad: Dictionary = anim_item as Dictionary
-		var arect: Rect2 = ad["rect"] as Rect2
-		var best: Vector2 = Vector2(-1, -1)
-		var best_d: float = 1e9
-		for want_pos: Variant in anim_want.keys():
-			var wp: Vector2 = want_pos as Vector2
-			var d: float = arect.position.distance_to(wp * 0.512)
-			if d < best_d:
-				best_d = d
-				best = wp
-		if best_d > 2.0:
-			anim_kinds_ok = false
-		else:
-			anim_matched += 1
-			if str(ad.get("kind", "")) != str(anim_want[best]):
-				anim_kinds_ok = false
-	_expect(anim_kinds_ok and anim_matched == 4,
-		"animation membership classifies the layers: the stepped lamp is anim, the stepped solenoid stays flasher, the unstepped and DMD-stepped bulbs stay lamps", failures)
-	var anim_meta: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.layers_meta_path(b2s_anim)))
-	var anim_meta_kinds: Dictionary = {ArtProvider.LAYER_KIND_LAMP: 0, ArtProvider.LAYER_KIND_FLASHER: 0, ArtProvider.LAYER_KIND_ANIM: 0}
-	if anim_meta is Dictionary:
-		for am_item: Variant in (anim_meta as Dictionary).get("layers", []):
-			var amk: String = str((am_item as Dictionary).get("kind", ""))
-			if anim_meta_kinds.has(amk):
-				anim_meta_kinds[amk] = int(anim_meta_kinds[amk]) + 1
-	_expect(anim_meta is Dictionary and int((anim_meta as Dictionary).get("lv", 0)) == ArtProvider.LAYERS_VERSION
-		and int(anim_meta_kinds[ArtProvider.LAYER_KIND_ANIM]) == 1 and int(anim_meta_kinds[ArtProvider.LAYER_KIND_FLASHER]) == 1
-		and int(anim_meta_kinds[ArtProvider.LAYER_KIND_LAMP]) == 2,
-		"the layer meta carries the membership kinds under generation lv%d (one anim of four)" % ArtProvider.LAYERS_VERSION, failures)
-	# No illumination at all: a plain still, stamped no_layers.
-	var b2s_fl_none: String = art_dir.path_join("Plain Table.directb2s")
-	_expect(_write_text_file(b2s_fl_none, "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(pair_off2.save_png_to_buffer()) + "\" /></Images><Illumination></Illumination></DirectB2SData>"),
-		"layerless fixture written", failures)
-	_expect(str(ArtProvider.extract_flicker_layers(b2s_fl_none)["status"]) == ArtProvider.STATUS_NO_LAYERS
-		and ArtProvider.flicker_outcome(b2s_fl_none) == ArtProvider.STATUS_NO_LAYERS
-		and not ArtProvider.has_flicker_layers(b2s_fl_none),
-		"a backglass without usable bulbs stamps no_layers (remembered, not retried)", failures)
-	# A designated base that will not decode: failed, even with
-	# healthy bulbs riding along.
-	var bad_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(_zero_bytes(300)) + "\" /></Images><Illumination>"
-	bad_text += _b2s_bulb_xml("Backglass", "1", 60, 60, 300, 120, amber_img)
-	bad_text += "</Illumination></DirectB2SData>"
-	var b2s_fl_bad: String = art_dir.path_join("Corrupt Layers Table.directb2s")
-	_expect(_write_text_file(b2s_fl_bad, bad_text), "corrupt-base fixture written", failures)
-	_expect(str(ArtProvider.extract_flicker_layers(b2s_fl_bad)["status"]) == ArtProvider.STATUS_FAILED
-		and ArtProvider.is_flicker_negative(ArtProvider.flicker_outcome(b2s_fl_bad)),
-		"an undecodable base stamps the layer extraction failed", failures)
-	# The cap: 45 bulbs in rising sizes keeps the largest 40.
-	var cap_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(fl_glass.save_png_to_buffer()) + "\" /></Images><Illumination>"
-	for ci: int in range(45):
-		var cw: int = 10 + ci
-		cap_text += _b2s_bulb_xml("Backglass", "1", (ci % 9) * 110, (ci / 9) * 160, cw, 20, fl_solid.call(cw, 20, Color(1.0, 0.75, 0.16)) as Image)
-	cap_text += "</Illumination></DirectB2SData>"
-	var b2s_cap: String = art_dir.path_join("Many Bulbs Table.directb2s")
-	_expect(_write_text_file(b2s_cap, cap_text), "cap fixture written", failures)
-	var cap: Dictionary = ArtProvider.extract_flicker_layers(b2s_cap)
-	var cap_layers: Array = cap["layers"] as Array
-	var cap_min_w: float = 1e9
-	for cap_item: Variant in cap_layers:
-		cap_min_w = minf(cap_min_w, ((cap_item as Dictionary)["rect"] as Rect2).size.x)
-	var cap_meta: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.layers_meta_path(b2s_cap)))
-	_expect(cap_layers.size() == ArtProvider.LAYER_CAP and cap_min_w > 7.6
-		and cap_meta is Dictionary and int((cap_meta as Dictionary).get("dropped", 0)) == 5,
-		"45 bulbs cap at %d layers, the largest kept, the drop counted in the meta" % ArtProvider.LAYER_CAP, failures)
 	# The library's median art aspect (sizing half (a)'s input).
 	var med_paths: Array[String] = []
 	for mi2: int in range(3):
@@ -5977,15 +4933,6 @@ func _run_core_test() -> void:
 		"the median art aspect comes from the library's own art (0.5, 0.8, 0.8 -> 0.8)", failures)
 	_expect(ArtProvider.library_art_median_aspect([]) == 0.0,
 		"no readable art, no median (the caller keeps its default proportions)", failures)
-	# Prune: a layer set dies with its source. The keep set
-	# names only the layered fixture's flat path, so the pair
-	# fixture's set and outcome must go, and its own survive.
-	var keep_map: Dictionary = {ArtProvider.cache_path_for(b2s_fl): true}
-	ArtProvider.prune_cache(keep_map)
-	_expect(ArtProvider.has_flicker_layers(b2s_fl),
-		"prune keeps the layer set of a library source", failures)
-	_expect(not FileAccess.file_exists(ArtProvider.layers_meta_path(b2s_fl_pair)) and ArtProvider.flicker_outcome(b2s_fl_pair) == "",
-		"prune removes an orphaned layer set and its outcome", failures)
 
 	# --- The wart, deep-fixed (flicker fix round 2) + warmer
 	# phase two. The wart: a .directb2s whose designated
@@ -5994,13 +4941,11 @@ func _run_core_test() -> void:
 	# readers the flat path convicted the file at the
 	# designated step and never reached its blob fallback -
 	# flat FAILED, face fell through to another source -
-	# while the layers reader, whose narrower designated
-	# search saw nothing, fell back and found the base, so
-	# the lamps composited over a stranger's face. One
-	# finder now: a corrupt designated element does not
-	# veto the fallback, the flat face IS the base the
-	# lamps extract over (same image, pixel for pixel),
-	# and the game wears its own glass.
+	# reader, whose narrower designated search saw nothing,
+	# fell back and found the base, so its lamps composited
+	# over a stranger's face. One finder now: a corrupt
+	# designated element does not veto the fallback, and
+	# the game wears its own glass.
 	var wart_noise: Image = mk_img.call(600, 400) as Image
 	var wart_text: String = "<DirectB2SData><Images><DMDImage Value=\"" + Marshalls.raw_to_base64(_zero_bytes(300)) + "\" /><ReelImage Value=\"" + Marshalls.raw_to_base64(wart_noise.save_png_to_buffer()) + "\" /></Images><Illumination>"
 	wart_text += _b2s_bulb_xml("Backglass", "1", 0, 0, 600, 400, fl_solid.call(600, 400, Color(1.0, 0.75, 0.16)) as Image)
@@ -6012,21 +4957,15 @@ func _run_core_test() -> void:
 	var wart_face: String = ArtProvider.extract_art_image(b2s_wart)
 	_expect(wart_face == ArtProvider.cache_path_for(b2s_wart) and ArtProvider.outcome_for_source(b2s_wart) == ArtProvider.STATUS_OK,
 		"wart: the flat extraction finds the base behind the corrupt designated DMD image", failures)
-	var wart_layers: Dictionary = ArtProvider.extract_flicker_layers(b2s_wart)
-	_expect(str(wart_layers["status"]) == ArtProvider.STATUS_OK and (wart_layers["layers"] as Array).size() == 3,
-		"wart: the same file's layers extract over that base", failures)
-	var wart_face_img: Image = Image.new()
-	var wart_base_img: Image = Image.new()
-	_expect(wart_face_img.load(wart_face) == OK and wart_base_img.load(str(wart_layers["base_path"])) == OK
-		and wart_face_img.get_data() == wart_base_img.get_data(),
-		"wart: the flat face and the layer set's base are the same image", failures)
 	var wart_entry: GameEntry = GameEntry.new()
 	wart_entry.art_source_path = b2s_wart
-	_expect(wart_entry.ensure_art() == wart_face and wart_entry.flicker_source() == b2s_wart and not wart_entry.ensure_flicker().is_empty(),
-		"wart: the entry's face is its own backglass and its layers serve", failures)
-	# Warmer phase two: a bulb-bearing game is warmed flat
-	# first, layers second, in ONE pass - polled, so the order
-	# is observed, not assumed.
+	_expect(wart_entry.ensure_art() == wart_face and wart_entry.backglass_source() == b2s_wart and wart_entry.pair_on_art() == "",
+		"wart: the entry's face is its own backglass (and it is no pair - it takes the mimic grade)", failures)
+	# The warmer on a bulb-bearing file: the flat extraction
+	# is the whole job (the swap round - there is no layer set
+	# to prefetch behind it), and stamped outcomes are never
+	# re-queued. Once per game ever: a second pass extracts
+	# nothing - the stamp stands.
 	var pf_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(fl_glass.save_png_to_buffer()) + "\" /></Images><Illumination>"
 	pf_text += _b2s_bulb_xml("Backglass", "1", 60, 60, 300, 120, amber_img)
 	pf_text += "</Illumination></DirectB2SData>"
@@ -6036,24 +4975,12 @@ func _run_core_test() -> void:
 	pf_entry.art_source_path = b2s_pf
 	var pf_warmer: ArtWarmer = ArtWarmer.new()
 	pf_warmer.warm_library([pf_entry])
-	var pf_flat_at: int = -1
-	var pf_layer_at: int = -1
 	var pf_waited: int = 0
-	while pf_waited < 30000:
-		if pf_flat_at < 0 and ArtProvider.is_cached(b2s_pf):
-			pf_flat_at = pf_waited
-		if pf_layer_at < 0 and ArtProvider.flicker_outcome(b2s_pf) != "":
-			pf_layer_at = pf_waited
-		if pf_flat_at >= 0 and pf_layer_at >= 0 and pf_warmer.is_idle():
-			break
-		OS.delay_msec(5)
-		pf_waited += 5
-	_expect(pf_flat_at >= 0 and pf_layer_at >= 0 and pf_flat_at <= pf_layer_at,
-		"warmer phase two: the flat extraction lands before the layer outcome (flat %d ms, layers %d ms)" % [pf_flat_at, pf_layer_at], failures)
-	_expect(pf_warmer.last_pass_items == 2 and ArtProvider.has_flicker_layers(b2s_pf),
-		"warmer phase two: one pass performs the flat and the layer extraction, and the set waits warm", failures)
-	# Once per game ever: a second pass over the same library
-	# extracts nothing - both stamps stand.
+	while not pf_warmer.is_idle() and pf_waited < 30000:
+		OS.delay_msec(20)
+		pf_waited += 20
+	_expect(pf_warmer.is_idle() and pf_warmer.last_pass_items == 1 and ArtProvider.is_cached(b2s_pf),
+		"warmer: a bulb-bearing file warms with one flat extraction and nothing behind it", failures)
 	var pf_warmer2: ArtWarmer = ArtWarmer.new()
 	pf_warmer2.warm_library([pf_entry])
 	pf_waited = 0
@@ -6061,12 +4988,11 @@ func _run_core_test() -> void:
 		OS.delay_msec(20)
 		pf_waited += 20
 	_expect(pf_warmer2.is_idle() and pf_warmer2.last_pass_items == 0,
-		"warmer phase two: stamped layer outcomes are never re-queued", failures)
+		"warmer: stamped outcomes are never re-queued", failures)
 	# The wart under the warmer: a fresh wart file warms
 	# flat in the pass (the unified finder reads its base
 	# through the blob fallback, where the split readers
-	# stamped it FAILED) and its layers are prefetched in
-	# the same pass.
+	# stamped it FAILED).
 	var b2s_wart2: String = art_dir.path_join("Wart Warm Table.directb2s")
 	_expect(_write_text_file(b2s_wart2, wart_text), "wart warm fixture written", failures)
 	var wart2_entry: GameEntry = GameEntry.new()
@@ -6077,170 +5003,57 @@ func _run_core_test() -> void:
 	while not wart_warmer.is_idle() and pf_waited < 30000:
 		OS.delay_msec(20)
 		pf_waited += 20
-	_expect(wart_warmer.is_idle() and ArtProvider.has_flicker_layers(b2s_wart2)
+	_expect(wart_warmer.is_idle() and wart_warmer.last_pass_items == 1
 		and ArtProvider.outcome_for_source(b2s_wart2) == ArtProvider.STATUS_OK,
-		"warmer phase two: the wart warms flat and layers in one pass", failures)
+		"warmer: the wart warms flat in one pass", failures)
 
-	# --- Half 2: layer-queue priority, the kick wait, and
-	# the failed-stamp retry (the intermittent-firing round).
-	# Queue legs: six games whose layer sets all stand
-	# untried, warmed in library order. The pass chews the
-	# flat queue first - and the first fixture is fat - so
-	# the layer queue's order is observable while it works.
-	var h2_queue_games: Array[GameEntry] = []
-	for qi: int in range(6):
-		var qp: String = art_dir.path_join("Half2 Queue Table %d.directb2s" % qi)
-		_expect(bool(mk_b2s.call(qp, 2400 if qi == 0 else 1000 + qi, 3000 if qi == 0 else 1300)),
-			"half2 queue fixture %d written" % qi, failures)
-		var qe: GameEntry = GameEntry.new()
-		qe.game_id = "half2-queue-%d" % qi
-		qe.title = "Half2 Queue Table %d" % qi
-		qe.art_source_path = qp
-		h2_queue_games.append(qe)
-	var h2_warmer: ArtWarmer = ArtWarmer.new()
-	h2_warmer.warm_library(h2_queue_games)
-	var h2_layer_ids: Callable = func() -> Array:
-		var ids: Array = []
-		for ge: GameEntry in h2_warmer._layer_queue:
-			ids.append(ge.game_id)
-		return ids
-	_expect(h2_layer_ids.call() == ["half2-queue-0", "half2-queue-1", "half2-queue-2", "half2-queue-3", "half2-queue-4", "half2-queue-5"],
-		"half2: the layer queue starts in library order", failures)
-	h2_warmer.prioritize_layers([h2_queue_games[3], h2_queue_games[1]])
-	_expect(h2_layer_ids.call() == ["half2-queue-3", "half2-queue-1", "half2-queue-0", "half2-queue-2", "half2-queue-4", "half2-queue-5"],
-		"half2: prioritize_layers moves exactly the named games to the layer queue's front, order preserved, nothing duplicated", failures)
-	h2_warmer.prioritize([h2_queue_games[5]])
-	_expect(h2_warmer._queue[0] == h2_queue_games[5].art_source_path
-		and h2_layer_ids.call() == ["half2-queue-5", "half2-queue-3", "half2-queue-1", "half2-queue-0", "half2-queue-2", "half2-queue-4"],
-		"half2: a page settle (prioritize) brings the game's flat art AND its layer item forward - the flat front is the same behavior as always", failures)
-	h2_warmer.prioritize_layers([h2_queue_games[2]])
-	_expect(h2_layer_ids.call() == ["half2-queue-2", "half2-queue-5", "half2-queue-3", "half2-queue-1", "half2-queue-0", "half2-queue-4"],
-		"half2: a kick's game jumps the layer queue ahead of the settled page's games", failures)
-	h2_warmer.request_stop()
-	var h2_waited: int = 0
-	while not h2_warmer.is_idle() and h2_waited < 30000:
-		OS.delay_msec(20)
-		h2_waited += 20
-	_expect(h2_warmer.is_idle(), "half2: the queue leg's warmer stops clean", failures)
-	# The kick wait: a rival claimant holds the file's layer
-	# claim and finishes its (slow) extraction at ~4.5 s.
-	# The kick's join must ride it out and land the set; a
-	# caller at the panel cap resolves empty at ~3 s.
-	var h2_slow_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(fl_glass.save_png_to_buffer()) + "\" /></Images><Illumination>"
-	h2_slow_text += _b2s_bulb_xml("Backglass", "1", 60, 60, 300, 120, amber_img)
-	h2_slow_text += "</Illumination></DirectB2SData>"
-	var b2s_slow: String = art_dir.path_join("Half2 Slow Layers Table.directb2s")
-	_expect(_write_text_file(b2s_slow, h2_slow_text), "half2 slow fixture written", failures)
-	var slow_entry: GameEntry = GameEntry.new()
-	slow_entry.game_id = "half2-slow"
-	slow_entry.title = "Half2 Slow Layers Table"
-	slow_entry.art_source_path = b2s_slow
-	var slow_key: String = ArtProvider.flicker_claim_key(b2s_slow)
-	_expect(ArtProvider.claim_extract(slow_key), "half2 kick leg: the rival claimant holds the file", failures)
-	var slow_thread: Thread = Thread.new()
-	slow_thread.start(func() -> void:
-		OS.delay_msec(4500)
-		ArtProvider.extract_flicker_layers(b2s_slow)
-		ArtProvider.release_extract(slow_key))
-	var kick_t0: int = Time.get_ticks_msec()
-	var kick_data: Dictionary = slow_entry.ensure_flicker(GameEntry.KICK_WAIT_MSEC)
-	var kick_elapsed: int = Time.get_ticks_msec() - kick_t0
-	slow_thread.wait_to_finish()
-	_expect((kick_data.get("layers", []) as Array).size() == 1 and kick_elapsed >= 4000,
-		"half2: the kick wait rides out a >3s in-flight extraction and lands the set (layers %d after %d ms) - at the 3s panel cap the kick dies empty and the set never lands" % [(kick_data.get("layers", []) as Array).size(), kick_elapsed], failures)
-	var b2s_slow2: String = art_dir.path_join("Half2 Slow Two Table.directb2s")
-	_expect(_write_text_file(b2s_slow2, h2_slow_text), "half2 slow-two fixture written", failures)
-	var slow2_entry: GameEntry = GameEntry.new()
-	slow2_entry.game_id = "half2-slow-2"
-	slow2_entry.title = "Half2 Slow Two Table"
-	slow2_entry.art_source_path = b2s_slow2
-	var slow2_key: String = ArtProvider.flicker_claim_key(b2s_slow2)
-	_expect(ArtProvider.claim_extract(slow2_key), "half2 cap leg: the rival claimant holds the second file", failures)
-	var slow2_thread: Thread = Thread.new()
-	slow2_thread.start(func() -> void:
-		OS.delay_msec(8000)
-		ArtProvider.release_extract(slow2_key))
-	var cap_t0: int = Time.get_ticks_msec()
-	var cap_data: Dictionary = slow2_entry.ensure_flicker()
-	var cap_elapsed: int = Time.get_ticks_msec() - cap_t0
-	slow2_thread.wait_to_finish()
-	_expect(cap_data.is_empty() and cap_elapsed >= 2800 and cap_elapsed <= 6000,
-		"half2: a non-kick caller still resolves at the 3s cap (empty after %d ms) - the long wait belongs to the kick alone" % cap_elapsed, failures)
-	# The failed-stamp retry: a corrupt base stamps failed;
-	# the actionable outcome reads untried while the one
-	# per-generation retry stands; the attempt itself spends
-	# it; the stamp then settles. The index entry is the
-	# evidence (its "tries" count is the budget's memory).
-	var h2_read_stamp: Callable = func(path: String) -> Dictionary:
-		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.INDEX_PATH))
-		if parsed is Dictionary:
-			var e: Variant = (parsed as Dictionary).get("L" + ArtProvider.stamp_key_for(path), null)
-			if e is Dictionary:
-				return e as Dictionary
-		return {}
-	var bad2_text: String = "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(_zero_bytes(300)) + "\" /></Images><Illumination>"
-	bad2_text += _b2s_bulb_xml("Backglass", "1", 60, 60, 300, 120, amber_img)
-	bad2_text += "</Illumination></DirectB2SData>"
-	var b2s_retry: String = art_dir.path_join("Half2 Flaky Layers Table.directb2s")
-	_expect(_write_text_file(b2s_retry, bad2_text), "half2 flaky fixture written", failures)
-	_expect(str(ArtProvider.extract_flicker_layers(b2s_retry)["status"]) == ArtProvider.STATUS_FAILED
-		and ArtProvider.flicker_outcome(b2s_retry) == ArtProvider.STATUS_FAILED
-		and ArtProvider.flicker_actionable_outcome(b2s_retry) == "",
-		"half2: a fresh failed stamp reads failed in the record but untried to act on - the retry stands", failures)
-	_expect(int((h2_read_stamp.call(b2s_retry) as Dictionary).get("tries", 0)) == 1,
-		"half2: the stamp counts its first attempt", failures)
-	var retry_entry: GameEntry = GameEntry.new()
-	retry_entry.game_id = "half2-flaky"
-	retry_entry.art_source_path = b2s_retry
-	_expect((retry_entry.ensure_flicker().get("layers", []) as Array).is_empty()
-		and ArtProvider.flicker_actionable_outcome(b2s_retry) == ArtProvider.STATUS_FAILED
-		and int((h2_read_stamp.call(b2s_retry) as Dictionary).get("tries", 0)) == 2,
-		"half2: the retry fires exactly once through the entry path and the stamp settles to failed", failures)
-	var retry_entry2: GameEntry = GameEntry.new()
-	retry_entry2.game_id = "half2-flaky-2"
-	retry_entry2.art_source_path = b2s_retry
-	_expect(retry_entry2.ensure_flicker().is_empty()
-		and int((h2_read_stamp.call(b2s_retry) as Dictionary).get("tries", 0)) == 2,
-		"half2: a spent retry does not fire again (no third attempt)", failures)
-	# A generation bump re-arms the rule: age the stamp by
-	# hand (the migration the lv gate exists for); the next
-	# attempt records under the current generation with a
-	# fresh count and its own retry standing.
-	var idx_parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.INDEX_PATH))
-	var idx_ok: bool = idx_parsed is Dictionary and (idx_parsed as Dictionary).has("L" + ArtProvider.stamp_key_for(b2s_retry))
-	if idx_ok:
-		var aged: Dictionary = (idx_parsed as Dictionary)["L" + ArtProvider.stamp_key_for(b2s_retry)] as Dictionary
-		aged["lv"] = ArtProvider.LAYERS_VERSION - 1
-		(idx_parsed as Dictionary)["L" + ArtProvider.stamp_key_for(b2s_retry)] = aged
-		var idx_file: FileAccess = FileAccess.open(ArtProvider.INDEX_PATH, FileAccess.WRITE)
-		if idx_file != null:
-			idx_file.store_string(JSON.stringify(idx_parsed))
-			idx_file.close()
-		ArtProvider.reload_index()
-	_expect(idx_ok and ArtProvider.flicker_outcome(b2s_retry) == "",
-		"half2: an older-generation failed stamp reads untried (the lv gate)", failures)
-	var retry_entry3: GameEntry = GameEntry.new()
-	retry_entry3.game_id = "half2-flaky-3"
-	retry_entry3.art_source_path = b2s_retry
-	retry_entry3.ensure_flicker()
-	var retry_stamp3: Dictionary = h2_read_stamp.call(b2s_retry) as Dictionary
-	_expect(int(retry_stamp3.get("lv", 0)) == ArtProvider.LAYERS_VERSION and int(retry_stamp3.get("tries", 0)) == 1
-		and ArtProvider.flicker_actionable_outcome(b2s_retry) == "",
-		"half2: after a generation bump the stamp retries again under the new generation, count reset, retry standing", failures)
-	# no_layers is a finding, not a failure: no retry, ever.
-	var b2s_nolayer2: String = art_dir.path_join("Half2 Plain Layers Table.directb2s")
-	_expect(_write_text_file(b2s_nolayer2, "<DirectB2SData><Images><BackglassImage Value=\"" + Marshalls.raw_to_base64(pair_off2.save_png_to_buffer()) + "\" /></Images><Illumination></Illumination></DirectB2SData>"),
-		"half2 layerless fixture written", failures)
-	_expect(str(ArtProvider.extract_flicker_layers(b2s_nolayer2)["status"]) == ArtProvider.STATUS_NO_LAYERS
-		and ArtProvider.flicker_actionable_outcome(b2s_nolayer2) == ArtProvider.STATUS_NO_LAYERS,
-		"half2: no_layers reads the same to act on - it is never retried", failures)
-	var nolayer_entry: GameEntry = GameEntry.new()
-	nolayer_entry.game_id = "half2-plain"
-	nolayer_entry.art_source_path = b2s_nolayer2
-	var nolayer_stamp_before: Dictionary = h2_read_stamp.call(b2s_nolayer2) as Dictionary
-	nolayer_entry.ensure_flicker()
-	_expect((h2_read_stamp.call(b2s_nolayer2) as Dictionary) == nolayer_stamp_before,
-		"half2: the entry path leaves a no_layers stamp untouched", failures)
+	# --- The swap (mimic round): the power-on's pure curves,
+	# the retired stack's on-disk cleanup, and stale-index
+	# tolerance. The curves are pinned here; the rendered
+	# behavior is the mimic shot suite's subject.
+	_expect(RoomView.mimic_power_at(0.0) == 0.0 and RoomView.mimic_power_at(0.48) == 1.0
+		and RoomView.mimic_power_at(RoomView.POWER_CASCADE_SEC) == 1.0,
+		"mimic envelope: dark at rest, full by 0.48s, held to the cascade's end", failures)
+	_expect(absf(RoomView.mimic_power_at(0.34) - 0.62) < 0.001 and RoomView.mimic_power_at(0.34) < RoomView.mimic_power_at(0.27),
+		"mimic envelope: the sag dips to 0.62 at 0.34s, below the third catch", failures)
+	_expect(RoomView.pair_mix_at(0.2) == 0.0 and RoomView.pair_mix_at(RoomView.POWER_CASCADE_SEC) == 1.0
+		and absf(RoomView.pair_mix_at(0.725) - 0.5) < 0.001,
+		"pair crossfade: Off holds through the catch, smoothstepped to full On at the cascade's end", failures)
+	# The warmer's prune keeps a pair's cached On half (it maps
+	# to the face's stamp, like the face itself). Re-extract
+	# first: earlier legs' warmers pruned to their own
+	# libraries, exactly as prune is meant to.
+	_expect(ArtProvider.extract_directb2s_image(b2s_pair) != "" and ArtProvider.has_pair_on(b2s_pair),
+		"the pair re-extracts with its On half under the current reader", failures)
+	var pair_keep_warmer: ArtWarmer = ArtWarmer.new()
+	pair_keep_warmer.warm_library([pair_entry])
+	_expect(FileAccess.file_exists(ArtProvider.pair_on_path_for(b2s_pair)),
+		"the warmer's prune keeps a pair's cached On half", failures)
+	# Stale layer records: an index carrying the retired stack's
+	# "L" keys loads without a murmur (no reader consults them
+	# any more), and the next prune erases them; a legacy
+	# layers tree left on disk is wiped by the same prune.
+	var swap_idx: Dictionary = {}
+	var swap_parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.INDEX_PATH))
+	if swap_parsed is Dictionary:
+		swap_idx = swap_parsed as Dictionary
+	swap_idx["L" + ArtProvider.stamp_key_for(b2s_pair)] = {"status": "ok", "lv": 4}
+	_expect(_write_text_file(ArtProvider.INDEX_PATH, JSON.stringify(swap_idx)), "stale layer key planted", failures)
+	ArtProvider.reload_index()
+	_expect(ArtProvider.outcome_for(b2s_pair) == ArtProvider.STATUS_OK,
+		"a stale layer key in the index breaks no flat reader", failures)
+	var cache_root: DirAccess = DirAccess.open("user://art_cache")
+	if cache_root != null and not cache_root.dir_exists("layers"):
+		cache_root.make_dir("layers")
+	_expect(_write_text_file("user://art_cache/layers/orphan.txt", "retired"), "legacy layers tree planted", failures)
+	var swap_warmer: ArtWarmer = ArtWarmer.new()
+	swap_warmer.warm_library([pair_entry])
+	_expect(not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path("user://art_cache/layers")),
+		"the first prune wipes the retired stack's orphaned layer cache", failures)
+	var swap_after: Variant = JSON.parse_string(FileAccess.get_file_as_string(ArtProvider.INDEX_PATH))
+	_expect(swap_after is Dictionary and not (swap_after as Dictionary).has("L" + ArtProvider.stamp_key_for(b2s_pair))
+		and ArtProvider.outcome_for(b2s_pair) == ArtProvider.STATUS_OK,
+		"the prune erases stale layer keys and leaves flat outcomes standing", failures)
 
 	# --- Embedded art: images extracted from inside .vpx files.
 	# The fixtures are REAL compound files written by
