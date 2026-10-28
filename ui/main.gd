@@ -3724,6 +3724,7 @@ func _drive_letters_smoke() -> void:
 				_letters_leg_country()
 				_letters_leg_hash_walk()
 				_letters_leg_full_strip_walks()
+				_letters_leg_anchors()
 				_letters_leg_jump()
 				_letters_leg_the_net()
 				_letters_leg_number_net()
@@ -4044,6 +4045,68 @@ func _letters_leg_full_strip_walks() -> void:
 	var left_seq: Array[String] = _letters_walk_record(Vector2(-1.0, 0.0))
 	_letters_expect(left_seq == drawn_rev,
 		"strip order: holding LEFT visits the exact reverse (got %s, want %s)" % [str(left_seq), str(drawn_rev)])
+
+
+## The bumper-anchor legs (the bumper-anchors round,
+## 2026-10-28 - Chris: bumpers on the strip should "move
+## you to middle, then end"): while a strip slot holds
+## focus, LB/RB step between the anchors over the pickable
+## slots - first / middle / last - instead of turning the
+## wall's page. The fixture's pickable strip is A F G M S
+## T W THE # (nine slots), so the anchors are A, S (index
+## (9-1)/2 = 4) and #. Every press rides _bumper_page, the
+## pad poll's own call, and every landing is asserted by
+## key AND checked against the drawn pickable list - a
+## greyed slot is never a landing.
+func _letters_leg_anchors() -> void:
+	var drawn: Array[String] = _letters_drawn_pickable_order()
+	_letters_expect(drawn == ["A", "F", "G", "M", "S", "T", "W", "THE", "#"],
+		"anchors: the fixture's pickable strip is A F G M S T W THE # - anchors A, S and # (got %s)" % str(drawn))
+	var page0: int = _room._page
+	var landings: Array[String] = []
+	_room._set_focused(_room.letter_quad("G"))
+	_room._bumper_page(1)
+	landings.append(_letters_key_of(_room.focused_quad()))
+	_letters_expect(landings[landings.size() - 1] == "S",
+		"anchors: RB from G (left of the middle) lands on the middle, S (got '%s')" % landings[landings.size() - 1])
+	_room._bumper_page(1)
+	landings.append(_letters_key_of(_room.focused_quad()))
+	_letters_expect(landings[landings.size() - 1] == "#",
+		"anchors: RB from the middle lands on the last slot, # (got '%s')" % landings[landings.size() - 1])
+	_room._bumper_page(1)
+	landings.append(_letters_key_of(_room.focused_quad()))
+	_letters_expect(landings[landings.size() - 1] == "#",
+		"anchors: RB at the last slot clamps - focus stays on # (got '%s')" % landings[landings.size() - 1])
+	_room._bumper_page(-1)
+	landings.append(_letters_key_of(_room.focused_quad()))
+	_letters_expect(landings[landings.size() - 1] == "S",
+		"anchors: LB from the last slot lands back on the middle, S (got '%s')" % landings[landings.size() - 1])
+	_room._bumper_page(-1)
+	landings.append(_letters_key_of(_room.focused_quad()))
+	_letters_expect(landings[landings.size() - 1] == "A",
+		"anchors: LB from the middle lands on the first slot, A (got '%s')" % landings[landings.size() - 1])
+	_room._bumper_page(-1)
+	landings.append(_letters_key_of(_room.focused_quad()))
+	_letters_expect(landings[landings.size() - 1] == "A",
+		"anchors: LB at the first slot clamps - focus stays on A (got '%s')" % landings[landings.size() - 1])
+	_room._set_focused(_room.letter_quad("W"))
+	_room._bumper_page(-1)
+	landings.append(_letters_key_of(_room.focused_quad()))
+	_letters_expect(landings[landings.size() - 1] == "S",
+		"anchors: LB from W (right of the middle) lands on the middle, S (got '%s')" % landings[landings.size() - 1])
+	_room._set_focused(_room.letter_quad("A"))
+	_room._bumper_page(1)
+	landings.append(_letters_key_of(_room.focused_quad()))
+	_letters_expect(landings[landings.size() - 1] == "S",
+		"anchors: a press while ON the first anchor advances to the middle - never a no-op (got '%s')" % landings[landings.size() - 1])
+	var all_pickable: bool = true
+	for k: String in landings:
+		if not drawn.has(k):
+			all_pickable = false
+	_letters_expect(all_pickable,
+		"anchors: every landing is a pickable slot - a greyed slot is never landed on (landings %s)" % str(landings))
+	_letters_expect(_room._page == page0,
+		"anchors: bumper presses inside the strip never turned the wall page (page %d, was %d)" % [_room._page, page0])
 
 
 func _letters_leg_jump() -> void:
@@ -6685,6 +6748,35 @@ func _run_core_test() -> void:
 		and LetterIndex.slot_keys(true)[0] == "A" and LetterIndex.slot_keys(true)[26] == "THE"
 		and LetterIndex.slot_keys(true)[27] == "#" and LetterIndex.slot_keys(false)[26] == "THE",
 		"letter index: the slot order is A-Z THE (#) - the one list layout and walk both read", failures)
+	# Bumper anchors (the bumper-anchors round, 2026-10-28):
+	# first / middle / last over a pickable list, the middle
+	# at index (n - 1) / 2. The nine-slot list is the letters
+	# fixture's real pickable strip (see below); the targets
+	# are the press landings the room's strip step takes.
+	var anch9: Array[String] = ["A", "F", "G", "M", "S", "T", "W", "THE", "#"]
+	_expect(LetterIndex.anchor_keys(anch9) == ["A", "S", "#"],
+		"letter index: nine pickable slots anchor at A, S (index (9-1)/2 = 4) and #", failures)
+	_expect(LetterIndex.anchor_target(anch9, "G", 1) == "S" and LetterIndex.anchor_target(anch9, "S", 1) == "#"
+		and LetterIndex.anchor_target(anch9, "#", 1) == "",
+		"letter index: RB steps G -> middle, middle -> last, and clamps past the last", failures)
+	_expect(LetterIndex.anchor_target(anch9, "S", -1) == "A" and LetterIndex.anchor_target(anch9, "W", -1) == "S"
+		and LetterIndex.anchor_target(anch9, "F", -1) == "A" and LetterIndex.anchor_target(anch9, "A", -1) == "",
+		"letter index: LB steps middle -> first, W -> middle, F -> first, and clamps past the first", failures)
+	_expect(LetterIndex.anchor_target(anch9, "A", 1) == "S" and LetterIndex.anchor_target(anch9, "#", -1) == "S",
+		"letter index: a press while ON an anchor advances to the next one - never a no-op", failures)
+	var anch8: Array[String] = ["A", "F", "G", "M", "S", "T", "W", "THE"]
+	_expect(LetterIndex.anchor_keys(anch8) == ["A", "M", "THE"],
+		"letter index: an even count's middle is index (8-1)/2 = 3, just left of centre", failures)
+	_expect(LetterIndex.anchor_keys(["A", "#"]) == ["A", "#"]
+		and LetterIndex.anchor_target(["A", "#"], "A", 1) == "#" and LetterIndex.anchor_target(["A", "#"], "#", -1) == "A"
+		and LetterIndex.anchor_target(["A", "#"], "#", 1) == "",
+		"letter index: two pickable slots anchor at the two ends (the middle collapses)", failures)
+	_expect(LetterIndex.anchor_keys(["M"]) == ["M"] and LetterIndex.anchor_target(["M"], "M", 1) == ""
+		and LetterIndex.anchor_target(["M"], "M", -1) == "",
+		"letter index: a single pickable slot's bumpers are a clean no-op", failures)
+	_expect(LetterIndex.anchor_keys([]).is_empty() and LetterIndex.anchor_target([], "A", 1) == ""
+		and LetterIndex.anchor_target(anch9, "B", 1) == "",
+		"letter index: an empty list - or a slot not in it - answers no anchor", failures)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")

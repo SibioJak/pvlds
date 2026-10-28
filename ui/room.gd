@@ -240,8 +240,10 @@ var _placeholder_tex: Texture2D = null ## the standing wall's placeholder face (
 ## landing (fault 2's shape), "letterland" restores the
 ## letter picks' first-card landing (the focus law's shape),
 ## "striporder" permutes the strip's walk order away from
-## its drawn order (the strip-order fix's shape). Empty in
-## every real run.
+## its drawn order (the strip-order fix's shape),
+## "greyanchors" computes the strip's bumper anchors over
+## every laid-out slot, greyed ones included (the bumper-
+## anchors round's shape). Empty in every real run.
 static var debug_focus_nc: String = ""
 ## Bench seam (the focus-law round's harness env PVLDS_BENCH,
 ## set by Main before any room exists): when true, every wall
@@ -1824,6 +1826,54 @@ func _slide_ease(p: float) -> float:
 	return p * p * (3.0 - 2.0 * p)
 
 
+## The strip's pickable slots, in drawn order: the ONE list
+## (slot_keys) filtered to slots that are laid out (visible)
+## and lit (pick_enabled) in the current view - the same
+## truth _refresh_focusables admits as focus stops. The NC
+## value "greyanchors" drops the pick filter, so the anchor
+## math runs over greyed slots too and the letters smoke's
+## anchor legs fail by name.
+func _strip_pickable_keys() -> Array[String]:
+	var out: Array[String] = []
+	for key: String in _strip_slot_keys():
+		var q: ClickableQuad = _strip_quads.get(key) as ClickableQuad
+		if q == null or not q.visible:
+			continue
+		if debug_focus_nc != "greyanchors" and not q.pick_enabled:
+			continue
+		out.append(key)
+	return out
+
+
+## A bumper press inside the strip country (the bumper-
+## anchors round, 2026-10-28 - Chris: bumpers on the strip
+## should "move you to middle, then end. One to two taps
+## instead of a bunch"): focus steps to the nearest anchor
+## strictly in the press's direction over the pickable
+## slots - first, middle, last (LetterIndex.anchor_target
+## owns the math, the middle rule included). POSITIONAL,
+## NO MEMORY: the anchors are recomputed from the standing
+## presence on every press, so a filter change between
+## presses is absorbed by the next press without any state
+## to go stale. Only strip focus moves - the wall's page
+## never turns - and a press at the far anchor clamps,
+## spent, focus staying put.
+func _strip_anchor_step(step: int) -> void:
+	var current: String = ""
+	for k: Variant in _strip_quads.keys():
+		if _strip_quads[k] == _focused:
+			current = str(k)
+			break
+	if current == "":
+		return
+	var target: String = LetterIndex.anchor_target(_strip_pickable_keys(), current, step)
+	if target == "":
+		return ## clamped at the far anchor (or a degenerate strip): the press is spent
+	var q: ClickableQuad = _strip_quads.get(target) as ClickableQuad
+	if q != null:
+		_set_focused(q)
+
+
 ## A bumper press's page travel: the whole section shifts one
 ## page over (Chris's clarification, 2026-10-24 - the bumpers
 ## flip PAGES, never filters; the filters change only via the
@@ -1849,6 +1899,15 @@ func _slide_ease(p: float) -> float:
 ## rebuild, so focus keeps even its instance.
 func _bumper_page(step: int) -> void:
 	if _launching_game_id != "" or _placard_up or _setup_panel_up or _mode != "wall":
+		return
+	# The strip country spends its bumpers at home (the
+	# bumper-anchors round, 2026-10-28 - see
+	# _strip_anchor_step): while a strip slot holds focus,
+	# LB/RB step between the strip's anchors and the wall
+	# does NOT turn a page. On the wall or the rail the
+	# bumpers keep the page-travel law below, untouched.
+	if _focused != null and _is_strip_quad(_focused):
+		_strip_anchor_step(step)
 		return
 	var slot: int = -1
 	var rail_key: String = ""

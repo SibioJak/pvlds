@@ -113,3 +113,56 @@ static func slot_keys(has_number: bool) -> Array[String]:
 	if has_number:
 		out.append("#")
 	return out
+
+
+## The strip's bumper anchors over a PICKABLE slot list in
+## drawn order (the bumper-anchors round, 2026-10-28 -
+## Chris: bumpers should "move you to middle, then end.
+## One to two taps instead of a bunch"): FIRST, MIDDLE and
+## LAST. The MIDDLE is index (n - 1) / 2 of the list
+## (integer division): the exact median for an odd count,
+## and for an even count the slot just left of centre - so
+## the middle never sits right of the row's midpoint.
+## Degenerate lists collapse by dedupe: two pickable slots
+## give the two ends (the middle IS the first slot's index
+## and drops out), one slot gives just itself, none gives
+## none. Purely positional: the anchors are recomputed from
+## the list handed in on every call - there is no memory of
+## where the last press landed anywhere in this math.
+static func anchor_keys(pickable: Array[String]) -> Array[String]:
+	var out: Array[String] = []
+	if pickable.is_empty():
+		return out
+	out.append(pickable[0])
+	if pickable.size() >= 2:
+		var mid: int = (pickable.size() - 1) / 2
+		if mid != 0 and not out.has(pickable[mid]):
+			out.append(pickable[mid])
+		var last: String = pickable[pickable.size() - 1]
+		if not out.has(last):
+			out.append(last)
+	return out
+
+
+## Where a bumper press (step -1 = LB, +1 = RB) lands from
+## `current`: the nearest anchor STRICTLY in that direction
+## - a press while sitting on an anchor advances to the
+## next one, never a no-op - or "" when no anchor lies that
+## way (focus already at or past the far anchor: the press
+## clamps and focus stays). "" also answers a current slot
+## that is not in the list at all and the one-slot list,
+## whose only anchor is itself.
+static func anchor_target(pickable: Array[String], current: String, step: int) -> String:
+	var idx: int = pickable.find(current)
+	if idx < 0 or step == 0:
+		return ""
+	var anchors: Array[String] = anchor_keys(pickable)
+	if step > 0:
+		for a: String in anchors:
+			if pickable.find(a) > idx:
+				return a
+	else:
+		for i: int in range(anchors.size() - 1, -1, -1):
+			if pickable.find(anchors[i]) < idx:
+				return anchors[i]
+	return ""
