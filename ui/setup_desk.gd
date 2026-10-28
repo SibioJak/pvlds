@@ -357,7 +357,10 @@ func _apply_session_settings() -> void:
 ## key lands in the config file the moment the button is
 ## pressed, and a failed save restores field, config, and
 ## label to exactly what they were (a key that did not save
-## must not look saved). The emit lets Main refresh the
+## must not look saved). A wrong-length key still saves -
+## his pasteboard, his call - but the line says so in
+## words (WoVP's keys are 32 characters; the client would
+## refuse to test this one). The emit lets Main refresh the
 ## Tournament Room's boards with the new key.
 func _on_wovp_save_pressed() -> void:
 	if _config == null:
@@ -365,7 +368,13 @@ func _on_wovp_save_pressed() -> void:
 	var prev: String = _config.wovp_api_key
 	_config.wovp_api_key = _wovp_edit.text.strip_edges()
 	if _config.save_to_disk():
-		_wovp_label.text = "Key saved on this PC." if _config.wovp_api_key != "" else "Key cleared - the Tournament Room will ask for one."
+		if _config.wovp_api_key == "":
+			_wovp_label.text = "Key cleared - the Tournament Room will ask for one."
+		else:
+			_wovp_label.text = "Key saved on this PC."
+			var length_note: String = WovpClient.key_length_note(_config.wovp_api_key)
+			if length_note != "":
+				_wovp_label.text += " " + length_note
 		wovp_key_saved.emit()
 		return
 	_config.wovp_api_key = prev
@@ -376,11 +385,18 @@ func _on_wovp_save_pressed() -> void:
 ## Test key: validates the field's text - what he pasted,
 ## saved or not - so the answer names the key he is looking
 ## at. Main owns the client; the verdict lands on the
-## status line via set_wovp_status.
+## status line via set_wovp_status. A wrong-length key is
+## refused HERE, in words, and nothing is sent - WoVP's
+## answer to it is already known (its 32-character rule),
+## so the line says it instead of spending the request.
 func _on_wovp_test_pressed() -> void:
 	var text: String = _wovp_edit.text.strip_edges()
 	if text == "":
 		_wovp_label.text = "Nothing to test - paste your WoVP key into the field first."
+		return
+	var length_note: String = WovpClient.key_length_note(text)
+	if length_note != "":
+		_wovp_label.text = length_note
 		return
 	_wovp_label.text = "Testing that key..."
 	wovp_test_requested.emit(text)

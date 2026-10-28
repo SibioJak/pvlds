@@ -903,7 +903,11 @@ func _on_room_wovp_key_pasted(api_key: String) -> void:
 	if _config.save_to_disk():
 		_wovp_identity_state = "untested"
 		if _room != null:
-			_room.set_setup_panel_message("WoVP key saved. Press TEST KEY to check whose it is.")
+			var length_note: String = WovpClient.key_length_note(_config.wovp_api_key)
+			if length_note == "":
+				_room.set_setup_panel_message("WoVP key saved. Press TEST KEY to check whose it is.")
+			else:
+				_room.set_setup_panel_message("WoVP key saved. " + length_note)
 		_refresh_setup_panel_health()
 		_wovp_fetch_boards()
 	elif _room != null:
@@ -911,11 +915,19 @@ func _on_room_wovp_key_pasted(api_key: String) -> void:
 
 
 ## The room SETUP panel's TEST KEY: validate the SAVED key
-## and name whose it is on the panel's message line.
+## and name whose it is on the panel's message line. A
+## wrong-length saved key is answered here, in words, and
+## nothing is sent - WoVP's answer to that shape is
+## already known (the client refuses it too, as backstop).
 func _on_room_wovp_key_test() -> void:
 	if _config == null or _config.wovp_api_key == "":
 		if _room != null:
 			_room.set_setup_panel_message("No WoVP key saved yet - paste one first (PASTE KEY).")
+		return
+	var length_note: String = WovpClient.key_length_note(_config.wovp_api_key)
+	if length_note != "":
+		if _room != null:
+			_room.set_setup_panel_message(length_note)
 		return
 	if _wovp_client != null and not _wovp_client.is_busy():
 		_wovp_validating_for = "room"

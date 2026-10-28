@@ -26,6 +26,16 @@ extends Node
 ##   never a half-built board. Unknown extra fields are
 ##   ignored (the league's own mapper ignores them too);
 ##   missing or mistyped required fields fail.
+## - A refusal quotes the refuser: on any non-200 the error
+##   carries WoVP's own response body (server_words), never
+##   just the bare code - the server's 400 on the first
+##   live test explained itself completely ("X-Client-ID
+##   header is required or invalid") and a bare-code line
+##   threw that explanation away (HTTP400.md).
+## - The key's shape is checked the way WoVP checks it
+##   (exactly KEY_LENGTH characters) before anything is
+##   sent: a wrong-length key is refused locally, in words,
+##   and no request leaves the machine.
 
 signal validation_finished(ok: bool, message: String, user_id: String, display_name: String)
 signal challenges_finished(ok: bool, message: String, challenges: Array, raw_body: String)
@@ -34,6 +44,8 @@ const BASE_URL: String = "https://worldofvirtualpinball.com/api/whsc/v1/"
 const VALIDATE_PATH: String = "validate-apikey"
 const CHALLENGES_PATH: String = "challenges/search"
 const CLIENT_ID: String = "pvlds"
+const KEY_LENGTH: int = 32 ## the league's own rule, proven live by probe (HTTP400.md): a WoVP key is exactly 32 characters - any other length is refused before the key is even read
+const ERROR_BODY_MAX_CHARS: int = 200 ## how much of WoVP's own answer an error line will quote before the quote is cut and the cut is stated
 const REQUEST_TIMEOUT_SEC: float = 30.0 ## Studio's request timeout (spike); its connect timeout maps to the same budget headless
 
 const CACHE_FILE_NAME: String = "wovp_cache.json"
@@ -76,6 +88,41 @@ func is_busy() -> bool:
 	return _busy
 
 
+## The key's shape, in the plain words every save/test
+## surface speaks: "" when the key is one WoVP would look
+## at (exactly KEY_LENGTH characters once its padding is
+## stripped), else the refusal. Callers show it verbatim;
+## validate_key enforces it, so no path can send a key
+## WoVP is certain to refuse.
+static func key_length_note(api_key: String) -> String:
+	var n: int = api_key.strip_edges().length()
+	if n == KEY_LENGTH:
+		return ""
+	return "That key is %d characters - WoVP keys are %d." % [n, KEY_LENGTH]
+
+
+## WoVP's own words out of an error response's body, fit
+## to ride a status line: the body is usually a bare JSON
+## string (the quotes are packaging, not words), so one
+## that parses as a string is quoted by its words; line
+## breaks flatten to spaces; past ERROR_BODY_MAX_CHARS
+## the quote is cut and the cut is stated. An empty body
+## answers "" - the caller falls back to the bare code.
+static func server_words(body: PackedByteArray) -> String:
+	var text: String = body.get_string_from_utf8().strip_edges()
+	if text == "":
+		return ""
+	var parsed: Variant = JSON.parse_string(text)
+	if parsed is String:
+		text = str(parsed)
+	text = text.replace("\r", " ").replace("\n", " ").replace("\t", " ").strip_edges()
+	while text.contains("  "):
+		text = text.replace("  ", " ")
+	if text.length() > ERROR_BODY_MAX_CHARS:
+		text = text.substr(0, ERROR_BODY_MAX_CHARS).strip_edges() + "... (WoVP's answer was longer - cut off here.)"
+	return text
+
+
 ## POST validate-apikey: no Bearer header (the key rides in
 ## the body - that IS the request), Content-Type + our own
 ## X-Client-ID. The answer names whose key it is.
@@ -85,6 +132,10 @@ func validate_key(api_key: String) -> void:
 		return
 	if api_key.strip_edges() == "":
 		validation_finished.emit(false, "No WoVP key to test - paste one first.", "", "")
+		return
+	var length_note: String = key_length_note(api_key)
+	if length_note != "":
+		validation_finished.emit(false, length_note, "", "")
 		return
 	_busy = true
 	_pending_kind = "validate"
@@ -165,6 +216,9 @@ func _on_request_completed(result: int, response_code: int, _headers: PackedStri
 		var why: String = "WoVP answered with an error (HTTP %d)." % response_code
 		if response_code == 401 or response_code == 403:
 			why = "WoVP did not accept that key (HTTP %d)." % response_code
+		var words: String = server_words(body)
+		if words != "":
+			why += " WoVP said: " + words
 		if kind == "validate":
 			validation_finished.emit(false, why, "", "")
 		else:
