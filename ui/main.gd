@@ -5017,6 +5017,12 @@ func _tournament_leg_layout() -> void:
 	# The launch leg, on both boards: the button's rect
 	# shares no ground with any row's rect, and the footer
 	# band the face reserved contains the button whole.
+	if OS.has_environment("PVLDS_LAYOUT_DEBUG"):
+		var dbg: Dictionary = _layout_probe_results.get(0, {})
+		for rv3: Variant in (dbg.get("rows", []) as Array):
+			var rd3: Dictionary = rv3
+			print("LAYOUTDBG row ", str(rd3.get("kind", "")), " rect ", str(rd3.get("rect", Rect2())))
+		print("LAYOUTDBG footer ", str(dbg.get("footer_panel_rect", Rect2())), " launch ", str(dbg.get("launch_rect", Rect2())))
 	var launch_ok: bool = true
 	var launch_why: String = ""
 	for idx: int in range(2):
@@ -5034,7 +5040,7 @@ func _tournament_leg_layout() -> void:
 		if not (footer.position.x <= launch.position.x + 0.002 and footer.position.y <= launch.position.y + 0.002
 				and footer.end.x >= launch.end.x - 0.002 and footer.end.y >= launch.end.y - 0.002):
 			launch_ok = false
-			launch_why = "board %d: the button does not sit inside the footer band" % idx
+			launch_why = "board %d: the button does not sit inside the footer band (button %s, band %s)" % [idx, str(launch), str(footer)]
 			break
 		for rv2: Variant in (p.get("rows", []) as Array):
 			var rd2: Dictionary = rv2
