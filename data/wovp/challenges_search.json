@@ -1,0 +1,795 @@
+{
+	"items": [
+		{
+			"id": "fixture-ch-season-main-w3",
+			"pinballTableId": "pt-addams-family",
+			"seasonChallengeId": "fixture-season-17",
+			"name": "Main - Week 3",
+			"description": "",
+			"scriptMatchKeywords": [],
+			"challengeTypeCode": "season",
+			"endDateUTC": "2026-10-25T19:00:00Z",
+			"startDateUTC": "2026-10-19T19:00:00Z",
+			"pinballTable": {
+				"id": "pt-addams-family",
+				"externalId": "aT_GONvw",
+				"name": "The Addams Family",
+				"manufacturer": "Bally",
+				"players": 4,
+				"status": 1,
+				"year": 1992
+			},
+			"pinballTableVersion": {
+				"id": "pv-addams-vpw",
+				"externalId": "Oytg92XtEb",
+				"name": "VPW 1.13"
+			},
+			"scoreBoard": {
+				"items": [
+					{
+						"position": 1,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Challenger",
+							"ParticipantId": "participant-anna",
+							"ParticipantName": "Fixture Anna",
+							"Position": 1,
+							"Score": 98450210.0,
+							"UserId": "fixture-user-anna",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "DE"
+						}
+					},
+					{
+						"position": 2,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-ben",
+							"ParticipantName": "Fixture Ben",
+							"Position": 2,
+							"Score": 61230980.0,
+							"UserId": "fixture-user-ben",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "US"
+						}
+					},
+					{
+						"position": 3,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Challenger",
+							"ParticipantId": "participant-carla",
+							"ParticipantName": "Fixture Carla",
+							"Position": 3,
+							"Score": 45002110.0,
+							"UserId": "fixture-user-carla",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "GB"
+						}
+					},
+					{
+						"position": 4,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-dan",
+							"ParticipantName": "Fixture Dan",
+							"Position": 4,
+							"Score": 38900450.0,
+							"UserId": "fixture-user-dan",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "CA"
+						}
+					},
+					{
+						"position": 5,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Pro",
+							"ParticipantId": "participant-elsa",
+							"ParticipantName": "Fixture Elsa",
+							"Position": 5,
+							"Score": 30115720.0,
+							"UserId": "fixture-user-elsa",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "SE"
+						}
+					},
+					{
+						"position": 6,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Challenger",
+							"ParticipantId": "participant-1",
+							"ParticipantName": "S. Kubrick",
+							"Position": 6,
+							"Score": 24531070.0,
+							"UserId": "fixture-user-1",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "US"
+						}
+					},
+					{
+						"position": 7,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-fred",
+							"ParticipantName": "Fixture Fred",
+							"Position": 7,
+							"Score": 22987410.0,
+							"UserId": "fixture-user-fred",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "FR"
+						}
+					},
+					{
+						"position": 8,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Challenger",
+							"ParticipantId": "participant-hank",
+							"ParticipantName": "Fixture Hank",
+							"Position": 8,
+							"Score": 18204660.0,
+							"UserId": "fixture-user-hank",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "NL"
+						}
+					},
+					{
+						"position": 9,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-ivy",
+							"ParticipantName": "Fixture Ivy",
+							"Position": 9,
+							"Score": 17990340.0,
+							"UserId": "fixture-user-ivy",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "AU"
+						}
+					},
+					{
+						"position": 10,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-jack",
+							"ParticipantName": "Fixture Jack",
+							"Position": 10,
+							"Score": 12003450.0,
+							"UserId": "fixture-user-jack",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "US"
+						}
+					},
+					{
+						"position": 11,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Challenger",
+							"ParticipantId": "participant-kara",
+							"ParticipantName": "Fixture Kara",
+							"Position": 11,
+							"Score": 8450210.0,
+							"UserId": "fixture-user-kara",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "DE"
+						}
+					},
+					{
+						"position": 12,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-liam",
+							"ParticipantName": "Fixture Liam",
+							"Position": 12,
+							"Score": 3020450.0,
+							"UserId": "fixture-user-liam",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "GB"
+						}
+					}
+				]
+			}
+		},
+		{
+			"id": "fixture-ch-extra-bw2",
+			"pinballTableId": "pt-medieval-madness",
+			"seasonChallengeId": "fixture-season-17",
+			"name": "Extra - Biweekly 2",
+			"description": "",
+			"scriptMatchKeywords": [],
+			"challengeTypeCode": "extra",
+			"endDateUTC": "2026-10-25T19:00:00Z",
+			"startDateUTC": "2026-10-12T19:00:00Z",
+			"pinballTable": {
+				"id": "pt-medieval-madness",
+				"externalId": "-5yMpqSy",
+				"name": "Medieval Madness",
+				"manufacturer": "Williams",
+				"players": 4,
+				"status": 1,
+				"year": 1997
+			},
+			"pinballTableVersion": {
+				"id": "pv-mm-vpw",
+				"externalId": "zbyQ01wi3L",
+				"name": "VPW 2.1"
+			},
+			"scoreBoard": {
+				"items": [
+					{
+						"position": 1,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Pro",
+							"ParticipantId": "participant-mona",
+							"ParticipantName": "Fixture Mona",
+							"Position": 1,
+							"Score": 77300000.0,
+							"UserId": "fixture-user-mona",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "DE"
+						}
+					},
+					{
+						"position": 2,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-nils",
+							"ParticipantName": "Fixture Nils",
+							"Position": 2,
+							"Score": 55400100.0,
+							"UserId": "fixture-user-nils",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "NO"
+						}
+					},
+					{
+						"position": 3,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": true,
+							"ParticipantDivision": "Challenger",
+							"ParticipantId": "participant-1",
+							"ParticipantName": "S. Kubrick",
+							"Position": 3,
+							"Score": 41208990.0,
+							"UserId": "fixture-user-1",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "US"
+						}
+					},
+					{
+						"position": 4,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-olga",
+							"ParticipantName": "Fixture Olga",
+							"Position": 4,
+							"Score": 20900300.0,
+							"UserId": "fixture-user-olga",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "PL"
+						}
+					},
+					{
+						"position": 5,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-pete",
+							"ParticipantName": "Fixture Pete",
+							"Position": 5,
+							"Score": 9870600.0,
+							"UserId": "fixture-user-pete",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "US"
+						}
+					}
+				]
+			}
+		},
+		{
+			"id": "fixture-ch-br-r4",
+			"pinballTableId": "pt-twilight-zone",
+			"seasonChallengeId": null,
+			"name": "Battle Royale - Round 4",
+			"description": "",
+			"scriptMatchKeywords": [],
+			"challengeTypeCode": "tournament",
+			"endDateUTC": "2026-10-25T19:00:00Z",
+			"startDateUTC": "2026-10-22T19:00:00Z",
+			"pinballTable": {
+				"id": "pt-twilight-zone",
+				"externalId": "WMwkA7_p",
+				"name": "Twilight Zone",
+				"manufacturer": "Bally",
+				"players": 4,
+				"status": 1,
+				"year": 1993
+			},
+			"pinballTableVersion": {
+				"id": "pv-tz-vpw",
+				"externalId": "B-UOlv2K",
+				"name": "VPW 1.4"
+			},
+			"scoreBoard": {
+				"items": [
+					{
+						"position": 1,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Pro",
+							"ParticipantId": "participant-quinn",
+							"ParticipantName": "Fixture Quinn",
+							"Position": 1,
+							"Score": 210554900.0,
+							"UserId": "fixture-user-quinn",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "US"
+						}
+					},
+					{
+						"position": 2,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Challenger",
+							"ParticipantId": "participant-rosa",
+							"ParticipantName": "Fixture Rosa",
+							"Position": 2,
+							"Score": 156200300.0,
+							"UserId": "fixture-user-rosa",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "ES"
+						}
+					},
+					{
+						"position": 3,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-sven",
+							"ParticipantName": "Fixture Sven",
+							"Position": 3,
+							"Score": 120450700.0,
+							"UserId": "fixture-user-sven",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "SE"
+						}
+					},
+					{
+						"position": 4,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Challenger",
+							"ParticipantId": "participant-tara",
+							"ParticipantName": "Fixture Tara",
+							"Position": 4,
+							"Score": 88120400.0,
+							"UserId": "fixture-user-tara",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "GB"
+						}
+					},
+					{
+						"position": 5,
+						"values": {
+							"approvalNote": null,
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-ulf",
+							"ParticipantName": "Fixture Ulf",
+							"Position": 5,
+							"Score": 77003400.0,
+							"UserId": "fixture-user-ulf",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "DE"
+						}
+					},
+					{
+						"position": 6,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-vera",
+							"ParticipantName": "Fixture Vera",
+							"Position": 6,
+							"Score": 65400200.0,
+							"UserId": "fixture-user-vera",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "FR"
+						}
+					},
+					{
+						"position": 7,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Challenger",
+							"ParticipantId": "participant-walt",
+							"ParticipantName": "Fixture Walt",
+							"Position": 7,
+							"Score": 54120900.0,
+							"UserId": "fixture-user-walt",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "US"
+						}
+					},
+					{
+						"position": 8,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-xenia",
+							"ParticipantName": "Fixture Xenia",
+							"Position": 8,
+							"Score": 43900300.0,
+							"UserId": "fixture-user-xenia",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "GR"
+						}
+					},
+					{
+						"position": 9,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-yuri",
+							"ParticipantName": "Fixture Yuri",
+							"Position": 9,
+							"Score": 31200400.0,
+							"UserId": "fixture-user-yuri",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "UA"
+						}
+					},
+					{
+						"position": 10,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Challenger",
+							"ParticipantId": "participant-zara",
+							"ParticipantName": "Fixture Zara",
+							"Position": 10,
+							"Score": 22010500.0,
+							"UserId": "fixture-user-zara",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "IT"
+						}
+					},
+					{
+						"position": 11,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Challenger",
+							"ParticipantId": "participant-1",
+							"ParticipantName": "S. Kubrick",
+							"Position": 11,
+							"Score": 9412300.0,
+							"UserId": "fixture-user-1",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "US"
+						}
+					},
+					{
+						"position": 12,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-alan",
+							"ParticipantName": "Fixture Alan",
+							"Position": 12,
+							"Score": 7300400.0,
+							"UserId": "fixture-user-alan",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "GB"
+						}
+					},
+					{
+						"position": 13,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-berta",
+							"ParticipantName": "Fixture Berta",
+							"Position": 13,
+							"Score": 4100200.0,
+							"UserId": "fixture-user-berta",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "AT"
+						}
+					},
+					{
+						"position": 14,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-cato",
+							"ParticipantName": "Fixture Cato",
+							"Position": 14,
+							"Score": 1200300.0,
+							"UserId": "fixture-user-cato",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "DK"
+						}
+					}
+				]
+			}
+		},
+		{
+			"id": "fixture-ch-monthly-oct",
+			"pinballTableId": "pt-white-water",
+			"seasonChallengeId": null,
+			"name": "Monthly Contracts - October",
+			"description": "",
+			"scriptMatchKeywords": [],
+			"challengeTypeCode": "monthly_contracts",
+			"endDateUTC": "2026-11-01T19:00:00Z",
+			"startDateUTC": "2026-10-01T00:00:00Z",
+			"pinballTable": {
+				"id": "pt-white-water",
+				"externalId": "LJRH3fKk",
+				"name": "White Water",
+				"manufacturer": "Williams",
+				"players": 4,
+				"status": 1,
+				"year": 1993
+			},
+			"pinballTableVersion": {
+				"id": "pv-ww-vpw",
+				"externalId": "keUEMOcIgD",
+				"name": "VPW 1.2"
+			},
+			"scoreBoard": {
+				"items": [
+					{
+						"position": 1,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-dora",
+							"ParticipantName": "Fixture Dora",
+							"Position": 1,
+							"Score": 5991020.0,
+							"UserId": "fixture-user-dora",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "US"
+						}
+					},
+					{
+						"position": 2,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Challenger",
+							"ParticipantId": "participant-1",
+							"ParticipantName": "S. Kubrick",
+							"Position": 2,
+							"Score": 3208450.0,
+							"UserId": "fixture-user-1",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "US"
+						}
+					},
+					{
+						"position": 3,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-emil",
+							"ParticipantName": "Fixture Emil",
+							"Position": 3,
+							"Score": 1980300.0,
+							"UserId": "fixture-user-emil",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "DE"
+						}
+					},
+					{
+						"position": 4,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-faye",
+							"ParticipantName": "Fixture Faye",
+							"Position": 4,
+							"Score": 750200.0,
+							"UserId": "fixture-user-faye",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "CA"
+						}
+					}
+				]
+			}
+		},
+		{
+			"id": "fixture-ch-season-acdc-w3",
+			"pinballTableId": "pt-acdc-luci",
+			"seasonChallengeId": "fixture-season-17",
+			"name": "Main - Week 3",
+			"description": "",
+			"scriptMatchKeywords": [],
+			"challengeTypeCode": "season",
+			"endDateUTC": "2026-10-25T19:00:00Z",
+			"startDateUTC": "2026-10-19T19:00:00Z",
+			"pinballTable": {
+				"id": "pt-acdc-luci",
+				"externalId": "kGBkVb-v",
+				"name": "AC/DC (LUCI Premium)",
+				"manufacturer": "Stern",
+				"players": 4,
+				"status": 1,
+				"year": 2013
+			},
+			"pinballTableVersion": {
+				"id": "pv-acdc-vpw",
+				"externalId": "butCgIcLzI",
+				"name": "VPW 1.13"
+			},
+			"scoreBoard": {
+				"items": [
+					{
+						"position": 1,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Pro",
+							"ParticipantId": "participant-gus",
+							"ParticipantName": "Fixture Gus",
+							"Position": 1,
+							"Score": 450200100.0,
+							"UserId": "fixture-user-gus",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "AU"
+						}
+					},
+					{
+						"position": 2,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 1,
+							"IsPending": false,
+							"ParticipantDivision": "Challenger",
+							"ParticipantId": "participant-1",
+							"ParticipantName": "S. Kubrick",
+							"Position": 2,
+							"Score": 300450200.0,
+							"UserId": "fixture-user-1",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "US"
+						}
+					},
+					{
+						"position": 3,
+						"values": {
+							"approvalNote": "",
+							"ApprovalStatus": 0,
+							"IsPending": false,
+							"ParticipantDivision": "Open",
+							"ParticipantId": "participant-hana",
+							"ParticipantName": "Fixture Hana",
+							"Position": 3,
+							"Score": 120300400.0,
+							"UserId": "fixture-user-hana",
+							"ParticipantPlayingPlatform": 1,
+							"ParticipantProfilePicture": "",
+							"ParticipantCountryCode": "JP"
+						}
+					}
+				]
+			}
+		}
+	]
+}

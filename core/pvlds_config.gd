@@ -28,6 +28,13 @@ var launch_args_template: String = DEFAULT_LAUNCH_ARGS
 var table_folders: Array[String] = []
 var vpsdb_path: String = ""
 var focus_herding: bool = true ## watchdog window duty kill-switch (design section 3 amendment)
+## The player's World of Virtual Pinball API key (self-service
+## in his WoVP profile; the Tournament Room's read side uses
+## it). A secret: it lives ONLY in this local file, is loaded
+## at boot, and is never printed or logged anywhere - the
+## desk and the in-room SETUP panel mask it, and the harness
+## greps every produced log for a sentinel key.
+var wovp_api_key: String = ""
 ## Deliberately absent: any close-duty or hold-to-exit setting.
 ## The exit model was simplified by the player's ruling
 ## (2026-10-22): the watchdog's session-close duty is
@@ -82,6 +89,7 @@ func load_from_disk() -> bool:
 		launch_args_template = DEFAULT_LAUNCH_ARGS
 	vpsdb_path = str(d.get("vpsdb_path", ""))
 	focus_herding = bool(d.get("focus_herding", true))
+	wovp_api_key = str(d.get("wovp_api_key", ""))
 	table_folders.clear()
 	var folders: Variant = d.get("table_folders", [])
 	if folders is Array:
@@ -99,6 +107,7 @@ func save_to_disk() -> bool:
 	d["launch_args_template"] = launch_args_template
 	d["vpsdb_path"] = vpsdb_path
 	d["focus_herding"] = focus_herding
+	d["wovp_api_key"] = wovp_api_key
 	var folders: Array = []
 	for f: String in table_folders:
 		folders.append(f)

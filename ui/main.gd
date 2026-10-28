@@ -6778,6 +6778,218 @@ func _run_core_test() -> void:
 		and LetterIndex.anchor_target(anch9, "B", 1) == "",
 		"letter index: an empty list - or a slot not in it - answers no anchor", failures)
 
+	# WoVP read side (the Tournament Room round, 2026-10-28):
+	# the client core against the MODEL-DERIVED fixtures in
+	# data/wovp/ (built field-by-field from VPin Studio's DTO
+	# definitions - the spike found no literal sample response;
+	# see data/wovp/README.md). Parsing, his-row identity,
+	# cutoff selection, board composition, Chicago clock math,
+	# fail-closed behavior, the key's config round-trip, and
+	# the last-good cache.
+	var wovp_validate_text: String = FileAccess.get_file_as_string("res://data/wovp/validate_apikey.json")
+	var wovp_search_text: String = FileAccess.get_file_as_string("res://data/wovp/challenges_search.json")
+	_expect(wovp_validate_text != "" and wovp_search_text != "",
+		"wovp: the model-derived fixtures load", failures)
+	var wovp_val: Dictionary = WovpClient.parse_validation(wovp_validate_text)
+	_expect(bool(wovp_val.get("ok", false)) and str(wovp_val.get("user_id", "")) == "fixture-user-1"
+		and str(wovp_val.get("display_name", "")) == "Fixture Player",
+		"wovp: validate fixture resolves the key to its player (id + name)", failures)
+	var wovp_refused: Dictionary = WovpClient.parse_validation("{\"success\": false}")
+	_expect(not bool(wovp_refused.get("ok", true)) and bool(wovp_refused.get("refused", false)),
+		"wovp: success=false is a stated refusal, not a parse failure", failures)
+	_expect(not bool(WovpClient.parse_validation("not json").get("ok", true)),
+		"wovp: an unreadable validate answer fails closed", failures)
+	var wovp_parsed: Dictionary = WovpClient.parse_challenges(wovp_search_text)
+	_expect(bool(wovp_parsed.get("ok", false)),
+		"wovp: the challenges fixture parses (%s)" % str(wovp_parsed.get("error", "")), failures)
+	var wovp_challenges: Array = wovp_parsed.get("challenges", [])
+	_expect(wovp_challenges.size() == 5, "wovp: five challenges in the fixture", failures)
+	if wovp_challenges.size() == 5:
+		var ch_season: WovpChallenge = wovp_challenges[0]
+		var ch_extra: WovpChallenge = wovp_challenges[1]
+		var ch_br: WovpChallenge = wovp_challenges[2]
+		var ch_monthly: WovpChallenge = wovp_challenges[3]
+		var ch_notowned: WovpChallenge = wovp_challenges[4]
+		_expect(ch_season.type_code == "season" and ch_extra.type_code == "extra"
+			and ch_br.type_code == "tournament" and ch_monthly.type_code == "monthly_contracts",
+			"wovp: all four challenge types parse", failures)
+		_expect(ch_season.table_external_id == "aT_GONvw" and ch_season.version_external_id == "Oytg92XtEb",
+			"wovp: a challenge carries its VPS game id + table-file id (the library join keys)", failures)
+		_expect(ch_season.rows.size() == 12 and ch_season.rows[0].position == 1 and ch_season.rows[11].position == 12,
+			"wovp: the season board parses whole and sorts by position", failures)
+		var his_season: WovpScoreRow = ch_season.his_row("fixture-user-1")
+		_expect(his_season != null and his_season.position == 6 and int(his_season.score) == 24531070,
+			"wovp: his row is found by userId, mid-board", failures)
+		_expect(ch_season.his_row("fixture-user-ghost") == null,
+			"wovp: an unknown userId has no row (nobody is 'him' by accident)", failures)
+		_expect(ch_season.leader_row() != null and int(ch_season.leader_row().score) == 98450210,
+			"wovp: the leader's score reads off the board's head", failures)
+		var his_extra: WovpScoreRow = ch_extra.his_row("fixture-user-1")
+		_expect(his_extra != null and his_extra.is_pending,
+			"wovp: a pending entry parses as pending (IsPending)", failures)
+		_expect(ch_notowned.table_external_id == "kGBkVb-v" and ch_notowned.his_row("fixture-user-1") != null,
+			"wovp: the not-owned challenge parses with his score on it (ownership is the library's call, not the board's)", failures)
+		# Cutoff selection per type: season draws the
+		# promotion line under 8th; Battle Royale the cut
+		# under the last survivor (14 rows - 10 cut = 4);
+		# a 5-row extra board has no line yet; monthly
+		# contracts never draw one.
+		_expect(ch_season.cutoff_position() == 8, "wovp: season cutoff is the promotion line at 8th", failures)
+		_expect(ch_br.cutoff_position() == 4, "wovp: Battle Royale cutoff leaves 14 - 10 = 4 survivors", failures)
+		_expect(ch_extra.cutoff_position() == 0, "wovp: a board short of 8 rows draws no promotion line", failures)
+		_expect(ch_monthly.cutoff_position() == 0, "wovp: monthly contracts draw no cutoff line", failures)
+		# Board composition: leader, his row, the rows
+		# around the line, the divider where it falls.
+		var season_board: Array = ch_season.board_rows("fixture-user-1")
+		var season_seq: Array = []
+		for e: Variant in season_board:
+			var ed: Dictionary = e
+			season_seq.append(str(ed.get("kind", "")) + ":" + str((ed.get("row") as WovpScoreRow).position if ed.get("row") is WovpScoreRow else 0))
+		_expect(season_seq == ["score:1", "score:6", "score:8", "divider:0", "score:9"],
+			"wovp: the season board shows leader, him, and both sides of the promotion line", failures)
+		var season_mine: int = 0
+		for e2: Variant in season_board:
+			var ed2: Dictionary = e2
+			if bool(ed2.get("mine", false)):
+				season_mine += 1
+		_expect(season_mine == 1, "wovp: exactly one row on the board is marked his", failures)
+		var br_board: Array = ch_br.board_rows("fixture-user-1")
+		var br_kinds: Array = []
+		var br_divider_label: String = ""
+		for e3: Variant in br_board:
+			var ed3: Dictionary = e3
+			br_kinds.append(str(ed3.get("kind", "")))
+			if str(ed3.get("kind", "")) == "divider":
+				br_divider_label = str(ed3.get("label", ""))
+		_expect(br_kinds == ["score", "score", "divider", "score", "score"] and br_divider_label.contains("CUT LINE"),
+			"wovp: the Battle Royale board carries its cut line between the survivor and the cut", failures)
+		var ghost_board: Array = ch_monthly.board_rows("fixture-user-ghost")
+		var ghost_has_note: bool = false
+		for e4: Variant in ghost_board:
+			var ed4: Dictionary = e4
+			if str(ed4.get("kind", "")) == "note":
+				ghost_has_note = true
+		_expect(ghost_has_note, "wovp: a board he has no score on says so, plainly", failures)
+	_expect(WovpChallenge.format_score(24531070.0) == "24,531,070" and WovpChallenge.format_score(750200.0) == "750,200"
+		and WovpChallenge.format_score(0.0) == "0",
+		"wovp: scores print grouped, the way pinball prints them", failures)
+	# Fail-closed mutations of the fixture (built in code -
+	# the fixture file itself stays DTO-shaped).
+	var wovp_mut: Variant = JSON.parse_string(wovp_search_text)
+	if wovp_mut is Dictionary:
+		var mut_items: Array = (wovp_mut as Dictionary)["items"]
+		(mut_items[0] as Dictionary).erase("endDateUTC")
+		_expect(not bool(WovpClient.parse_challenges(JSON.stringify(wovp_mut)).get("ok", true)),
+			"wovp: a challenge with no end date fails closed", failures)
+		wovp_mut = JSON.parse_string(wovp_search_text)
+		mut_items = (wovp_mut as Dictionary)["items"]
+		(mut_items[0] as Dictionary)["challengeTypeCode"] = "playoffs"
+		_expect(not bool(WovpClient.parse_challenges(JSON.stringify(wovp_mut)).get("ok", true)),
+			"wovp: an unknown challenge type fails closed", failures)
+		wovp_mut = JSON.parse_string(wovp_search_text)
+		mut_items = (wovp_mut as Dictionary)["items"]
+		(((mut_items[0] as Dictionary)["scoreBoard"] as Dictionary)["items"][0] as Dictionary)["values"].erase("Score")
+		_expect(not bool(WovpClient.parse_challenges(JSON.stringify(wovp_mut)).get("ok", true)),
+			"wovp: a scoreboard row with no score fails closed", failures)
+		wovp_mut = JSON.parse_string(wovp_search_text)
+		mut_items = (wovp_mut as Dictionary)["items"]
+		(((mut_items[0] as Dictionary)["scoreBoard"] as Dictionary)["items"][0] as Dictionary)["values"].erase("UserId")
+		_expect(not bool(WovpClient.parse_challenges(JSON.stringify(wovp_mut)).get("ok", true)),
+			"wovp: a scoreboard row naming no player fails closed", failures)
+		wovp_mut = JSON.parse_string(wovp_search_text)
+		(wovp_mut as Dictionary).erase("items")
+		_expect(not bool(WovpClient.parse_challenges(JSON.stringify(wovp_mut)).get("ok", true)),
+			"wovp: a response with no challenge list fails closed", failures)
+		wovp_mut = JSON.parse_string(wovp_search_text)
+		mut_items = (wovp_mut as Dictionary)["items"]
+		(mut_items[0] as Dictionary)["someFutureField"] = {"nested": [1, 2]}
+		(((mut_items[0] as Dictionary)["scoreBoard"] as Dictionary)["items"][0] as Dictionary)["values"]["AnotherFutureField"] = true
+		_expect(bool(WovpClient.parse_challenges(JSON.stringify(wovp_mut)).get("ok", false)),
+			"wovp: unknown extra fields are ignored, the league's own mapper's way", failures)
+		wovp_mut = JSON.parse_string(wovp_search_text)
+		mut_items = (wovp_mut as Dictionary)["items"]
+		(mut_items[0] as Dictionary)["scriptMatchKeywords"] = ["the addams family"]
+		var kw_parsed: Dictionary = WovpClient.parse_challenges(JSON.stringify(wovp_mut))
+		_expect(bool(kw_parsed.get("ok", false)) and (kw_parsed["challenges"][0] as WovpChallenge).script_keywords == ["the addams family"],
+			"wovp: script match keywords parse as carried", failures)
+	_expect(not bool(WovpClient.parse_challenges(wovp_search_text.left(200)).get("ok", true)),
+		"wovp: a truncated response fails closed", failures)
+	# The league's dates: strict ISO-8601 with offsets.
+	var wovp_instant: int = Time.get_unix_time_from_datetime_dict({"year": 2026, "month": 10, "day": 25, "hour": 19, "minute": 0, "second": 0})
+	_expect(WovpClient.parse_iso8601("2026-10-25T19:00:00Z") == wovp_instant
+		and WovpClient.parse_iso8601("2026-10-25T21:00:00+02:00") == wovp_instant
+		and WovpClient.parse_iso8601("2026-10-25T19:00:00.500Z") == wovp_instant,
+		"wovp: ISO dates read in Z, offset, and fractional forms as one instant", failures)
+	_expect(WovpClient.parse_iso8601("garbage") == -1 and WovpClient.parse_iso8601("2026-13-25T19:00:00Z") == -1
+		and WovpClient.parse_iso8601("") == -1,
+		"wovp: non-dates are refused, not guessed", failures)
+	# Chicago conversion, pinned to known instants (the
+	# league's Sunday 19:00 UTC deadline shape): the last
+	# CDT Sunday of 2026, the first CST Sunday, the spring
+	# forward Sunday, and deep winter.
+	_expect(WovpTime.format_deadline(wovp_instant) == "Sun Oct 25, 2:00 PM CDT",
+		"wovp time: 2026-10-25 19:00 UTC is Sun 2:00 PM CDT in Chicago", failures)
+	_expect(WovpTime.format_deadline(Time.get_unix_time_from_datetime_dict({"year": 2026, "month": 11, "day": 1, "hour": 19, "minute": 0, "second": 0})) == "Sun Nov 1, 1:00 PM CST",
+		"wovp time: 2026-11-01 19:00 UTC is Sun 1:00 PM CST (DST over)", failures)
+	_expect(WovpTime.format_deadline(Time.get_unix_time_from_datetime_dict({"year": 2026, "month": 3, "day": 8, "hour": 19, "minute": 0, "second": 0})) == "Sun Mar 8, 2:00 PM CDT",
+		"wovp time: 2026-03-08 19:00 UTC is Sun 2:00 PM CDT (DST begun)", failures)
+	_expect(WovpTime.format_deadline(Time.get_unix_time_from_datetime_dict({"year": 2026, "month": 1, "day": 18, "hour": 19, "minute": 0, "second": 0})) == "Sun Jan 18, 1:00 PM CST",
+		"wovp time: deep winter is CST", failures)
+	_expect(WovpTime.format_remaining(wovp_instant + 2 * 86400 + 4 * 3600, wovp_instant) == "2d 4h left"
+		and WovpTime.format_remaining(wovp_instant + 3600 + 30 * 60, wovp_instant) == "1h 30m left"
+		and WovpTime.format_remaining(wovp_instant - 60, wovp_instant) == "ended",
+		"wovp time: remaining time reads in days/hours, minutes, and the past tense", failures)
+	# The search body never carries key material (the key
+	# rides in the header only) - the redaction discipline
+	# at the shape level; the harness greps the logs for a
+	# sentinel key on top of this.
+	var wovp_body: String = WovpClient.search_body()
+	_expect(not wovp_body.contains("apikey") and not wovp_body.contains("Bearer") and wovp_body.contains("inProgress"),
+		"wovp: the search body is Studio's Search shape and carries no key", failures)
+	# Config round-trip for the key (backed up + restored
+	# like the rest of this test's file work).
+	var wovp_cfg_file: String = PvldsConfig.existing_path()
+	var wovp_cfg_backup: String = ""
+	if FileAccess.file_exists(wovp_cfg_file):
+		wovp_cfg_backup = FileAccess.get_file_as_string(wovp_cfg_file)
+	var wovp_cfg: PvldsConfig = PvldsConfig.new()
+	wovp_cfg.wovp_api_key = "core-test-key-not-a-real-one"
+	_expect(wovp_cfg.save_to_disk(), "wovp: a config carrying a key saves", failures)
+	var wovp_cfg2: PvldsConfig = PvldsConfig.new()
+	_expect(wovp_cfg2.load_from_disk() and wovp_cfg2.wovp_api_key == "core-test-key-not-a-real-one",
+		"wovp: the key round-trips through the local config file", failures)
+	if wovp_cfg_backup != "":
+		var wcf: FileAccess = FileAccess.open(wovp_cfg_file, FileAccess.WRITE)
+		if wcf != null:
+			wcf.store_string(wovp_cfg_backup)
+			wcf.close()
+	elif FileAccess.file_exists(PvldsConfig.save_path()):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(PvldsConfig.save_path()))
+	# The last-good cache: a saved fetch loads back through
+	# the same fail-closed parser; a corrupt cache is no
+	# cache (backed up + restored like the state above).
+	var wovp_cache_file: String = WovpClient.cache_path()
+	var wovp_cache_backup: String = ""
+	if FileAccess.file_exists(wovp_cache_file):
+		wovp_cache_backup = FileAccess.get_file_as_string(wovp_cache_file)
+	_expect(WovpClient.save_cache(wovp_search_text, "fixture-user-1", "Fixture Player", 1761435600),
+		"wovp: the last-good cache saves", failures)
+	var wovp_cache: Dictionary = WovpClient.load_cache()
+	_expect(bool(wovp_cache.get("ok", false)) and (wovp_cache.get("challenges", []) as Array).size() == 5
+		and str(wovp_cache.get("user_id", "")) == "fixture-user-1" and int(wovp_cache.get("fetched_at", 0)) == 1761435600,
+		"wovp: the cache loads back - boards, player, and stamp", failures)
+	_expect(_write_text_file(ProjectSettings.globalize_path(wovp_cache_file), "{\"fetched_at\": 1, \"body\": \"{broken\"}"),
+		"wovp: corrupt cache written for its leg", failures)
+	_expect(not bool(WovpClient.load_cache().get("ok", true)),
+		"wovp: a corrupt cache fails closed (it is no cache)", failures)
+	if wovp_cache_backup != "":
+		var wkf: FileAccess = FileAccess.open(wovp_cache_file, FileAccess.WRITE)
+		if wkf != null:
+			wkf.store_string(wovp_cache_backup)
+			wkf.close()
+	elif FileAccess.file_exists(wovp_cache_file):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(wovp_cache_file))
+
 	if failures.is_empty():
 		print("CORE TEST: PASS")
 		get_tree().quit(0)
