@@ -5014,6 +5014,14 @@ func _tournament_leg_layout() -> void:
 		var ink: bool = _layout_digit_ink(p0.get("texture") as Texture2D, target)
 		_tournament_expect(need <= allot + 1.0 and ink,
 			"layout score: a 10-digit score renders whole, never clipped (need %.0fpx <= allot %.0fpx at %dpx font, final digit inked, no spill)" % [need, allot, int(target.get("font_px", 0))])
+		# Keep the worst-case board's rendered face as a
+		# grab beside the boot, for the human verdict.
+		var grab_dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+		var gtex: Texture2D = p0.get("texture") as Texture2D
+		if grab_dir != "" and gtex != null:
+			var gimg: Image = gtex.get_image()
+			if gimg != null and not gimg.is_empty():
+				gimg.save_png(grab_dir.path_join("tournament_board_worst.png"))
 	# The launch leg, on both boards: the button's rect
 	# shares no ground with any row's rect, and the footer
 	# band the face reserved contains the button whole.
