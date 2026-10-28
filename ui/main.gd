@@ -5038,7 +5038,22 @@ func _drive_tournament_full() -> void:
 					"panel length: TEST KEY refuses the short key in words, on the panel (panel says: %s)" % _room.setup_panel_message())
 				_tournament_expect(_tournament_validate_count() == _tournament_validate_count_seen,
 					"panel length: the refused test sent nothing - the stub saw no new validate request")
+				# Restore the good key before leaving: the
+				# cache boot reuses this home, and its
+				# trusted-identity leg needs the config and
+				# the cache to name the same key.
+				DisplayServer.clipboard_set("PVLDS-WOVP-SENTINEL-KEY-00000001")
+				_room._activate(_room.setup_panel_wovp_paste_quad())
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 20000
+				_tournament_smoke_phase = 12
+		12:
+			var reloaded3: PvldsConfig = PvldsConfig.new()
+			if reloaded3.load_from_disk() and reloaded3.wovp_api_key == "PVLDS-WOVP-SENTINEL-KEY-00000001":
+				_tournament_expect(true, "panel length: the good key is restored for the boots that reuse this home")
 				_room._activate(_room.setup_panel_back_quad())
+				_finish_tournament_smoke()
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("panel length: the good key was never restored (panel says: %s)" % _room.setup_panel_message())
 				_finish_tournament_smoke()
 
 
