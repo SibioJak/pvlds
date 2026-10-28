@@ -28,6 +28,7 @@ extends Control
 ## limit and pushing the rest of the card off its texture.
 
 const FACE_MARGIN_TOP_PX: int = 22 ## the shared face layout's top margin
+const FACE_MARGIN_BOTTOM_PX: int = 22 ## the shared face layout's bottom margin (a board's footer band takes the bottom over - see apply_spec)
 
 ## Title-card raise (Chris's field note, 2026-10-23): art faces are
 ## full-bleed - their content starts at the texture's top row -
@@ -130,7 +131,7 @@ func _init() -> void:
 	_margin.add_theme_constant_override("margin_left", 26)
 	_margin.add_theme_constant_override("margin_right", 26)
 	_margin.add_theme_constant_override("margin_top", FACE_MARGIN_TOP_PX)
-	_margin.add_theme_constant_override("margin_bottom", 22)
+	_margin.add_theme_constant_override("margin_bottom", FACE_MARGIN_BOTTOM_PX)
 	add_child(_margin)
 	_vbox = VBoxContainer.new()
 	_vbox.add_theme_constant_override("separation", 12)
@@ -163,7 +164,7 @@ func _init() -> void:
 	_vbox.add_child(_chips_row)
 
 	_rows_box = VBoxContainer.new()
-	_rows_box.add_theme_constant_override("separation", 8)
+	_rows_box.add_theme_constant_override("separation", 6)
 	_rows_box.visible = false
 	_vbox.add_child(_rows_box)
 
@@ -212,6 +213,16 @@ func _footer_box() -> StyleBoxFlat:
 	return sb
 
 
+## A board row's style: _box with the vertical padding
+## squeezed (2px, not 6) - board rows are a dense stack,
+## and the face's height budget is spent on the type.
+func _board_box(color: Color, radius: int) -> StyleBoxFlat:
+	var sb: StyleBoxFlat = _box(color, radius)
+	sb.content_margin_top = 2
+	sb.content_margin_bottom = 2
+	return sb
+
+
 func apply_spec(spec: Dictionary) -> void:
 	var kind: String = str(spec.get("kind", "panel"))
 	# Per-spec top margin: title cards (panel kind) ride higher so
@@ -222,6 +233,10 @@ func apply_spec(spec: Dictionary) -> void:
 	var top_margin_px: int = FACE_MARGIN_TOP_PX
 	if kind == "panel":
 		top_margin_px = maxi(0, FACE_MARGIN_TOP_PX - PANEL_CONTENT_RAISE_PX)
+	elif kind == "board":
+		# Boards run a tighter top margin: a full board's
+		# rows plus its footer band budget the whole face.
+		top_margin_px = 14
 	_margin.add_theme_constant_override("margin_top", top_margin_px)
 	var bg: Color = _color_of(spec, "bg", Color(0.05, 0.05, 0.09))
 	var band: Color = _color_of(spec, "band", Color(0.25, 0.25, 0.38))
@@ -242,6 +257,10 @@ func apply_spec(spec: Dictionary) -> void:
 	if _band_panel.visible:
 		_band_panel.add_theme_stylebox_override("panel", _box(band, 6))
 		_band_label.text = str(spec.get("band_text", ""))
+		# A spec may set its own band size ("band_size") -
+		# boards run theirs smaller. Re-asserted on every
+		# spec, stock 30 as the default.
+		_band_label.add_theme_font_size_override("font_size", int(spec.get("band_size", 30)))
 
 	var centered: bool = kind == "button" or kind == "banner"
 	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
@@ -312,6 +331,18 @@ func apply_spec(spec: Dictionary) -> void:
 	_footer_panel.visible = footer_px > 0
 	if footer_px > 0:
 		_footer_panel.custom_minimum_size = Vector2(0.0, float(footer_px))
+	# Boards breathe tighter than cards: their section gaps
+	# run 6px, not 12, so a full board (four score rows, the
+	# line, a note) plus its footer band fits the face with
+	# room to spare. Re-asserted on every spec.
+	_vbox.add_theme_constant_override("separation", 6 if kind == "board" else 12)
+	# A footer board's band owns the face's bottom edge to
+	# itself: the stock bottom margin would leave a dead
+	# strip under the plinth and shift the band off the
+	# geometry RoomSpecs.board_launch_y derives from it.
+	# Re-asserted on every spec, like the top margin.
+	_margin.add_theme_constant_override("margin_bottom",
+		0 if footer_px > 0 else FACE_MARGIN_BOTTOM_PX)
 
 
 ## The board's column geometry for one spec: the position
@@ -386,7 +417,7 @@ func _make_board_row(entry: Dictionary, layout: Dictionary, idx: int) -> Control
 				ink = Color(1.0, 0.64, 0.56)
 				ground = Color(0.17, 0.07, 0.06)
 		var dp: PanelContainer = PanelContainer.new()
-		var dsb: StyleBoxFlat = _box(ground, 6)
+		var dsb: StyleBoxFlat = _board_box(ground, 6)
 		dsb.border_color = rule
 		dsb.border_width_top = 5
 		dp.add_theme_stylebox_override("panel", dsb)
@@ -405,12 +436,12 @@ func _make_board_row(entry: Dictionary, layout: Dictionary, idx: int) -> Control
 			# His row, richer (TR3): a brighter amber ground
 			# and a solid gold leading edge, so the eye finds
 			# it before it reads anything.
-			var asb: StyleBoxFlat = _box(Color(0.66, 0.46, 0.10), 6)
+			var asb: StyleBoxFlat = _board_box(Color(0.66, 0.46, 0.10), 6)
 			asb.border_color = Color(1.0, 0.80, 0.30)
 			asb.border_width_left = 8
 			sp.add_theme_stylebox_override("panel", asb)
 		else:
-			sp.add_theme_stylebox_override("panel", _box(Color(0.10, 0.10, 0.16), 6))
+			sp.add_theme_stylebox_override("panel", _board_box(Color(0.10, 0.10, 0.16), 6))
 		var ink2: Color = Color(1.0, 0.98, 0.92) if accent else Color(0.90, 0.91, 0.96)
 		sp.set_meta("board_kind", "score")
 		sp.set_meta("score_text", str(entry.get("score_text", "")))
@@ -432,7 +463,6 @@ func _make_board_row(entry: Dictionary, layout: Dictionary, idx: int) -> Control
 		var font_px: int = int(fonts.get(idx, int(entry.get("size", 40))))
 		var h: HBoxContainer = HBoxContainer.new()
 		h.add_theme_constant_override("separation", 10)
-		sp.add_child(h)
 		var pl: Label = Label.new()
 		pl.text = str(entry.get("pos_text", ""))
 		pl.custom_minimum_size = Vector2(float(layout.get("pos_w", 60.0)), 0.0)
@@ -457,6 +487,24 @@ func _make_board_row(entry: Dictionary, layout: Dictionary, idx: int) -> Control
 		sl.add_theme_font_size_override("font_size", font_px)
 		sl.add_theme_color_override("font_color", ink2)
 		h.add_child(sl)
+		if bool(entry.get("pending", false)):
+			# A pending score carries its state as a quiet
+			# second line inside its own row - right-aligned,
+			# small, dim amber - instead of stretching the
+			# score line (TR1) or spending a whole note row
+			# (the first TR3 cut).
+			var vb: VBoxContainer = VBoxContainer.new()
+			vb.add_theme_constant_override("separation", 0)
+			vb.add_child(h)
+			var pend: Label = Label.new()
+			pend.text = "awaiting validation"
+			pend.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+			pend.add_theme_font_size_override("font_size", 22)
+			pend.add_theme_color_override("font_color", Color(0.88, 0.74, 0.45))
+			vb.add_child(pend)
+			sp.add_child(vb)
+		else:
+			sp.add_child(h)
 		sp.set_meta("score_label", sl)
 		return sp
 	var nl: Label = Label.new()

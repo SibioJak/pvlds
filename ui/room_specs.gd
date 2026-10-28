@@ -327,11 +327,10 @@ static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: Strin
 					"pos_text": "#%d" % r.position,
 					"name_text": r.participant_name,
 					"score_text": score_text,
+					"pending": r.is_pending,
 					"accent": bool(e.get("mine", false)),
-					"size": 44 if bool(e.get("mine", false)) else 40,
+					"size": 42 if bool(e.get("mine", false)) else 40,
 				})
-				if r.is_pending:
-					rows.append({"kind": "note", "text": "awaiting validation", "size": 24})
 			"divider":
 				var tone: String = ""
 				match ch.type_code:
@@ -339,7 +338,7 @@ static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: Strin
 						tone = "up"
 					WovpChallenge.TYPE_TOURNAMENT:
 						tone = "down"
-				rows.append({"kind": "divider", "text": str(e.get("label", "")), "size": 30, "tone": tone})
+				rows.append({"kind": "divider", "text": str(e.get("label", "")), "size": 28, "tone": tone})
 			"note":
 				rows.append({"kind": "note", "text": str(e.get("text", "")), "size": 34})
 	var chips: Array = []
@@ -359,11 +358,12 @@ static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: Strin
 		"bg": CARD_BG,
 		"band": challenge_type_color(ch.type_code),
 		"band_text": "%s - %s" % [ch.type_label(), ch.name],
+		"band_size": 28,
 		"title": title,
-		"title_size": 48,
+		"title_size": 46,
 		"title_max_lines": 1,
 		"sub": sub,
-		"sub_size": 28,
+		"sub_size": 26,
 		"sub_max_lines": 1,
 		"sub_color": sub_color,
 		"chips": chips,
