@@ -173,7 +173,9 @@ var _tournament_smoke_wait: int = 0
 var _tournament_smoke_failures: int = 0
 var _tournament_smoke_deadline_msec: int = 0
 var _tournament_validate_count_seen: int = 0 ## the stub's validate count when the panel length legs begin (their no-send witness)
-var _tournament_smoke_mode: String = "full" ## PVLDS_WOVP_SMOKE_MODE: full | nokey | failfetch | errbody | errempty | cache - which harness boot this is
+var _tournament_smoke_mode: String = "full" ## PVLDS_WOVP_SMOKE_MODE: full | nokey | failfetch | errbody | errempty | cache | layout - which harness boot this is
+var _layout_probe_results: Dictionary = {} ## layout mode: panel index -> RoomView.board_layout_probe result, filled async
+var _layout_probes_in_flight: bool = false
 var _smoke_launch_game: String = ""
 var _smoke_verdict_pending: bool = false ## a smoke launch is riding the load wait; its settle prints the verdict and quits
 var _shot_launch_path: String = ""
@@ -430,6 +432,10 @@ func _ready() -> void:
 	# refreshes (fault 1), "pager" drops the page-travel focus
 	# landing (fault 2). Set here, before any room exists.
 	RoomView.debug_focus_nc = OS.get_environment("PVLDS_FOCUS_NC")
+	# The board-layout negative-control seam (PVLDS_BOARD_NC=
+	# oldlayout): restores the pre-TR3 board presentation so
+	# the tournament smoke's layout legs fail against it.
+	RoomSpecs.board_nc_old = OS.get_environment("PVLDS_BOARD_NC") == "oldlayout"
 	# The pick-latency bench seam (PVLDS_BENCH): the room's
 	# fills print their phase timings + render counts.
 	RoomView.debug_bench = OS.has_environment("PVLDS_BENCH")
@@ -4901,6 +4907,15 @@ func _bootfocus_region_stdev(img: Image, rect: Rect2i) -> float:
 ##   cache     - a second boot in a full boot's home, base
 ##               URL dead: the saved boards stand with their
 ##               stamp, stated as last-good.
+##   layout    - key, stub serving the worst-case boards
+##               (a 10-digit score under a 24-character name,
+##               a promotion line and a cut line): a score
+##               renders whole - measured, and inked to its
+##               final digit - and the Launch button, parked
+##               in the face's footer band, never covers board
+##               text. PVLDS_BOARD_NC=oldlayout restores the
+##               pre-TR3 presentation and both layout legs
+##               must fail by name.
 ## The honesty and his-row legs double as the negative
 ## controls' targets: PVLDS_WOVP_NC=clientid makes the
 ## client send Studio's id (the honesty leg fails by name);
@@ -4914,8 +4929,156 @@ func _drive_tournament_smoke() -> void:
 			_drive_tournament_state_mode(true)
 		"cache":
 			_drive_tournament_cache_mode()
+		"layout":
+			_drive_tournament_layout()
 		_:
 			_drive_tournament_full()
+
+
+## layout mode: the TR3 board-presentation contract against
+## the stub's worst-case boards - the score column's law and
+## the Launch footer's law, proven on measured layout and on
+## rendered ink, not on how the code reads.
+func _drive_tournament_layout() -> void:
+	match _tournament_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_room._handle_rail("tournament")
+				_tournament_expect(_room.tournament_active(), "layout: the TOURNAMENT stop raises the Tournament Room")
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 45000
+				_tournament_smoke_phase = 1
+			else:
+				_tournament_smoke_wait += 1
+				if _tournament_smoke_wait > 3600:
+					_tournament_fail("the room never came up")
+					_finish_tournament_smoke()
+		1:
+			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _room._panels.size() >= 2:
+				_tournament_leg_layout_boards()
+				_layout_start_probes()
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 30000
+				_tournament_smoke_phase = 2
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("layout: the boards never went live against the stub")
+				_finish_tournament_smoke()
+		2:
+			if not _layout_probes_in_flight and _layout_probe_results.size() >= 2:
+				_tournament_leg_layout()
+				_finish_tournament_smoke()
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("layout: the board layout probes never landed")
+				_finish_tournament_smoke()
+
+
+func _tournament_leg_layout_boards() -> void:
+	var rows: Array = _room.tournament_rows()
+	_tournament_expect(rows.size() == 2, "layout: the two seeded worst-case challenges stand (got %d)" % rows.size())
+	var owned_flags: Array = []
+	for r: Variant in rows:
+		owned_flags.append(bool((r as Dictionary).get("owned", false)))
+	_tournament_expect(owned_flags == [true, true],
+		"layout: both seeded boards are his tables (owned - footer and Launch stand on them)")
+	if _room._panels.size() >= 1:
+		var psz: Vector2 = _room._panels[0].quad_size()
+		_tournament_expect(psz == RoomSpecs.board_panel_size() and psz.x > RoomView.PANEL_SIZE.x,
+			"layout size: tournament boards stand at their own larger window (%s), not the table-card size" % str(psz))
+
+
+func _layout_start_probes() -> void:
+	_layout_probes_in_flight = true
+	var rows: Array = _room.tournament_rows()
+	var now_unix: int = int(Time.get_unix_time_from_system())
+	for i: int in range(rows.size()):
+		var rd: Dictionary = rows[i]
+		var spec: Dictionary = RoomSpecs.tournament_board_spec(
+			rd["challenge"] as WovpChallenge, bool(rd.get("owned", false)), _wovp_user_id, now_unix)
+		_layout_probe_results[i] = await _room.board_layout_probe(spec)
+	_layout_probes_in_flight = false
+
+
+func _tournament_leg_layout() -> void:
+	# The score leg, on the season board (probe 0): the
+	# 10-digit score's measured need fits its column at the
+	# rendered font, and the rendered texture inks the final
+	# digit with nothing spilling past the column.
+	var p0: Dictionary = _layout_probe_results.get(0, {})
+	var target: Dictionary = {}
+	for rv: Variant in (p0.get("rows", []) as Array):
+		var rd: Dictionary = rv
+		if str(rd.get("kind", "")) == "score" and str(rd.get("score_text", "")) == "1,234,567,890":
+			target = rd
+	_tournament_expect(not target.is_empty(), "layout: the seeded 10-digit score stands on the season board")
+	if not target.is_empty():
+		var need: float = float(target.get("score_need_px", 0.0))
+		var allot: float = float(target.get("score_allot_px", 0.0))
+		var ink: bool = _layout_digit_ink(p0.get("texture") as Texture2D, target)
+		_tournament_expect(need <= allot + 1.0 and ink,
+			"layout score: a 10-digit score renders whole, never clipped (need %.0fpx <= allot %.0fpx at %dpx font, final digit inked, no spill)" % [need, allot, int(target.get("font_px", 0))])
+	# The launch leg, on both boards: the button's rect
+	# shares no ground with any row's rect, and the footer
+	# band the face reserved contains the button whole.
+	var launch_ok: bool = true
+	var launch_why: String = ""
+	for idx: int in range(2):
+		var p: Dictionary = _layout_probe_results.get(idx, {})
+		if p.is_empty():
+			launch_ok = false
+			launch_why = "probe %d missing" % idx
+			break
+		var launch: Rect2 = p["launch_rect"]
+		if not p.has("footer_panel_rect"):
+			launch_ok = false
+			launch_why = "board %d reserves no footer band" % idx
+			break
+		var footer: Rect2 = p["footer_panel_rect"]
+		if not (footer.position.x <= launch.position.x + 0.002 and footer.position.y <= launch.position.y + 0.002
+				and footer.end.x >= launch.end.x - 0.002 and footer.end.y >= launch.end.y - 0.002):
+			launch_ok = false
+			launch_why = "board %d: the button does not sit inside the footer band" % idx
+			break
+		for rv2: Variant in (p.get("rows", []) as Array):
+			var rd2: Dictionary = rv2
+			var rr: Rect2 = rd2["panel_rect"]
+			if launch.intersects(rr):
+				launch_ok = false
+				launch_why = "board %d: the button covers a %s row" % [idx, str(rd2.get("kind", ""))]
+				break
+		if not launch_ok:
+			break
+	_tournament_expect(launch_ok,
+		"layout launch: the LAUNCH footer never covers board text (dividers included), on season and battle-royale boards%s" % ("" if launch_ok else " - " + launch_why))
+
+
+## Rendered-ink check for the layout score leg: within the
+## score row's band, the score column's rightmost slice must
+## carry text ink (the final digit), and the strip between
+## the column's right edge and the face's edge must carry
+## none (nothing ran off the board).
+func _layout_digit_ink(tex: Texture2D, row: Dictionary) -> bool:
+	if tex == null:
+		return false
+	var img: Image = tex.get_image()
+	if img == null or img.is_empty():
+		return false
+	var sr: Rect2 = row["score_rect"]
+	var rr: Rect2 = row["rect"]
+	var y0: int = clampi(int(rr.position.y) + 4, 0, img.get_height())
+	var y1: int = clampi(int(rr.position.y + rr.size.y) - 4, 0, img.get_height())
+	var dx1: int = clampi(int(sr.position.x + sr.size.x), 0, img.get_width())
+	var dx0: int = clampi(dx1 - 18, 0, img.get_width())
+	var ink: int = 0
+	for x: int in range(dx0, dx1):
+		for y: int in range(y0, y1):
+			var px: Color = img.get_pixel(x, y)
+			if px.r + px.g + px.b > 1.7:
+				ink += 1
+	var spill: int = 0
+	for x2: int in range(mini(dx1 + 4, img.get_width()), img.get_width()):
+		for y2: int in range(y0, y1):
+			var px2: Color = img.get_pixel(x2, y2)
+			if px2.r + px2.g + px2.b > 1.7:
+				spill += 1
+	return ink >= 3 and spill == 0
 
 
 func _drive_tournament_full() -> void:

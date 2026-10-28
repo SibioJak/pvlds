@@ -51,3 +51,15 @@ What is invented, and marked as such:
 One row (`approvalNote: null`, Twilight Zone position 5)
 exercises the parser's null tolerance, which the DTO's
 nullable String permits.
+
+## challenges_search_layout.json (the TR3 round)
+
+Same DTO shapes, same real VPS ids (Addams Family, Twilight
+Zone - both tables he owns, so both boards stand owned).
+The content is invented as a deliberate worst case for the
+board layout: the season board's leader carries a 10-digit
+score (1,234,567,890) under a 24-character name, his own
+row is pending, and the Battle Royale board holds 14 rows
+so its cut line is live. The tournament smoke's layout
+mode renders these boards and measures them: a score may
+never clip, and the Launch footer may never cover text.
