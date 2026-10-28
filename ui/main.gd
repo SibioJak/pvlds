@@ -172,7 +172,8 @@ var _tournament_smoke_phase: int = 0
 var _tournament_smoke_wait: int = 0
 var _tournament_smoke_failures: int = 0
 var _tournament_smoke_deadline_msec: int = 0
-var _tournament_smoke_mode: String = "full" ## PVLDS_WOVP_SMOKE_MODE: full | nokey | failfetch | cache - which harness boot this is
+var _tournament_validate_count_seen: int = 0 ## the stub's validate count when the panel length legs begin (their no-send witness)
+var _tournament_smoke_mode: String = "full" ## PVLDS_WOVP_SMOKE_MODE: full | nokey | failfetch | errbody | errempty | cache - which harness boot this is
 var _smoke_launch_game: String = ""
 var _smoke_verdict_pending: bool = false ## a smoke launch is riding the load wait; its settle prints the verdict and quits
 var _shot_launch_path: String = ""
@@ -4888,6 +4889,15 @@ func _bootfocus_region_stdev(img: Image, rect: Rect2i) -> float:
 ##   failfetch - key, dead base URL, no cache: the view is
 ##               the failure state, never boards dressed
 ##               as live.
+##   errbody   - key, stub refuses with HTTP 400 and words
+##               of its own in the body: the words, not
+##               just the code, stand on the state panel
+##               (the HTTP400 round's negative control - a
+##               client that discards response bodies
+##               fails this leg by name).
+##   errempty  - key, stub refuses with HTTP 400 and an
+##               empty body: the panel falls back to the
+##               bare code, gracefully.
 ##   cache     - a second boot in a full boot's home, base
 ##               URL dead: the saved boards stand with their
 ##               stamp, stated as last-good.
@@ -4900,7 +4910,7 @@ func _drive_tournament_smoke() -> void:
 	match _tournament_smoke_mode:
 		"nokey":
 			_drive_tournament_state_mode(false)
-		"failfetch":
+		"failfetch", "errbody", "errempty":
 			_drive_tournament_state_mode(true)
 		"cache":
 			_drive_tournament_cache_mode()
@@ -4963,7 +4973,7 @@ func _drive_tournament_full() -> void:
 				_tournament_expect(_room.is_setup_panel_up(), "panel: SETUP opens the in-room panel")
 				_tournament_expect(_room.setup_panel_wovp_paste_quad() != null and _room.setup_panel_wovp_test_quad() != null,
 					"panel: PASTE KEY and TEST KEY stand on the panel")
-				DisplayServer.clipboard_set("PVLDS-WOVP-SENTINEL-KEY-0001")
+				DisplayServer.clipboard_set("PVLDS-WOVP-SENTINEL-KEY-00000001")
 				_tournament_smoke_wait = 0
 				_tournament_smoke_phase = 6
 			elif _tournament_smoke_wait > 600:
@@ -4977,7 +4987,7 @@ func _drive_tournament_full() -> void:
 				_tournament_smoke_phase = 7
 		7:
 			var reloaded: PvldsConfig = PvldsConfig.new()
-			if reloaded.load_from_disk() and reloaded.wovp_api_key == "PVLDS-WOVP-SENTINEL-KEY-0001":
+			if reloaded.load_from_disk() and reloaded.wovp_api_key == "PVLDS-WOVP-SENTINEL-KEY-00000001":
 				_tournament_expect(true, "panel paste: PASTE KEY saved the clipboard's key into the config file")
 				_tournament_expect(_room.setup_panel_message().contains("saved"),
 					"panel paste: the panel says the key saved")
@@ -4996,10 +5006,39 @@ func _drive_tournament_full() -> void:
 		9:
 			if _room.setup_panel_message().contains("Fixture Player"):
 				_tournament_expect(true, "panel test: TEST KEY names whose key it is, on the panel")
-				_room._activate(_room.setup_panel_back_quad())
-				_finish_tournament_smoke()
+				# The length legs (the HTTP400 round): paste a
+				# key WoVP's 32-character rule refuses. It
+				# still saves - with the warning on the panel -
+				# and TEST KEY then answers locally: the stub
+				# must see no new request.
+				_tournament_validate_count_seen = _tournament_validate_count()
+				DisplayServer.clipboard_set("SHORTKEY123")
+				_room._activate(_room.setup_panel_wovp_paste_quad())
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 20000
+				_tournament_smoke_phase = 10
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
 				_tournament_fail("panel test: TEST KEY never named the key's owner (panel says: %s)" % _room.setup_panel_message())
+				_finish_tournament_smoke()
+		10:
+			var reloaded2: PvldsConfig = PvldsConfig.new()
+			if reloaded2.load_from_disk() and reloaded2.wovp_api_key == "SHORTKEY123":
+				_tournament_expect(true, "panel length: a wrong-length key still saves into the config file")
+				_tournament_expect(_room.setup_panel_message().contains("11 characters - WoVP keys are 32"),
+					"panel length: the paste warns in words - that key is 11 characters, WoVP keys are 32 (panel says: %s)" % _room.setup_panel_message())
+				_room._activate(_room.setup_panel_wovp_test_quad())
+				_tournament_smoke_wait = 0
+				_tournament_smoke_phase = 11
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("panel length: the short key never reached the config file (panel says: %s)" % _room.setup_panel_message())
+				_finish_tournament_smoke()
+		11:
+			_tournament_smoke_wait += 1
+			if _tournament_smoke_wait >= 6:
+				_tournament_expect(_room.setup_panel_message().contains("11 characters - WoVP keys are 32"),
+					"panel length: TEST KEY refuses the short key in words, on the panel (panel says: %s)" % _room.setup_panel_message())
+				_tournament_expect(_tournament_validate_count() == _tournament_validate_count_seen,
+					"panel length: the refused test sent nothing - the stub saw no new validate request")
+				_room._activate(_room.setup_panel_back_quad())
 				_finish_tournament_smoke()
 
 
@@ -5142,6 +5181,18 @@ func _drive_tournament_state_mode(expect_failure: bool) -> void:
 						"state: the failure state says WoVP could not be reached, in plain words")
 					_tournament_expect(_room._banner_line().contains("could not reach WoVP"),
 						"state: the banner names the failure - no boards dressed as live")
+					if _tournament_smoke_mode == "errbody":
+						# The HTTP400 round's negative control:
+						# the stub refused with words of its
+						# own, and the words - not just the
+						# code - must stand on the panel. A
+						# client that discards response
+						# bodies fails this leg by name.
+						_tournament_expect(joined.contains("WOVP-STUB-REFUSAL"),
+							"error body: WoVP's own words for its refusal stand on the state panel, not just the HTTP code")
+					elif _tournament_smoke_mode == "errempty":
+						_tournament_expect(joined.contains("HTTP 400") and not joined.contains("WoVP said"),
+							"error body: an empty refusal falls back to the bare HTTP code, gracefully")
 				else:
 					_tournament_expect(joined.contains("No WoVP key yet"),
 						"state: the no-key state says to add the key in SETUP, plainly")
@@ -5200,6 +5251,14 @@ func _tournament_search_count() -> int:
 	var n: int = 0
 	for e: Variant in _tournament_stub_entries():
 		if str((e as Dictionary).get("path", "")).ends_with("challenges/search"):
+			n += 1
+	return n
+
+
+func _tournament_validate_count() -> int:
+	var n: int = 0
+	for e: Variant in _tournament_stub_entries():
+		if str((e as Dictionary).get("path", "")).ends_with("validate-apikey"):
 			n += 1
 	return n
 
@@ -5325,10 +5384,10 @@ func _drive_desk_smoke() -> void:
 					"wovp: the desk's key field exists and is masked (it is a secret)")
 				_desk_expect(_desk._wovp_save_button != null and _desk._wovp_test_button != null,
 					"wovp: the desk has Save key and Test key")
-				_desk._wovp_edit.text = "PVLDS-WOVP-SENTINEL-KEY-0001"
+				_desk._wovp_edit.text = "PVLDS-WOVP-SENTINEL-KEY-00000001"
 				_desk._wovp_save_button.pressed.emit()
 				var wovp_after: PvldsConfig = PvldsConfig.new()
-				_desk_expect(wovp_after.load_from_disk() and wovp_after.wovp_api_key == "PVLDS-WOVP-SENTINEL-KEY-0001",
+				_desk_expect(wovp_after.load_from_disk() and wovp_after.wovp_api_key == "PVLDS-WOVP-SENTINEL-KEY-00000001",
 					"wovp: Save key writes the key to the config FILE immediately, no Save & Scan")
 				_desk_expect(_desk._wovp_label.text.contains("saved"),
 					"wovp: the desk says the key saved, in words")
@@ -5343,7 +5402,7 @@ func _drive_desk_smoke() -> void:
 			_desk_smoke_wait += 1
 			if _desk._wovp_label.text.contains("Fixture Player"):
 				_desk_expect(true, "wovp: Test key names whose key it is, on the status line")
-				_finish_desk_smoke()
+				_desk_smoke_phase = 3
 			elif _desk_smoke_wait == 240 and _wovp_client != null and not _wovp_client.is_busy():
 				# The save's own board fetch may have held the
 				# client when the first press landed - press
@@ -5352,6 +5411,45 @@ func _drive_desk_smoke() -> void:
 			elif _desk_smoke_wait > 1200:
 				_desk_expect(false, "wovp: Test key never answered (status line: %s)" % _desk._wovp_label.text)
 				_finish_desk_smoke()
+		3:
+			# The 32-character rule (the HTTP400 round): a
+			# wrong-length key still SAVES - with the warning
+			# on the line - but Test refuses it in words and
+			# sends nothing; the stub's request log is the
+			# witness (its count must not move).
+			_desk_expect(OS.has_environment("PVLDS_WOVP_STUB_LOG"),
+				"wovp: the harness gave the desk smoke the stub's request log to witness against")
+			var stub_requests_before: int = _desk_stub_request_count()
+			_desk._wovp_edit.text = "SHORTKEY123"
+			_desk._wovp_save_button.pressed.emit()
+			var short_after: PvldsConfig = PvldsConfig.new()
+			_desk_expect(short_after.load_from_disk() and short_after.wovp_api_key == "SHORTKEY123",
+				"wovp: a wrong-length key still saves (his pasteboard, his call)")
+			_desk_expect(_desk._wovp_label.text.contains("11 characters - WoVP keys are 32"),
+				"wovp: the save line warns about the key's length, in words")
+			_desk._wovp_test_button.pressed.emit()
+			_desk_expect(_desk._wovp_label.text.contains("11 characters - WoVP keys are 32"),
+				"wovp: Test key refuses a wrong-length key in plain words")
+			_desk_expect(_desk_stub_request_count() == stub_requests_before,
+				"wovp: the refused save and test sent nothing - the stub saw no new request")
+			# Leave the desk as the passing legs left it.
+			_desk._wovp_edit.text = "PVLDS-WOVP-SENTINEL-KEY-00000001"
+			_desk._wovp_save_button.pressed.emit()
+			_finish_desk_smoke()
+
+
+## How many requests the harness's WoVP stub has logged so
+## far (the desk legs' no-send witness). The stub never logs
+## key values - paths only.
+func _desk_stub_request_count() -> int:
+	var path: String = OS.get_environment("PVLDS_WOVP_STUB_LOG")
+	if path == "" or not FileAccess.file_exists(path):
+		return 0
+	var n: int = 0
+	for line: String in FileAccess.get_file_as_string(path).split("\n"):
+		if JSON.parse_string(line.strip_edges()) is Dictionary:
+			n += 1
+	return n
 
 
 func _desk_expect(cond: bool, label: String) -> void:
@@ -7635,6 +7733,61 @@ func _run_core_test() -> void:
 			wkf.close()
 	elif FileAccess.file_exists(wovp_cache_file):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(wovp_cache_file))
+	# The server's own words (the HTTP400 round): an error
+	# body is quoted in the failure, never discarded.
+	# server_words unwraps a bare JSON string body (the
+	# quotes are packaging), flattens to one line, caps the
+	# quote with a stated cut, and answers "" for no body.
+	_expect(WovpClient.server_words("\"X-Client-ID header is required or invalid\"".to_utf8_buffer()) == "X-Client-ID header is required or invalid",
+		"wovp: an error body that is a JSON string is quoted as its words, not its packaging", failures)
+	_expect(WovpClient.server_words("plain refusal text".to_utf8_buffer()) == "plain refusal text",
+		"wovp: a plain-text error body is quoted as it stands", failures)
+	_expect(WovpClient.server_words(PackedByteArray()) == "" and WovpClient.server_words("  \n ".to_utf8_buffer()) == "",
+		"wovp: an empty error body answers no words (the caller falls back to the bare code)", failures)
+	var wovp_long_words: String = WovpClient.server_words("x".repeat(400).to_utf8_buffer())
+	_expect(wovp_long_words.length() <= 260 and wovp_long_words.contains("cut off"),
+		"wovp: a long error body is capped and the cut is stated", failures)
+	# Propagation: a stubbed refusal's body lands IN the
+	# emitted failure, for both calls - the desk line, the
+	# panel line, and the room's state panel all render
+	# this one message. The handler is driven directly;
+	# no network is touched.
+	var wovp_probe_client: WovpClient = WovpClient.new()
+	add_child(wovp_probe_client)
+	var wovp_probe_answers: Array = []
+	wovp_probe_client.validation_finished.connect(func(_ok: bool, message: String, _uid: String, _name: String) -> void: wovp_probe_answers.append(message))
+	wovp_probe_client.challenges_finished.connect(func(_ok: bool, message: String, _ch: Array, _raw: String) -> void: wovp_probe_answers.append(message))
+	wovp_probe_client._pending_kind = "validate"
+	wovp_probe_client._on_request_completed(HTTPRequest.RESULT_SUCCESS, 400, PackedStringArray(), "\"DISTINCTIVE-VALIDATE-REFUSAL\"".to_utf8_buffer())
+	_expect(wovp_probe_answers.size() == 1 and str(wovp_probe_answers[0]).contains("DISTINCTIVE-VALIDATE-REFUSAL")
+		and str(wovp_probe_answers[0]).contains("HTTP 400"),
+		"wovp: a validate refusal carries WoVP's own words (validate 400 propagation)", failures)
+	wovp_probe_client._pending_kind = "search"
+	wovp_probe_client._on_request_completed(HTTPRequest.RESULT_SUCCESS, 400, PackedStringArray(), "\"DISTINCTIVE-SEARCH-REFUSAL\"".to_utf8_buffer())
+	_expect(wovp_probe_answers.size() == 2 and str(wovp_probe_answers[1]).contains("DISTINCTIVE-SEARCH-REFUSAL"),
+		"wovp: a search refusal carries WoVP's own words (search 400 propagation)", failures)
+	wovp_probe_client._pending_kind = "validate"
+	wovp_probe_client._on_request_completed(HTTPRequest.RESULT_SUCCESS, 400, PackedStringArray(), PackedByteArray())
+	_expect(wovp_probe_answers.size() == 3 and str(wovp_probe_answers[2]) == "WoVP answered with an error (HTTP 400).",
+		"wovp: an empty refusal body falls back to the bare code, nothing appended", failures)
+	# The key's shape (WoVP's 32-character rule, probed
+	# live): 31 and 33 are refused in words, 32 passes, and
+	# padding never counts. And the client itself will not
+	# send a short key: validate answers locally, instantly,
+	# with the request never started.
+	_expect(WovpClient.key_length_note("k".repeat(31)).contains("31 characters"),
+		"wovp: a 31-character key is refused in words before anything is sent", failures)
+	_expect(WovpClient.key_length_note("k".repeat(32)) == "",
+		"wovp: a 32-character key is the shape WoVP wants", failures)
+	_expect(WovpClient.key_length_note("k".repeat(33)).contains("33 characters"),
+		"wovp: a 33-character key is refused in words before anything is sent", failures)
+	_expect(WovpClient.key_length_note("  " + "k".repeat(32) + " ") == "",
+		"wovp: the length check counts the key, not its padding", failures)
+	wovp_probe_answers.clear()
+	wovp_probe_client.validate_key("k".repeat(31))
+	_expect(wovp_probe_answers.size() == 1 and str(wovp_probe_answers[0]).contains("31 characters") and not wovp_probe_client.is_busy(),
+		"wovp: validate on a short key sends nothing - the refusal is local and instant", failures)
+	wovp_probe_client.queue_free()
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")
