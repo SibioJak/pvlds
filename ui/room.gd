@@ -237,7 +237,11 @@ var _placeholder_tex: Texture2D = null ## the standing wall's placeholder face (
 ## PVLDS_FOCUS_NC, set by Main before any room exists):
 ## "visual" starves the strip quads of visual-state refreshes
 ## (fault 1's shape), "pager" drops the page-travel focus
-## landing (fault 2's shape). Empty in every real run.
+## landing (fault 2's shape), "letterland" restores the
+## letter picks' first-card landing (the focus law's shape),
+## "striporder" permutes the strip's walk order away from
+## its drawn order (the strip-order fix's shape). Empty in
+## every real run.
 static var debug_focus_nc: String = ""
 ## Bench seam (the focus-law round's harness env PVLDS_BENCH,
 ## set by Main before any room exists): when true, every wall
@@ -898,9 +902,11 @@ func _apply_rail_textures() -> void:
 				quad.set_texture(_rail_tex_cache[ck] as Texture2D)
 
 
-## The strip's laid-out slots, in order: "#" leads when the
-## library holds a non-letter title (those games lead the
-## title sort too), then A-Z, then THE.
+## The strip's laid-out slots, in the ONE order
+## (LetterIndex.slot_keys): A-Z, then THE, then "#" at the
+## row's right end when the library holds a non-letter
+## title. Layout, walk, focusables and greying all read
+## this list - see LetterIndex.slot_keys for the history.
 func _strip_slot_keys() -> Array[String]:
 	return LetterIndex.slot_keys(_strip_has_number)
 
@@ -937,25 +943,36 @@ func _refresh_strip() -> void:
 	for key: String in keys:
 		total += _strip_slot_size(key).x + STRIP_GAP
 	total -= STRIP_GAP
+	# The row is positioned BY THE ONE LIST (keys): the x
+	# cursor advances in slot_keys order, so the drawn
+	# sequence is the list's sequence by construction - it
+	# can never again drift from the walk's order the way
+	# the build-order iteration let it (the strip-order
+	# fix: _build_strip creates "#" last, and positioning
+	# in creation order drew it last while slot_keys
+	# claimed it led). A quad the list does not carry is
+	# not laid out at all.
 	var x: float = -total * 0.5
-	for key: String in _strip_quads.keys():
-		var q: ClickableQuad = _strip_quads[key] as ClickableQuad
+	for key: String in keys:
+		var q: ClickableQuad = _strip_quads.get(key) as ClickableQuad
 		if q == null:
 			continue
-		if keys.has(key):
-			var w: float = _strip_slot_size(key).x
-			q.visible = true
-			q.position = Vector3(x + w * 0.5, STRIP_Y, STRIP_Z)
-			# The row re-centers whenever the "#" slot joins or
-			# leaves, so a slot's facing follows its laid-out
-			# position, not the position it was built at.
-			ClickableQuad.face_point(q, EYE)
-			x += w + STRIP_GAP
-			q.pick_enabled = presence.has(key)
-			q.set_content_alpha(1.0)
-		else:
-			q.visible = false
-			q.pick_enabled = false
+		var w: float = _strip_slot_size(key).x
+		q.visible = true
+		q.position = Vector3(x + w * 0.5, STRIP_Y, STRIP_Z)
+		# The row re-centers whenever the "#" slot joins or
+		# leaves, so a slot's facing follows its laid-out
+		# position, not the position it was built at.
+		ClickableQuad.face_point(q, EYE)
+		x += w + STRIP_GAP
+		q.pick_enabled = presence.has(key)
+		q.set_content_alpha(1.0)
+	for key: String in _strip_quads.keys():
+		if not keys.has(key):
+			var hq: ClickableQuad = _strip_quads[key] as ClickableQuad
+			if hq != null:
+				hq.visible = false
+				hq.pick_enabled = false
 	_apply_strip_textures(presence)
 
 
@@ -3129,6 +3146,28 @@ func _focus_country(q: ClickableQuad) -> int:
 	return 0
 
 
+## The order the strip's sideways walk visits its slots:
+## the ONE list (_strip_slot_keys) - the same order the
+## layout draws and the eye sees. The row CLAMPS at both
+## ends (the rail's law, kept): a step past either end
+## leaves focus where it stands, so every pickable slot is
+## reachable by holding one direction from wherever the
+## strip is entered. The NC value "striporder" permutes
+## this to the pre-fix fiction ("#" first, THE last - the
+## order the walk believed before the strip-order fix) so
+## the letters smoke's full-strip-walk legs fail by name.
+func _strip_walk_order() -> Array:
+	if debug_focus_nc == "striporder":
+		var perm: Array = ["#"]
+		for i: int in range(26):
+			perm.append(String.chr(65 + i))
+		perm.append("THE")
+		return perm
+	var out: Array = []
+	out.assign(_strip_slot_keys())
+	return out
+
+
 ## The next focus stop along the focused quad's own row - the
 ## rail in RAIL_FOCUS_ORDER, the strip in its layout order -
 ## skipping stops that are not focusable right now (the
@@ -3142,7 +3181,7 @@ func _rail_focus_neighbour(step: int) -> ClickableQuad:
 	order.assign(RAIL_FOCUS_ORDER)
 	if _is_strip_quad(_focused):
 		quads = _strip_quads
-		order.assign(_strip_slot_keys())
+		order = _strip_walk_order()
 	var idx: int = -1
 	for i: int in range(order.size()):
 		var cand: ClickableQuad = quads.get(str(order[i])) as ClickableQuad

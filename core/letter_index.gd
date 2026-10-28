@@ -88,14 +88,28 @@ static func presence_over(games: Array[GameEntry]) -> Dictionary:
 	return out
 
 
-## The strip's slot order: "#" first when the library holds a
-## non-letter title (the number/symbol games lead the title
-## sort too), then A-Z, then the THE net.
+## The strip's ONE order: A-Z, then the THE net, then "#"
+## when the library holds a non-letter title. This list is
+## the single source of truth for the strip: the layout
+## positions the slots in this order (left to right), the
+## pad's sideways walk visits them in this order, the
+## focusables list carries them in this order, and presence
+## greys by these keys. "#" rides LAST - at the row's right
+## end, after THE - because that is where the layout has
+## drawn it since the strip's first build (the layout
+## positions slots in build order, and "#" is built last).
+## This function's first version claimed "#" led; the walk
+## believed the list while the eye saw the drawing, so
+## stepping right along the strip died at THE, one slot
+## short of the drawn "#" - reachable only by travelling
+## left, where the highlight leapt the row's full width to
+## the far end (Chris's field report, 2026-10-27 - the
+## strip-order fix).
 static func slot_keys(has_number: bool) -> Array[String]:
 	var out: Array[String] = []
-	if has_number:
-		out.append("#")
 	for i: int in range(26):
 		out.append(String.chr(65 + i))
 	out.append("THE")
+	if has_number:
+		out.append("#")
 	return out

@@ -3723,6 +3723,7 @@ func _drive_letters_smoke() -> void:
 				_letters_leg_presence()
 				_letters_leg_country()
 				_letters_leg_hash_walk()
+				_letters_leg_full_strip_walks()
 				_letters_leg_jump()
 				_letters_leg_the_net()
 				_letters_leg_number_net()
@@ -3776,8 +3777,12 @@ func _drive_letters_smoke() -> void:
 						"focus law: the rendered frame shows the focus frame around 'W' after its pick (%d frame-blue band samples)" % blue_w)
 					for i: int in range(30):
 						_room._move_focus(Vector2(-1.0, 0.0))
+					_letters_expect(_letters_key_of(_room.focused_quad()) == "A",
+						"focus law: the post-pick walk left holds at A, the strip's first slot (got '%s')" % _letters_key_of(_room.focused_quad()))
+					for i: int in range(30):
+						_room._move_focus(Vector2(1.0, 0.0))
 					_letters_expect(_letters_key_of(_room.focused_quad()) == "#",
-						"focus law: the post-pick walk holds at # (got '%s')" % _letters_key_of(_room.focused_quad()))
+						"focus law: the walk right across the strip holds at #, its far end (got '%s')" % _letters_key_of(_room.focused_quad()))
 					_letters_step = 0
 					_letters_smoke_wait = 0
 					_letters_smoke_phase = 6
@@ -3790,9 +3795,49 @@ func _drive_letters_smoke() -> void:
 				var blue_h: int = _letters_grab_ring("#", "walk_focus_hash.png")
 				_letters_expect(blue_h >= 6,
 					"focus law: the rendered frame shows the focus frame around '#' after the walk (%d frame-blue band samples)" % blue_h)
-				_finish_letters_smoke()
+				_letters_smoke_wait = 0
+				_letters_smoke_phase = 7
 			elif _letters_smoke_wait > 3600:
 				_letters_smoke_fail("focus law: the # grab never came due")
+				_finish_letters_smoke()
+		7:
+			# The user's exact route (the strip-order fix,
+			# Chris 2026-10-27): onto the strip the player's
+			# way - card, DOWN to the rail, DOWN to the strip -
+			# then hold RIGHT and arrive at #, monotonically
+			# through the drawn sequence, frame flagged.
+			_letters_pick("A") ## a plain wall: title sort, page 1, no net
+			_room._set_focused(_room._panels[10]) ## a bottom-row card
+			_room._move_focus(Vector2(0.0, 1.0))
+			_room._move_focus(Vector2(0.0, 1.0))
+			_letters_expect(_letters_key_of(_room.focused_quad()) != "",
+				"user route: DOWN from the rail lands on the strip (got key '%s')" % _letters_key_of(_room.focused_quad()))
+			var route_seq: Array[String] = _letters_walk_record(Vector2(1.0, 0.0))
+			var drawn_u: Array[String] = _letters_drawn_pickable_order()
+			var mono: bool = true
+			var last_idx: int = -1
+			for k: String in route_seq:
+				var di: int = drawn_u.find(k)
+				if di <= last_idx:
+					mono = false
+				last_idx = di
+			_letters_expect(mono,
+				"user route: holding RIGHT from the entry travels the drawn sequence monotonically (got %s)" % str(route_seq))
+			_letters_expect(route_seq[route_seq.size() - 1] == "#",
+				"user route: holding RIGHT from the entry arrives at # (got '%s')" % route_seq[route_seq.size() - 1])
+			_letters_expect(_room.focused_quad() != null and _room.focused_quad().highlight_visible(),
+				"user route: #'s highlight frame is flagged showing at the route's end")
+			_letters_smoke_wait = 0
+			_letters_smoke_phase = 8
+		8:
+			_letters_smoke_wait += 1
+			if _letters_smoke_wait >= 6:
+				var blue_r: int = _letters_grab_ring("#", "route_focus_hash.png")
+				_letters_expect(blue_r >= 6,
+					"user route: the rendered frame shows the focus frame around '#' reached by holding RIGHT (%d frame-blue band samples)" % blue_r)
+				_finish_letters_smoke()
+			elif _letters_smoke_wait > 3600:
+				_letters_smoke_fail("user route: the # grab never came due")
 				_finish_letters_smoke()
 
 
@@ -3884,22 +3929,27 @@ func _letters_leg_country() -> void:
 	_room._move_focus(Vector2(0.0, 1.0))
 	_letters_expect(_letters_key_of(_room.focused_quad()) != "",
 		"country: DOWN from the rail lands on the strip (got key '%s')" % _letters_key_of(_room.focused_quad()))
-	# Walk to the row's start, then prove the sideways walk and
-	# its greyed-slot skips against the deterministic lit order.
+	# Walk to the row's drawn start, then prove the sideways
+	# walk and its greyed-slot skips against the deterministic
+	# lit order - in the DRAWN sequence (the strip-order fix:
+	# A is the left end, # the right end, past THE).
 	for i: int in range(30):
 		_room._move_focus(Vector2(-1.0, 0.0))
-	_letters_expect(_letters_key_of(_room.focused_quad()) == "#",
-		"country: the sideways walk holds at the strip's first slot (got '%s')" % _letters_key_of(_room.focused_quad()))
-	_room._move_focus(Vector2(1.0, 0.0))
 	_letters_expect(_letters_key_of(_room.focused_quad()) == "A",
-		"country: # steps right to A")
+		"country: the sideways walk holds at the strip's first slot, A (got '%s')" % _letters_key_of(_room.focused_quad()))
+	_room._move_focus(Vector2(-1.0, 0.0))
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "A",
+		"country: the strip's left end clamps - focus stays on A")
 	_room._move_focus(Vector2(1.0, 0.0))
 	_letters_expect(_letters_key_of(_room.focused_quad()) == "F",
 		"country: A steps right to F - the greyed B-E are skipped, never landed on (got '%s')" % _letters_key_of(_room.focused_quad()))
 	for i: int in range(30):
 		_room._move_focus(Vector2(1.0, 0.0))
-	_letters_expect(_letters_key_of(_room.focused_quad()) == "THE",
-		"country: the sideways walk holds at the strip's last slot, THE (got '%s')" % _letters_key_of(_room.focused_quad()))
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "#",
+		"country: the sideways walk holds at the strip's last slot, # - past THE, at the drawn right end (got '%s')" % _letters_key_of(_room.focused_quad()))
+	_room._move_focus(Vector2(1.0, 0.0))
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "#",
+		"country: the strip's right end clamps - focus stays on #")
 	_room._move_focus(Vector2(0.0, -1.0))
 	_letters_expect(_nav_key_of(_room.focused_quad()) != "",
 		"country: UP from the strip returns to the rail")
@@ -3914,27 +3964,86 @@ func _letters_leg_country() -> void:
 	_letters_expect(saw_panel, "country: Tab cycling escapes the strip to a card (no focus trap)")
 
 
-## The # walk legs (Chris, 2026-10-27: "Cant highlight #").
-## The country leg traverses the row from wherever the entry
-## landing falls; these start from deterministic neighbours:
-## one step LEFT from A must land on #, and the full walk
-## LEFT from THE must hold at # - with the frame flagged
-## showing on the slot each time.
+## The # walk legs (Chris, 2026-10-27: "Cant highlight #",
+## then, on the focus-law build: "If I highlight down to
+## letters and start moving right to get to #, I can't get
+## there. Stops at THE."). # is DRAWN at the row's right
+## end, past THE; these legs start from deterministic
+## neighbours and take HIS route: one step RIGHT from THE
+## must land on #, the frame flagged showing; # steps left
+## back to THE; and the full walk LEFT from # must traverse
+## the row to its drawn start at A.
 func _letters_leg_hash_walk() -> void:
-	_room._set_focused(_room.letter_quad("A"))
-	_room._move_focus(Vector2(-1.0, 0.0))
-	_letters_expect(_letters_key_of(_room.focused_quad()) == "#",
-		"# walk: A steps left onto # (got '%s')" % _letters_key_of(_room.focused_quad()))
-	_letters_expect(_room.focused_quad() != null and _room.focused_quad().highlight_visible(),
-		"# walk: #'s highlight frame is flagged showing after the step from A")
 	_room._set_focused(_room.letter_quad("THE"))
+	_room._move_focus(Vector2(1.0, 0.0))
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "#",
+		"# walk: THE steps right onto # (got '%s')" % _letters_key_of(_room.focused_quad()))
+	_letters_expect(_room.focused_quad() != null and _room.focused_quad().highlight_visible(),
+		"# walk: #'s highlight frame is flagged showing after the step from THE")
+	_room._move_focus(Vector2(-1.0, 0.0))
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "THE",
+		"# walk: # steps left back to THE")
 	for i: int in range(30):
 		_room._move_focus(Vector2(-1.0, 0.0))
-	_letters_expect(_letters_key_of(_room.focused_quad()) == "#",
-		"# walk: the walk left from THE holds at # (got '%s')" % _letters_key_of(_room.focused_quad()))
-	_room._move_focus(Vector2(1.0, 0.0))
 	_letters_expect(_letters_key_of(_room.focused_quad()) == "A",
-		"# walk: # steps right back to A")
+		"# walk: the walk left from # holds at A, the drawn left end (got '%s')" % _letters_key_of(_room.focused_quad()))
+
+
+## The strip's pickable slots in DRAWN order: the slots
+## sorted by their laid-out x - what the eye sees, read off
+## the geometry, not off any order list.
+func _letters_drawn_pickable_order() -> Array[String]:
+	var pairs: Array = [] ## [x, key]
+	for k: Variant in _room._strip_quads.keys():
+		var q: ClickableQuad = _room._strip_quads[k] as ClickableQuad
+		if q != null and q.visible and q.pick_enabled:
+			pairs.append([q.position.x, str(k)])
+	pairs.sort_custom(func(a: Array, b: Array) -> bool: return float(a[0]) < float(b[0]))
+	var out: Array[String] = []
+	for p: Array in pairs:
+		out.append(str(p[1]))
+	return out
+
+
+## Step sideways until focus stops changing, recording each
+## newly focused slot's key (the starting slot first).
+func _letters_walk_record(dir: Vector2) -> Array[String]:
+	var out: Array[String] = []
+	var cur: String = _letters_key_of(_room.focused_quad())
+	out.append(cur)
+	for i: int in range(40):
+		_room._move_focus(dir)
+		var k: String = _letters_key_of(_room.focused_quad())
+		if k == cur:
+			break
+		out.append(k)
+		cur = k
+	return out
+
+
+## The full-strip walks (the strip-order fix's proof).
+## The drawn order is read off the slots' own positions -
+## the eye's truth, independent of any list in the code -
+## and holding one direction from an end must reproduce it
+## exactly, then its exact reverse coming back. Greyed
+## slots are skipped in both directions; no stop is
+## skipped or doubled.
+func _letters_leg_full_strip_walks() -> void:
+	var drawn: Array[String] = _letters_drawn_pickable_order()
+	_letters_expect(drawn.size() >= 3,
+		"strip order: the drawn pickable order reads off the slots' positions (got %s)" % str(drawn))
+	_letters_expect(drawn[drawn.size() - 1] == "#",
+		"strip order: # is the drawn far (right) end of this library's strip (got %s)" % str(drawn))
+	_room._set_focused(_room.letter_quad(drawn[0]))
+	var right_seq: Array[String] = _letters_walk_record(Vector2(1.0, 0.0))
+	_letters_expect(right_seq == drawn,
+		"strip order: holding RIGHT visits the drawn order exactly, far end included (got %s, drawn %s)" % [str(right_seq), str(drawn)])
+	var drawn_rev: Array[String] = []
+	for i: int in range(drawn.size()):
+		drawn_rev.append(drawn[drawn.size() - 1 - i])
+	var left_seq: Array[String] = _letters_walk_record(Vector2(-1.0, 0.0))
+	_letters_expect(left_seq == drawn_rev,
+		"strip order: holding LEFT visits the exact reverse (got %s, want %s)" % [str(left_seq), str(drawn_rev)])
 
 
 func _letters_leg_jump() -> void:
@@ -4021,13 +4130,17 @@ func _letters_leg_strip_entry() -> void:
 	var fq: ClickableQuad = _room.focused_quad()
 	_letters_expect(fq != null and fq.highlight_visible(),
 		"strip visual: the focused letter's highlight frame is flagged showing (key '%s')" % key)
-	# Steer to the wide THE slot for the photograph: its frame
-	# ring is the broadest on the strip.
+	# Steer right to the row's drawn far end (#), then one
+	# step back to the wide THE slot for the photograph: its
+	# frame ring is the broadest on the strip.
 	for i: int in range(30):
 		_room._move_focus(Vector2(1.0, 0.0))
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "#",
+		"strip visual: the walk right from the entry holds at #, the drawn far end (got '%s')" % _letters_key_of(_room.focused_quad()))
+	_room._move_focus(Vector2(-1.0, 0.0))
 	_letters_focus_key = _letters_key_of(_room.focused_quad())
 	_letters_expect(_letters_focus_key == "THE",
-		"strip visual: the grab walk holds at THE (got '%s')" % _letters_focus_key)
+		"strip visual: one step left from # lands on THE for the grab (got '%s')" % _letters_focus_key)
 	_letters_expect(_room.focused_quad() != null and _room.focused_quad().highlight_visible(),
 		"strip visual: THE's highlight frame is flagged showing for the grab")
 
@@ -6569,8 +6682,9 @@ func _run_core_test() -> void:
 	_expect(pres.has("A") and pres.has("G") and pres.has("S") and pres.has("THE") and not pres.has("B") and not pres.has("#"),
 		"letter index: presence lights exactly the held letters plus THE", failures)
 	_expect(LetterIndex.slot_keys(false).size() == 27 and LetterIndex.slot_keys(true).size() == 28
-		and LetterIndex.slot_keys(true)[0] == "#" and LetterIndex.slot_keys(true)[27] == "THE",
-		"letter index: the slot order is (#) A-Z THE", failures)
+		and LetterIndex.slot_keys(true)[0] == "A" and LetterIndex.slot_keys(true)[26] == "THE"
+		and LetterIndex.slot_keys(true)[27] == "#" and LetterIndex.slot_keys(false)[26] == "THE",
+		"letter index: the slot order is A-Z THE (#) - the one list layout and walk both read", failures)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")
