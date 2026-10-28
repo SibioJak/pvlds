@@ -190,7 +190,7 @@ static func placard_spec(message: String) -> Dictionary:
 ## a glance in the headset.
 static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 	var lines: Array[String] = []
-	if health.is_empty():
+	if not health.has("files"):
 		lines.append("Not scanned yet - press SCAN LIBRARY below.")
 	else:
 		var files: int = int(health.get("files", 0))
@@ -210,6 +210,11 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 			lines.append("Missing backglass: %d table files have no .directb2s beside them. The list is missing_b2s.txt in the app data folder." % missing)
 		else:
 			lines.append("Missing backglass: none - every table file has a .directb2s beside it.")
+	# The WoVP line (the Tournament Room round): Main composes
+	# it in _setup_panel_health from the config + the last
+	# validation - whose key is saved here, in plain words.
+	if health.has("wovp_line"):
+		lines.append(str(health["wovp_line"]))
 	return {
 		"kind": "banner",
 		"bg": Color(0.05, 0.05, 0.09),
@@ -219,6 +224,78 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 		"sub_size": 38,
 		"body": "\n".join(lines),
 		"body_size": 34,
+	}
+
+
+## One Tournament Room board face: a challenge's standings
+## on its table's wall panel, glanceable - the leader, his
+## own row on the accent ground, the rows around the cutoff
+## line and the line itself, and the deadline in his own
+## clock with the time left. The row composition is the
+## challenge's own mathematics (WovpChallenge.board_rows);
+## this spec only dresses it. A table he does not own still
+## gets its board - with the NOT IN YOUR LIBRARY chip, and
+## the room gives it no Launch button.
+static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int) -> Dictionary:
+	var rows: Array = []
+	for entry: Variant in ch.board_rows(user_id):
+		var e: Dictionary = entry
+		match str(e.get("kind", "")):
+			"score":
+				var r: WovpScoreRow = e.get("row") as WovpScoreRow
+				if r == null:
+					continue
+				var line: String = "#%d  %s  %s" % [r.position, r.participant_name, WovpChallenge.format_score(r.score)]
+				if r.is_pending:
+					line += " - awaiting validation"
+				rows.append({
+					"kind": "score", "text": line,
+					"accent": bool(e.get("mine", false)),
+					"size": 44 if bool(e.get("mine", false)) else 40,
+				})
+			"divider":
+				rows.append({"kind": "divider", "text": str(e.get("label", "")), "size": 30})
+			"note":
+				rows.append({"kind": "note", "text": str(e.get("text", "")), "size": 34})
+	var chips: Array = []
+	if not owned:
+		chips.append({"text": "NOT IN YOUR LIBRARY", "accent": true})
+	var title: String = ch.table_name if ch.table_name != "" else ch.name
+	return {
+		"kind": "board",
+		"bg": CARD_BG,
+		"band": manufacturer_color(ch.table_manufacturer),
+		"band_text": "%s - %s" % [ch.type_label(), ch.name],
+		"title": title,
+		"title_size": 52,
+		"title_max_lines": 1,
+		"sub": "Ends %s - %s" % [WovpTime.format_deadline(ch.end_unix), WovpTime.format_remaining(ch.end_unix, now_unix)],
+		"sub_size": 30,
+		"sub_max_lines": 1,
+		"chips": chips,
+		"rows": rows,
+	}
+
+
+## A Tournament Room state face: the wall has no boards to
+## show and says why, in plain words - no key yet, a fetch
+## that failed with nothing saved, no live challenges. A
+## state is a board-shaped panel so it stands in the same
+## grid and reads at the same distance.
+static func tournament_state_spec(lines: Array) -> Dictionary:
+	var rows: Array = []
+	for line: Variant in lines:
+		rows.append({"kind": "note", "text": str(line), "size": 38})
+	return {
+		"kind": "board",
+		"bg": CARD_BG,
+		"band": Color(0.28, 0.28, 0.36),
+		"band_text": "TOURNAMENT ROOM",
+		"title": "Tournament Room",
+		"title_size": 52,
+		"title_max_lines": 1,
+		"sub": "",
+		"rows": rows,
 	}
 
 

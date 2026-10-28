@@ -151,6 +151,28 @@ var _xr_enabled: bool = false
 var _xr_tried: bool = false
 var _launch_service: LaunchService = null
 var _intentional_launch_exit: bool = false ## quitting FOR a launch must not disarm the watchdog
+# WoVP read side (the Tournament Room round): Main owns the
+# client, the identity the key resolves to, and the standing
+# boards the room renders. The key itself lives only in the
+# config - never in these vars, never in a print.
+var _wovp_client: WovpClient = null
+var _wovp_user_id: String = "" ## whose key is saved (validate's answer, or the cache's when its key hash matches)
+var _wovp_user_name: String = ""
+var _wovp_identity_key_hash: int = 0 ## the hash of the key _wovp_user_id was resolved for
+var _wovp_identity_state: String = "untested" ## "untested" | "ok" | "failed" - this session's last validation outcome
+var _wovp_identity_note: String = "" ## the last validation failure's words
+var _wovp_challenges: Array = [] ## the standing boards (Array of WovpChallenge): live, or the disk cache's at boot
+var _wovp_fetched_at: int = 0 ## when the standing boards landed (0 = never this device)
+var _wovp_boards_live: bool = false ## the standing boards came from a fetch this session
+var _wovp_fetch_error: String = "" ## the last fetch's failure in words, while it stands
+var _wovp_validating_for: String = "" ## who a running validation answers to: "fetch" | "room" | "desk"
+var _wovp_validating_key_hash: int = 0 ## the hash of the key a running validation is about (a desk test may name a key that is not the saved one)
+var _smoke_tournament: bool = false ## --pvlds-smoke-tournament: drive the Tournament Room contract once the room is up
+var _tournament_smoke_phase: int = 0
+var _tournament_smoke_wait: int = 0
+var _tournament_smoke_failures: int = 0
+var _tournament_smoke_deadline_msec: int = 0
+var _tournament_smoke_mode: String = "full" ## PVLDS_WOVP_SMOKE_MODE: full | nokey | failfetch | cache - which harness boot this is
 var _smoke_launch_game: String = ""
 var _smoke_verdict_pending: bool = false ## a smoke launch is riding the load wait; its settle prints the verdict and quits
 var _shot_launch_path: String = ""
@@ -378,6 +400,17 @@ func _ready() -> void:
 		_smoke_lockout = true
 	if user_args.has("--pvlds-smoke-nav"):
 		_smoke_nav = true
+	if user_args.has("--pvlds-smoke-tournament"):
+		_smoke_tournament = true
+		_tournament_smoke_mode = OS.get_environment("PVLDS_WOVP_SMOKE_MODE")
+		if _tournament_smoke_mode == "":
+			_tournament_smoke_mode = "full"
+		# The honesty negative control (harness env): send
+		# Studio's client id instead of PVLDS's own, so the
+		# smoke's client-id leg fails by name. Set here,
+		# before any request can be made.
+		if OS.get_environment("PVLDS_WOVP_NC") == "clientid":
+			WovpClient.debug_client_id_override = "vpin-studio"
 	if user_args.has("--pvlds-smoke-letters"):
 		_smoke_letters = true
 		# The negative control (harness env): the index stops
@@ -433,7 +466,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_letters or _smoke_bootfocus or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "") and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_letters or _smoke_bootfocus or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -456,6 +489,25 @@ func _ready() -> void:
 	# art is warm before it is browsed to (art-speed round).
 	_art_warmer = ArtWarmer.new()
 	_art_warmer.on_drained = _on_art_warm_drained
+	# The WoVP client (read side only) + the last-good boards
+	# off the disk cache, so an offline boot still shows the
+	# boards with their stamp. The cached identity is trusted
+	# only when the cache's key hash matches the key now
+	# saved - a swapped key never inherits another player's
+	# highlighted rows.
+	_wovp_client = WovpClient.new()
+	add_child(_wovp_client)
+	_wovp_client.validation_finished.connect(_on_wovp_validation_finished)
+	_wovp_client.challenges_finished.connect(_on_wovp_challenges_finished)
+	var wovp_cache: Dictionary = WovpClient.load_cache()
+	if bool(wovp_cache.get("ok", false)):
+		_wovp_challenges = wovp_cache.get("challenges", [])
+		_wovp_fetched_at = int(wovp_cache.get("fetched_at", 0))
+		if int(wovp_cache.get("key_hash", 0)) == _wovp_key_hash() and _wovp_key_hash() != 0:
+			_wovp_user_id = str(wovp_cache.get("user_id", ""))
+			_wovp_user_name = str(wovp_cache.get("user_name", ""))
+			_wovp_identity_key_hash = _wovp_key_hash()
+			_wovp_identity_state = "ok"
 	if configured and _config.is_configured() and not user_args.has("--setup") and not _smoke_desk:
 		# Configured boot: present the desk as a live shell immediately
 		# (first frame, progress ticking) and enter the room only when
@@ -568,6 +620,8 @@ func _process(_delta: float) -> void:
 		_drive_nav_smoke()
 	if _smoke_letters:
 		_drive_letters_smoke()
+	if _smoke_tournament:
+		_drive_tournament_smoke()
 	if _smoke_bootfocus:
 		_drive_bootfocus_smoke()
 	if _smoke_jumpbench:
@@ -707,10 +761,13 @@ func _on_setup_panel_scan_requested() -> void:
 
 
 ## The SETUP panel's health numbers from the last completed
-## scan - the desk summary's facts, minus the prose.
+## scan - the desk summary's facts, minus the prose. The
+## WoVP line rides along even before any scan (the spec
+## reads "no scan yet" off the missing counts, not an empty
+## dictionary).
 func _setup_panel_health() -> Dictionary:
 	if _scanner == null:
-		return {}
+		return {"wovp_line": _wovp_health_line()}
 	return {
 		"files": _scanner.total_files,
 		"games": _scanner.games.size(),
@@ -719,7 +776,170 @@ func _setup_panel_health() -> Dictionary:
 		"db_ok": _last_db_ok,
 		"db_kind": _last_db_kind,
 		"missing": _scanner.missing_b2s_files.size(),
+		"wovp_line": _wovp_health_line(),
 	}
+
+
+# ------------------------------------------------------------- WoVP
+
+## The key's identity hash - the ONLY trace of the key any
+## state keeps. The key itself lives in the config alone.
+func _wovp_key_hash() -> int:
+	if _config == null or _config.wovp_api_key == "":
+		return 0
+	return _config.wovp_api_key.hash()
+
+
+## The SETUP panel face's WoVP line: the key's standing in
+## plain words - whose it is once a test has resolved it.
+func _wovp_health_line() -> String:
+	if _config == null or _config.wovp_api_key == "":
+		return "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it on the desktop desk."
+	match _wovp_identity_state:
+		"ok":
+			return "WoVP: key saved - it belongs to %s." % _wovp_user_name
+		"failed":
+			return "WoVP: key saved, but its last test failed (%s)." % _wovp_identity_note
+	return "WoVP: a key is saved (not tested yet - press TEST KEY below)."
+
+
+func _refresh_setup_panel_health() -> void:
+	if _room != null:
+		_room.set_setup_health(_setup_panel_health())
+
+
+## Push the standing WoVP truth to the room (its banner,
+## boards, and state panels render exactly this).
+func _push_wovp_data() -> void:
+	if _room == null:
+		return
+	_room.set_wovp_data({
+		"has_key": _config != null and _config.wovp_api_key != "",
+		"user_id": _wovp_user_id,
+		"challenges": _wovp_challenges,
+		"fetched_at": _wovp_fetched_at,
+		"live": _wovp_boards_live,
+		"fetch_error": _wovp_fetch_error,
+	})
+
+
+## Fetch the boards: resolve the key's identity first when
+## it is unknown (or belongs to a different key), then the
+## challenges. Entering the Tournament Room, REFRESH, and a
+## key save all land here.
+func _wovp_fetch_boards() -> void:
+	if _config == null or _config.wovp_api_key == "" or _wovp_client == null:
+		_push_wovp_data()
+		return
+	if _wovp_client.is_busy():
+		return
+	if _wovp_user_id == "" or _wovp_identity_key_hash != _wovp_key_hash():
+		_wovp_validating_for = "fetch"
+		_wovp_validating_key_hash = _wovp_key_hash()
+		_wovp_client.validate_key(_config.wovp_api_key)
+	else:
+		_wovp_client.fetch_challenges(_config.wovp_api_key)
+
+
+func _on_wovp_validation_finished(ok: bool, message: String, user_id: String, display_name: String) -> void:
+	var who: String = _wovp_validating_for
+	_wovp_validating_for = ""
+	# Identity bookkeeping belongs to the SAVED key alone: a
+	# desk test of an unsaved paste answers the desk and
+	# changes nothing here.
+	var about_saved_key: bool = _wovp_validating_key_hash != 0 and _wovp_validating_key_hash == _wovp_key_hash()
+	_wovp_validating_key_hash = 0
+	if ok and about_saved_key:
+		_wovp_user_id = user_id
+		_wovp_user_name = display_name
+		_wovp_identity_key_hash = _wovp_key_hash()
+		_wovp_identity_state = "ok"
+		_wovp_identity_note = ""
+	elif not ok and about_saved_key:
+		_wovp_identity_state = "failed"
+		_wovp_identity_note = message
+	match who:
+		"fetch":
+			if ok:
+				_wovp_client.fetch_challenges(_config.wovp_api_key)
+			else:
+				_wovp_fetch_error = message
+				_push_wovp_data()
+		"room":
+			if _room != null:
+				_room.set_setup_panel_message("That key belongs to %s." % display_name if ok else message)
+		"desk":
+			if _desk != null:
+				_desk.set_wovp_status("That key belongs to %s." % display_name if ok else message)
+	if ok:
+		# A resolved identity can change which rows are HIS
+		# on boards already standing (the cache's, at boot).
+		_push_wovp_data()
+	_refresh_setup_panel_health()
+
+
+func _on_wovp_challenges_finished(ok: bool, message: String, challenges: Array, raw_body: String) -> void:
+	if ok:
+		_wovp_challenges = challenges
+		_wovp_fetched_at = int(Time.get_unix_time_from_system())
+		_wovp_boards_live = true
+		_wovp_fetch_error = ""
+		WovpClient.save_cache(raw_body, _wovp_user_id, _wovp_user_name, _wovp_fetched_at, _wovp_key_hash())
+	else:
+		# The last good boards stand, with their stamp - the
+		# failure rides the banner, never a silent freeze.
+		_wovp_fetch_error = message
+	_push_wovp_data()
+
+
+## The room SETUP panel's PASTE KEY: the clipboard's key,
+## saved to the config here (the room never holds config).
+## A save also fetches, so the Tournament Room is warm when
+## he walks back to it.
+func _on_room_wovp_key_pasted(api_key: String) -> void:
+	if _config == null:
+		return
+	_config.wovp_api_key = api_key.strip_edges()
+	if _config.save_to_disk():
+		_wovp_identity_state = "untested"
+		if _room != null:
+			_room.set_setup_panel_message("WoVP key saved. Press TEST KEY to check whose it is.")
+		_refresh_setup_panel_health()
+		_wovp_fetch_boards()
+	elif _room != null:
+		_room.set_setup_panel_message("That key could NOT be saved - the config file is not writable.")
+
+
+## The room SETUP panel's TEST KEY: validate the SAVED key
+## and name whose it is on the panel's message line.
+func _on_room_wovp_key_test() -> void:
+	if _config == null or _config.wovp_api_key == "":
+		if _room != null:
+			_room.set_setup_panel_message("No WoVP key saved yet - paste one first (PASTE KEY).")
+		return
+	if _wovp_client != null and not _wovp_client.is_busy():
+		_wovp_validating_for = "room"
+		_wovp_validating_key_hash = _wovp_key_hash()
+		_wovp_client.validate_key(_config.wovp_api_key)
+
+
+## The desk's Save key landed: warm the boards for the room.
+func _on_desk_wovp_key_saved() -> void:
+	_wovp_identity_state = "untested" if _wovp_identity_key_hash != _wovp_key_hash() else _wovp_identity_state
+	_refresh_setup_panel_health()
+	_wovp_fetch_boards()
+
+
+## The desk's Test key: validate the FIELD's text (what he
+## pasted, saved or not) and answer on the desk's status
+## line.
+func _on_desk_wovp_test_requested(api_key: String) -> void:
+	if _wovp_client != null and not _wovp_client.is_busy():
+		_wovp_validating_for = "desk"
+		_wovp_validating_key_hash = api_key.hash() if api_key != "" else 0
+		_wovp_client.validate_key(api_key)
+	elif _desk != null:
+		_desk.set_wovp_status("Another WoVP request is already running - one moment.")
 
 
 ## Human-readable summary of the last completed scan, for the desk pass.
@@ -800,6 +1020,9 @@ func _enter_room() -> void:
 		_room.setup_requested.connect(_show_desk)
 		_room.setup_placard_dismissed.connect(_on_setup_placard_dismissed)
 		_room.setup_panel_scan_requested.connect(_on_setup_panel_scan_requested)
+		_room.tournament_refresh_requested.connect(_wovp_fetch_boards)
+		_room.wovp_key_pasted.connect(_on_room_wovp_key_pasted)
+		_room.wovp_key_test_requested.connect(_on_room_wovp_key_test)
 		_room.launch_requested.connect(_on_launch_requested)
 		_room.exit_requested.connect(_on_exit_requested)
 		_room.art_prefetch_requested.connect(_on_art_prefetch)
@@ -812,6 +1035,9 @@ func _enter_room() -> void:
 	# The SETUP panel's health rows start from the last scan's
 	# numbers, whichever route built the room.
 	_room.set_setup_health(_setup_panel_health())
+	# The Tournament Room's standing data (the cache's boards
+	# at boot) reaches the room here.
+	_push_wovp_data()
 	_room.visible = true
 	if _seated_cam:
 		# Dev hooks only (--pvlds-seated-cam, --pvlds-smoke-nav):
@@ -2050,6 +2276,8 @@ func _show_desk(message: String = "") -> void:
 		add_child(_desk)
 		_desk.setup(_config)
 		_desk.enter_room_requested.connect(_enter_room)
+		_desk.wovp_key_saved.connect(_on_desk_wovp_key_saved)
+		_desk.wovp_test_requested.connect(_on_desk_wovp_test_requested)
 	_desk.visible = true
 
 
@@ -2367,7 +2595,7 @@ func _finish_placard_smoke() -> void:
 ## ever reached the player's eyes. So this driver proves the
 ## SURFACE: SETUP through the rail raises a visible 3D panel in
 ## the room (not a CanvasLayer), its rows present, focus
-## confined to its three buttons, the wall inert behind it -
+## confined to its five buttons, the wall inert behind it -
 ## then drives its operations for real: SCAN runs Main's scan
 ## and the landing lands on the panel ONLY (health + message;
 ## the wall behind keeps its instances and textures, the
@@ -2463,7 +2691,8 @@ func _drive_setup_panel_smoke() -> void:
 				_setup_panel_expect(_room.is_setup_panel_up(), "scan leg: the panel stands through its scan")
 				_setup_panel_expect(not _room._setup_scanning, "scan leg: the working state cleared")
 				var f: ClickableQuad = _room.focused_quad()
-				_setup_panel_expect(f == _room.setup_panel_scan_quad() or f == _room.setup_panel_download_quad() or f == _room.setup_panel_back_quad(),
+				_setup_panel_expect(f == _room.setup_panel_scan_quad() or f == _room.setup_panel_download_quad() or f == _room.setup_panel_back_quad()
+					or f == _room.setup_panel_wovp_paste_quad() or f == _room.setup_panel_wovp_test_quad(),
 					"scan leg: focus stayed on the panel through the landing")
 				# The download leg: the harness's stub database
 				# over local HTTP (PVLDS_VPSDB_URL).
@@ -2649,6 +2878,10 @@ func _setup_panel_smoke_orphan_highlight() -> bool:
 		quads.append(_room.setup_panel_scan_quad())
 	if _room.setup_panel_download_quad() != null:
 		quads.append(_room.setup_panel_download_quad())
+	if _room.setup_panel_wovp_paste_quad() != null:
+		quads.append(_room.setup_panel_wovp_paste_quad())
+	if _room.setup_panel_wovp_test_quad() != null:
+		quads.append(_room.setup_panel_wovp_test_quad())
 	if _room.setup_panel_back_quad() != null:
 		quads.append(_room.setup_panel_back_quad())
 	for q: ClickableQuad in quads:
@@ -2667,6 +2900,8 @@ func _setup_panel_surface_assertions() -> void:
 	_setup_panel_expect(_room.setup_panel_face_quad() != null, "XR setup: the panel has its face (health + message)")
 	_setup_panel_expect(_room.setup_panel_scan_quad() != null, "XR setup: the panel has SCAN LIBRARY")
 	_setup_panel_expect(_room.setup_panel_download_quad() != null, "XR setup: the panel has DOWNLOAD VPS DATABASE")
+	_setup_panel_expect(_room.setup_panel_wovp_paste_quad() != null, "XR setup: the panel has PASTE KEY (the WoVP row)")
+	_setup_panel_expect(_room.setup_panel_wovp_test_quad() != null, "XR setup: the panel has TEST KEY (the WoVP row)")
 	_setup_panel_expect(_room.setup_panel_back_quad() != null, "XR setup: the panel has BACK")
 	_setup_panel_expect(_room.visible, "XR setup: the room stays visible")
 	_setup_panel_expect(not _room.is_setup_placard_up(), "XR setup: no placard - the desktop route is retired")
@@ -2688,13 +2923,17 @@ func _setup_panel_surface_assertions() -> void:
 	_setup_panel_expect(inert, "XR setup: every wall/rail control is inert behind the panel")
 	_setup_panel_expect(_room.setup_panel_scan_quad().pick_enabled
 		and _room.setup_panel_download_quad().pick_enabled
+		and _room.setup_panel_wovp_paste_quad().pick_enabled
+		and _room.setup_panel_wovp_test_quad().pick_enabled
 		and _room.setup_panel_back_quad().pick_enabled,
 		"XR setup: the panel's own buttons are live")
-	_setup_panel_expect(_room._focusables.size() == 3
+	_setup_panel_expect(_room._focusables.size() == 5
 		and _room._focusables.has(_room.setup_panel_scan_quad())
 		and _room._focusables.has(_room.setup_panel_download_quad())
+		and _room._focusables.has(_room.setup_panel_wovp_paste_quad())
+		and _room._focusables.has(_room.setup_panel_wovp_test_quad())
 		and _room._focusables.has(_room.setup_panel_back_quad()),
-		"XR setup: focus navigation is confined to the panel's three buttons")
+		"XR setup: focus navigation is confined to the panel's five buttons")
 	_setup_panel_expect(_room._focused == _room.setup_panel_scan_quad(),
 		"XR setup: focus opens on SCAN LIBRARY")
 	# Confinement under travel: TAB around the stops and
@@ -2985,7 +3224,11 @@ func _nav_key_of(q: ClickableQuad) -> String:
 func _nav_leg_rail_walk() -> void:
 	var order: Array[String] = [
 		"filter:all", "filter:vr", "filter:favorites", "filter:recents",
-		"sort", "page_prev", "page_next", "desk", "exit"]
+		"sort", "tournament", "page_prev", "page_next", "desk", "exit"]
+	# The Tournament Room round's stops: TOURNAMENT walks
+	# with the rail always; REFRESH is a stop only while the
+	# Tournament Room stands, so this library-mode walk
+	# correctly never lands on it.
 	_room._set_focused(_room.rail_quad(order[0]))
 	for i: int in range(1, order.size()):
 		_room._move_focus(Vector2(1.0, 0.0))
@@ -4616,6 +4859,360 @@ func _bootfocus_region_stdev(img: Image, rect: Rect2i) -> float:
 	return sqrt(m2 / float(n))
 
 
+# -------------------------------------------------- tournament smoke
+
+## --pvlds-smoke-tournament: the Tournament Room contract,
+## against the harness's local WoVP stub (PVLDS_WOVP_BASE_URL
+## - the league itself is never touched). Modes
+## (PVLDS_WOVP_SMOKE_MODE):
+##   full      - key in config, stub live: boards land,
+##               his row renders highlighted, the not-owned
+##               board cannot launch, REFRESH re-fetches,
+##               the view enters/leaves without stranding
+##               focus, and the SETUP panel's PASTE KEY /
+##               TEST KEY work end to end.
+##   nokey     - no key in config: the view is the plain
+##               "add your key in SETUP" state, not an error.
+##   failfetch - key, dead base URL, no cache: the view is
+##               the failure state, never boards dressed
+##               as live.
+##   cache     - a second boot in a full boot's home, base
+##               URL dead: the saved boards stand with their
+##               stamp, stated as last-good.
+## The honesty and his-row legs double as the negative
+## controls' targets: PVLDS_WOVP_NC=clientid makes the
+## client send Studio's id (the honesty leg fails by name);
+## the stub's baduser variant renames his board rows (the
+## his-row legs fail by name).
+func _drive_tournament_smoke() -> void:
+	match _tournament_smoke_mode:
+		"nokey":
+			_drive_tournament_state_mode(false)
+		"failfetch":
+			_drive_tournament_state_mode(true)
+		"cache":
+			_drive_tournament_cache_mode()
+		_:
+			_drive_tournament_full()
+
+
+func _drive_tournament_full() -> void:
+	match _tournament_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_room._handle_rail("tournament")
+				_tournament_expect(_room.tournament_active(), "enter: the TOURNAMENT stop raises the Tournament Room")
+				_tournament_expect(_room.focused_quad() == _room.rail_quad("tournament"),
+					"enter: focus lands on the TOURNAMENT stop that was pressed")
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 45000
+				_tournament_smoke_phase = 1
+			else:
+				_tournament_smoke_wait += 1
+				if _tournament_smoke_wait > 3600:
+					_tournament_fail("the room never came up")
+					_finish_tournament_smoke()
+		1:
+			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy():
+				_tournament_leg_boards()
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 20000
+				_tournament_smoke_phase = 2
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("the boards never went live against the stub")
+				_finish_tournament_smoke()
+		2:
+			# The REFRESH leg's verdict: the stub saw a second
+			# search after the rail press in _tournament_leg_boards.
+			if _tournament_search_count() >= 2 and _wovp_client != null and not _wovp_client.is_busy() and _room.wall_ready:
+				_tournament_expect(true, "refresh: REFRESH on the rail re-fetches the boards")
+				_tournament_smoke_wait = 0
+				_tournament_smoke_phase = 3
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("refresh: REFRESH never produced a second search")
+				_finish_tournament_smoke()
+		3:
+			_tournament_smoke_wait += 1
+			if _room.wall_ready and _tournament_smoke_wait >= 4:
+				_tournament_leg_rendered()
+				_tournament_smoke_wait = 0
+				_tournament_smoke_phase = 4
+		4:
+			# The SETUP panel's WoVP legs. Clear the saved key
+			# first (memory + file), so the paste leg proves
+			# the panel's own save, not the harness's config.
+			_config.wovp_api_key = ""
+			_config.save_to_disk()
+			_room._xr_enabled = true
+			_room._activate(_room.rail_quad("desk"))
+			_tournament_smoke_wait = 0
+			_tournament_smoke_phase = 5
+		5:
+			_tournament_smoke_wait += 1
+			if _tournament_smoke_wait >= 3:
+				_tournament_expect(_room.is_setup_panel_up(), "panel: SETUP opens the in-room panel")
+				_tournament_expect(_room.setup_panel_wovp_paste_quad() != null and _room.setup_panel_wovp_test_quad() != null,
+					"panel: PASTE KEY and TEST KEY stand on the panel")
+				DisplayServer.clipboard_set("PVLDS-WOVP-SENTINEL-KEY-0001")
+				_tournament_smoke_wait = 0
+				_tournament_smoke_phase = 6
+			elif _tournament_smoke_wait > 600:
+				_tournament_fail("panel: the SETUP panel never stood")
+				_finish_tournament_smoke()
+		6:
+			_tournament_smoke_wait += 1
+			if _tournament_smoke_wait >= 6:
+				_room._activate(_room.setup_panel_wovp_paste_quad())
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 20000
+				_tournament_smoke_phase = 7
+		7:
+			var reloaded: PvldsConfig = PvldsConfig.new()
+			if reloaded.load_from_disk() and reloaded.wovp_api_key == "PVLDS-WOVP-SENTINEL-KEY-0001":
+				_tournament_expect(true, "panel paste: PASTE KEY saved the clipboard's key into the config file")
+				_tournament_expect(_room.setup_panel_message().contains("saved"),
+					"panel paste: the panel says the key saved")
+				_tournament_smoke_phase = 8
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("panel paste: the pasted key never reached the config file (panel says: %s)" % _room.setup_panel_message())
+				_finish_tournament_smoke()
+		8:
+			if _wovp_client != null and not _wovp_client.is_busy():
+				_room._activate(_room.setup_panel_wovp_test_quad())
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 20000
+				_tournament_smoke_phase = 9
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("panel test: the client never went idle for TEST KEY")
+				_finish_tournament_smoke()
+		9:
+			if _room.setup_panel_message().contains("Fixture Player"):
+				_tournament_expect(true, "panel test: TEST KEY names whose key it is, on the panel")
+				_room._activate(_room.setup_panel_back_quad())
+				_finish_tournament_smoke()
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("panel test: TEST KEY never named the key's owner (panel says: %s)" % _room.setup_panel_message())
+				_finish_tournament_smoke()
+
+
+func _tournament_leg_boards() -> void:
+	var rows: Array = _room.tournament_rows()
+	_tournament_expect(rows.size() == 5, "boards: five live challenges stand on the wall (got %d)" % rows.size())
+	var all_challenges: bool = rows.size() == 5
+	var owned_flags: Array = []
+	for r: Variant in rows:
+		var rd: Dictionary = r
+		if str(rd.get("kind", "")) != "challenge":
+			all_challenges = false
+		owned_flags.append(bool(rd.get("owned", false)))
+	_tournament_expect(all_challenges, "boards: every panel is a challenge board (no state panel among live data)")
+	_tournament_expect(owned_flags == [true, true, true, true, false],
+		"boards: four challenges matched his library by VPS id; the fifth is not owned")
+	if rows.size() == 5:
+		var first_game: GameEntry = (rows[0] as Dictionary).get("game") as GameEntry
+		_tournament_expect(first_game != null and first_game.game_id == "aT_GONvw",
+			"boards: the season board is his Addams Family (matched by its VPS game id)")
+		var last_game: GameEntry = (rows[4] as Dictionary).get("game") as GameEntry
+		_tournament_expect(last_game != null and last_game.game_id.begins_with("wovp:none:"),
+			"boards: the not-owned board stands on a synthetic, unlaunchable entry")
+		var season: WovpChallenge = (rows[0] as Dictionary).get("challenge") as WovpChallenge
+		_tournament_expect(season != null and season.his_row(_wovp_user_id) != null and season.his_row(_wovp_user_id).position == 6,
+			"his row: his scoreboard row is identified by the validated userId, mid-board")
+	_tournament_expect(_room._banner_line().contains("updated"),
+		"boards: the banner stamps when the boards landed")
+	# The honesty leg: the stub recorded how the client
+	# announced itself. PVLDS_WOVP_NC=clientid must fail this
+	# by name.
+	var entries: Array = _tournament_stub_entries()
+	var saw_validate: bool = false
+	var saw_search: bool = false
+	var honest: bool = true
+	for e: Variant in entries:
+		var ed: Dictionary = e
+		if str(ed.get("x_client_id", "")) != "pvlds":
+			honest = false
+		if str(ed.get("path", "")).ends_with("validate-apikey"):
+			saw_validate = true
+		if str(ed.get("path", "")).ends_with("challenges/search"):
+			saw_search = true
+			if not bool(ed.get("authorization_present", false)):
+				honest = false
+	_tournament_expect(saw_validate and saw_search, "honesty: the stub saw both read-side calls (validate, then search)")
+	_tournament_expect(honest, "honesty: the client identified itself to WoVP as pvlds on every call, and the key rode only in the search's Authorization header")
+	_tournament_expect(_room.rail_quad("wovp_refresh").pick_enabled,
+		"refresh: REFRESH is a live stop while the Tournament Room stands")
+	# Fire the refresh for phase 2's count.
+	_room._activate(_room.rail_quad("wovp_refresh"))
+
+
+func _tournament_leg_rendered() -> void:
+	# His row, in the rendered pixels: the season board's
+	# texture carries a full row on the accent ground
+	# (CardFace's board accent). The NC that renames his
+	# rows (the stub's baduser variant) leaves no accent row
+	# to find - this leg fails by name there.
+	if _room._panels.size() >= 5:
+		var tex: Texture2D = _room._panels[0].current_texture()
+		var accent_px: int = 0
+		if tex != null:
+			var img: Image = tex.get_image()
+			if img != null and not img.is_empty():
+				# The rows' region only: the band above it is a
+				# palette color that can sit in the accent
+				# window, and it must not be able to fake this
+				# leg - his row or nothing.
+				for x: int in range(0, img.get_width(), 3):
+					for y: int in range(250, mini(630, img.get_height()), 3):
+						var px: Color = img.get_pixel(x, y)
+						if px.r >= 0.48 and px.r <= 0.64 and px.g >= 0.30 and px.g <= 0.47 and px.b <= 0.16:
+							accent_px += 1
+		_tournament_expect(accent_px >= 60,
+			"his row: the rendered season board carries his row on the accent ground (%d accent samples)" % accent_px)
+		_tournament_expect(not _room._panel_launches[4].visible and not _room._panel_launches[4].pick_enabled,
+			"not-owned: the not-owned board carries no Launch button")
+		_tournament_expect(_room._panel_launches[0].visible and _room._panel_launches[0].pick_enabled,
+			"boards: an owned board keeps its Launch button")
+		# A on the not-owned board: nothing starts, nothing
+		# opens - the board is information, not a door.
+		_room._set_focused(_room._panels[4])
+		_room._a_press()
+		_tournament_expect(not _launch_pending and _room._mode == "wall" and _room.tournament_active(),
+			"not-owned: A on a not-owned board starts nothing and opens nothing")
+		# Focus is never stranded in the view: DOWN from a
+		# board walks to the rail by the room's own ladder
+		# (five boards stand two rows deep in this column:
+		# board, board, rail).
+		_room._set_focused(_room._panels[0])
+		var reached_rail: bool = false
+		for i: int in range(3):
+			_room._move_focus(Vector2(0.0, 1.0))
+			if _nav_key_of(_room.focused_quad()) != "":
+				reached_rail = true
+				break
+			_tournament_expect(_room._panels.has(_room.focused_quad()),
+				"navigation: DOWN from a board stays on boards until the rail")
+		_tournament_expect(reached_rail,
+			"navigation: DOWN from a board reaches the rail - focus is never stranded in the view")
+	# Leaving: a filter press restores the library wall,
+	# focus on the pressed stop, REFRESH disarmed.
+	_room._handle_rail("filter:all")
+	_tournament_expect(not _room.tournament_active() and _room.tournament_rows().is_empty(),
+		"leaving: a filter press leaves the Tournament Room")
+	_tournament_expect(_room.focused_quad() == _room.rail_quad("filter:all"),
+		"leaving: focus lands on the filter stop that was pressed")
+	_tournament_expect(not _room.rail_quad("wovp_refresh").pick_enabled,
+		"leaving: REFRESH is not a stop over the library wall")
+
+
+## nokey / failfetch share one shape: ONE state panel, its
+## lines in plain words, no launch anywhere, and a banner
+## that names the state.
+func _drive_tournament_state_mode(expect_failure: bool) -> void:
+	match _tournament_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_room._handle_rail("tournament")
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 30000
+				_tournament_smoke_phase = 1
+			else:
+				_tournament_smoke_wait += 1
+				if _tournament_smoke_wait > 3600:
+					_tournament_fail("the room never came up")
+					_finish_tournament_smoke()
+		1:
+			var ready: bool = _room.wall_ready and (not expect_failure or _wovp_fetch_error != "")
+			if ready:
+				var rows: Array = _room.tournament_rows()
+				_tournament_expect(rows.size() == 1 and str((rows[0] as Dictionary).get("kind", "")) == "state",
+					"state: exactly one state panel stands (got %d rows)" % rows.size())
+				var lines: Array = (rows[0] as Dictionary).get("lines", []) if rows.size() == 1 else []
+				var joined: String = ""
+				for lv: Variant in lines:
+					joined += str(lv) + " "
+				if expect_failure:
+					_tournament_expect(joined.contains("Could not reach WoVP"),
+						"state: the failure state says WoVP could not be reached, in plain words")
+					_tournament_expect(_room._banner_line().contains("could not reach WoVP"),
+						"state: the banner names the failure - no boards dressed as live")
+				else:
+					_tournament_expect(joined.contains("No WoVP key yet"),
+						"state: the no-key state says to add the key in SETUP, plainly")
+					_tournament_expect(_room._banner_line().contains("no WoVP key yet"),
+						"state: the banner names the no-key state")
+				_tournament_expect(_room._panels.size() == 1 and not _room._panel_launches[0].visible,
+					"state: the state panel carries no Launch button")
+				_finish_tournament_smoke()
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("the state never settled (mode %s)" % _tournament_smoke_mode)
+				_finish_tournament_smoke()
+
+
+func _drive_tournament_cache_mode() -> void:
+	match _tournament_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_tournament_expect(_wovp_challenges.size() == 5 and _wovp_fetched_at > 0 and not _wovp_boards_live,
+					"cache: the boot loaded the saved boards (5 challenges, stamped, not live)")
+				_tournament_expect(_wovp_user_id == "fixture-user-1",
+					"cache: the saved identity is trusted - its key hash matches the saved key")
+				_room._handle_rail("tournament")
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 30000
+				_tournament_smoke_phase = 1
+			else:
+				_tournament_smoke_wait += 1
+				if _tournament_smoke_wait > 3600:
+					_tournament_fail("the room never came up (cache mode)")
+					_finish_tournament_smoke()
+		1:
+			if _wovp_fetch_error != "":
+				var rows: Array = _room.tournament_rows()
+				_tournament_expect(rows.size() == 5,
+					"cache: the saved boards stand on the wall (got %d rows)" % rows.size())
+				_tournament_expect(_room._banner_line().contains("last good boards"),
+					"cache: the banner says these are the last good boards - the failed refresh is stated, not hidden")
+				_finish_tournament_smoke()
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("cache: the dead-URL refresh never reported its failure")
+				_finish_tournament_smoke()
+
+
+func _tournament_stub_entries() -> Array:
+	var path: String = OS.get_environment("PVLDS_WOVP_STUB_LOG")
+	if path == "" or not FileAccess.file_exists(path):
+		return []
+	var out: Array = []
+	for line: String in FileAccess.get_file_as_string(path).split("\n"):
+		var parsed: Variant = JSON.parse_string(line.strip_edges())
+		if parsed is Dictionary:
+			out.append(parsed)
+	return out
+
+
+func _tournament_search_count() -> int:
+	var n: int = 0
+	for e: Variant in _tournament_stub_entries():
+		if str((e as Dictionary).get("path", "")).ends_with("challenges/search"):
+			n += 1
+	return n
+
+
+func _tournament_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - tournament smoke: ", label)
+	else:
+		_tournament_fail(label)
+
+
+func _tournament_fail(label: String) -> void:
+	_tournament_smoke_failures += 1
+	printerr("  FAIL - tournament smoke: ", label)
+
+
+func _finish_tournament_smoke() -> void:
+	if _tournament_smoke_failures == 0:
+		print("PVLDS TOURNAMENT SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS TOURNAMENT SMOKE: FAIL (%d)" % _tournament_smoke_failures)
+		get_tree().quit(1)
+
+
 # -------------------------------------------------- desk smoke
 
 ## --pvlds-smoke-desk: the desk's session switch is a live
@@ -4706,6 +5303,42 @@ func _drive_desk_smoke() -> void:
 					"the button's open path resolves to missing_b2s.txt")
 				_desk.apply_missing_b2s(3)
 				_desk._b2s_button.pressed.emit()
+				# The WoVP section (the Tournament Room round):
+				# a masked key field; Save key lands the key in
+				# the config FILE on the spot; Test key answers
+				# through Main's client - the harness points it
+				# at its stub (PVLDS_WOVP_BASE_URL), so phase 2
+				# waits for the verdict on the status line.
+				_desk_expect(_desk._wovp_edit != null and _desk._wovp_edit.secret,
+					"wovp: the desk's key field exists and is masked (it is a secret)")
+				_desk_expect(_desk._wovp_save_button != null and _desk._wovp_test_button != null,
+					"wovp: the desk has Save key and Test key")
+				_desk._wovp_edit.text = "PVLDS-WOVP-SENTINEL-KEY-0001"
+				_desk._wovp_save_button.pressed.emit()
+				var wovp_after: PvldsConfig = PvldsConfig.new()
+				_desk_expect(wovp_after.load_from_disk() and wovp_after.wovp_api_key == "PVLDS-WOVP-SENTINEL-KEY-0001",
+					"wovp: Save key writes the key to the config FILE immediately, no Save & Scan")
+				_desk_expect(_desk._wovp_label.text.contains("saved"),
+					"wovp: the desk says the key saved, in words")
+				if OS.has_environment("PVLDS_WOVP_BASE_URL"):
+					_desk._wovp_test_button.pressed.emit()
+					_desk_smoke_wait = 0
+					_desk_smoke_phase = 2
+				else:
+					print("  info - desk smoke: no PVLDS_WOVP_BASE_URL in env - the Test key leg belongs to the harness run")
+					_finish_desk_smoke()
+		2:
+			_desk_smoke_wait += 1
+			if _desk._wovp_label.text.contains("Fixture Player"):
+				_desk_expect(true, "wovp: Test key names whose key it is, on the status line")
+				_finish_desk_smoke()
+			elif _desk_smoke_wait == 240 and _wovp_client != null and not _wovp_client.is_busy():
+				# The save's own board fetch may have held the
+				# client when the first press landed - press
+				# again now that it is idle.
+				_desk._wovp_test_button.pressed.emit()
+			elif _desk_smoke_wait > 1200:
+				_desk_expect(false, "wovp: Test key never answered (status line: %s)" % _desk._wovp_label.text)
 				_finish_desk_smoke()
 
 
@@ -6972,12 +7605,13 @@ func _run_core_test() -> void:
 	var wovp_cache_backup: String = ""
 	if FileAccess.file_exists(wovp_cache_file):
 		wovp_cache_backup = FileAccess.get_file_as_string(wovp_cache_file)
-	_expect(WovpClient.save_cache(wovp_search_text, "fixture-user-1", "Fixture Player", 1761435600),
+	_expect(WovpClient.save_cache(wovp_search_text, "fixture-user-1", "Fixture Player", 1761435600, 4242),
 		"wovp: the last-good cache saves", failures)
 	var wovp_cache: Dictionary = WovpClient.load_cache()
 	_expect(bool(wovp_cache.get("ok", false)) and (wovp_cache.get("challenges", []) as Array).size() == 5
-		and str(wovp_cache.get("user_id", "")) == "fixture-user-1" and int(wovp_cache.get("fetched_at", 0)) == 1761435600,
-		"wovp: the cache loads back - boards, player, and stamp", failures)
+		and str(wovp_cache.get("user_id", "")) == "fixture-user-1" and int(wovp_cache.get("fetched_at", 0)) == 1761435600
+		and int(wovp_cache.get("key_hash", 0)) == 4242,
+		"wovp: the cache loads back - boards, player, stamp, and the key's hash (never the key)", failures)
 	_expect(_write_text_file(ProjectSettings.globalize_path(wovp_cache_file), "{\"fetched_at\": 1, \"body\": \"{broken\"}"),
 		"wovp: corrupt cache written for its leg", failures)
 	_expect(not bool(WovpClient.load_cache().get("ok", true)),

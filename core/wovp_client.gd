@@ -451,11 +451,16 @@ static func cache_path() -> String:
 ## body (parsed again on load through the same fail-closed
 ## parser - a corrupt cache is no cache), whose key it was,
 ## and when it landed. Written only on a successful fetch.
-static func save_cache(raw_body: String, user_id: String, user_name: String, fetched_at: int) -> bool:
+## The key itself is never stored here - only a hash of it,
+## so a later boot can tell whether the cached identity
+## belongs to the key now saved (a swapped key must not
+## inherit the old player's highlighted rows).
+static func save_cache(raw_body: String, user_id: String, user_name: String, fetched_at: int, key_hash: int) -> bool:
 	var d: Dictionary = {
 		"fetched_at": fetched_at,
 		"user_id": user_id,
 		"user_name": user_name,
+		"key_hash": key_hash,
 		"body": raw_body,
 	}
 	var f: FileAccess = FileAccess.open(cache_path(), FileAccess.WRITE)
@@ -484,5 +489,6 @@ static func load_cache() -> Dictionary:
 		"challenges": c.get("challenges", []),
 		"user_id": str(d.get("user_id", "")),
 		"user_name": str(d.get("user_name", "")),
+		"key_hash": int(d.get("key_hash", 0)),
 		"fetched_at": int(d.get("fetched_at", 0)),
 	}

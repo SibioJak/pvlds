@@ -8,6 +8,8 @@ extends CanvasLayer
 ## coverage) plus any titles it could not identify.
 
 signal enter_room_requested
+signal wovp_key_saved ## the WoVP key was saved from this desk: Main refreshes the Tournament Room's boards
+signal wovp_test_requested(api_key: String) ## Test key: Main validates this text against WoVP and answers on the status line
 
 var _config: PvldsConfig
 var _filling_from_config: bool = false ## true while _fill_from_config sets widget state (its signal emissions are not user flips)
@@ -28,6 +30,10 @@ var _scanned: bool = false
 var _dl_button: Button
 var _dl_label: Label
 var _downloader: VpsDownloader
+var _wovp_edit: LineEdit
+var _wovp_save_button: Button
+var _wovp_test_button: Button
+var _wovp_label: Label
 
 const MAX_FOLDER_ROWS: int = 6
 
@@ -93,6 +99,41 @@ func _build_ui() -> void:
 	_herding_check.tooltip_text = "Design section 3 amendment: during the launch settle and during play, the watchdog returns foreground focus to the VPX window when something steals it. It never moves or resizes windows."
 	_herding_check.toggled.connect(func(_on: bool) -> void: _apply_session_settings())
 	vbox.add_child(_herding_check)
+
+	# The WoVP section (the Tournament Room round): his
+	# World of Virtual Pinball API key - self-service in his
+	# WoVP profile, pasted here once. Like the session
+	# switch, the key is a live setting: Save key writes the
+	# config on the spot (no Save & Scan), Test key validates
+	# the field's text and names whose key it is. The field
+	# is masked - it is a secret, and it is never printed.
+	var wovp_title: Label = Label.new()
+	wovp_title.text = "World of Virtual Pinball (WoVP) - the Tournament Room's boards"
+	wovp_title.add_theme_font_size_override("font_size", 20)
+	vbox.add_child(wovp_title)
+	var wovp_intro: Label = Label.new()
+	wovp_intro.text = "Your WoVP API key (in your WoVP profile) lets PVLDS show your live league boards in the Tournament Room. It is stored only in the config file on this PC."
+	wovp_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(wovp_intro)
+	_wovp_edit = LineEdit.new()
+	_wovp_edit.secret = true
+	_wovp_edit.placeholder_text = "Paste your WoVP API key here"
+	vbox.add_child(_wovp_edit)
+	var wovp_row: HBoxContainer = HBoxContainer.new()
+	wovp_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(wovp_row)
+	_wovp_save_button = Button.new()
+	_wovp_save_button.text = "Save key"
+	_wovp_save_button.pressed.connect(_on_wovp_save_pressed)
+	wovp_row.add_child(_wovp_save_button)
+	_wovp_test_button = Button.new()
+	_wovp_test_button.text = "Test key"
+	_wovp_test_button.pressed.connect(_on_wovp_test_pressed)
+	wovp_row.add_child(_wovp_test_button)
+	_wovp_label = Label.new()
+	_wovp_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_wovp_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	wovp_row.add_child(_wovp_label)
 	_folder_rows = VBoxContainer.new()
 	_folder_rows.add_theme_constant_override("separation", 8)
 	vbox.add_child(_folder_label())
@@ -237,6 +278,8 @@ func _fill_from_config() -> void:
 	_exe_edit.text = _config.vpx_exe_path
 	_db_edit.text = _config.vpsdb_path
 	_args_edit.text = _config.launch_args_template
+	_wovp_edit.text = _config.wovp_api_key
+	_wovp_label.text = "A key is saved on this PC." if _config.wovp_api_key != "" else "No key saved yet."
 	_fill_session_widgets()
 	for f: String in _config.table_folders:
 		_add_folder_row(f)
@@ -266,6 +309,7 @@ func _on_use_dummy() -> void:
 func _collect_into_config() -> void:
 	_config.vpx_exe_path = _exe_edit.text.strip_edges()
 	_config.vpsdb_path = _db_edit.text.strip_edges()
+	_config.wovp_api_key = _wovp_edit.text.strip_edges()
 	_config.launch_args_template = _args_edit.text.strip_edges()
 	if _config.launch_args_template == "":
 		_config.launch_args_template = PvldsConfig.DEFAULT_LAUNCH_ARGS
@@ -307,6 +351,49 @@ func _apply_session_settings() -> void:
 	_filling_from_config = false
 	if _stats_label != null:
 		_stats_label.text = "That session setting could NOT be saved - the config file is not writable, so the switch has not taken effect and has been put back as it was. Fix the config file, then flip it again."
+
+
+## Save key: the live apply, on the herding pattern - the
+## key lands in the config file the moment the button is
+## pressed, and a failed save restores field, config, and
+## label to exactly what they were (a key that did not save
+## must not look saved). The emit lets Main refresh the
+## Tournament Room's boards with the new key.
+func _on_wovp_save_pressed() -> void:
+	if _config == null:
+		return
+	var prev: String = _config.wovp_api_key
+	_config.wovp_api_key = _wovp_edit.text.strip_edges()
+	if _config.save_to_disk():
+		_wovp_label.text = "Key saved on this PC." if _config.wovp_api_key != "" else "Key cleared - the Tournament Room will ask for one."
+		wovp_key_saved.emit()
+		return
+	_config.wovp_api_key = prev
+	_wovp_edit.text = prev
+	_wovp_label.text = "That key could NOT be saved - the config file is not writable, so nothing changed. Fix the config file, then save it again."
+
+
+## Test key: validates the field's text - what he pasted,
+## saved or not - so the answer names the key he is looking
+## at. Main owns the client; the verdict lands on the
+## status line via set_wovp_status.
+func _on_wovp_test_pressed() -> void:
+	var text: String = _wovp_edit.text.strip_edges()
+	if text == "":
+		_wovp_label.text = "Nothing to test - paste your WoVP key into the field first."
+		return
+	_wovp_label.text = "Testing that key..."
+	wovp_test_requested.emit(text)
+
+
+## Main's WoVP verdicts (test results, fetch outcomes) in
+## the section's own status line.
+func set_wovp_status(text: String) -> void:
+	_wovp_label.text = text
+
+
+func wovp_key_text() -> String:
+	return _wovp_edit.text.strip_edges()
 
 
 func _on_download_pressed() -> void:

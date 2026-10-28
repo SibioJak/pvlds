@@ -9,6 +9,10 @@ extends Control
 ##   button - a single centered label
 ##   info   - title plus stacked fact lines
 ##   banner - app title plus a summary line
+##   board  - a Tournament Room scoreboard: band, table name,
+##            deadline line, then stacked board rows - score
+##            rows (his carries the accent ground), a divider
+##            row where the cutoff line falls, and note rows
 ## Specs are plain dictionaries built by callers; reads are defensive.
 ## A spec may cap a text slot's lines ("title_max_lines" and friends);
 ## a capped label ellipsizes its overrun instead of wrapping without
@@ -50,6 +54,7 @@ var _title_label: Label
 var _sub_label: Label
 var _body_label: Label
 var _chips_row: HBoxContainer
+var _rows_box: VBoxContainer ## the board kind's stacked rows (score / divider / note)
 var _art_rect: TextureRect
 var _art_strip: PanelContainer
 var _art_label: Label
@@ -139,6 +144,11 @@ func _init() -> void:
 	_chips_row.add_theme_constant_override("separation", 10)
 	_vbox.add_child(_chips_row)
 
+	_rows_box = VBoxContainer.new()
+	_rows_box.add_theme_constant_override("separation", 8)
+	_rows_box.visible = false
+	_vbox.add_child(_rows_box)
+
 	# One CardFace serves every render the TextureFactory makes, so
 	# per-spec line discipline (apply_spec) must be undone before the
 	# next spec: snapshot the stock label settings now.
@@ -187,7 +197,7 @@ func apply_spec(spec: Dictionary) -> void:
 		return
 
 	_restore_labels()
-	_band_panel.visible = kind == "panel" or kind == "info"
+	_band_panel.visible = kind == "panel" or kind == "info" or kind == "board"
 	if _band_panel.visible:
 		_band_panel.add_theme_stylebox_override("panel", _box(band, 6))
 		_band_label.text = str(spec.get("band_text", ""))
@@ -228,6 +238,59 @@ func apply_spec(spec: Dictionary) -> void:
 			if item is Dictionary:
 				var cd: Dictionary = item
 				_chips_row.add_child(_make_chip(str(cd.get("text", "")), bool(cd.get("accent", false))))
+
+	# The board kind's rows: rebuilt per spec like the chips
+	# (one CardFace serves every render, so nothing may leak
+	# from a previous board into this one).
+	for child: Node in _rows_box.get_children():
+		_rows_box.remove_child(child)
+		child.queue_free()
+	_rows_box.visible = kind == "board"
+	if kind == "board":
+		var rows_v: Variant = spec.get("rows", [])
+		if rows_v is Array:
+			var rarr: Array = rows_v
+			for item: Variant in rarr:
+				if item is Dictionary:
+					_rows_box.add_child(_make_board_row(item))
+
+
+## One board row: a score line on its own ground (the accent
+## ground is HIS row - the highlight the wall promises), a
+## divider (the cutoff line, labelled), or a plain note.
+func _make_board_row(entry: Dictionary) -> Control:
+	var kind: String = str(entry.get("kind", "note"))
+	var text: String = str(entry.get("text", ""))
+	if kind == "divider":
+		var dp: PanelContainer = PanelContainer.new()
+		dp.add_theme_stylebox_override("panel", _box(Color(0.32, 0.23, 0.05), 6))
+		var dl: Label = Label.new()
+		dl.text = text
+		dl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		dl.add_theme_font_size_override("font_size", int(entry.get("size", 30)))
+		dl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
+		dp.add_child(dl)
+		return dp
+	if kind == "score":
+		var accent: bool = bool(entry.get("accent", false))
+		var sp: PanelContainer = PanelContainer.new()
+		sp.add_theme_stylebox_override("panel", _box(
+			Color(0.55, 0.38, 0.08) if accent else Color(0.10, 0.10, 0.16), 6))
+		var sl: Label = Label.new()
+		sl.text = text
+		sl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		sl.add_theme_font_size_override("font_size", int(entry.get("size", 40)))
+		sl.add_theme_color_override("font_color",
+			Color(1.0, 0.98, 0.92) if accent else Color(0.90, 0.91, 0.96))
+		sp.add_child(sl)
+		return sp
+	var nl: Label = Label.new()
+	nl.text = text
+	nl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	nl.add_theme_font_size_override("font_size", int(entry.get("size", 34)))
+	nl.add_theme_color_override("font_color", Color(0.80, 0.82, 0.90))
+	return nl
 
 
 func _snapshot_label(l: Label) -> void:

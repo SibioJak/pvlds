@@ -12,6 +12,9 @@ signal setup_panel_scan_requested ## the SETUP panel's SCAN LIBRARY: Main owns t
 signal launch_requested(game: GameEntry, build: TableBuild) ## card Launch / detail Play - Main owns the launch + exit
 signal exit_requested ## rail EXIT: Main disarms the watchdog and quits
 signal art_prefetch_requested(games: Array) ## a page settled: Main's warmer should bring the neighbouring pages' art forward
+signal tournament_refresh_requested ## the Tournament Room wants its boards (re)fetched: entering the view, or REFRESH pressed - Main owns the WoVP client
+signal wovp_key_pasted(api_key: String) ## the SETUP panel's PASTE KEY read a key off the clipboard: Main saves it to the config
+signal wovp_key_test_requested ## the SETUP panel's TEST KEY: Main validates the saved key and reports whose it is
 
 const PAGE_COLS: int = 4
 const PAGE_ROWS: int = 3
@@ -271,6 +274,8 @@ var _setup_panel: Node3D = null ## the in-room SETUP panel's holder; in the tree
 var _setup_panel_face: ClickableQuad = null
 var _setup_panel_scan_btn: ClickableQuad = null
 var _setup_panel_dl_btn: ClickableQuad = null
+var _setup_panel_wovp_paste_btn: ClickableQuad = null ## PASTE KEY: reads the WoVP key off the PC clipboard (VR has no keyboard - the paste IS the field)
+var _setup_panel_wovp_test_btn: ClickableQuad = null ## TEST KEY: Main validates the saved key and names whose it is
 var _setup_panel_back_btn: ClickableQuad = null
 var _setup_panel_up: bool = false
 var _setup_panel_gen: int = 0
@@ -294,6 +299,14 @@ var _face_cache_order: Array[String] = [] ## the face cache's LRU order (oldest 
 const FACE_CACHE_MAX: int = 48 ## four pages of faces - the working set a browsing session actually revisits
 var _strip_has_number: bool = false ## the library holds a non-letter title, so the "#" slot is laid out (see _refresh_strip)
 var _letter_net: String = "" ## "" | "THE" | "#": the standing net view - the wall shows exactly that net's games, in title order (see _jump_to_letter)
+var _tournament: bool = false ## the Tournament Room view stands: the wall shows WoVP challenge boards, not the library (see _build_tournament_rows)
+var _tournament_rows: Array = [] ## the standing view's rows, aligned 1:1 with _visible_games: {"kind": "challenge"|"state", "challenge", "game", "owned", "lines"}
+var _wovp_has_key: bool = false ## Main's word on the config: a WoVP key is saved
+var _wovp_user_id: String = "" ## whose key it is (validate-apikey's answer, or the cache's) - how the wall knows which row is HIS
+var _wovp_challenges: Array = [] ## the last-good boards (Array of WovpChallenge), live or from the disk cache
+var _wovp_fetched_at: int = 0 ## unix time the standing boards landed (0 = never)
+var _wovp_live: bool = false ## the standing boards came from a fetch this session (false = the disk cache's)
+var _wovp_fetch_error: String = "" ## the last fetch's failure, in words, when it failed - the wall says so rather than dressing stale boards as live
 var _slide_phase: int = 0 ## the page slide: 0 rest, 1 gliding out, 2 gliding back (see _update_slide)
 var _slide_dir: int = 0 ## the live slide's travel direction: +1 next page, -1 previous
 var _slide_t: float = 0.0 ## seconds into the live slide's current leg
@@ -547,7 +560,11 @@ func _recompute_visible() -> void:
 	# THE favorite un-flagged from inside the net) must not
 	# present as an empty room either - the net lifts, the
 	# plain filtered list shows, and the banner says why.
-	if _visible_games.is_empty() and _letter_net != "" and _scanner != null and not _scanner.games.is_empty():
+	# The Tournament Room is exempt from both guards below:
+	# its empty states (no key, no live challenges, a failed
+	# fetch) are real states with their own state panel, not
+	# a broken filter to fall back from.
+	if not _tournament and _visible_games.is_empty() and _letter_net != "" and _scanner != null and not _scanner.games.is_empty():
 		_filter_note = "%s view is empty here - showing the full list" % _letter_net
 		_letter_net = ""
 		_collect_visible()
@@ -556,7 +573,7 @@ func _recompute_visible() -> void:
 	# the sample-database trap showed up in the field - a black wall
 	# and "1/1"). Fall back to ALL and let the banner say why. VR
 	# stays the default only when VR-tagged games actually exist.
-	if _filter != "all" and _visible_games.is_empty() and _scanner != null and not _scanner.games.is_empty():
+	if not _tournament and _filter != "all" and _visible_games.is_empty() and _scanner != null and not _scanner.games.is_empty():
 		_filter_note = "%s filter found none - showing ALL" % str(FILTER_LABELS[_filter])
 		_filter = "all"
 		_collect_visible()
@@ -595,6 +612,20 @@ func _collect_filtered() -> Array[GameEntry]:
 
 
 func _collect_visible() -> void:
+	if _tournament:
+		# The Tournament Room's wall: one panel per live
+		# challenge (or a single state panel saying why there
+		# are none), in the league's own order - no sort, no
+		# net. _tournament_rows stays aligned 1:1 with
+		# _visible_games; the games are the matched library
+		# entries (launchable) or synthetic stand-ins for
+		# tables he does not own and for state panels (inert).
+		_tournament_rows = _build_tournament_rows()
+		_visible_games = []
+		for r: Variant in _tournament_rows:
+			_visible_games.append((r as Dictionary)["game"] as GameEntry)
+		return
+	_tournament_rows = []
 	var source: Array[GameEntry] = _collect_filtered()
 	if _letter_net != "":
 		# The net view: exactly the net's members out of the
@@ -611,6 +642,155 @@ func _collect_visible() -> void:
 		_sort_by_name()
 	elif _filter != "recents":
 		_sort_visible()
+
+
+## ------------------------------------------------------ Tournament Room
+
+## Main's delivery of the WoVP state: whose key, the
+## last-good boards (live or the disk cache's), when they
+## landed, and the last fetch's failure when it failed. The
+## wall renders exactly this and nothing else - no boards
+## are ever invented locally, and a failed refresh keeps
+## the last good boards WITH their stamp and the failure
+## stated (see _tournament_banner_line), never dressed as
+## live.
+func set_wovp_data(d: Dictionary) -> void:
+	_wovp_has_key = bool(d.get("has_key", false))
+	_wovp_user_id = str(d.get("user_id", ""))
+	_wovp_challenges = []
+	var arr: Variant = d.get("challenges", [])
+	if arr is Array:
+		var a: Array = arr
+		for c: Variant in a:
+			if c is WovpChallenge:
+				_wovp_challenges.append(c)
+	_wovp_fetched_at = int(d.get("fetched_at", 0))
+	_wovp_live = bool(d.get("live", false))
+	_wovp_fetch_error = str(d.get("fetch_error", ""))
+	if _tournament:
+		_recompute_visible()
+		_rebuild_wall()
+
+
+func tournament_active() -> bool:
+	return _tournament
+
+
+## The standing view's rows (the smoke's read of the wall's
+## own truth): aligned with _visible_games while the
+## Tournament Room stands, empty otherwise.
+func tournament_rows() -> Array:
+	return _tournament_rows.duplicate()
+
+
+## The banner while the Tournament Room stands: the boards'
+## provenance in one line - how many, when they landed, and
+## when they are not fresh, exactly that.
+func _tournament_banner_line() -> String:
+	if not _wovp_has_key:
+		return "Tournament Room - no WoVP key yet (add it in SETUP)"
+	if _wovp_challenges.is_empty():
+		if _wovp_fetch_error != "" and _wovp_fetched_at == 0:
+			return "Tournament Room - could not reach WoVP"
+		if _wovp_fetched_at == 0:
+			return "Tournament Room - fetching..."
+		return "Tournament Room - no live challenges right now"
+	var line: String = "Tournament Room - %d live challenges" % _wovp_challenges.size()
+	if _wovp_fetched_at > 0:
+		line += " - updated " + WovpTime.format_stamp(_wovp_fetched_at)
+	if _wovp_fetch_error != "":
+		line += " - refresh failed, showing the last good boards"
+	elif not _wovp_live:
+		line += " - saved boards, not yet refreshed"
+	return line
+
+
+## The standing view's rows from the standing data. A
+## challenge he owns joins his library by its VPS game id
+## against the scanner's match data (the version id rides
+## along in the challenge; the join is game-level in this
+## round - the build the wall launches is his default).
+func _build_tournament_rows() -> Array:
+	var rows: Array = []
+	if not _wovp_has_key:
+		rows.append(_tournament_state_row([
+			"No WoVP key yet.",
+			"Add your key in SETUP - PASTE KEY there (copy it first), or paste it on the desktop desk.",
+			"The key lives only on this PC.",
+		]))
+		return rows
+	if _wovp_challenges.is_empty():
+		if _wovp_fetch_error != "" and _wovp_fetched_at == 0:
+			rows.append(_tournament_state_row([
+				"Could not reach WoVP.",
+				_wovp_fetch_error,
+				"Press REFRESH on the rail to try again.",
+			]))
+		elif _wovp_fetched_at == 0:
+			rows.append(_tournament_state_row([
+				"Fetching your live challenges from WoVP...",
+			]))
+		else:
+			rows.append(_tournament_state_row([
+				"No live challenges right now.",
+				"Last checked " + WovpTime.format_stamp(_wovp_fetched_at) + ".",
+			]))
+		return rows
+	for ch: WovpChallenge in _wovp_challenges:
+		var game: GameEntry = _match_challenge(ch)
+		var owned: bool = game != null
+		if not owned:
+			game = _tournament_unowned_game(ch)
+		rows.append({"kind": "challenge", "challenge": ch, "game": game, "owned": owned, "lines": []})
+	return rows
+
+
+func _tournament_state_row(lines: Array) -> Dictionary:
+	var game: GameEntry = GameEntry.new()
+	game.game_id = "wovp:state"
+	game.title = "Tournament Room"
+	return {"kind": "state", "challenge": null, "game": game, "owned": false, "lines": lines}
+
+
+func _tournament_unowned_game(ch: WovpChallenge) -> GameEntry:
+	var game: GameEntry = GameEntry.new()
+	game.game_id = "wovp:none:" + ch.challenge_id
+	game.title = ch.table_name if ch.table_name != "" else ch.name
+	game.manufacturer = ch.table_manufacturer
+	game.year = ch.table_year
+	return game
+
+
+func _match_challenge(ch: WovpChallenge) -> GameEntry:
+	if _scanner == null or ch.table_external_id == "":
+		return null
+	return _scanner.game_by_id(ch.table_external_id)
+
+
+## Enter the Tournament Room: the wall becomes the boards
+## (whatever data already stands - the cache at boot), and
+## a fetch is requested so what stands becomes live. Focus
+## lands on the TOURNAMENT stop (the rail law: a press lands
+## on the stop that was pressed).
+func _enter_tournament() -> void:
+	_failed_game_id = ""
+	_status_note = ""
+	_tournament = true
+	_letter_net = ""
+	_page = 0
+	_recompute_visible()
+	_rebuild_wall()
+	_persist_view()
+	_land_on_rail_stop("tournament")
+	tournament_refresh_requested.emit()
+
+
+## Leave the Tournament Room for a library view. Called by
+## every rail branch that rebuilds the wall as the library
+## (filters, sort) and by a letter pick - the views are
+## alternatives, never layers.
+func _exit_tournament() -> void:
+	_tournament = false
 
 
 func page_count() -> int:
@@ -765,6 +945,13 @@ func _rebuild_wall() -> void:
 			if rq != null:
 				rq.pick_enabled = str(k) != "page_label"
 				rq.set_content_alpha(1.0)
+	# REFRESH is the one stop whose pick state is not a
+	# constant: it lives only while the Tournament Room
+	# stands (the blanket reset above would otherwise arm
+	# it over the library wall).
+	var refresh_q: ClickableQuad = _rail_quads.get("wovp_refresh") as ClickableQuad
+	if refresh_q != null:
+		refresh_q.pick_enabled = _tournament
 	# The alphabet strip is furniture on the same terms: built
 	# once beside the rail, and every rebuild re-lays it out
 	# (the "#" slot's existence follows the library), re-reads
@@ -801,7 +988,8 @@ func _build_rail(placeholder: Texture2D) -> void:
 	var z: float = -1.85
 	var defs: Array = [
 		["filter:all", 0.30], ["filter:vr", 0.24], ["filter:favorites", 0.44], ["filter:recents", 0.40],
-		["sort", 0.52], ["page_prev", 0.18], ["page_label", 0.28], ["page_next", 0.18], ["desk", 0.32], ["exit", 0.28],
+		["sort", 0.46], ["tournament", 0.44], ["page_prev", 0.18], ["page_label", 0.28], ["page_next", 0.18],
+		["wovp_refresh", 0.32], ["desk", 0.32], ["exit", 0.28],
 	]
 	var total: float = 0.0
 	for d: Variant in defs:
@@ -812,7 +1000,11 @@ func _build_rail(placeholder: Texture2D) -> void:
 		var key: String = str(d[0])
 		var w: float = float(d[1])
 		var q: ClickableQuad = _make_quad(_rail, "rail", key, placeholder, Vector2(w, 0.15), Vector3(x + w * 0.5, y, z))
-		if key == "page_label":
+		if key == "page_label" or key == "wovp_refresh":
+			# page_label is a readout, never a stop. REFRESH is
+			# a stop only while the Tournament Room stands (see
+			# _rebuild_wall) - refreshing boards you are not
+			# looking at is not a rail job.
 			q.pick_enabled = false
 		_rail_quads[key] = q
 		x += w + 0.035
@@ -830,6 +1022,8 @@ func _make_quad(parent: Node3D, action: String, payload: String, tex: Texture2D,
 ## The banner's one line: library summary, the empty-filter guard's
 ## explanation when it fired, and any transient launch status.
 func _banner_line() -> String:
+	if _tournament:
+		return _tournament_banner_line()
 	var line: String = "%d files - %d games - filter %s - sort %s" % [
 		_scanner.total_files, _scanner.games.size(),
 		str(FILTER_LABELS[_filter]), str(SORT_LABELS[_sort])]
@@ -868,9 +1062,14 @@ func _rail_label_accent(key: String) -> Array:
 	if key.begins_with("filter:"):
 		var f: String = key.trim_prefix("filter:")
 		label = str(FILTER_LABELS[f])
-		accent = f == _filter
+		accent = f == _filter and not _tournament
 	elif key == "sort":
 		label = "SORT: " + str(SORT_LABELS[_sort])
+	elif key == "tournament":
+		label = "TOURNAMENT"
+		accent = _tournament
+	elif key == "wovp_refresh":
+		label = "REFRESH"
 	elif key == "page_prev":
 		label = "<"
 	elif key == "page_next":
@@ -1039,6 +1238,7 @@ func _apply_strip_textures(presence: Dictionary) -> void:
 func _jump_to_letter(key: String) -> void:
 	_failed_game_id = ""
 	_status_note = ""
+	_exit_tournament() ## a letter pick files the LIBRARY - it leaves the Tournament Room like any library view change
 	if _filter == "recents":
 		_filter = "all"
 	_sort = "name"
@@ -1184,6 +1384,13 @@ func _fill_wall_textures(gen: int) -> void:
 		_strip_tex_cache[sck] = stex
 		squad.set_texture(stex)
 	var bench_t_furniture: int = Time.get_ticks_msec()
+	if _tournament:
+		# The Tournament Room's panels are boards and state
+		# faces, not game cards - their own fill, below.
+		await _fill_tournament_textures(gen, _page * PAGE_SIZE)
+		if gen == _gen:
+			wall_ready = true
+		return
 	# Panels. A face is a pure function of (game, its art
 	# file, favorite flag) inside one library adoption, so it
 	# is cached like the furniture's faces are (the pick-
@@ -1293,6 +1500,47 @@ func _fill_wall_textures(gen: int) -> void:
 			art_prefetch_requested.emit(near)
 
 
+## The Tournament Room's panel fill: board faces for
+## challenges (his row highlighted by the spec), a state
+## face for the state row, and a Launch button only on a
+## panel whose table he owns - a not-owned board and a
+## state panel carry no launch at all, so there is nothing
+## on them to press by accident. Boards are not cached:
+## their content is a function of the standing data and the
+## clock, and the view's rebuilds are player-paced.
+func _fill_tournament_textures(gen: int, start: int) -> void:
+	var now_unix: int = int(Time.get_unix_time_from_system())
+	for i: int in range(_panels.size()):
+		var row: Dictionary = _tournament_rows[start + i]
+		var quad: ClickableQuad = _panels[i]
+		var spec: Dictionary
+		if str(row.get("kind", "")) == "state":
+			spec = RoomSpecs.tournament_state_spec(row.get("lines", []))
+		else:
+			spec = RoomSpecs.tournament_board_spec(row["challenge"] as WovpChallenge,
+				bool(row.get("owned", false)), _wovp_user_id, now_unix)
+		var tex: Texture2D = await _factory.render_texture(spec, _panel_face_px)
+		if gen != _gen:
+			return
+		quad.set_texture(tex)
+		_panel_art_aspect[i] = 0.0
+		if i < _panel_launches.size():
+			var lq: ClickableQuad = _panel_launches[i]
+			var owned: bool = str(row.get("kind", "")) == "challenge" and bool(row.get("owned", false))
+			lq.visible = owned
+			lq.pick_enabled = owned and _mode == "wall"
+			if owned:
+				var ltex: Texture2D = _btn_tex_cache.get("LAUNCH|a") as Texture2D
+				if ltex == null:
+					ltex = await _factory.render_texture(
+						RoomSpecs.button_spec("LAUNCH", true), Vector2i(512, 164))
+					if gen != _gen:
+						return
+					if ltex != null:
+						_btn_tex_cache["LAUNCH|a"] = ltex
+				lq.set_texture(ltex)
+
+
 # ------------------------------------------------------------ interaction
 
 func _refresh_focusables() -> void:
@@ -1307,12 +1555,16 @@ func _refresh_focusables() -> void:
 		if _placard_back != null:
 			_focusables.append(_placard_back)
 	elif _setup_panel_up:
-		# The SETUP panel owns the room: its three buttons are
+		# The SETUP panel owns the room: its five buttons are
 		# the only focus stops (see show_setup_panel).
 		if _setup_panel_scan_btn != null:
 			_focusables.append(_setup_panel_scan_btn)
 		if _setup_panel_dl_btn != null:
 			_focusables.append(_setup_panel_dl_btn)
+		if _setup_panel_wovp_paste_btn != null:
+			_focusables.append(_setup_panel_wovp_paste_btn)
+		if _setup_panel_wovp_test_btn != null:
+			_focusables.append(_setup_panel_wovp_test_btn)
 		if _setup_panel_back_btn != null:
 			_focusables.append(_setup_panel_back_btn)
 	elif _mode == "detail" and _detail != null:
@@ -1386,6 +1638,10 @@ func _refresh_quad_states() -> void:
 		all.append(_setup_panel_scan_btn)
 	if _setup_panel_dl_btn != null:
 		all.append(_setup_panel_dl_btn)
+	if _setup_panel_wovp_paste_btn != null:
+		all.append(_setup_panel_wovp_paste_btn)
+	if _setup_panel_wovp_test_btn != null:
+		all.append(_setup_panel_wovp_test_btn)
 	if _setup_panel_back_btn != null:
 		all.append(_setup_panel_back_btn)
 	for q: ClickableQuad in all:
@@ -1469,7 +1725,7 @@ func _on_select(quad: ClickableQuad) -> void:
 
 func _activate(quad: ClickableQuad) -> void:
 	if _setup_panel_up:
-		# While the SETUP panel stands, its three buttons are
+		# While the SETUP panel stands, its five buttons are
 		# the room: everything else refuses. The pick flags
 		# already say so for the pointer; this is the lock for
 		# the keyboard/gamepad paths, which activate the
@@ -1486,6 +1742,13 @@ func _activate(quad: ClickableQuad) -> void:
 				if _setup_downloader != null and not _setup_downloader.is_downloading():
 					quad.pulse()
 					_start_setup_panel_download()
+			"setup_panel_wovp_paste":
+				quad.pulse()
+				_paste_wovp_key()
+			"setup_panel_wovp_test":
+				quad.pulse()
+				set_setup_panel_message("Testing the saved WoVP key...")
+				wovp_key_test_requested.emit()
 		return
 	if _placard_up:
 		# While the placard stands, everything else is inert. The
@@ -1598,6 +1861,7 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 	if key.begins_with("filter:"):
 		_filter = key.trim_prefix("filter:")
 		_letter_net = "" ## a filter press leaves the net view: the wall it rebuilds is the filter's own set
+		_exit_tournament() ## and the Tournament Room - the views are alternatives, never layers
 		_page = 0
 		_recompute_visible()
 		_rebuild_wall()
@@ -1607,11 +1871,24 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 		var idx: int = SORTS.find(_sort)
 		_sort = SORTS[(idx + 1) % SORTS.size()]
 		_letter_net = "" ## a sort press leaves the net view too - the net's order was title order by definition
+		_exit_tournament()
 		_page = 0
 		_recompute_visible()
 		_rebuild_wall()
 		_persist_view()
 		_land_on_rail_stop(key)
+	elif key == "tournament":
+		if _tournament:
+			# Already standing in it: the press is a refresh
+			# (the same ask REFRESH makes), focus unmoved.
+			tournament_refresh_requested.emit()
+			_land_on_rail_stop(key)
+		else:
+			_enter_tournament()
+	elif key == "wovp_refresh":
+		if _tournament:
+			tournament_refresh_requested.emit()
+			_land_on_rail_stop(key)
 	elif key == "page_prev":
 		if _page > 0:
 			_begin_page_slide(-1, _page_travel_landing(key, after_swap))
@@ -1695,7 +1972,11 @@ func _page_travel_landing(key: String, after_swap: Callable) -> Callable:
 ## empty-filter guard has already fallen back to ALL, whose
 ## first panel takes the focus.
 func _toggle_focused_favorite() -> void:
-	if _mode != "wall" or _placard_up or _setup_panel_up or _launching_game_id != "" or _focused == null:
+	if _mode != "wall" or _placard_up or _setup_panel_up or _launching_game_id != "" or _focused == null or _tournament:
+		# The Tournament Room is a standings surface, not a
+		# browsing one: X is inert there (a board face carries
+		# no favorite mark to flip, and the in-place re-render
+		# would paint a game face over the board).
 		return
 	var idx: int = _panels.find(_focused)
 	if idx < 0:
@@ -2173,7 +2454,7 @@ func _restore_room_pick_states() -> void:
 ## While the panel stands, the room behind it is inert,
 ## exactly as behind the placard: pick flags down (the
 ## snapshot restores them on the way out), focus confined
-## to the panel's three buttons, _activate refusing
+## to the panel's five buttons, _activate refusing
 ## everything else, launching unreachable, and B / D-pad
 ## Right acting as BACK - the panel never exits the app.
 func show_setup_panel() -> void:
@@ -2226,6 +2507,8 @@ func clear_setup_panel() -> void:
 		_setup_panel_face = null
 		_setup_panel_scan_btn = null
 		_setup_panel_dl_btn = null
+		_setup_panel_wovp_paste_btn = null
+		_setup_panel_wovp_test_btn = null
 		_setup_panel_back_btn = null
 	_restore_room_pick_states()
 	_set_focused(null)
@@ -2267,6 +2550,31 @@ func setup_panel_download_quad() -> ClickableQuad:
 
 func setup_panel_back_quad() -> ClickableQuad:
 	return _setup_panel_back_btn
+
+
+func setup_panel_wovp_paste_quad() -> ClickableQuad:
+	return _setup_panel_wovp_paste_btn
+
+
+func setup_panel_wovp_test_quad() -> ClickableQuad:
+	return _setup_panel_wovp_test_btn
+
+
+## PASTE KEY: the room's paste field. VR has no keyboard,
+## so the field is the clipboard itself - the player copies
+## the key on the PC (it is one line in his WoVP profile),
+## and this button takes it from there and hands it to Main
+## to save. An empty clipboard is a stated outcome, never a
+## silent no-op; the key itself is never written anywhere
+## here - it passes through this one signal to Main's
+## config save.
+func _paste_wovp_key() -> void:
+	var text: String = DisplayServer.clipboard_get().strip_edges()
+	if text == "":
+		set_setup_panel_message("The clipboard was empty - copy your WoVP key first, then press PASTE KEY.")
+		return
+	set_setup_panel_message("WoVP key pasted - saving it...")
+	wovp_key_pasted.emit(text)
 
 
 func setup_panel_message() -> String:
@@ -2356,9 +2664,23 @@ func _build_setup_panel() -> void:
 	_setup_panel_dl_btn.setup("setup_panel_download", "", placeholder, Vector2(0.66, 0.16))
 	_setup_panel_dl_btn.position = Vector3(0.375, -0.24, 0.0)
 	_setup_panel.add_child(_setup_panel_dl_btn)
+	# The WoVP row (the Tournament Room round): the key's
+	# two acts in the room. PASTE KEY is the paste field and
+	# its Save in one button - it reads the key off the PC
+	# clipboard and hands it to Main to save; TEST KEY asks
+	# Main whose the saved key is. The face's WoVP line says
+	# the standing state in words.
+	_setup_panel_wovp_paste_btn = ClickableQuad.new()
+	_setup_panel_wovp_paste_btn.setup("setup_panel_wovp_paste", "", placeholder, Vector2(0.66, 0.16))
+	_setup_panel_wovp_paste_btn.position = Vector3(-0.375, -0.5, 0.0)
+	_setup_panel.add_child(_setup_panel_wovp_paste_btn)
+	_setup_panel_wovp_test_btn = ClickableQuad.new()
+	_setup_panel_wovp_test_btn.setup("setup_panel_wovp_test", "", placeholder, Vector2(0.66, 0.16))
+	_setup_panel_wovp_test_btn.position = Vector3(0.375, -0.5, 0.0)
+	_setup_panel.add_child(_setup_panel_wovp_test_btn)
 	_setup_panel_back_btn = ClickableQuad.new()
 	_setup_panel_back_btn.setup("setup_panel_back", "", placeholder, Vector2(0.5, 0.16))
-	_setup_panel_back_btn.position = Vector3(0.0, -0.5, 0.0)
+	_setup_panel_back_btn.position = Vector3(0.0, -0.76, 0.0)
 	_setup_panel.add_child(_setup_panel_back_btn)
 	if _setup_downloader == null:
 		_setup_downloader = VpsDownloader.new()
@@ -2370,7 +2692,7 @@ func _build_setup_panel() -> void:
 	# placard's lesson).
 
 
-## Panel textures - face plus the three buttons - render
+## Panel textures - face plus the five buttons - render
 ## from current state, generation-guarded like the
 ## placard's. Renders serialize (the shared factory takes
 ## one at a time): a state change during a render, or
@@ -2419,6 +2741,18 @@ func _fill_setup_panel_textures(gen: int) -> void:
 		_after_setup_render()
 		return
 	_setup_panel_dl_btn.set_texture(dl_tex)
+	var paste_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.button_spec("PASTE KEY", false), Vector2i(512, 124))
+	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_wovp_paste_btn == null:
+		_after_setup_render()
+		return
+	_setup_panel_wovp_paste_btn.set_texture(paste_tex)
+	var test_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.button_spec("TEST KEY", false), Vector2i(512, 124))
+	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_wovp_test_btn == null:
+		_after_setup_render()
+		return
+	_setup_panel_wovp_test_btn.set_texture(test_tex)
 	var back_tex: Texture2D = await _factory.render_texture(
 		RoomSpecs.button_spec("BACK", true), Vector2i(512, 164))
 	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_back_btn == null:
@@ -2740,6 +3074,8 @@ func panel_full_pop_scale(q: ClickableQuad) -> Vector2:
 ## settle clock starts.
 func _update_power(delta: float) -> void:
 	var cand: ClickableQuad = _pop_target_panel()
+	if _tournament:
+		cand = null ## boards are standings, not backglasses: no power-on performance stands on a Tournament panel
 	if _slide_phase != 0:
 		cand = null
 	if cand != _power_candidate:
@@ -3176,7 +3512,7 @@ func _cycle_focus(step: int) -> void:
 ## rail walks THIS order and nothing else.
 const RAIL_FOCUS_ORDER: Array[String] = [
 	"filter:all", "filter:vr", "filter:favorites", "filter:recents",
-	"sort", "page_prev", "page_next", "desk", "exit",
+	"sort", "tournament", "page_prev", "page_next", "wovp_refresh", "desk", "exit",
 ]
 
 
