@@ -12,7 +12,16 @@ extends Control
 ##   board  - a Tournament Room scoreboard: band, table name,
 ##            deadline line, then stacked board rows - score
 ##            rows (his carries the accent ground), a divider
-##            row where the cutoff line falls, and note rows
+##            row where the cutoff line falls, and note rows.
+##            TR3: a score row is three columns (position /
+##            name / score): the name ellipsizes, the score
+##            sits in a fixed right-aligned column whose full
+##            text always fits - a row whose score outgrows
+##            the column at its base font scales the whole
+##            row down until the number fits. An owned board
+##            reserves a footer band at the face's bottom
+##            (spec "footer_px") for the room's Launch button:
+##            a plinth the text never flows into.
 ## Specs are plain dictionaries built by callers; reads are defensive.
 ## A spec may cap a text slot's lines ("title_max_lines" and friends);
 ## a capped label ellipsizes its overrun instead of wrapping without
@@ -45,6 +54,13 @@ const ART_STRIP_HEIGHT_PX: int = 92
 ## third) at wall distance.
 const FAVORITE_STAR_COLOR: Color = Color(1.0, 0.78, 0.25)
 
+## Board score rows (TR3): the score column's width cap, in
+## face pixels. A board's column is as wide as its widest
+## score needs at base font, up to this cap; a score that
+## needs more scales its whole row down to fit the cap
+## instead of ever clipping a digit.
+const BOARD_SCORE_COL_MAX_PX: float = 330.0
+
 var _bg: ColorRect
 var _margin: MarginContainer
 var _vbox: VBoxContainer
@@ -55,6 +71,8 @@ var _sub_label: Label
 var _body_label: Label
 var _chips_row: HBoxContainer
 var _rows_box: VBoxContainer ## the board kind's stacked rows (score / divider / note)
+var _footer_spacer: Control ## board kind: pushes the footer band to the face's bottom edge
+var _footer_panel: PanelContainer ## board kind: the Launch button's plinth (spec "footer_px")
 var _art_rect: TextureRect
 var _art_strip: PanelContainer
 var _art_label: Label
@@ -149,6 +167,15 @@ func _init() -> void:
 	_rows_box.visible = false
 	_vbox.add_child(_rows_box)
 
+	_footer_spacer = Control.new()
+	_footer_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_footer_spacer.visible = false
+	_vbox.add_child(_footer_spacer)
+	_footer_panel = PanelContainer.new()
+	_footer_panel.add_theme_stylebox_override("panel", _footer_box())
+	_footer_panel.visible = false
+	_vbox.add_child(_footer_panel)
+
 	# One CardFace serves every render the TextureFactory makes, so
 	# per-spec line discipline (apply_spec) must be undone before the
 	# next spec: snapshot the stock label settings now.
@@ -168,6 +195,20 @@ func _box(color: Color, radius: int) -> StyleBoxFlat:
 	sb.content_margin_right = 14
 	sb.content_margin_top = 6
 	sb.content_margin_bottom = 6
+	return sb
+
+
+## The board footer's style: a plinth - a slightly lifted
+## ground with a marquee-amber rule along its top edge, so
+## the band reads as the board's base and the Launch
+## button's home before the button even lands on it.
+func _footer_box() -> StyleBoxFlat:
+	var sb: StyleBoxFlat = StyleBoxFlat.new()
+	sb.bg_color = Color(0.09, 0.09, 0.15)
+	sb.border_color = Color(0.55, 0.38, 0.08)
+	sb.border_width_top = 3
+	sb.corner_radius_top_left = 6
+	sb.corner_radius_top_right = 6
 	return sb
 
 
@@ -217,6 +258,12 @@ func apply_spec(spec: Dictionary) -> void:
 	_sub_label.text = str(spec.get("sub", ""))
 	_sub_label.visible = _sub_label.text != ""
 	_sub_label.add_theme_font_size_override("font_size", int(spec.get("sub_size", 32)))
+	# A spec may warm its own sub line ("sub_color") - the
+	# board's deadline does, as its end nears. Re-asserted on
+	# every spec (one CardFace serves all renders), with the
+	# stock colour as the default so no warmth can leak.
+	_sub_label.add_theme_color_override("font_color",
+		_color_of(spec, "sub_color", Color(0.75, 0.78, 0.88)))
 	_body_label.text = str(spec.get("body", ""))
 	_body_label.visible = _body_label.text != ""
 	_body_label.add_theme_font_size_override("font_size", int(spec.get("body_size", 34)))
@@ -250,39 +297,167 @@ func apply_spec(spec: Dictionary) -> void:
 		var rows_v: Variant = spec.get("rows", [])
 		if rows_v is Array:
 			var rarr: Array = rows_v
-			for item: Variant in rarr:
-				if item is Dictionary:
-					_rows_box.add_child(_make_board_row(item))
+			var layout: Dictionary = _board_layout(rarr)
+			for i: int in range(rarr.size()):
+				if rarr[i] is Dictionary:
+					_rows_box.add_child(_make_board_row(rarr[i], layout, i))
+	# The board's footer band: an owned board reserves the
+	# face's bottom for its Launch button (the room parks the
+	# button over this plinth - see RoomSpecs.board_launch_y).
+	# Spacer + band stand only when the spec asks, so a
+	# board without a button uses its full height and no
+	# other kind ever sees the furniture.
+	var footer_px: int = int(spec.get("footer_px", 0)) if kind == "board" else 0
+	_footer_spacer.visible = footer_px > 0
+	_footer_panel.visible = footer_px > 0
+	if footer_px > 0:
+		_footer_panel.custom_minimum_size = Vector2(0.0, float(footer_px))
 
 
-## One board row: a score line on its own ground (the accent
-## ground is HIS row - the highlight the wall promises), a
-## divider (the cutoff line, labelled), or a plain note.
-func _make_board_row(entry: Dictionary) -> Control:
+## The board's column geometry for one spec: the position
+## column fits the widest position on the board, the score
+## column fits the widest score (capped - BOARD_SCORE_COL_MAX_PX),
+## and any row whose score still would not fit gets its font
+## scaled down until the number fits whole. Measured with
+## the labels' own font, so the numbers are the renderer's
+## numbers, not estimates.
+func _board_layout(entries: Array) -> Dictionary:
+	var font: Font = _measure_font()
+	var pos_w: float = 0.0
+	var score_w: float = 0.0
+	var needs: Dictionary = {}
+	var fonts: Dictionary = {}
+	for i: int in range(entries.size()):
+		if not (entries[i] is Dictionary):
+			continue
+		var e: Dictionary = entries[i]
+		if str(e.get("kind", "")) != "score":
+			continue
+		var base: int = int(e.get("size", 40))
+		pos_w = maxf(pos_w, _text_w(font, str(e.get("pos_text", "")), base))
+		var need: float = _text_w(font, str(e.get("score_text", "")), base) + 16.0
+		needs[i] = need
+		fonts[i] = base
+		score_w = maxf(score_w, need)
+	score_w = minf(score_w, BOARD_SCORE_COL_MAX_PX)
+	for i: int in range(entries.size()):
+		if not needs.has(i):
+			continue
+		var need2: float = float(needs[i])
+		if need2 > score_w:
+			var base2: int = int(fonts[i])
+			fonts[i] = maxi(18, int(floor(float(base2) * score_w / need2)))
+	return {"pos_w": pos_w + 6.0, "score_w": score_w, "fonts": fonts}
+
+
+func _measure_font() -> Font:
+	var f: Font = _band_label.get_theme_font("font")
+	if f != null:
+		return f
+	return ThemeDB.fallback_font
+
+
+func _text_w(font: Font, text: String, font_size: int) -> float:
+	if font == null:
+		return float(text.length()) * float(font_size) * 0.55
+	return font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
+
+
+## One board row: a divider (the cutoff line, drawn as a
+## ruled line in its tone - green up for a promotion line,
+## red down for a cut line), a score row in three columns,
+## or a plain note. The legacy single-label score row lives
+## on behind the harness's NC seam (RoomSpecs.board_nc_old):
+## it is the pre-TR3 shape the layout legs fail against.
+func _make_board_row(entry: Dictionary, layout: Dictionary, idx: int) -> Control:
 	var kind: String = str(entry.get("kind", "note"))
 	var text: String = str(entry.get("text", ""))
 	if kind == "divider":
+		var rule: Color = Color(0.85, 0.62, 0.20)
+		var ink: Color = Color(1.0, 0.85, 0.45)
+		var ground: Color = Color(0.20, 0.15, 0.04)
+		match str(entry.get("tone", "")):
+			"up":
+				rule = Color(0.35, 0.85, 0.45)
+				ink = Color(0.68, 1.0, 0.74)
+				ground = Color(0.07, 0.15, 0.09)
+			"down":
+				rule = Color(1.0, 0.36, 0.28)
+				ink = Color(1.0, 0.64, 0.56)
+				ground = Color(0.17, 0.07, 0.06)
 		var dp: PanelContainer = PanelContainer.new()
-		dp.add_theme_stylebox_override("panel", _box(Color(0.32, 0.23, 0.05), 6))
+		var dsb: StyleBoxFlat = _box(ground, 6)
+		dsb.border_color = rule
+		dsb.border_width_top = 5
+		dp.add_theme_stylebox_override("panel", dsb)
 		var dl: Label = Label.new()
 		dl.text = text
 		dl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		dl.add_theme_font_size_override("font_size", int(entry.get("size", 30)))
-		dl.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45))
+		dl.add_theme_color_override("font_color", ink)
 		dp.add_child(dl)
+		dp.set_meta("board_kind", "divider")
 		return dp
 	if kind == "score":
 		var accent: bool = bool(entry.get("accent", false))
 		var sp: PanelContainer = PanelContainer.new()
-		sp.add_theme_stylebox_override("panel", _box(
-			Color(0.55, 0.38, 0.08) if accent else Color(0.10, 0.10, 0.16), 6))
+		if accent:
+			# His row, richer (TR3): a brighter amber ground
+			# and a solid gold leading edge, so the eye finds
+			# it before it reads anything.
+			var asb: StyleBoxFlat = _box(Color(0.66, 0.46, 0.10), 6)
+			asb.border_color = Color(1.0, 0.80, 0.30)
+			asb.border_width_left = 8
+			sp.add_theme_stylebox_override("panel", asb)
+		else:
+			sp.add_theme_stylebox_override("panel", _box(Color(0.10, 0.10, 0.16), 6))
+		var ink2: Color = Color(1.0, 0.98, 0.92) if accent else Color(0.90, 0.91, 0.96)
+		sp.set_meta("board_kind", "score")
+		sp.set_meta("score_text", str(entry.get("score_text", "")))
+		if RoomSpecs.board_nc_old:
+			# The pre-TR3 row: one label, one line, and the
+			# score ellipsized away with the rest when the
+			# line outgrows the face. Restored only so the
+			# smoke's layout legs can fail against it by name.
+			var sl0: Label = Label.new()
+			sl0.text = text
+			sl0.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			sl0.add_theme_font_size_override("font_size", int(entry.get("size", 40)))
+			sl0.add_theme_color_override("font_color", ink2)
+			sp.add_child(sl0)
+			sp.set_meta("score_label", sl0)
+			sp.set_meta("need_text", text)
+			return sp
+		var fonts: Dictionary = layout.get("fonts", {})
+		var font_px: int = int(fonts.get(idx, int(entry.get("size", 40))))
+		var h: HBoxContainer = HBoxContainer.new()
+		h.add_theme_constant_override("separation", 10)
+		sp.add_child(h)
+		var pl: Label = Label.new()
+		pl.text = str(entry.get("pos_text", ""))
+		pl.custom_minimum_size = Vector2(float(layout.get("pos_w", 60.0)), 0.0)
+		pl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		pl.add_theme_font_size_override("font_size", font_px)
+		pl.add_theme_color_override("font_color", ink2)
+		h.add_child(pl)
+		var nl2: Label = Label.new()
+		nl2.text = str(entry.get("name_text", ""))
+		nl2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nl2.autowrap_mode = TextServer.AUTOWRAP_OFF
+		nl2.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		nl2.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		nl2.add_theme_font_size_override("font_size", font_px)
+		nl2.add_theme_color_override("font_color", ink2)
+		h.add_child(nl2)
 		var sl: Label = Label.new()
-		sl.text = text
-		sl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		sl.add_theme_font_size_override("font_size", int(entry.get("size", 40)))
-		sl.add_theme_color_override("font_color",
-			Color(1.0, 0.98, 0.92) if accent else Color(0.90, 0.91, 0.96))
-		sp.add_child(sl)
+		sl.text = str(entry.get("score_text", ""))
+		sl.custom_minimum_size = Vector2(float(layout.get("score_w", 200.0)), 0.0)
+		sl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		sl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		sl.add_theme_font_size_override("font_size", font_px)
+		sl.add_theme_color_override("font_color", ink2)
+		h.add_child(sl)
+		sp.set_meta("score_label", sl)
 		return sp
 	var nl: Label = Label.new()
 	nl.text = text
@@ -290,7 +465,38 @@ func _make_board_row(entry: Dictionary) -> Control:
 	nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	nl.add_theme_font_size_override("font_size", int(entry.get("size", 34)))
 	nl.add_theme_color_override("font_color", Color(0.80, 0.82, 0.90))
+	nl.set_meta("board_kind", "note")
 	return nl
+
+
+## The standing board spec's layout, measured off the built
+## controls (the smoke's layout legs read this): every row's
+## rect in face space; for score rows, the score label's own
+## rect and whether the score's full text fits it at the
+## rendered font - need measured with the renderer's font,
+## allotment the label's real width. Read it after a render,
+## while this face still wears the board.
+func board_metrics() -> Dictionary:
+	var rows: Array = []
+	for child: Node in _rows_box.get_children():
+		var c: Control = child as Control
+		if c == null or not c.has_meta("board_kind"):
+			continue
+		var d: Dictionary = {"kind": str(c.get_meta("board_kind")), "rect": c.get_global_rect()}
+		if str(d["kind"]) == "score":
+			var sl: Label = c.get_meta("score_label") as Label
+			if sl != null:
+				var need_text: String = str(c.get_meta("need_text")) if c.has_meta("need_text") else str(c.get_meta("score_text"))
+				d["score_rect"] = sl.get_global_rect()
+				d["score_text"] = str(c.get_meta("score_text"))
+				d["font_px"] = sl.get_theme_font_size("font_size")
+				d["score_need_px"] = _text_w(_measure_font(), need_text, int(d["font_px"]))
+				d["score_allot_px"] = sl.get_global_rect().size.x
+		rows.append(d)
+	var out: Dictionary = {"rows": rows, "face_size": size}
+	if _footer_panel.visible:
+		out["footer"] = _footer_panel.get_global_rect()
+	return out
 
 
 func _snapshot_label(l: Label) -> void:

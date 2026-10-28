@@ -45,6 +45,13 @@ func render_texture(spec: Dictionary, px_size: Vector2i) -> Texture2D:
 	return result
 
 
+## The face's board-layout metrics for the spec it currently
+## wears (the smoke's layout probe reads them right after a
+## board render, before any other render overwrites the face).
+func face_board_metrics() -> Dictionary:
+	return _face.board_metrics()
+
+
 func _render_now(spec: Dictionary, px_size: Vector2i) -> Texture2D:
 	_viewport.size = px_size
 	_face.apply_spec(spec)

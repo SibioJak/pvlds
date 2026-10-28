@@ -908,7 +908,10 @@ func _rebuild_wall() -> void:
 		var row: int = i / PAGE_COLS
 		var angle: float = deg_to_rad(float(col - 1) - 0.5) * 14.0
 		var pos: Vector3 = Vector3(sin(angle) * WALL_RADIUS, WALL_ROW_YS[row], -cos(angle) * WALL_RADIUS)
-		var q: ClickableQuad = _make_quad(_wall, "panel", game.game_id, placeholder, _panel_size, pos)
+		# Tournament boards stand at their own, larger window -
+		# they are not table cards (TR3; RoomSpecs.board_panel_size).
+		var psize: Vector2 = RoomSpecs.board_panel_size() if _tournament else _panel_size
+		var q: ClickableQuad = _make_quad(_wall, "panel", game.game_id, placeholder, psize, pos)
 		_panels.append(q)
 		_panel_base_pos.append(pos)
 		_panel_pop_dir.append((EYE - pos).normalized())
@@ -924,7 +927,9 @@ func _rebuild_wall() -> void:
 		# art face's name strip, never over the name.
 		var lq: ClickableQuad = ClickableQuad.new()
 		lq.setup("panel_launch", game.game_id, placeholder, PANEL_LAUNCH_SIZE)
-		lq.position = Vector3(0.0, PANEL_LAUNCH_Y, 0.032)
+		# On a board the button centres on the face's footer
+		# band (TR3) - over the plinth, never over board text.
+		lq.position = Vector3(0.0, RoomSpecs.board_launch_y() if _tournament else PANEL_LAUNCH_Y, 0.032)
 		q.add_child(lq)
 		_panel_launches.append(lq)
 	# Rail: built ONCE and persistent across rebuilds (the feel
@@ -1519,7 +1524,7 @@ func _fill_tournament_textures(gen: int, start: int) -> void:
 		else:
 			spec = RoomSpecs.tournament_board_spec(row["challenge"] as WovpChallenge,
 				bool(row.get("owned", false)), _wovp_user_id, now_unix)
-		var tex: Texture2D = await _factory.render_texture(spec, _panel_face_px)
+		var tex: Texture2D = await _factory.render_texture(spec, RoomSpecs.board_face_px())
 		if gen != _gen:
 			return
 		quad.set_texture(tex)
@@ -1539,6 +1544,46 @@ func _fill_tournament_textures(gen: int, start: int) -> void:
 					if ltex != null:
 						_btn_tex_cache["LAUNCH|a"] = ltex
 				lq.set_texture(ltex)
+
+
+## Smoke support (the tournament layout legs): render one
+## board spec fresh and report its layout in both spaces -
+## the face's own row/footer rects (face pixels, from
+## CardFace's measured controls) and the same rects converted
+## into panel space, alongside the Launch button's panel-
+## space rect, so a leg can assert the button and the text
+## never share ground. Panel space: metres, origin at the
+## panel centre, +x right, +y up, Rect2 position = min corner.
+func board_layout_probe(spec: Dictionary) -> Dictionary:
+	var tex: Texture2D = await _factory.render_texture(spec, RoomSpecs.board_face_px())
+	var m: Dictionary = _factory.face_board_metrics()
+	var psize: Vector2 = RoomSpecs.board_panel_size()
+	var face_size: Vector2 = m.get("face_size", Vector2(RoomSpecs.board_face_px()))
+	var rows_out: Array = []
+	for rv: Variant in (m.get("rows", []) as Array):
+		var rd: Dictionary = (rv as Dictionary).duplicate()
+		rd["panel_rect"] = _face_rect_to_panel(rd["rect"], face_size, psize)
+		if rd.has("score_rect"):
+			rd["score_panel_rect"] = _face_rect_to_panel(rd["score_rect"], face_size, psize)
+		rows_out.append(rd)
+	var out: Dictionary = {"texture": tex, "rows": rows_out, "panel_size": psize}
+	if m.has("footer"):
+		out["footer_panel_rect"] = _face_rect_to_panel(m["footer"], face_size, psize)
+	var ly: float = RoomSpecs.board_launch_y()
+	out["launch_rect"] = Rect2(
+		Vector2(-PANEL_LAUNCH_SIZE.x * 0.5, ly - PANEL_LAUNCH_SIZE.y * 0.5), PANEL_LAUNCH_SIZE)
+	return out
+
+
+## One face-space rect (pixels, origin top-left, +y down)
+## in panel space (metres, origin centre, +y up, min-corner
+## position) - the two spaces the layout legs compare in.
+func _face_rect_to_panel(r: Rect2, face_size: Vector2, panel_size: Vector2) -> Rect2:
+	var sx: float = panel_size.x / face_size.x
+	var sy: float = panel_size.y / face_size.y
+	var x0: float = (r.position.x - face_size.x * 0.5) * sx
+	var y_top: float = (face_size.y * 0.5 - r.position.y) * sy
+	return Rect2(Vector2(x0, y_top - r.size.y * sy), Vector2(r.size.x * sx, r.size.y * sy))
 
 
 # ------------------------------------------------------------ interaction

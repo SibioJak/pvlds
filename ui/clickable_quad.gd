@@ -11,6 +11,7 @@ extends Area3D
 var action_id: String = ""
 var payload: String = ""
 var pick_enabled: bool = true
+var _size: Vector2 = Vector2.ZERO ## the quad's face size, as set up (the tournament smoke reads board panels')
 
 var _mat: StandardMaterial3D
 var _frame_mat: StandardMaterial3D
@@ -26,6 +27,7 @@ const FOCUS_COLOR: Color = Color(0.35, 0.75, 1.0)
 func setup(p_action: String, p_payload: String, tex: Texture2D, size: Vector2) -> void:
 	action_id = p_action
 	payload = p_payload
+	_size = size
 	collision_layer = 2
 	collision_mask = 0
 	monitoring = false
@@ -80,6 +82,11 @@ func set_texture(tex: Texture2D) -> void:
 ## it to prove the rail never falls back to the placeholder).
 func current_texture() -> Texture2D:
 	return _mat.albedo_texture if _mat != null else null
+
+
+## The face size the quad was set up with.
+func quad_size() -> Vector2:
+	return _size
 
 
 ## Fade the quad's face (and its frame) toward transparent via

@@ -20,6 +20,68 @@ const CARD_BG: Color = Color(0.055, 0.055, 0.095)
 const BUTTON_BG: Color = Color(0.11, 0.11, 0.17)
 const BUTTON_BG_ACCENT: Color = Color(0.36, 0.25, 0.06)
 
+## ---- Tournament board presentation (the TR3 polish round).
+## Boards are NOT table cards: they stand at their own, larger
+## window and render at their own face size, and an owned
+## board's face reserves a footer band at its bottom where
+## the room parks the Launch button - over the band, never
+## over board text (Chris's field catches, 2026-10-28: "launch
+## buttons are in way, scores getting cut off"; "probably
+## room to expand the windows and not the same as table
+## windows, liven it up"). The pre-TR3 presentation survives
+## only behind the harness's negative-control seam
+## (PVLDS_BOARD_NC=oldlayout, read by Main before any room
+## exists): the legacy values below restore it wholesale -
+## card-size panels, the 512x640 face, the Launch button at
+## RoomView.PANEL_LAUNCH_Y, no footer - so the layout legs
+## can fail against it by name.
+const BOARD_PANEL_SIZE: Vector2 = Vector2(0.70, 0.672)
+const BOARD_FACE_PX: Vector2i = Vector2i(700, 672)
+const BOARD_FOOTER_PX: int = 128 ## the owned board face's bottom band: the Launch button's home
+const LEGACY_BOARD_PANEL_SIZE: Vector2 = Vector2(0.54, 0.64) ## == RoomView.PANEL_SIZE at the TR1/TR2 rounds
+const LEGACY_BOARD_FACE_PX: Vector2i = Vector2i(512, 640)
+const LEGACY_BOARD_LAUNCH_Y: float = -0.155 ## == RoomView.PANEL_LAUNCH_Y
+
+static var board_nc_old: bool = false ## Main sets this from PVLDS_BOARD_NC before any room exists
+
+
+static func board_panel_size() -> Vector2:
+	return LEGACY_BOARD_PANEL_SIZE if board_nc_old else BOARD_PANEL_SIZE
+
+
+static func board_face_px() -> Vector2i:
+	return LEGACY_BOARD_FACE_PX if board_nc_old else BOARD_FACE_PX
+
+
+## The board Launch button's centre height on its panel: the
+## middle of the face's footer band, in panel-local metres -
+## the one place room.gd and the face layout both derive
+## from, so the button can never drift back over the text.
+static func board_launch_y() -> float:
+	if board_nc_old:
+		return LEGACY_BOARD_LAUNCH_Y
+	var p: Vector2 = BOARD_PANEL_SIZE
+	return -p.y * 0.5 + (float(BOARD_FOOTER_PX) / float(BOARD_FACE_PX.y) * p.y) * 0.5
+
+
+## A challenge type's identity colour - the board's band.
+## The band carried the table's manufacturer colour through
+## TR1/TR2; the type is what changes a board's mathematics
+## (whether it draws a line, and where), so the type owns
+## the band now. The manufacturer stays where it always
+## lived: the library card and the detail view.
+static func challenge_type_color(type_code: String) -> Color:
+	match type_code:
+		WovpChallenge.TYPE_SEASON:
+			return Color(0.15, 0.30, 0.55) # steel blue
+		WovpChallenge.TYPE_EXTRA:
+			return Color(0.38, 0.22, 0.55) # violet
+		WovpChallenge.TYPE_TOURNAMENT:
+			return Color(0.55, 0.16, 0.13) # royale red
+		WovpChallenge.TYPE_MONTHLY:
+			return Color(0.08, 0.38, 0.33) # contract teal
+	return Color(0.25, 0.25, 0.38)
+
 
 static func manufacturer_color(manufacturer: String) -> Color:
 	if manufacturer == "":
@@ -236,6 +298,17 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 ## this spec only dresses it. A table he does not own still
 ## gets its board - with the NOT IN YOUR LIBRARY chip, and
 ## the room gives it no Launch button.
+##
+## TR3 dressing: score rows carry their parts (position /
+## name / score) separately so the face can lay them out in
+## columns - the name ellipsizes, the score never does (see
+## CardFace). The full line still rides along as "text" for
+## the legacy layout the NC seam restores. The deadline
+## line warms as the end nears (amber inside 48 hours, hot
+## inside 12, with the words to match), and the divider
+## knows its tone: "up" for a promotion line, "down" for a
+## cut line - the face draws it as a ruled line, not a
+## sentence.
 static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int) -> Dictionary:
 	var rows: Array = []
 	for entry: Variant in ch.board_rows(user_id):
@@ -245,35 +318,57 @@ static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: Strin
 				var r: WovpScoreRow = e.get("row") as WovpScoreRow
 				if r == null:
 					continue
-				var line: String = "#%d  %s  %s" % [r.position, r.participant_name, WovpChallenge.format_score(r.score)]
+				var score_text: String = WovpChallenge.format_score(r.score)
+				var line: String = "#%d  %s  %s" % [r.position, r.participant_name, score_text]
 				if r.is_pending:
 					line += " - awaiting validation"
 				rows.append({
 					"kind": "score", "text": line,
+					"pos_text": "#%d" % r.position,
+					"name_text": r.participant_name,
+					"score_text": score_text,
 					"accent": bool(e.get("mine", false)),
 					"size": 44 if bool(e.get("mine", false)) else 40,
 				})
+				if r.is_pending:
+					rows.append({"kind": "note", "text": "awaiting validation", "size": 24})
 			"divider":
-				rows.append({"kind": "divider", "text": str(e.get("label", "")), "size": 30})
+				var tone: String = ""
+				match ch.type_code:
+					WovpChallenge.TYPE_SEASON, WovpChallenge.TYPE_EXTRA:
+						tone = "up"
+					WovpChallenge.TYPE_TOURNAMENT:
+						tone = "down"
+				rows.append({"kind": "divider", "text": str(e.get("label", "")), "size": 30, "tone": tone})
 			"note":
 				rows.append({"kind": "note", "text": str(e.get("text", "")), "size": 34})
 	var chips: Array = []
 	if not owned:
 		chips.append({"text": "NOT IN YOUR LIBRARY", "accent": true})
 	var title: String = ch.table_name if ch.table_name != "" else ch.name
+	var remaining: int = ch.end_unix - now_unix
+	var sub: String = "Ends %s - %s" % [WovpTime.format_deadline(ch.end_unix), WovpTime.format_remaining(ch.end_unix, now_unix)]
+	var sub_color: Color = Color(0.75, 0.78, 0.88)
+	if remaining <= 12 * 3600:
+		sub += " - CLOSES SOON"
+		sub_color = Color(1.0, 0.55, 0.40)
+	elif remaining <= 48 * 3600:
+		sub_color = Color(0.98, 0.80, 0.45)
 	return {
 		"kind": "board",
 		"bg": CARD_BG,
-		"band": manufacturer_color(ch.table_manufacturer),
+		"band": challenge_type_color(ch.type_code),
 		"band_text": "%s - %s" % [ch.type_label(), ch.name],
 		"title": title,
-		"title_size": 52,
+		"title_size": 48,
 		"title_max_lines": 1,
-		"sub": "Ends %s - %s" % [WovpTime.format_deadline(ch.end_unix), WovpTime.format_remaining(ch.end_unix, now_unix)],
-		"sub_size": 30,
+		"sub": sub,
+		"sub_size": 28,
 		"sub_max_lines": 1,
+		"sub_color": sub_color,
 		"chips": chips,
 		"rows": rows,
+		"footer_px": (0 if board_nc_old else BOARD_FOOTER_PX) if owned else 0,
 	}
 
 
