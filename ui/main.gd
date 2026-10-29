@@ -2835,8 +2835,13 @@ func _drive_setup_panel_smoke() -> void:
 				_setup_panel_expect(_room.is_setup_panel_up(), "scan leg: the panel stands through its scan")
 				_setup_panel_expect(not _room._setup_scanning, "scan leg: the working state cleared")
 				var f: ClickableQuad = _room.focused_quad()
+				# The accepted set includes the display dials
+				# (amended in the GRAD FIX round with cause:
+				# TAB travel from SCAN now legitimately lands
+				# on the WING dial - it is a panel button).
 				_setup_panel_expect(f == _room.setup_panel_scan_quad() or f == _room.setup_panel_download_quad() or f == _room.setup_panel_back_quad()
-					or f == _room.setup_panel_wovp_paste_quad() or f == _room.setup_panel_wovp_test_quad(),
+					or f == _room.setup_panel_wovp_paste_quad() or f == _room.setup_panel_wovp_test_quad()
+					or f == _room.setup_panel_wing_quad() or f == _room.setup_panel_stars_quad(),
 					"scan leg: focus stayed on the panel through the landing")
 				# The download leg: the harness's stub database
 				# over local HTTP (PVLDS_VPSDB_URL).
