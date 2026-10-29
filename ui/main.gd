@@ -8728,6 +8728,112 @@ func _run_core_test() -> void:
 		"display title: 'Mr.' is a title word, not the MR feature tag", failures)
 	_expect(VpsDatabase.clean_display_title("Pharaoh's Ledger (Vantage 1979) JP v55 DT-FS-VR-MR Ext2k Conversion.vpx") == "Pharaoh's Ledger JP Ext2k Conversion",
 		"display title: the shouted DT-FS-VR-MR chain scrubs; unknowable words stay", failures)
+
+	# Edition referee (the edition-referee round, 2026-10-29):
+	# the VPS db catalogs trims as separate games - "Bolt/DC",
+	# "Bolt/DC (Pro)", "Bolt/DC (LUCI Premium)" - and a file
+	# wearing the edition words outside the db's parentheses
+	# used to match nothing: the LUCI build's download slug
+	# undershoots ("boltdc-luci"), the cleaned title strips the
+	# words (all trims share "boltdc"), and a team tag after the
+	# maker parens breaks the title guess. The referee reads the
+	# file's FULL token stream against the games' full names.
+	# A separate fixture, so the ladder distribution above keeps
+	# its numbers: in THAT db no LUCI game exists, and its
+	# "Bolt-DC LUCI Premium.vpx" correctly stays filename-only.
+	var ed_root_user: String = "user://core_test_edition"
+	_wipe_tree(ProjectSettings.globalize_path(ed_root_user))
+	var ed_user_dir: DirAccess = DirAccess.open("user://")
+	if ed_user_dir != null and not ed_user_dir.dir_exists("core_test_edition"):
+		ed_user_dir.make_dir("core_test_edition")
+	var ed_dir: DirAccess = DirAccess.open(ed_root_user)
+	if ed_dir != null and not ed_dir.dir_exists("tables"):
+		ed_dir.make_dir("tables")
+	var ed_tables: String = ed_root_user.path_join("tables")
+	var ed_db_data: Array = [
+		{
+			"id": "fx-ed-bolt", "name": "Bolt/DC", "manufacturer": "Volt",
+			"year": 2012, "designers": ["V. Olt"],
+			"tableFiles": [
+				{"id": "fx-ed-bolt-1", "version": "1.0", "tableFormat": "VPX", "authors": ["Volt Team"], "createdAt": 1700000000, "features": [], "urls": [{"url": "https://www.vpforums.org/index.php?app=downloads&showfile=20001"}]},
+			],
+		},
+		{
+			"id": "fx-ed-bolt-pro", "name": "Bolt/DC (Pro)", "manufacturer": "Volt",
+			"year": 2012, "designers": ["V. Olt"],
+			"tableFiles": [
+				{"id": "fx-ed-bolt-pro-1", "version": "1.0", "tableFormat": "VPX", "authors": ["Volt Team"], "createdAt": 1700000000, "features": [], "urls": [{"url": "https://www.vpforums.org/index.php?app=downloads&showfile=20002"}]},
+			],
+		},
+		{
+			"id": "fx-ed-bolt-luci", "name": "Bolt/DC (LUCI Premium)", "manufacturer": "Volt",
+			"year": 2013, "designers": ["V. Olt"],
+			"tableFiles": [
+				{"id": "fx-ed-bolt-luci-1", "version": "1.0.0", "tableFormat": "VPX", "authors": ["JP Sturm"], "createdAt": 1700000000, "features": [], "urls": [{"url": "https://www.vpforums.org/index.php?app=downloads&showfile=20003"}]},
+				{"id": "fx-ed-bolt-luci-2", "version": "1.13", "tableFormat": "VPX", "authors": ["VPW", "Fluff"], "createdAt": 1735000000, "features": ["Hybrid", "VR"], "urls": [{"url": "https://vpuniverse.com/files/file/99999-boltdc-luci-volt-2013-vpw-mod/"}]},
+			],
+		},
+	]
+	_expect(_write_text_file(ed_root_user.path_join("vpsdb.json"), JSON.stringify(ed_db_data)), "edition fixture: db written", failures)
+	var ed_db: VpsDatabase = VpsDatabase.new()
+	_expect(ed_db.load_db(ed_root_user.path_join("vpsdb.json")), "edition fixture: db loads", failures)
+	var ed_names: Array[String] = [
+		"Bolt-DC LUCI Premium (Volt 2013) VPW v1.13.vpx",
+		"Bolt-DC (Volt 2013) LUCI Premium v1.13.vpx",
+		"Bolt-DC Pro (Volt 2012) VPW v1.0.vpx",
+		"Bolt-DC Ultra Premium (Volt 2013) v1.0.vpx",
+		"Bolt-DC LUCI Premium (Volt 2012) VPW v1.13.vpx",
+		"Bolt-DC (Volt 2012).vpx",
+		"Bolt-DC LUCI Premium.vpx",
+	]
+	for ed_name: String in ed_names:
+		_expect(_write_text_file(ed_tables.path_join(ed_name), "fixture"), "edition fixture: file written (%s)" % ed_name, failures)
+	var ed_folders: Array[String] = [ed_tables]
+	var ed_scan: LibraryScanner = LibraryScanner.new()
+	ed_scan.scan(ed_folders, ed_db)
+	print("  edition fixture distribution: ", ed_scan.match_tier_counts,
+		" (builds ", ed_scan.matched_files, ", game-only ", ed_scan.game_matched_files, ")")
+	_expect(ed_scan.total_files == 7, "edition fixture: 7 files scanned", failures)
+	_expect(ed_scan.matched_files == 4, "edition fixture: 4 builds matched", failures)
+	_expect(ed_scan.game_matched_files == 1, "edition fixture: 1 by game only", failures)
+	_expect(ed_scan.games.size() == 5, "edition fixture: grouped into 5 games", failures)
+	_expect(int(ed_scan.match_tier_counts.get("edition", 0)) == 3
+		and int(ed_scan.match_tier_counts.get("name", 0)) == 2
+		and int(ed_scan.match_tier_counts.get("local", 0)) == 2,
+		"edition fixture: tiers resolve edition 3 / name 2 / local 2", failures)
+	var ed_luci: GameEntry = ed_scan.game_by_id("fx-ed-bolt-luci")
+	_expect(ed_luci != null and ed_luci.builds.size() == 3, "edition fixture: the LUCI game groups its 3 files (2 rescued, 1 by name)", failures)
+	if ed_luci != null:
+		var res1: TableBuild = ed_luci.build_by_path(ed_tables.path_join("Bolt-DC LUCI Premium (Volt 2013) VPW v1.13.vpx"))
+		_expect(res1 != null and res1.table_file_id == "fx-ed-bolt-luci-2" and res1.match_tier == "edition" and res1.has_vr_tag(),
+			"edition referee: his AC/DC shape - team tag after the maker parens - identifies the VR build fx-ed-bolt-luci-2 (it can now appear in the VR view)", failures)
+		var res2: TableBuild = ed_luci.build_by_path(ed_tables.path_join("Bolt-DC (Volt 2013) LUCI Premium v1.13.vpx"))
+		_expect(res2 != null and res2.table_file_id == "fx-ed-bolt-luci-2" and res2.match_tier == "edition",
+			"edition referee: edition words behind the maker parens complete the same match", failures)
+		_expect(ed_luci.build_by_path(ed_tables.path_join("Bolt-DC LUCI Premium (Volt 2012) VPW v1.13.vpx")) == null,
+			"edition referee: a LUCI file whose own parens state the WRONG year is still refused - the year veto is untouched", failures)
+		_expect(ed_luci.build_by_path(ed_tables.path_join("Bolt-DC Pro (Volt 2012) VPW v1.0.vpx")) == null,
+			"edition referee NC: the Pro file never lands on the LUCI entry", failures)
+		var ed_bare_file: TableBuild = ed_luci.build_by_path(ed_tables.path_join("Bolt-DC LUCI Premium.vpx"))
+		_expect(ed_bare_file != null and ed_bare_file.match_tier == "name" and not ed_bare_file.matched_db,
+			"edition referee: the bare edition file keeps its historic road - the name tier, game-only (the game states two builds, the file names neither)", failures)
+	var ed_pro: GameEntry = ed_scan.game_by_id("fx-ed-bolt-pro")
+	_expect(ed_pro != null and ed_pro.builds.size() == 1, "edition fixture: the Pro game holds exactly its own file", failures)
+	if ed_pro != null:
+		var nc1: TableBuild = ed_pro.builds[0]
+		_expect(nc1.table_file_id == "fx-ed-bolt-pro-1" and nc1.match_tier == "edition",
+			"edition referee NC: a file naming the Pro edition lands on the Pro entry - not the base game, not LUCI", failures)
+	var ed_bolt: GameEntry = ed_scan.game_by_id("fx-ed-bolt")
+	_expect(ed_bolt != null and ed_bolt.builds.size() == 1, "edition fixture: the base game holds exactly its own file", failures)
+	if ed_bolt != null:
+		var ctrl: TableBuild = ed_bolt.builds[0]
+		_expect(ctrl.table_file_id == "fx-ed-bolt-1" and ctrl.match_tier == "name",
+			"edition referee: the edition-less file still matches the plain entry by name, exactly as before", failures)
+	_expect(ed_scan.game_by_id("local:boltdcultrapremium") != null,
+		"edition referee NC: edition words naming NO game's edition ('Ultra Premium') complete nothing - the file stays filename-only", failures)
+	_expect(ed_scan.game_by_id("local:boltdclucipremiumvolt2012vpw") != null,
+		"edition referee: the wrong-year LUCI file stays filename-only under its own name", failures)
+	_wipe_tree(ProjectSettings.globalize_path(ed_root_user))
 	_wipe_tree(mt_root)
 
 	# Letter index (the letter-jump round): the alphabet

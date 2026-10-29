@@ -462,7 +462,15 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   game's own maker/year tokens to meet it) → game by normalized
   title → cleaned title (the scrubbed file name equals a db game's
   scrubbed name, for tables whose db entries carry no usable
-  download slug). An earlier ladder matched on db table-file names;
+  download slug) → edition referee (the file's full token stream —
+  base title and edition words, in place — equals exactly one db
+  game's full name with its parenthesized edition kept: the db
+  catalogs trims as separate games, "AC/DC (LUCI Premium)" beside
+  the plain "AC/DC", and a file wearing the words outside the
+  parentheses, with the decoration that broke the other roads,
+  still states its game exactly; a `(Maker Year)` segment drops
+  from the file's stream as meta while a year-less segment is
+  name text, and the parens referee judges as always). An earlier ladder matched on db table-file names;
   the real VPS database carries none on VPX entries (field finding,
   2026-10-25: those routes scored 0 of 383 in the field while
   passing against a fixture that had invented the field), so those
