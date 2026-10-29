@@ -3162,6 +3162,7 @@ var _grad_failures: int = 0
 var _grad_manifest: Dictionary = {}
 var _grad_sweep_i: int = -1 ## the centre the sweep is measuring (-1 = not started)
 var _grad_ink_stage: int = 0
+var _grad_ink_tries: int = 0 ## stability-wait cycles spent on the current ink target
 var _grad_ink_targets: Array = []
 var _grad_ink_img_a: Image = null
 var _grad_ink_img_b: Image = null
@@ -3727,22 +3728,51 @@ func _grad_ink_step() -> void:
 				return
 			var i: int = int(_grad_ink_targets[0])
 			_room._set_focused(_room._panels[i])
+			_grad_ink_tries = 0
 			_grad_ink_stage = 2
 			_grad_wait = 0
 		2:
-			var quiet: bool = not _room.page_slide_active() \
-				and (_room.power_panel() == null or _room.power_time() > 1.3)
-			if quiet and _grad_wait > 30:
+			# Stability is judged directly, not by proxy: two
+			# frames a few ticks apart must agree inside the
+			# label's rect before any diff is trusted (a power
+			# performance settling, a wing texture landing -
+			# whatever moves, the rect says so).
+			if not _room.page_slide_active() and _grad_wait > 10:
 				var i: int = int(_grad_ink_targets[0])
 				_grad_ink_label = _room._panel_labels[i]
 				_grad_ink_plate = _room._panel_plates[i]
 				_grad_ink_img_a = get_viewport().get_texture().get_image()
-				_grad_ink_label.visible = false
-				_grad_ink_stage = 3
+				_grad_ink_stage = 25
 				_grad_wait = 0
 			elif _grad_wait > 3600:
 				_grad_fail("label ink: the room never went quiet")
 				_grad_phase = 3
+		25:
+			if _grad_wait > 4:
+				_grad_ink_tries += 1
+				if _grad_ink_tries > 900:
+					_grad_fail("label ink: the frame never settled")
+					_grad_ink_label.visible = true
+					_grad_ink_plate.visible = true
+					_grad_phase = 3
+					return
+				var img_a2: Image = get_viewport().get_texture().get_image()
+				var i: int = int(_grad_ink_targets[0])
+				var cam: Camera3D = _room._active_camera()
+				var rect: Rect2 = _grad_label_screen_rect(i, cam).intersection(
+					Rect2(Vector2.ZERO, Vector2(img_a2.get_size())))
+				var changed: int = 0
+				for y: int in range(int(rect.position.y), int(rect.position.y + rect.size.y)):
+					for x: int in range(int(rect.position.x), int(rect.position.x + rect.size.x)):
+						var pa: Color = _grad_ink_img_a.get_pixel(x, y)
+						var pb: Color = img_a2.get_pixel(x, y)
+						if absf(pa.r - pb.r) + absf(pa.g - pb.g) + absf(pa.b - pb.b) > 0.24:
+							changed += 1
+				_grad_ink_img_a = img_a2
+				if changed <= 5:
+					_grad_ink_label.visible = false
+					_grad_ink_stage = 3
+				_grad_wait = 0
 		3:
 			if _grad_wait > 3:
 				_grad_ink_img_b = get_viewport().get_texture().get_image()
