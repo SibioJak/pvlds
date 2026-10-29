@@ -875,6 +875,55 @@ func _push_wovp_data() -> void:
 		"live": _wovp_boards_live,
 		"fetch_error": _wovp_fetch_error,
 	})
+	_resolve_unowned_shots()
+
+
+## A challenge whose table he does not own still gets its
+## art (the Tournament redesign): the db's author screenshot
+## for the challenge's exact table file, fetched through the
+## same ShotFetcher the library uses and worn by the
+## synthetic entry's face chain. No db art: the card wears
+## its generated title face - never another table's art.
+func _resolve_unowned_shots() -> void:
+	if _db == null or _shot_fetcher == null or _room == null:
+		return
+	var want: Array[GameEntry] = []
+	for rv: Variant in _room.tournament_rows():
+		var row: Dictionary = rv as Dictionary
+		if str(row.get("kind", "")) != "challenge" or bool(row.get("owned", false)):
+			continue
+		var game: GameEntry = row.get("game") as GameEntry
+		var ch: WovpChallenge = row.get("challenge") as WovpChallenge
+		if game == null or ch == null:
+			continue
+		if game.shot_url == "":
+			game.shot_url = _db_shot_url_for(ch)
+		if game.shot_url != "" and not ArtProvider.shot_is_cached(game.shot_url) \
+				and not ArtProvider.is_negative_outcome(ArtProvider.shot_outcome(game.shot_url)):
+			want.append(game)
+	if not want.is_empty():
+		_shot_fetcher.fetch_library(want)
+
+
+## The db's image for one challenge: its exact table file's
+## screenshot first, then the game record's own image, then
+## any of the game's table files.
+func _db_shot_url_for(ch: WovpChallenge) -> String:
+	for tfv: Variant in _db.table_files_of(ch.table_external_id):
+		var tf: Dictionary = tfv as Dictionary
+		if str(tf.get("id", "")) == ch.version_external_id:
+			var u: String = str(tf.get("imgUrl", ""))
+			if u != "":
+				return u
+	var gd: Dictionary = _db.game_dict(ch.table_external_id)
+	var gu: String = str(gd.get("imgUrl", ""))
+	if gu != "":
+		return gu
+	for tfv: Variant in _db.table_files_of(ch.table_external_id):
+		var u2: String = str((tfv as Dictionary).get("imgUrl", ""))
+		if u2 != "":
+			return u2
+	return ""
 
 
 ## Fetch the boards: resolve the key's identity first when
@@ -6536,10 +6585,22 @@ func _tournament_leg_layout_boards() -> void:
 		owned_flags.append(bool((r as Dictionary).get("owned", false)))
 	_tournament_expect(owned_flags == [true, true],
 		"layout: both seeded boards are his tables (owned - footer and Launch stand on them)")
+	# The redesign's shape (the GRAD FIX round, amending the
+	# TR3 leg with cause): challenges stand as full art CARDS
+	# at the card size, and ONE board stands beside the
+	# centred card at the board's own size, paired with the
+	# centred challenge.
 	if _room._panels.size() >= 1:
 		var psz: Vector2 = _room._panels[0].quad_size()
-		_tournament_expect(psz == RoomSpecs.board_panel_size() and psz.x > RoomView.PANEL_SIZE.x,
-			"layout size: tournament boards stand at their own larger window (%s), not the table-card size" % str(psz))
+		_tournament_expect(psz == Vector2(0.62, 1.08),
+			"layout size: tournament challenges stand as full art cards (%s), not board panels" % str(psz))
+	var bs: Dictionary = _room.tournament_board_state()
+	_tournament_expect(bool(bs.get("exists", false)) and (bs.get("size") as Vector2) == RoomSpecs.board_panel_size(),
+		"layout size: one board stands at its own window (%s) beside the centred card" % str(bs.get("size", Vector2.ZERO)))
+	if rows.size() >= 1:
+		var ch0: WovpChallenge = (rows[0] as Dictionary).get("challenge") as WovpChallenge
+		_tournament_expect(ch0 != null and str(bs.get("challenge_id", "")) == ch0.challenge_id,
+			"layout pairing: the standing board carries the centred challenge's board")
 
 
 func _layout_start_probes() -> void:
@@ -6691,7 +6752,28 @@ func _drive_tournament_full() -> void:
 			if _room.wall_ready and _tournament_smoke_wait >= 4:
 				_tournament_leg_rendered()
 				_tournament_smoke_wait = 0
+				_tournament_smoke_phase = 13
+		13:
+			# The re-pair (the redesign's core law): stepping
+			# to the not-owned challenge re-pairs the standing
+			# board - same place, same size, its content; the
+			# pairing carries no Launch.
+			if _tournament_smoke_wait == 0 and _room._panels.size() >= 5:
+				_room._set_focused(_room._panels[4])
+			_tournament_smoke_wait += 1
+			var bs13: Dictionary = _room.tournament_board_state()
+			var rows13: Array = _room.tournament_rows()
+			var ch4: WovpChallenge = (rows13[4] as Dictionary).get("challenge") as WovpChallenge if rows13.size() >= 5 else null
+			if ch4 != null and str(bs13.get("challenge_id", "")) == ch4.challenge_id and bool(bs13.get("has_board_texture", false)):
+				_tournament_expect(not bool(bs13.get("owned", true)),
+					"pairing: the board re-pairs to the not-owned challenge - board shown, no Launch")
+				_grad_save_grab("tournament_pairing_unowned.png")
+				_room._set_focused(_room._panels[0])
+				_tournament_smoke_wait = 0
 				_tournament_smoke_phase = 4
+			elif _tournament_smoke_wait > 900:
+				_tournament_fail("pairing: the standing board never re-paired to the not-owned challenge")
+				_finish_tournament_smoke()
 		4:
 			# The SETUP panel's WoVP legs. Clear the saved key
 			# first (memory + file), so the paste leg proves
@@ -6843,13 +6925,24 @@ func _tournament_leg_boards() -> void:
 
 
 func _tournament_leg_rendered() -> void:
-	# His row, in the rendered pixels: the season board's
+	# His row, in the rendered pixels: the standing board's
 	# texture carries a full row on the accent ground
 	# (CardFace's board accent). The NC that renames his
 	# rows (the stub's baduser variant) leaves no accent row
-	# to find - this leg fails by name there.
+	# to find - this leg fails by name there. (Amended in the
+	# GRAD FIX round with cause: the board's texture lives on
+	# the standing board beside the centred card now, not on
+	# a board panel.)
 	if _room._panels.size() >= 5:
-		var tex: Texture2D = _room._panels[0].current_texture()
+		var rows: Array = _room.tournament_rows()
+		var bs: Dictionary = _room.tournament_board_state()
+		var season0: WovpChallenge = (rows[0] as Dictionary).get("challenge") as WovpChallenge if rows.size() >= 1 else null
+		_tournament_expect(season0 != null and str(bs.get("challenge_id", "")) == season0.challenge_id and bool(bs.get("owned", false)),
+			"pairing: the standing board pairs with the centred challenge (his season table, owned)")
+		_tournament_expect(bool(bs.get("has_board_texture", false)),
+			"pairing: the standing board carries its rendered board face")
+		_grad_save_grab("tournament_pairing_owned.png")
+		var tex: Texture2D = bs.get("texture") as Texture2D
 		var accent_px: int = 0
 		if tex != null:
 			var img: Image = tex.get_image()
@@ -6859,7 +6952,7 @@ func _tournament_leg_rendered() -> void:
 				# window, and it must not be able to fake this
 				# leg - his row or nothing.
 				for x: int in range(0, img.get_width(), 3):
-					for y: int in range(250, mini(630, img.get_height()), 3):
+					for y: int in range(150, mini(740, img.get_height()), 3):
 						var px: Color = img.get_pixel(x, y)
 						if px.r >= 0.48 and px.r <= 0.64 and px.g >= 0.30 and px.g <= 0.47 and px.b <= 0.16:
 							accent_px += 1
