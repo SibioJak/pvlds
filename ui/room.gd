@@ -190,7 +190,7 @@ const BG_STAR_RADIUS: float = 30.0 ## the starfield shell's radius around the ey
 const BG_WIRE_RADIUS: float = 14.0 ## the lat/long wireframe shell's radius
 const BG_RING_RADIUS: float = 9.0 ## the one tilted orbit ring's radius
 const HAZE_FLOOR: float = 0.45 ## the far window columns' dim floor (see _haze_for)
-const WING_SIZE: Vector2 = Vector2(0.58, 0.60) ## the focused card's wing, inside its borrowed slot (see _wing_size)
+const WING_SIZE: Vector2 = Vector2(0.54, 0.58) ## the focused card's wing, inside its borrowed slot (see _wing_size)
 const WING_Y: float = 0.21 ## the wing's centre in its borrowed slot, card-local: spans -0.09..+0.51 of the slot's +-0.54
 ## The wing's seat discipline (the GRAD FIX round): the wing
 ## stands IN the left neighbour's slot, shrunk inside the
@@ -202,7 +202,7 @@ const WING_Y: float = 0.21 ## the wing's centre in its borrowed slot, card-local
 ## PVLDS_GRAD_NC=wing restores that size and seat, unborrowed.
 const WING_SIZE_NC: Vector2 = Vector2(0.66, 0.634)
 const WING_Y_NC: float = 0.225
-const WING_PROUD: float = 0.10 ## how far in front of the neighbour card the wing floats at full pop
+const WING_PROUD: float = 0.08 ## how far in front of the neighbour card the wing floats at full pop
 const TBOARD_PROUD: float = 0.06 ## how far in front of its borrowed slot the Tournament board floats at full pop
 const BG_STAR_SHADER: String = """
 shader_type spatial;
