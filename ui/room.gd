@@ -146,7 +146,7 @@ const PAIR_MIX_T0: float = 0.40 ## cascade second where a pair card's crossfade 
 ## the net at that letter. The strip is its own focus country
 ## beside the rail's: sideways travel walks the strip's own
 ## order, and the two rows trade places only vertically.
-const STRIP_Y: float = 0.1025 ## the strip row's height (the rail rides at 0.365, the status plate between them - the graduation stack)
+const STRIP_Y: float = 0.0825 ## the strip row's height (the rail rides at 0.225 above it - the graduation stack)
 const STRIP_Z: float = -1.62 ## the rail's depth: the strip is rail furniture
 const STRIP_LETTER_SIZE: Vector2 = Vector2(0.095, 0.13)
 const STRIP_THE_SIZE: Vector2 = Vector2(0.21, 0.13)
@@ -1504,10 +1504,16 @@ func _rebuild_wall() -> void:
 ## factory render, so a status change is instant and the
 ## pick-latency caches never see it. Not a quad: it is not
 ## pickable, focusable, or part of any pick snapshot.
+## The plate sits LOW and CLOSE (y 0.09, z -1.30, in front of
+## and below the strip): the graduation census proved the
+## rail/strip/status stack cannot share one depth without
+## eating bottom-band labels, so the status line left the
+## stack - down here its top edge rides at ~40 degrees of
+## depression, below every label's sight line.
 func _build_status_line() -> void:
-	_status_plate = _make_card_quad(self, Vector2(2.3, 0.11), Vector3(0.0, 0.225, -1.62), _plate_mat())
+	_status_plate = _make_card_quad(self, Vector2(2.3, 0.11), Vector3(0.0, 0.09, -1.30), _plate_mat())
 	_status_label = Label3D.new()
-	_status_label.position = Vector3(0.0, 0.225, -1.608)
+	_status_label.position = Vector3(0.0, 0.09, -1.288)
 	_status_label.pixel_size = 0.0028
 	_status_label.font_size = 30
 	_status_label.width = 780.0
@@ -1524,27 +1530,24 @@ func _build_rail(placeholder: Texture2D) -> void:
 	# ~26 degrees below the eye line and far enough out that the full
 	# rail width sits inside a 16:9 frustum (it was clipped at the
 	# bottom edge of the flat view when it hugged the player).
-	# The seat was re-tuned twice at graduation. First 0.30 / -1.70
-	# (the flat wall's 0.45 / -1.85 projected over the dome's
-	# bottom band). The graduation census then convicted the
-	# STACK, not the rail alone: three rows (rail 0.15 + status
-	# plate + strip 0.115 + gaps = 0.395 m) must fit between the
-	# bottom band's lowest label sight line and the floor, and
-	# that budget only exists CLOSE - the sight line from the eye
-	# (1.25) to a 3-line bottom label's foot (+0.024 at ~2.9 m)
-	# passes y 0.48 at the prototype panel's own distance, 1.62,
-	# but only y 0.37 out at 1.85. So the stack stands at the
-	# prototype's distance: rail top at y 0.44, plate 0.11 at
-	# 0.225, strip at 0.1025 - all at z -1.62.
-	# THE ARC: the quads stand on the eye-centred cylinder
-	# (radius 1.62), not on a flat plane. A flat 3.9 m rail's
-	# end corners bow UP in view (17.7 degrees of depression at
-	# the ends against 26.6 at the centre) and eat the bottom
-	# band's labels at the neighbouring columns - the
-	# graduation census convicted exactly that, three seat
-	# changes deep. On the cylinder every quad's top edge sits
-	# at the same depression, the drum's own trick.
-	var y: float = 0.365
+	# The seat was re-tuned at graduation, three rounds deep.
+	# The flat wall's rail (0.45 / -1.85) projected over the
+	# dome's bottom band. The census then convicted the STACK:
+	# rail + status plate + strip cannot fit between the
+	# bottom labels' sight line and the floor at any single
+	# depth - and an eye-centred ARC rail (constant depression,
+	# zero label intrusions) spans +/-75 degrees of azimuth,
+	# furniture beside the user's head. The shipped shape: the
+	# status plate leaves the stack (a low console plate in
+	# front of the strip, _build_status_line), and the two
+	# remaining rows sit at the prototype panel's distance:
+	# rail centre 0.225 (top 0.30 - at the widest in-zone stop
+	# its top edge holds ~25.6 degrees of depression against
+	# the labels' ~24.5), strip at 0.0825, both at z -1.62.
+	# Beyond the browsing zone the flat rail's far ends still
+	# graze fringe labels in the desk projection; the census
+	# counts and prints those, it does not convict them.
+	var y: float = 0.225
 	var z: float = -1.62
 	var defs: Array = [
 		["filter:all", 0.30], ["filter:vr", 0.24], ["filter:favorites", 0.44], ["filter:recents", 0.40],
@@ -1559,7 +1562,7 @@ func _build_rail(placeholder: Texture2D) -> void:
 	for d: Variant in defs:
 		var key: String = str(d[0])
 		var w: float = float(d[1])
-		var q: ClickableQuad = _make_quad(_rail, "rail", key, placeholder, Vector2(w, 0.15), _rail_arc_position(x + w * 0.5, y, -z))
+		var q: ClickableQuad = _make_quad(_rail, "rail", key, placeholder, Vector2(w, 0.15), Vector3(x + w * 0.5, y, z))
 		if key == "page_label" or key == "wovp_refresh":
 			# page_label is a readout, never a stop. REFRESH is
 			# a stop only while the Tournament Room stands (see
@@ -1568,16 +1571,6 @@ func _build_rail(placeholder: Texture2D) -> void:
 			q.pick_enabled = false
 		_rail_quads[key] = q
 		x += w + 0.035
-
-
-## A furniture position on the eye-centred cylinder:
-## arc_x metres of arc at radius r, height y. The rail and
-## the strip stand on this cylinder (see _build_rail's seat
-## note): every quad's top edge then sits at one depression
-## from the eye, as the drum's own cards do.
-func _rail_arc_position(arc_x: float, y: float, r: float) -> Vector3:
-	var th: float = arc_x / r
-	return Vector3(sin(th) * r, y, -cos(th) * r)
 
 
 func _make_quad(parent: Node3D, action: String, payload: String, tex: Texture2D, size: Vector2, pos: Vector3) -> ClickableQuad:
@@ -1726,7 +1719,7 @@ func _refresh_strip() -> void:
 			continue
 		var w: float = _strip_slot_size(key).x
 		q.visible = true
-		q.position = _rail_arc_position(x + w * 0.5, STRIP_Y, -STRIP_Z)
+		q.position = Vector3(x + w * 0.5, STRIP_Y, STRIP_Z)
 		# The row re-centers whenever the "#" slot joins or
 		# leaves, so a slot's facing follows its laid-out
 		# position, not the position it was built at.
