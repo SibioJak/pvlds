@@ -6763,7 +6763,7 @@ func _drive_tournament_full() -> void:
 			# board - same place, same size, its content; the
 			# pairing carries no Launch.
 			if _tournament_smoke_wait == 0 and _room._panels.size() >= 5:
-				_room._set_focused(_room._panels[4])
+				_room._set_centre(4, false)
 			_tournament_smoke_wait += 1
 			var bs13: Dictionary = _room.tournament_board_state()
 			var rows13: Array = _room.tournament_rows()
@@ -6772,7 +6772,7 @@ func _drive_tournament_full() -> void:
 				_tournament_expect(not bool(bs13.get("owned", true)),
 					"pairing: the board re-pairs to the not-owned challenge - board shown, no Launch")
 				_grad_save_grab("tournament_pairing_unowned.png")
-				_room._set_focused(_room._panels[0])
+				_room._set_centre(0, false)
 				_tournament_smoke_wait = 0
 				_tournament_smoke_phase = 4
 			elif _tournament_smoke_wait > 900:
