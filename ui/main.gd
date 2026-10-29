@@ -3697,8 +3697,11 @@ func _grad_audit_labels(tag: String) -> void:
 
 func _grad_leg_background_static() -> void:
 	var layers: Array = _room.background_layers()
-	_grad_expect(layers.size() == 3,
-		"background world-lock: the stack stands (starfield, wireframe, ring - %d layers)" % layers.size())
+	# Four layers since the GRAD FIX round: the near star
+	# shell joined the stack (starfield far, starfield near,
+	# wireframe, ring).
+	_grad_expect(layers.size() == 4,
+		"background world-lock: the stack stands (starfield, starfield near, wireframe, ring - %d layers)" % layers.size())
 	var drum: Node3D = _room.drum_node()
 	_grad_bg_before.clear()
 	for layer: Variant in layers:
@@ -3707,6 +3710,23 @@ func _grad_leg_background_static() -> void:
 			"background world-lock: a layer is not the drum's child")
 		if node != null:
 			_grad_bg_before.append(node.global_transform)
+	# The starfield dial (the GRAD FIX round): layered stands
+	# both shells, flat the far one alone, off neither - and
+	# the drum's parentage never moves under any setting.
+	if layers.size() == 4:
+		var far_shell: Node3D = layers[0] as Node3D
+		var near_shell: Node3D = layers[1] as Node3D
+		_room.set_starfield_mode("flat")
+		_grad_expect(far_shell.visible and not near_shell.visible,
+			"starfield dial: flat stands the far shell alone")
+		_room.set_starfield_mode("off")
+		_grad_expect(not far_shell.visible and not near_shell.visible,
+			"starfield dial: off stands no stars")
+		_room.set_starfield_mode("layered")
+		_grad_expect(far_shell.visible and near_shell.visible,
+			"starfield dial: layered stands both shells (the shipped default)")
+		_grad_expect(_room.starfield_mode() == "layered",
+			"starfield dial: the room reports the standing mode")
 
 
 func _grad_leg_background_lock() -> void:
