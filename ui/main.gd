@@ -3183,6 +3183,12 @@ var _grad_failures: int = 0
 var _grad_manifest: Dictionary = {}
 var _grad_sweep_i: int = -1 ## the centre the sweep is measuring (-1 = not started)
 var _grad_ink_stage: int = 0
+var _grad_swing_stage: int = 0
+var _grad_swing_samples: Array = [] ## [msec since journey start, target deviation in degrees]
+var _grad_swing_cmds: Array = [] ## msec offsets at which step commands were issued
+var _grad_swing_cmd_i: int = 0
+var _grad_swing_last_cmd: int = 0
+var _grad_swing_t0: int = 0
 var _grad_ink_tries: int = 0 ## stability-wait cycles spent on the current ink target
 var _grad_ink_plate_checked: int = 0 ## targets whose plate leg actually ran (a performing panel is exempt)
 var _grad_ink_targets: Array = []
@@ -3551,6 +3557,8 @@ func _drive_grad_smoke() -> void:
 			_finish_grad_smoke()
 		10:
 			_grad_ink_step()
+		11:
+			_grad_swing_step()
 
 
 func _grad_leg_library() -> void:
@@ -3813,7 +3821,9 @@ func _grad_ink_step() -> void:
 			if _grad_ink_targets.is_empty():
 				_grad_expect(_grad_ink_plate_checked >= 5,
 					"plate ink: at least five panels stood plate-checked (%d did)" % _grad_ink_plate_checked)
-				_grad_phase = 3
+				_grad_phase = 11
+				_grad_swing_stage = 0
+				_grad_wait = 0
 				return
 			var i: int = int(_grad_ink_targets[0])
 			_room._set_focused(_room._panels[i])
@@ -3918,6 +3928,161 @@ func _grad_ink_step() -> void:
 				_grad_ink_targets.pop_front()
 				_grad_ink_stage = 1
 				_grad_wait = 0
+
+
+## The swing-glide legs (the GRAD FIX round): the drum's
+## angle, sampled densely across two representative journeys -
+## a held-scroll staircase (one column per 240 ms, the room's
+## own hold cadence) and one long single swing (15 columns).
+## The old per-step cubic ease-out settled between held steps
+## and lunged at every restart: the ratchet. The legs judge
+## the replacement spring on the sampled path itself: within
+## every leg the approach is monotone (the deviation from the
+## standing target never grows), the held-scroll cruise does
+## not collapse between steps (the smoothed speed's floor
+## stays a real fraction of its peak once the journey is
+## rolling), and arrivals land inside the old duration law's
+## envelope, exactly on target.
+func _grad_swing_step() -> void:
+	match _grad_swing_stage:
+		0:
+			_room._set_focused(_room._panels[6])
+			_grad_swing_stage = 1
+			_grad_wait = 0
+		1:
+			_grad_wait += 1
+			if not _room.page_slide_active() and _grad_wait > 20:
+				_grad_swing_samples.clear()
+				_grad_swing_cmds.clear()
+				_grad_swing_cmd_i = 0
+				_grad_swing_last_cmd = -240
+				_grad_swing_t0 = Time.get_ticks_msec()
+				_grad_swing_stage = 2
+			elif _grad_wait > 3600:
+				_grad_fail("swing glide: the drum never rested before the journey")
+				_grad_phase = 3
+		2:
+			var now: int = Time.get_ticks_msec() - _grad_swing_t0
+			_grad_swing_samples.append([now, _room.page_slide_yaw_deg()])
+			if _grad_swing_cmd_i < 6 and now - _grad_swing_last_cmd >= 240:
+				_room._set_focused(_room._panels[7 + _grad_swing_cmd_i])
+				_grad_swing_cmds.append(now)
+				_grad_swing_last_cmd = now
+				_grad_swing_cmd_i += 1
+			if _grad_swing_cmd_i >= 6 and not _room.page_slide_active():
+				_grad_swing_eval_journey()
+				_grad_swing_samples.clear()
+				_grad_swing_cmds.clear()
+				_grad_swing_t0 = Time.get_ticks_msec()
+				_room._set_focused(_room._panels[27])
+				_grad_swing_cmds.append(0)
+				_grad_swing_stage = 3
+			elif now > 8000:
+				_grad_fail("swing glide: the held-scroll journey never settled")
+				_grad_phase = 3
+		3:
+			var now2: int = Time.get_ticks_msec() - _grad_swing_t0
+			_grad_swing_samples.append([now2, _room.page_slide_yaw_deg()])
+			if not _room.page_slide_active() and now2 > 100:
+				_grad_swing_eval_long()
+				_grad_phase = 3
+			elif now2 > 5000:
+				_grad_fail("swing glide: the long swing never settled")
+				_grad_phase = 3
+
+
+## Within-leg analysis shared by both journeys: the worst
+## backward step of the deviation, and per-interval speeds
+## (intervals straddling a command are excluded - a retarget
+## legitimately redefines the deviation).
+func _grad_swing_legs_of(samples: Array, cmds: Array) -> Array:
+	var legs: Array = []
+	var start: int = 0
+	for ci: int in range(cmds.size()):
+		var end: int = samples.size()
+		if ci + 1 < cmds.size():
+			end = 0
+			for si: int in range(start, samples.size()):
+				if int(samples[si][0]) >= int(cmds[ci + 1]):
+					end = si
+					break
+			if end == 0:
+				end = samples.size()
+		legs.append(samples.slice(start, end))
+		start = end
+	return legs
+
+
+func _grad_swing_eval_journey() -> void:
+	var samples: Array = _grad_swing_samples
+	_grad_expect(samples.size() >= 30,
+		"swing glide: the held-scroll journey is densely sampled (%d samples)" % samples.size())
+	var legs: Array = _grad_swing_legs_of(samples, _grad_swing_cmds)
+	var worst_back: float = 0.0
+	var speeds: Array = []
+	for li: int in range(legs.size()):
+		var leg: Array = legs[li]
+		var leg_speeds: Array = []
+		for k: int in range(1, leg.size()):
+			var dt: float = float(int(leg[k][0]) - int(leg[k - 1][0])) / 1000.0
+			var dd: float = float(leg[k][1]) - float(leg[k - 1][1])
+			worst_back = maxf(worst_back, dd)
+			if dt > 0.001:
+				leg_speeds.append(absf(dd) / dt)
+		if li >= 2:
+			speeds.append_array(leg_speeds)
+	_grad_expect(worst_back <= 0.05,
+		"swing glide: the drum never steps backward mid-journey (worst %.3f deg)" % worst_back)
+	# The cruise ripple: 3-sample smoothed speeds across the
+	# rolling legs (3rd step on) - their floor against their
+	# peak. The old curve's floor was zero: it settled dead
+	# between held steps.
+	var smooth: Array = []
+	for k: int in range(speeds.size()):
+		var a: float = float(speeds[maxi(0, k - 1)])
+		var b: float = float(speeds[k])
+		var c2: float = float(speeds[mini(speeds.size() - 1, k + 1)])
+		smooth.append((a + b + c2) / 3.0)
+	if smooth.size() >= 6:
+		var smin: float = INF
+		var smax: float = 0.0
+		for v: Variant in smooth:
+			smin = minf(smin, float(v))
+			smax = maxf(smax, float(v))
+		printerr("GRAD SWING: held-scroll cruise smoothed speed min %.1f max %.1f deg/s over %d intervals"
+			% [smin, smax, smooth.size()])
+		_grad_expect(smax > 0.0 and smin >= 0.30 * smax,
+			"swing glide: the held-scroll cruise never collapses (floor %.1f vs peak %.1f deg/s)" % [smin, smax])
+	else:
+		_grad_fail("swing glide: too few rolling intervals to judge the cruise (%d)" % smooth.size())
+	var total_ms: int = int(samples[samples.size() - 1][0]) if not samples.is_empty() else 0
+	_grad_expect(total_ms <= 6 * 240 + 800,
+		"swing glide: the held-scroll journey lands inside its envelope (%d ms)" % total_ms)
+
+
+func _grad_swing_eval_long() -> void:
+	var samples: Array = _grad_swing_samples
+	if samples.size() < 8:
+		_grad_fail("swing glide: the long swing is too thinly sampled (%d)" % samples.size())
+		return
+	var d0: float = float(samples[0][1])
+	var worst_back: float = 0.0
+	var t10: int = -1
+	var t_settle: int = int(samples[samples.size() - 1][0])
+	for k: int in range(1, samples.size()):
+		worst_back = maxf(worst_back, float(samples[k][1]) - float(samples[k - 1][1]))
+		if t10 < 0 and float(samples[k][1]) <= 1.0:
+			t10 = int(samples[k][0])
+	printerr("GRAD SWING: long swing from %.1f deg, within a degree at %d ms, settled by %d ms, worst backward %.3f"
+		% [d0, t10, t_settle, worst_back])
+	_grad_expect(worst_back <= 0.05,
+		"swing glide: the long swing never steps backward (worst %.3f deg)" % worst_back)
+	_grad_expect(t10 > 0 and t10 <= 353,
+		"swing glide: the long swing is visibly arrived inside the old law's duration (within a degree at %d ms of 353)" % t10)
+	_grad_expect(float(samples[samples.size() - 1][1]) == 0.0,
+		"swing glide: the long swing lands exactly on target")
+	_grad_expect(t_settle <= 441,
+		"swing glide: the long swing settles inside its envelope (%d ms)" % t_settle)
 
 
 func _grad_measure_centre(c: int) -> void:
