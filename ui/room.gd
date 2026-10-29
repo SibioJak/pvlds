@@ -146,8 +146,8 @@ const PAIR_MIX_T0: float = 0.40 ## cascade second where a pair card's crossfade 
 ## the net at that letter. The strip is its own focus country
 ## beside the rail's: sideways travel walks the strip's own
 ## order, and the two rows trade places only vertically.
-const STRIP_Y: float = 0.25 ## the strip row's height (the rail rides at 0.45, same depth)
-const STRIP_Z: float = -1.85 ## the rail's depth: the strip is rail furniture
+const STRIP_Y: float = 0.10 ## the strip row's height (the rail rides at 0.30, same depth)
+const STRIP_Z: float = -1.70 ## the rail's depth: the strip is rail furniture
 const STRIP_LETTER_SIZE: Vector2 = Vector2(0.095, 0.13)
 const STRIP_THE_SIZE: Vector2 = Vector2(0.21, 0.13)
 const STRIP_GAP: float = 0.014
@@ -227,7 +227,7 @@ void fragment() {
 ## card, by construction (see _make_card_nodes).
 const PANEL_SIZE: Vector2 = CARD_SIZE
 const PANEL_LAUNCH_SIZE: Vector2 = Vector2(0.36, 0.115)
-const PANEL_LAUNCH_Y: float = -0.46
+const PANEL_LAUNCH_Y: float = -0.47
 const PANEL_LAUNCH_Y_TOP: float = 0.44
 const SEATED_EYE_Y: float = 1.2 ## a seated player's eye height - the clearance QA camera
 
@@ -564,6 +564,12 @@ func _build_environment() -> void:
 	var plane: PlaneMesh = PlaneMesh.new()
 	plane.size = Vector2(14.0, 14.0)
 	floor_inst.mesh = plane
+	# The floor rides at the prototype's -0.02 (graduation):
+	# the DOME5 label census was measured against that plane -
+	# at y=0 the bottom band's three-line label blocks bottom
+	# out at +0.002, two millimetres of slack the census
+	# never had.
+	floor_inst.position = Vector3(0.0, -0.02, 0.0)
 	var fm: StandardMaterial3D = StandardMaterial3D.new()
 	fm.albedo_color = Color(0.045, 0.045, 0.065)
 	fm.roughness = 0.95
@@ -1148,7 +1154,7 @@ func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 		nodes["plate"] = _make_card_quad(q, LABEL_STRIP_SIZE, Vector3(0.0, LABEL_STRIP_Y, 0.005), _plate_mat())
 	var lq: ClickableQuad = ClickableQuad.new()
 	lq.setup("panel_launch", game.game_id, _placeholder_tex, PANEL_LAUNCH_SIZE)
-	lq.position = Vector3(0.0, RoomSpecs.board_launch_y() if mode == "board" else PANEL_LAUNCH_Y, 0.032)
+	lq.position = Vector3(0.0, RoomSpecs.board_launch_y() if mode == "board" else PANEL_LAUNCH_Y, 0.020)
 	q.add_child(lq)
 	nodes["launch"] = lq
 	return nodes
@@ -1205,7 +1211,7 @@ func _seat_card(idx: int, nodes: Dictionary) -> void:
 		var plate_bottom: float = block_cy - block_h * 0.5
 		if plate_bottom < -0.40:
 			var lq: ClickableQuad = nodes["launch"] as ClickableQuad
-			lq.position = Vector3(0.0, PANEL_LAUNCH_Y_TOP, 0.032)
+			lq.position = Vector3(0.0, PANEL_LAUNCH_Y_TOP, 0.020)
 
 
 ## The shelf's bookend fins (DOME3): a dark slab with an amber
@@ -1500,15 +1506,19 @@ func _build_status_line() -> void:
 
 
 func _build_rail(placeholder: Texture2D) -> void:
-	# ~22 degrees below the eye line and far enough out that the full
+	# ~26 degrees below the eye line and far enough out that the full
 	# rail width sits inside a 16:9 frustum (it was clipped at the
 	# bottom edge of the flat view when it hugged the player).
-	# Lowered from 0.55 in the occlusion round: from a seated eye
-	# the rail's top edge projected BELOW the wall's bottom row and
-	# swallowed its lower edge (see WALL_ROW_YS) - at 0.45 the top
-	# edge clears the row by ~4.4 degrees.
-	var y: float = 0.45
-	var z: float = -1.85
+	# The seat was re-tuned at graduation: the flat wall's rail
+	# (0.45 / -1.85, set in the occlusion round against the flat
+	# bottom row) projected over the DOME's bottom band - its
+	# labels ride ~19-22 degrees down at the drum's radius, and
+	# the old rail's top edge sat at ~19. At 0.30 / -1.70 the
+	# top edge sits ~26 degrees down and clears the lowest
+	# bottom-band label line by ~4 degrees, the margin the
+	# flat-wall round worked to.
+	var y: float = 0.30
+	var z: float = -1.70
 	var defs: Array = [
 		["filter:all", 0.30], ["filter:vr", 0.24], ["filter:favorites", 0.44], ["filter:recents", 0.40],
 		["sort", 0.46], ["tournament", 0.44], ["page_prev", 0.18], ["page_label", 0.28], ["page_next", 0.18],

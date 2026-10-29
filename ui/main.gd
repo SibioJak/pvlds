@@ -3156,6 +3156,12 @@ func _drive_nav_smoke() -> void:
 	match _nav_smoke_phase:
 		0:
 			if _room != null and _room.visible and _room.wall_ready:
+				# Park the mouse in the corner: hover wins the
+				# drum's centre over pad focus (the shipped
+				# law, right in the headset), so a mouse left
+				# mid-screen by the harness would drive the
+				# shelf while the leg drives the pad.
+				Input.warp_mouse(Vector2(512.0, 764.0))
 				_room.set_desk_camera_height(RoomView.SEATED_EYE_Y)
 				_room._handle_rail("filter:all")
 				_nav_smoke_wait = 0
@@ -3350,12 +3356,18 @@ func _nav_leg_cards_only() -> void:
 			stops += 1
 	_nav_expect(_room._focusables.size() == stops,
 		"cards-only: the focus walk is exactly the %d cards + rail stops + lit letter slots (got %d)" % [_room._panels.size(), _room._focusables.size()])
-	# Column 1 (slots 1, 5, 9): DOWN walks the rows in order.
-	_room._set_focused(_room._panels[1])
-	for slot: int in [5, 9]:
+	# One column's DOWN walk: the column's three row panels
+	# in order. (Graduation amendment: the flat wall's column
+	# was slots 1/5/9 of a 4x3 page; the drum's grid is the
+	# shelf itself - the indices come from the room's own
+	# grid math, the law - DOWN walks one column's rows in
+	# order - is unchanged.)
+	var c0: Vector2i = _room._grid_coord(1)
+	_room._set_focused(_room._panels[_room._index_at(c0.x, 0)])
+	for row: int in [1, 2]:
 		_room._move_focus(Vector2(0.0, 1.0))
-		_nav_expect(_room.focused_quad() == _room._panels[slot],
-			"cards-only: DOWN walks the column - slot %d next" % slot)
+		_nav_expect(_room.focused_quad() == _room._panels[_room._index_at(c0.x, row)],
+			"cards-only: DOWN walks the column - row %d next" % row)
 	_room._move_focus(Vector2(0.0, 1.0))
 	_nav_expect(_nav_key_of(_room.focused_quad()) != "",
 		"cards-only: DOWN from the bottom row lands on the rail, never a Launch button")
@@ -3364,10 +3376,15 @@ func _nav_leg_cards_only() -> void:
 func _nav_bottom_row_panel() -> ClickableQuad:
 	if _room == null or _room._panels.is_empty():
 		return null
-	var rows: int = int(ceil(float(_room._panels.size()) / float(RoomView.PAGE_COLS)))
-	var first_bottom: int = (rows - 1) * RoomView.PAGE_COLS
-	var mid: int = mini(first_bottom + 1, _room._panels.size() - 1)
-	return _room._panels[mid]
+	# The drum's bottom row: the panels on the shelf's bottom
+	# band (grid row 2) - the middle one stands for the row.
+	var bottom: Array = []
+	for i: int in range(_room._panels.size()):
+		if _room._grid_coord(i).y == 2:
+			bottom.append(_room._panels[i])
+	if bottom.is_empty():
+		return null
+	return bottom[bottom.size() / 2]
 
 
 ## A quad's screen-space rect from its collision box's corners,
@@ -3390,6 +3407,53 @@ func _nav_screen_rect(q: ClickableQuad, cam: Camera3D) -> Rect2:
 	return rect
 
 
+## The y of a sampled screen-space edge at screen x x,
+## linearly interpolated between the samples; INF when x
+## lies outside the edge's span (no overlap, no constraint).
+func _nav_edge_y_at(edge: Array[Vector2], x: float) -> float:
+	var best_lo: Vector2 = Vector2(INF, INF)
+	var best_hi: Vector2 = Vector2(-INF, INF)
+	for p: Vector2 in edge:
+		if p.x <= x and p.x > best_lo.x:
+			best_lo = p
+		if p.x >= x and p.x < best_hi.x:
+			best_hi = p
+	if best_lo.x == INF or best_hi.x == -INF:
+		return INF
+	if best_hi.x - best_lo.x < 0.001:
+		return best_lo.y
+	var f: float = (x - best_lo.x) / (best_hi.x - best_lo.x)
+	return lerpf(best_lo.y, best_hi.y, f)
+
+
+## A quad's screen-space rect from its VISUAL face (quad_size),
+## not its collision box: the pick box is deliberately generous,
+## and occlusion is a fact about what is seen, not what is
+## clickable. (The graduation legs measure sight, not reach.)
+func _nav_visual_rect(q: ClickableQuad, cam: Camera3D) -> Rect2:
+	var size: Vector2 = q.quad_size()
+	var half: Vector2 = size * 0.5
+	var corners: Array[Vector3] = [
+		Vector3(-half.x, -half.y, 0.0), Vector3(half.x, -half.y, 0.0),
+		Vector3(-half.x, half.y, 0.0), Vector3(half.x, half.y, 0.0)]
+	var rect: Rect2 = Rect2(cam.unproject_position(q.global_transform * corners[0]), Vector2.ZERO)
+	for c: int in range(1, corners.size()):
+		rect = rect.expand(cam.unproject_position(q.global_transform * corners[c]))
+	return rect
+
+
+## Whether a world point projects inside the viewport (with a
+## small margin): projection legs only judge what the desk
+## screen can actually show - a panel outside the frustum is
+## the panel-space legs' subject, not the projection's.
+func _nav_on_screen(p: Vector3, cam: Camera3D) -> bool:
+	if cam.is_position_behind(p):
+		return false
+	var s: Vector2 = cam.unproject_position(p)
+	var vp: Vector2 = cam.get_viewport().get_visible_rect().size
+	return s.x > -60.0 and s.y > -60.0 and s.x < vp.x + 60.0 and s.y < vp.y + 60.0
+
+
 func _nav_leg_clearance(popped_only: bool) -> void:
 	var cam: Camera3D = _room._desk_camera
 	if cam == null:
@@ -3399,39 +3463,136 @@ func _nav_leg_clearance(popped_only: bool) -> void:
 	for k: Variant in _room._rail_quads.keys():
 		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
 		if rq != null:
-			rail_rects.append(_nav_screen_rect(rq, cam))
+			rail_rects.append(_nav_visual_rect(rq, cam))
 	var rows: int = int(ceil(float(_room._panels.size()) / float(RoomView.PAGE_COLS)))
 	var first_bottom: int = (rows - 1) * RoomView.PAGE_COLS
 	for i: int in range(_room._panels.size()):
 		var panel: ClickableQuad = _room._panels[i]
 		var launch: ClickableQuad = _room._panel_launches[i] if i < _room._panel_launches.size() else null
 		if not popped_only:
-			# The name strip: panel-local arithmetic first (exact,
-			# camera-free), then the projected midpoints agree.
-			var strip_top: float = -RoomView.PANEL_SIZE.y * 0.5 \
-				+ RoomView.PANEL_SIZE.y * (float(CardFace.ART_STRIP_HEIGHT_PX) / 640.0)
+			# The nameplate clearance (graduation amendment):
+			# the dome face carries no baked name strip - the
+			# card's name rides its 3D plate + label, and the
+			# Launch button must clear THAT, in panel space
+			# first (exact, camera-free), then in projection.
+			# Both seats are lawful: below the plate, or at
+			# the card's top when a long title's plate grows
+			# down over the low seat.
 			if launch != null:
-				var btn_bottom: float = launch.position.y - RoomView.PANEL_LAUNCH_SIZE.y * 0.5
-				_nav_expect(btn_bottom >= strip_top + 0.01,
-					"panel %d: Launch button clears the name strip in panel space (bottom %.4f, strip top %.4f)" % [i, btn_bottom, strip_top])
-				var btn_mid: Vector2 = cam.unproject_position(
-					launch.global_transform * Vector3(0.0, -RoomView.PANEL_LAUNCH_SIZE.y * 0.5, 0.0))
-				var strip_mid: Vector2 = cam.unproject_position(
-					panel.global_transform * Vector3(0.0, strip_top, 0.0))
-				_nav_expect(btn_mid.y < strip_mid.y,
-					"panel %d: Launch button projects above the name strip (%.1f over %.1f)" % [i, btn_mid.y, strip_mid.y])
-		if i < first_bottom:
+				var plate: MeshInstance3D = _room._panel_plates[i] if i < _room._panel_plates.size() else null
+				if plate != null and plate.visible:
+					var pq: QuadMesh = plate.mesh as QuadMesh
+					var psz: Vector2 = pq.size if pq != null else Vector2.ZERO
+					var plate_rect: Rect2 = Rect2(
+						Vector2(plate.position.x, plate.position.y) - psz * 0.5, psz)
+					var btn_rect: Rect2 = Rect2(
+						Vector2(launch.position.x, launch.position.y) - RoomView.PANEL_LAUNCH_SIZE * 0.5,
+						RoomView.PANEL_LAUNCH_SIZE)
+					_nav_expect(not plate_rect.intersects(btn_rect),
+						"panel %d: Launch button clears the nameplate in panel space (btn %s, plate %s)" % [i, str(btn_rect), str(plate_rect)])
+					# The projection, measured on the EDGES
+					# themselves (projected AABBs of slanted
+					# quads intersect in their slack corners
+					# where the quads themselves never meet):
+					# sample the plate's near edge and the
+					# button's near edge, and require the
+					# button's edge to stay on its own side of
+					# the plate's, wherever their screen
+					# x-ranges overlap. Off-frustum panels are
+					# the panel-space check's subject alone.
+					if _nav_on_screen(panel.global_position, cam):
+						var low_seat: bool = launch.position.y < plate.position.y
+						var plate_edge: Array[Vector2] = []
+						var btn_edge: Array[Vector2] = []
+						for s: int in range(5):
+							var f: float = float(s) / 4.0
+							var px: float = plate_rect.position.x + plate_rect.size.x * f
+							var py: float = plate_rect.position.y + (0.0 if low_seat else plate_rect.size.y)
+							plate_edge.append(cam.unproject_position(
+								panel.global_transform * Vector3(px, py, 0.012)))
+							var bx: float = -RoomView.PANEL_LAUNCH_SIZE.x * 0.5 + RoomView.PANEL_LAUNCH_SIZE.x * f
+							var by: float = (RoomView.PANEL_LAUNCH_SIZE.y * 0.5) if low_seat else (-RoomView.PANEL_LAUNCH_SIZE.y * 0.5)
+							btn_edge.append(cam.unproject_position(
+								launch.global_transform * Vector3(bx, by, 0.0)))
+						var clear: bool = true
+						for be: Vector2 in btn_edge:
+							# The plate's edge height at this x,
+							# interpolated from its samples.
+							var pe_y: float = _nav_edge_y_at(plate_edge, be.x)
+							if pe_y == INF:
+								continue
+							if low_seat and be.y < pe_y + 1.0:
+								clear = false
+							if not low_seat and be.y > pe_y - 1.0:
+								clear = false
+						_nav_expect(clear,
+							"panel %d: Launch button projects clear of the nameplate (edge-sampled)" % i)
+		if _room._grid_coord(i).y != 2:
 			continue
 		if popped_only and panel != _nav_pop_panel:
 			continue
-		var targets: Array[ClickableQuad] = [panel]
-		if launch != null:
-			targets.append(launch)
-		for t: ClickableQuad in targets:
-			var rect: Rect2 = _nav_screen_rect(t, cam)
-			for r: int in range(rail_rects.size()):
-				_nav_expect(not rect.intersects(rail_rects[r]),
-					"bottom row panel %d (%s) clears rail quad %d in screen space" % [i, t.action_id, r])
+		# The bottom band vs the rail (graduation amendment):
+		# on the flat wall the whole panel had to clear the
+		# rail. On the drum the rail is NEAR furniture (z
+		# -1.70) in front of far cards (r 3.05) - a card's ART
+		# passing behind the bar in projection is depth
+		# separation, not occlusion, and the pointer ray to
+		# the card passes over the bar (see the rail's seat).
+		# What must never be eaten is what the player reads
+		# or presses: the panel's LABEL and its Launch
+		# button. Those are the targets now.
+		if launch != null and _nav_on_screen(panel.global_position, cam):
+			# Edge-sampled, like the nameplate leg: the
+			# button's bottom edge against each rail quad's
+			# top edge, wherever their screen x-ranges meet.
+			# (Projected AABBs of a slanted far button and a
+			# flat near quad intersect in slack corners where
+			# the quads themselves never meet - and where
+			# they DO meet, this still convicts.)
+			var btn_edge: Array[Vector2] = []
+			var lsz: Vector2 = launch.quad_size()
+			for s: int in range(5):
+				var f2: float = float(s) / 4.0
+				btn_edge.append(cam.unproject_position(launch.global_transform * Vector3(
+					-lsz.x * 0.5 + lsz.x * f2, -lsz.y * 0.5, 0.0)))
+			for k2: Variant in _room._rail_quads.keys():
+				var rq2: ClickableQuad = _room._rail_quads[k2] as ClickableQuad
+				if rq2 == null:
+					continue
+				var rsz: Vector2 = rq2.quad_size()
+				var rail_edge: Array[Vector2] = []
+				for s2: int in range(5):
+					var f3: float = float(s2) / 4.0
+					rail_edge.append(cam.unproject_position(rq2.global_transform * Vector3(
+						-rsz.x * 0.5 + rsz.x * f3, rsz.y * 0.5, 0.0)))
+				var clear2: bool = true
+				for be2: Vector2 in btn_edge:
+					var re_y: float = _nav_edge_y_at(rail_edge, be2.x)
+					if re_y == INF:
+						continue
+					if be2.y > re_y - 1.0:
+						clear2 = false
+				_nav_expect(clear2,
+					"bottom row panel %d (panel_launch) clears rail quad %s in screen space (edge-sampled)" % [i, str(k2)])
+		var label: Label3D = _room._panel_labels[i] if i < _room._panel_labels.size() else null
+		if label != null and label.visible and _nav_on_screen(panel.global_position, cam):
+			var lab_rect: Rect2 = _nav_aabb_screen_rect(_room.panel_label_world_aabb(i), cam)
+			for r2: int in range(rail_rects.size()):
+				_nav_expect(not lab_rect.intersects(rail_rects[r2]),
+					"bottom row panel %d (label) clears rail quad %d in screen space" % [i, r2])
+
+
+## A world AABB's screen rect, projected corner by corner.
+func _nav_aabb_screen_rect(aabb: AABB, cam: Camera3D) -> Rect2:
+	var pts: Array[Vector3] = []
+	for sx: float in [aabb.position.x, aabb.position.x + aabb.size.x]:
+		for sy: float in [aabb.position.y, aabb.position.y + aabb.size.y]:
+			for sz: float in [aabb.position.z, aabb.position.z + aabb.size.z]:
+				pts.append(Vector3(sx, sy, sz))
+	var rect: Rect2 = Rect2(cam.unproject_position(pts[0]), Vector2.ZERO)
+	for k: int in range(1, pts.size()):
+		rect = rect.expand(cam.unproject_position(pts[k]))
+	return rect
 
 
 ## Leg 4 (async - the face render awaits a frame): a title
@@ -3477,38 +3638,50 @@ func _nav_await_slide() -> void:
 		"slide: the wall returns to exact rest (yaw %.4f)" % _room.page_slide_yaw_deg())
 
 
-## The slide's choreography proof, run on the bumper leg's
-## first flip: the press itself does NOT swap the page (the
-## swap waits for the far point); mid-glide the wall is off
-## rest; in the first frame after the swap lands, every rail
-## quad already wears a real (non-placeholder) texture - the
-## bar never pops; and the wall settles at exact rest.
+## Await the drum's centre arriving at a shelf index (focus
+## moves the centre on the drum - see RoomView._follow_centre)
+## and the swing settling there.
+func _nav_await_centre(idx: int) -> void:
+	var guard: int = 0
+	while _room.centre_index() != idx and guard < 2400:
+		await get_tree().process_frame
+		guard += 1
+	_nav_expect(_room.centre_index() == idx, "centre arrives at shelf index %d" % idx)
+	await _nav_await_slide()
+
+
+## The swing's choreography proof, run on the bumper leg's
+## first flip (graduation amendment): the flat wall swapped
+## pages at a slide's far point; the drum has no swap - the
+## centre commits at the press and the drum GLIDES to it.
+## The proof's surviving intents: the travel is a glide, not
+## a cut (the drum stands off rest mid-swing and settles at
+## EXACT rest); the furniture never pops (every rail quad
+## wears a real texture at the press frame itself, the rail
+## being persistent); and the centre the press chose is the
+## centre the drum lands on.
 func _nav_flip_proof(step: int) -> void:
-	var page_before: int = _room._page
+	var centre_before: int = _room.centre_index()
 	_room._bumper_page(step)
-	_nav_expect(_room._page == page_before,
-		"slide: the page does not swap at the press - it swaps at the far point")
+	for k: Variant in _room._rail_quads.keys():
+		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
+		var tx: Texture2D = null
+		if rq != null:
+			tx = rq.current_texture()
+		_nav_expect(tx != null and tx.get_width() > 4,
+			"rail: %s wears a real texture on the flip's press frame" % str(k))
 	var peak: float = 0.0
-	var swapped: bool = false
 	var guard: int = 0
 	while _room.page_slide_active() and guard < 2400:
 		await get_tree().process_frame
 		guard += 1
 		peak = maxf(peak, absf(_room.page_slide_yaw_deg()))
-		if not swapped and _room._page != page_before:
-			swapped = true
-			for k: Variant in _room._rail_quads.keys():
-				var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
-				var tx: Texture2D = null
-				if rq != null:
-					tx = rq.current_texture()
-				_nav_expect(tx != null and tx.get_width() > 4,
-					"rail: %s wears a real texture on the first frame after the flip" % str(k))
-	_nav_expect(swapped, "slide: the page swapped during the glide")
-	_nav_expect(peak > 1.0, "slide: the wall leaves rest mid-glide (peak yaw %.2f deg)" % peak)
-	_nav_expect(not _room.page_slide_active(), "slide: the wall settles after the proof flip")
+	_nav_expect(peak > 1.0, "swing: the drum leaves rest mid-glide (peak deviation %.2f deg)" % peak)
+	_nav_expect(not _room.page_slide_active(), "swing: the drum settles after the proof flip")
 	_nav_expect(_room.page_slide_yaw_deg() == 0.0,
-		"slide: the wall returns to exact rest after the proof flip")
+		"swing: the drum returns to exact rest after the proof flip")
+	_nav_expect(_room.centre_index() != centre_before or step == 0,
+		"swing: the press moved the centre")
 
 
 ## Leg 5: bumper page travel, driven through RoomView's
@@ -3517,10 +3690,17 @@ func _nav_flip_proof(step: int) -> void:
 ## detail view) is exercised exactly as the room enforces it.
 ## The harness library spans three pages on ALL (full, full,
 ## one-panel short), pinned by run_nav_smoke.sh's stub count.
-## Async (the feel round): a flip rides the page slide, so
-## each travel press is followed by a settle wait before its
-## verdicts - the gating presses stay synchronous, since a
-## gated press starts no slide at all.
+##
+## Graduation amendment: on the drum a "page" is a
+## bookkeeping unit (12 shelf indices; the rail's readout
+## derives from the centre), and the bumper law is the
+## shelf's: a focused panel travels one page of shelf FROM
+## ITSELF (index +/- PAGE_SIZE, clamped to the shelf's ends)
+## and the centre lands on it; a focused rail stop keeps its
+## stop while the centre jumps a page; no focus lands on the
+## new page's first panel. The leg drives to known centres
+## first (focus moves the drum now), because earlier legs
+## leave the centre where their browsing left it.
 func _nav_leg_bumpers_async() -> void:
 	var pages: int = _room.page_count()
 	_nav_expect(pages >= 3, "bumpers: the harness library spans at least 3 pages (got %d)" % pages)
@@ -3529,31 +3709,33 @@ func _nav_leg_bumpers_async() -> void:
 		return
 	var filter0: String = _room._filter
 	var sort0: String = _room._sort
-	var last_page: int = pages - 1
-	_nav_expect(_room._page == 0, "bumpers: the leg starts on page 1")
-	# Travel, with focus keeping its grid slot. The first flip
-	# carries the slide's choreography proof.
+	var last_idx: int = _room._visible_games.size() - 1
+	# Drive to a known shelf place: focus panel 5, centre follows.
 	_room._set_focused(_room._panels[5])
+	await _nav_await_centre(5)
+	_nav_expect(_room._page == 0, "bumpers: the leg starts at the shelf's head (page 1)")
+	# Travel, focus riding one page of shelf from itself.
+	# The first flip carries the swing's choreography proof.
 	await _nav_flip_proof(1)
-	_nav_expect(_room._page == 1, "bumpers: RB advances to page 2")
-	_nav_expect(_room.focused_quad() == _room._panels[5],
-		"bumpers: focus keeps its grid slot across the flip")
+	_nav_expect(_room.centre_index() == 17 and _room._page == 1, "bumpers: RB advances a page of shelf")
+	_nav_expect(_room.focused_quad() == _room._panels[17],
+		"bumpers: focus lands a page of shelf from itself across the flip")
 	_room._bumper_page(1)
 	await _nav_await_slide()
-	_nav_expect(_room._page == last_page, "bumpers: RB advances to the last page")
-	_nav_expect(_room.focused_quad() == _room._panels[_room._panels.size() - 1],
+	_nav_expect(_room.centre_index() == last_idx and _room._page == pages - 1, "bumpers: RB advances to the last page")
+	_nav_expect(_room.focused_quad() == _room._panels[last_idx],
 		"bumpers: the short last page clamps focus to its last panel")
 	# Clamped at the far end: no wrap, focus instance untouched.
 	var held: ClickableQuad = _room.focused_quad()
 	_room._bumper_page(1)
-	_nav_expect(_room._page == last_page, "bumpers: RB clamps on the last page (no wrap)")
+	_nav_expect(_room.centre_index() == last_idx and _room._page == pages - 1, "bumpers: RB clamps on the last page (no wrap)")
 	_nav_expect(_room.focused_quad() == held, "bumpers: a clamped RB leaves focus untouched")
 	_room._bumper_page(-1)
 	await _nav_await_slide()
-	_nav_expect(_room._page == last_page - 1, "bumpers: LB retreats a page")
+	_nav_expect(_room.centre_index() == last_idx - 12 and _room._page == pages - 2, "bumpers: LB retreats a page")
 	_room._bumper_page(-1)
 	await _nav_await_slide()
-	_nav_expect(_room._page == 0, "bumpers: LB retreats to page 1")
+	_nav_expect(_room.centre_index() == 0 and _room._page == 0, "bumpers: LB retreats to page 1")
 	held = _room.focused_quad()
 	_room._bumper_page(-1)
 	_nav_expect(_room._page == 0, "bumpers: LB clamps on page 1 (no wrap)")
@@ -3564,16 +3746,16 @@ func _nav_leg_bumpers_async() -> void:
 	_room._set_focused(_room.rail_quad("sort"))
 	_room._bumper_page(1)
 	await _nav_await_slide()
-	_nav_expect(_room._page == 1 and _nav_key_of(_room.focused_quad()) == "sort",
+	_nav_expect(_room.centre_index() == 12 and _room._page == 1 and _nav_key_of(_room.focused_quad()) == "sort",
 		"bumpers: rail focus carries to the same stop across the flip")
 	_room._bumper_page(-1)
 	await _nav_await_slide()
-	# No focus lands on the first panel.
+	# No focus lands on the new page's first panel.
 	_room._set_focused(null)
 	_room._bumper_page(1)
 	await _nav_await_slide()
-	_nav_expect(_room._page == 1 and _room.focused_quad() == _room._panels[0],
-		"bumpers: no focus lands on the first panel")
+	_nav_expect(_room.centre_index() == 12 and _room._page == 1 and _room.focused_quad() == _room._panels[12],
+		"bumpers: no focus lands on the new page's first panel")
 	_room._bumper_page(-1)
 	await _nav_await_slide()
 	# Inert while the SETUP placard stands.
@@ -4008,6 +4190,7 @@ func _drive_letters_smoke() -> void:
 	match _letters_smoke_phase:
 		0:
 			if _room != null and _room.visible and _room.wall_ready:
+				Input.warp_mouse(Vector2(512.0, 764.0)) ## parked: hover would drive the drum's centre over the legs' pad focus (see the nav driver)
 				_room._handle_rail("filter:all")
 				_letters_smoke_wait = 0
 				_letters_smoke_phase = 1
