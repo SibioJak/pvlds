@@ -207,24 +207,60 @@ const BG_STAR_SHADER: String = """
 shader_type spatial;
 render_mode unshaded, cull_front, depth_draw_opaque;
 uniform vec4 deep_color : source_color = vec4(0.006, 0.008, 0.018, 1.0);
+uniform vec2 grid_size = vec2(220.0, 110.0);
+uniform float density = 0.82;
+uniform float star_radius = 0.16;
+uniform float brightness = 0.85;
+uniform float band_strength = 1.0;
+uniform vec2 seed_offset = vec2(0.0, 0.0);
 float cell_hash(vec2 cell) {
 	return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
 }
 void fragment() {
-	vec2 grid = vec2(220.0, 110.0);
-	vec2 cell = floor(UV * grid);
-	vec2 f = fract(UV * grid) - 0.5;
+	vec2 cell = floor(UV * grid_size) + seed_offset;
+	vec2 f = fract(UV * grid_size) - 0.5;
 	float h = cell_hash(cell);
 	vec2 star_pos = vec2(cell_hash(cell + 19.19), cell_hash(cell + 47.47)) - 0.5;
 	float d = length(f - star_pos * 0.72);
-	float star = smoothstep(0.16, 0.0, d) * step(0.82, h);
+	float star = smoothstep(star_radius, 0.0, d) * step(density, h);
 	float shade = 0.55 + 0.45 * cell_hash(cell + 91.31);
-	vec3 col = deep_color.rgb + vec3(0.90, 0.93, 1.0) * star * shade * 0.85;
+	vec3 col = deep_color.rgb + vec3(0.90, 0.93, 1.0) * star * shade * brightness;
 	float band = exp(-pow((UV.y - 0.62 + 0.18 * sin(UV.x * 6.2831)) * 4.2, 2.0));
-	col += vec3(0.020, 0.026, 0.045) * band;
+	col += vec3(0.020, 0.026, 0.045) * band * band_strength;
 	ALBEDO = col;
 }
 """
+## The near star shell's shader: the same hash field, drawn
+## stars-only (no sky of its own) so the far shell shows
+## through between its bigger, brighter, sparser stars - the
+## two shells at 30 m and 12 m are the starfield's depth
+## (the GRAD FIX round): under any head motion the layers
+## parallax against each other and against the wireframe
+## shell (14 m) and the ring (9 m) between them.
+const BG_STAR_NEAR_SHADER: String = """
+shader_type spatial;
+render_mode unshaded, cull_front, depth_draw_disabled, blend_mix;
+uniform vec2 grid_size = vec2(120.0, 60.0);
+uniform float density = 0.86;
+uniform float star_radius = 0.26;
+uniform float brightness = 1.0;
+uniform vec2 seed_offset = vec2(37.7, 91.3);
+float cell_hash(vec2 cell) {
+	return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+}
+void fragment() {
+	vec2 cell = floor(UV * grid_size) + seed_offset;
+	vec2 f = fract(UV * grid_size) - 0.5;
+	float h = cell_hash(cell);
+	vec2 star_pos = vec2(cell_hash(cell + 19.19), cell_hash(cell + 47.47)) - 0.5;
+	float d = length(f - star_pos * 0.72);
+	float star = smoothstep(star_radius, 0.0, d) * step(density, h);
+	float shade = 0.55 + 0.45 * cell_hash(cell + 91.31);
+	ALBEDO = vec3(0.90, 0.93, 1.0);
+	ALPHA = star * shade * brightness;
+}
+"""
+const BG_STAR_NEAR_RADIUS: float = 12.0 ## the near star shell's distance (the far shell rides BG_STAR_RADIUS, 30)
 
 ## The Launch button's seat on a card: the dome face carries
 ## NO name strip inside it (the nameplate rides on the card),
@@ -699,6 +735,28 @@ func _build_background() -> void:
 	stars.position = EYE
 	_bg_root.add_child(stars)
 	_bg_starfield = stars
+	# The near star shell (the GRAD FIX round): a second,
+	# nearer sphere of bigger, brighter, sparser stars with
+	# no sky of its own - the far shell shows through it.
+	# Layered mode stands both (the field parallaxes); flat
+	# keeps the far shell alone (the graduation's field);
+	# off kills both. All world-locked, like every layer.
+	var near_stars: MeshInstance3D = MeshInstance3D.new()
+	near_stars.name = "StarfieldNearShell"
+	var near_sphere: SphereMesh = SphereMesh.new()
+	near_sphere.radius = BG_STAR_NEAR_RADIUS
+	near_sphere.height = BG_STAR_NEAR_RADIUS * 2.0
+	near_sphere.radial_segments = 48
+	near_sphere.rings = 24
+	near_stars.mesh = near_sphere
+	var nsm: ShaderMaterial = ShaderMaterial.new()
+	var nsh: Shader = Shader.new()
+	nsh.code = BG_STAR_NEAR_SHADER
+	nsm.shader = nsh
+	near_stars.material_override = nsm
+	near_stars.position = EYE
+	_bg_root.add_child(near_stars)
+	_bg_starfield_near = near_stars
 	# The wireframe shell: latitude/longitude lines drawn
 	# as line geometry on a nearer sphere - the dome's own
 	# ghost, faint enough to read as depth, not structure.
@@ -732,6 +790,7 @@ func _build_background() -> void:
 	ring.rotation_degrees = Vector3(63.0, 0.0, 17.0)
 	_bg_root.add_child(ring)
 	_bg_ring = ring
+	_apply_starfield_mode()
 
 
 ## The wireframe shell's line geometry: meridians every 15
@@ -4297,7 +4356,7 @@ func drum_node() -> Node3D:
 
 func background_layers() -> Array:
 	var out: Array = []
-	for n: Node in [_bg_starfield, _bg_wireframe, _bg_ring]:
+	for n: Node in [_bg_starfield, _bg_starfield_near, _bg_wireframe, _bg_ring]:
 		if n != null:
 			out.append(n)
 	return out
