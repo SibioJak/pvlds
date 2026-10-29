@@ -209,8 +209,11 @@ func _update_action_visibility() -> void:
 
 func _fill_textures(gen: int, game: GameEntry) -> void:
 	# Big art or title card (card also covers undecodable art).
+	# The face ranking is the wall's (the author shot first);
+	# the detail render keeps the art's baked name strip -
+	# this surface has no nameplate of its own.
 	var art_done: bool = false
-	var art_file: String = game.ensure_art()
+	var art_file: String = game.face_path()
 	if art_file != "":
 		var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
 		if art_tex != null:

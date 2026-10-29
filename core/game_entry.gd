@@ -13,6 +13,7 @@ var builds: Array[TableBuild] = []
 var art_path: String = "" ## Loadable image (side image or extracted cache file), or "" -> generated title card.
 var art_source_path: String = "" ## The primary extraction source not yet extracted: a same-stem .directb2s, or the .vpx itself when the game has no backglass. "" when neither exists.
 var art_vpx_path: String = "" ## The game's first build's .vpx - the embedded-image fallback source, tried when the primary source holds no usable image. Set for every game; it is the table file itself, so it always exists.
+var shot_url: String = "" ## The VPS db's imgUrl for the CURRENT build: the author's screenshot of that exact build, the card face's primary source (the graduation round). "" when the db carries none. The bytes live in ArtProvider's cache once Main's ShotFetcher lands them; this entry only ever reads that cache.
 var _art_attempted: bool = false
 
 
@@ -102,6 +103,52 @@ func _ensure_from_source(src: String) -> String:
 	return ""
 
 
+## The face the card wears, in the graduation round's order:
+## the author's screenshot of the current build first (served
+## from ArtProvider's shot cache once the fetcher has landed
+## it), then the standing chain (ensure_art: side image ->
+## .directb2s extraction -> embedded .vpx image), then "" and
+## the generated title card. A shot that has not landed yet
+## does NOT blank the card: the standing chain answers for
+## now, and when the fetch lands the room re-reads this
+## (its face cache key carries the returned path, so the new
+## face replaces the old on the next fill). A shot whose fetch
+## failed is a recorded negative outcome - it never re-blocks
+## the chain behind per-visit retries.
+func face_path() -> String:
+	if shot_url != "":
+		if ArtProvider.shot_is_cached(shot_url):
+			return ArtProvider.shot_cache_path_for(shot_url)
+		if not ArtProvider.is_negative_outcome(ArtProvider.shot_outcome(shot_url)):
+			# Not landed, not failed: the standing chain
+			# answers until the fetch arrives.
+			return ensure_art()
+		# Landed-and-failed: fall through to the chain for good.
+	return ensure_art()
+
+
+## Whether this game's face IS its author screenshot right
+## now (the power-on's settle rule reads it: a performance
+## whose subject was the backglass settles back to the shot
+## only when the shot is the standing face).
+func has_shot_face() -> bool:
+	return shot_url != "" and ArtProvider.shot_is_cached(shot_url)
+
+
+## The .directb2s face as a loadable path, extracted on the
+## same claim discipline as ensure_art - the power-on's
+## subject (the graduation round: the backglass is the
+## power-on's rest state, whatever the card's face is).
+## "" when the game has no backglass source. The room warms
+## this at face-fill time, so a focus never pays an extraction
+## the warmer would not have done anyway.
+func backglass_face_path() -> String:
+	var src: String = backglass_source()
+	if src == "":
+		return ""
+	return _ensure_from_source(src)
+
+
 ## The .directb2s this game's face comes from, or "" when it
 ## does not. Only the primary extraction source counts, and
 ## only when it is a backglass: a side image outranks the
@@ -119,16 +166,21 @@ func backglass_source() -> String:
 
 ## The cached pair ON half for this game, as a loadable face
 ## texture path, or "" when there is none to crossfade to:
-## the face must BE this backglass's extraction (art_path is
-## its cache) and the extraction must have cached its On
+## the game's backglass extraction must have cached its On
 ## sibling (ArtProvider.has_pair_on). Cheap probes only - the
 ## extraction itself is the flat pipeline's work, already done
 ## by the time a panel exists.
+##
+## Graduation note: this gate used to also require the card's
+## face to BE the backglass extraction (art_path == its cache
+## path). With the author screenshot as the face, that identity
+## never holds - the pair would have died by construction. The
+## gate now asks only about the backglass itself: the power-on
+## performs ON the backglass whatever the card's face is, so
+## its On half is the crossfade's target whenever it exists.
 func pair_on_art() -> String:
 	var src: String = backglass_source()
 	if src == "":
-		return ""
-	if art_path != ArtProvider.cache_path_for(src):
 		return ""
 	if ArtProvider.has_pair_on(src):
 		return ArtProvider.pair_on_path_for(src)

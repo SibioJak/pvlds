@@ -40,6 +40,13 @@ var _pass_items: int = 0
 func warm_library(games: Array[GameEntry]) -> void:
 	var keep: Dictionary = {}
 	for g: GameEntry in games:
+		# A landed author screenshot stands or falls with its
+		# game too (the graduation round): its cache file and
+		# its outcome entry both key off the URL's stamp, and
+		# the prune below would otherwise eat a fetched face
+		# the first time the warmer ran after the fetch.
+		if g.shot_url != "":
+			keep[ArtProvider.shot_cache_path_for(g.shot_url)] = true
 		for src: String in g.art_sources():
 			keep[ArtProvider.cache_path_for(src)] = true
 			if src.get_extension().to_lower() == "directb2s":

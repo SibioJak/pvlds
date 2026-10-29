@@ -8,6 +8,7 @@ var file_path: String = ""
 var file_name: String = ""
 var game_key: String = "" ## VPS game id when known, else "local:<normalized title>".
 var table_file_id: String = "" ## VPS table-file id when this build matched the db.
+var img_url: String = "" ## The db tableFile's imgUrl: the author's screenshot of this exact build (the graduation round's card face). "" when the db carries none for this file.
 var version: String = "" ## e.g. "1.2.0"; "" when unknown.
 var authors: PackedStringArray = PackedStringArray()
 var date_unix: int = 0 ## Release date from the db when matched, else file mtime.

@@ -86,6 +86,13 @@ func scan(folders: Array[String], db: VpsDatabase, progress: ScanProgress = null
 	for entry: GameEntry in games:
 		_sort_builds(entry)
 		_resolve_art(entry, art_map)
+		# The card face's first source (the graduation round): the
+		# CURRENT build's author screenshot, when the db carries
+		# one for that exact build. The URL is recorded here; the
+		# fetch itself is Main's ShotFetcher (the scan stays pure
+		# data - no network on the worker thread).
+		var best: TableBuild = entry.current_build()
+		entry.shot_url = best.img_url if best != null else ""
 		# Covered = the listing proved art exists: a side image or
 		# a backglass. A game whose only source is the image inside
 		# its .vpx is NOT counted here - that art is real but
@@ -318,6 +325,7 @@ func _apply_table_file(b: TableBuild, game_id: String, tf: Dictionary) -> void:
 	b.game_key = game_id
 	b.matched_db = true
 	b.table_file_id = str(tf.get("id", ""))
+	b.img_url = str(tf.get("imgUrl", ""))
 	var v: String = str(tf.get("version", ""))
 	b.version = v if v != "" else _guess_version(b.file_name)
 	b.authors = VpsDatabase.str_array(tf.get("authors", []))

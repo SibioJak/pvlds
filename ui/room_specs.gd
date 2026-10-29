@@ -127,11 +127,16 @@ static func panel_spec(game: GameEntry, store: StateStore) -> Dictionary:
 	}
 
 
-static func art_spec(game: GameEntry, art_texture: Texture2D, store: StateStore) -> Dictionary:
+static func art_spec(game: GameEntry, art_texture: Texture2D, store: StateStore, strip: bool = true) -> Dictionary:
 	return {
 		"kind": "art",
 		"art_texture": art_texture,
 		"title": game.title,
+		# The name strip inside the face: on for the detail
+		# view's big art (it captions itself), off for the
+		# dome room's cards, whose nameplate label rides on
+		# the card itself (the graduation round).
+		"strip": strip,
 		# The favorite mark: the panel face shows a FAVORITE chip
 		# (panel_spec, above); the art face carries the same fact
 		# as a star badge (CardFace draws it). One store, one truth,

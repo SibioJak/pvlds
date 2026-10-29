@@ -1,10 +1,20 @@
 class_name RoomView
 extends Node3D
 
-## The room: a seated-first curved wall of table panels, a control rail,
-## and the detail view. One input model for every hand: the PointerRig
-## (VR laser / mouse ray) plus gamepad-and-keyboard focus navigation
-## over the same set of ClickableQuads.
+## The room: the planetarium drum (the graduation round,
+## 2026-10-29 - the DOME prototype, field-approved across
+## DOME1-DOME5, becomes PVLDS's room). The library stands on
+## a spherical drum around the player: three bands on a
+## sphere of WALL_RADIUS, column-major in the standing sort
+## order, the drum swinging so the focused column faces the
+## player. Around it, the furniture the wall always had: the
+## control rail, the alphabet strip, the detail view, the
+## SETUP panel and placard, the loading marquee, the
+## Tournament Room's boards (which ride the drum at their
+## own size), and the power-on mimic. One input model for
+## every hand: the PointerRig (VR laser / mouse ray) plus
+## gamepad-and-keyboard focus navigation over the same set
+## of ClickableQuads.
 
 signal setup_requested
 signal setup_placard_dismissed ## the setup placard's BACK: Main closes the desk it opened alongside
@@ -56,42 +66,18 @@ const MARQUEE_OUTLINE_SIZE: int = 24
 ## or holding gamepad/keyboard focus - lifts off the wall toward
 ## the viewer with depth from its neighbours. Only the one card
 ## is ever popped; focus loss settles it back flush.
-const POP_OUT_DISTANCE: float = 0.15 ## metres off the wall at full pop
-const POP_OUT_SCALE: float = 1.08 ## card scale at full pop
+const POP_OUT_DISTANCE: float = 0.15 ## metres off the shelf at full pop
+const POP_OUT_SCALE: float = 1.04 ## card scale at full pop (DOME5's trim: 1.08 -> 1.04 so the popped frame's top clears the label above - see the dome constants below)
 const POP_OUT_SEC: float = 0.15 ## pop in/out travel time, seconds
 
-## Card proportions (the sizing round, 2026-10-26 - Chris:
-## "consider the average dimension of a backglass so it fits
-## as much as possible. Or when it pops out and lights up, its
-## sizing to proper size"). Two halves:
-## (a) The wall grid stays uniform, but its aspect is tuned
-## from the library's own art: the median aspect of the art
-## PVLDS has actually extracted (ArtProvider.library_art_
-## median_aspect), conservatively clamped so the field-passed
-## wall geometry (rows, banner, rail) is never destabilized.
-## Too few samples, or a median already at the default, keeps
-## PANEL_SIZE exactly. The panel face renders at matching
-## pixel proportions, so the tune never stretches a face.
-## (b) The popped card ALSO grows to its own art's true
-## aspect (the number below clamps freak aspects): same
-## popped height, width follows the glass. A card whose art
-## aspect equals the grid's pops exactly as it always has -
-## the grow is continuous with the old uniform scale - and a
-## title card (no art) pops the old way too.
-const PANEL_ASPECT_MIN: float = 0.76 ## grid aspect clamp, low (default 0.844)
-const PANEL_ASPECT_MAX: float = 0.93 ## grid aspect clamp, high
-const PANEL_ASPECT_MIN_SAMPLES: int = 8 ## art samples before the median may move the grid
-## The pop's true-aspect gate (flicker fix round): the grow to
-## "proper size" is only honest when the art IS a backglass -
-## real glasses measure 1.11-1.30 - so the true-aspect pop
-## applies only inside a glass-plausible band, and even then
-## the horizontal growth is capped: a popped card must not
-## swallow its neighbours. Embedded art fails the band by
-## construction (playfield textures run 0.44-0.5, banner and
-## screenshot textures 1.7+) and pops the old uniform way.
-const POP_GATE_ASPECT_MIN: float = 0.75 ## narrowest aspect the pop treats as a glass's shape
-const POP_GATE_ASPECT_MAX: float = 1.45 ## widest aspect the pop treats as a glass's shape
-const POP_FULL_X_MAX: float = 1.5 ## a true-aspect pop's widest horizontal growth, whatever the glass
+## Card proportions (the graduation round): the drum's cards
+## stand at the prototype's proven size - CARD_SIZE below,
+## portrait, the author screenshot's own shape (aspect
+## ~0.562). The old wall's median-aspect grid tune and the
+## pop's true-aspect width grow are RETIRED with the wall:
+## the dome's pop is one uniform scale (DOME5's clearance
+## proof was measured against exactly that), and a uniform
+## grid is what lets 300+ cards share one shelf geometry.
 
 ## Power-on (the swap round, 2026-10-27): the snippet-layer
 ## cascade is RETIRED - four field ghosts in a row were one
@@ -166,31 +152,52 @@ const STRIP_LETTER_SIZE: Vector2 = Vector2(0.095, 0.13)
 const STRIP_THE_SIZE: Vector2 = Vector2(0.21, 0.13)
 const STRIP_GAP: float = 0.014
 
-const PAGE_SLIDE_OUT_SEC: float = 0.12 ## glide-out leg, seconds
-const PAGE_SLIDE_BACK_SEC: float = 0.12 ## glide-back leg, seconds
-const PAGE_SLIDE_YAW_DEG: float = 5.0 ## the far point's yaw, degrees (~a third of a column pitch)
+## ------------------------------------------------------------ the drum
+## The dome's geometry, ported from the field-approved
+## prototype (pvlds-dome-prototype, DOME1-DOME5) number for
+## number: cards on a sphere of WALL_RADIUS around EYE, in
+## three bands; consecutive games run along the TOP band,
+## then the middle, then the bottom (column-major: a game's
+## column is its index along its band). Only the columns
+## within VISIBLE_HALF_COLUMNS of the focused column are
+## drawn - the shelf is long (his ~356 games make ~119
+## columns, ~1600 degrees of arc) and the ends wear bookend
+## fins, gated into the same visibility window (DOME4's law:
+## an ungated fin folds back into the forward view mid-shelf
+## and paints its amber over card art).
+const ROW_ELEVATIONS: Array[float] = [25.0, 5.0, -15.0] ## band elevations in degrees: top, middle, bottom
+const ANGLE_STEP_DEG: float = 13.5 ## column pitch, degrees
+const VISIBLE_HALF_COLUMNS: int = 10 ## drawn columns either side of the focused column
+const CARD_SIZE: Vector2 = Vector2(0.62, 1.08) ## the card face, metres - the author screenshot's portrait shape
+const CARD_FRAME_SIZE: Vector2 = Vector2(0.68, 1.10) ## the frame quad behind the face (DOME5's trimmed height)
+const CARD_FACE_PX: Vector2i = Vector2i(496, 864) ## card faces render at the card's own aspect (0.574)
+const LABEL_STRIP_Y: float = -0.30 ## the nameplate strip's centre, card-local metres (DOME5: raised from -0.47)
+const LABEL_STRIP_SIZE: Vector2 = Vector2(0.62, 0.135) ## the nameplate's dark plate behind the title
+const LABEL_PIXEL_SIZE: float = 0.0024 ## the title Label3D's world scale (the prototype's)
+const LABEL_FONT_SIZE: int = 30
+const LABEL_WIDTH_PX: float = 255.0 ## wrapped-title width: a long name takes up to four lines inside the plate's column
+## The swing: the drum eases to the focused column on a cubic
+## ease-out; the duration grows with the travel (a letter
+## jump's full-alphabet swing caps at 0.72 s) and input is
+## NEVER gated by the motion - every step retargets from the
+## drum's current angle (the prototype's speed-gate law).
+const SWING_MIN_SEC: float = 0.16
+const SWING_MAX_SEC: float = 0.72
 
-## Wall card geometry (the occlusion round, 2026-10-24 - Chris's
-## seated screenshot: names behind Launch buttons, the bottom row
-## behind the control rail). The wall faces render at 512x640, so
-## the art face's name strip (CardFace.ART_STRIP_HEIGHT_PX) owns
-## the panel's bottom 92/640 of its height: with PANEL_SIZE.y =
-## 0.64 the strip's top edge sits at panel-local y = -0.228. The
-## Launch button used to centre at y = -0.242 - square over the
-## name ("El D ... 1...", "Ele ..."). PANEL_LAUNCH_Y puts the
-## button's lower edge at -0.2125: clear of the strip's top edge
-## with ~15mm to spare, still riding the card's lower third as a
-## distinct, unmissable target.
-const PANEL_SIZE: Vector2 = Vector2(0.54, 0.64)
+## The Launch button's seat on a card: the dome face carries
+## NO name strip inside it (the nameplate rides on the card),
+## so the button sits in the card's lower third, below the
+## nameplate (the standard plate's bottom edge is at
+## card-local y = -0.3675; the button's top edge at -0.4025).
+## A card whose title wraps long grows its plate down over
+## that seat (a four-line block bottoms at -0.502); its
+## button moves to the card's top instead (PANEL_LAUNCH_Y_TOP)
+## - the plate never shares ground with the button, on any
+## card, by construction (see _make_card_nodes).
+const PANEL_SIZE: Vector2 = CARD_SIZE
 const PANEL_LAUNCH_SIZE: Vector2 = Vector2(0.36, 0.115)
-const PANEL_LAUNCH_Y: float = -0.155
-## Panel rows' centre heights. Raised 0.05 (with the banner) and
-## the rail lowered 0.10 in the same round: from a seated eye at
-## SEATED_EYE_Y the bottom row's lower edge - Launch buttons
-## included - now clears the rail's top edge by ~4.4 degrees of
-## view; before, the rail's top edge sat ~0.9 degrees BELOW the
-## row's lower edge in projection and swallowed it.
-const WALL_ROW_YS: Array[float] = [1.95, 1.30, 0.65]
+const PANEL_LAUNCH_Y: float = -0.46
+const PANEL_LAUNCH_Y_TOP: float = 0.44
 const SEATED_EYE_Y: float = 1.2 ## a seated player's eye height - the clearance QA camera
 
 var _factory: TextureFactory
@@ -207,9 +214,11 @@ var _visible_games: Array[GameEntry] = []
 var _gen: int = 0
 var _mode: String = "wall" ## "wall" | "detail"
 
-var _wall: Node3D
+var _wall: Node3D  ## the drum: every card + fin rides it; only it rotates
 var _rail: Node3D
-var _banner_quad: ClickableQuad
+var _status_plate: MeshInstance3D  ## the banner's new home (a plate, not a quad)
+var _status_label: Label3D
+var _status_text: String = ""
 var _detail: DetailView
 var _rig: PointerRig
 var _xr_camera: Camera3D
@@ -221,9 +230,20 @@ var _panel_base_pos: Array[Vector3] = [] ## wall-flush position per panel, paral
 var _panel_pop_dir: Array[Vector3] = [] ## unit vector from the panel toward the viewer (its wall normal)
 var _panel_pop: Array[float] = [] ## current pop amount per panel, 0 flush .. 1 popped
 var _panel_pop_applied: Array[float] = [] ## last pop amount written to a panel's transform (write guard)
-var _panel_size: Vector2 = PANEL_SIZE ## the wall's live card size: PANEL_SIZE, or the median-tuned size (see _tune_panel_size)
-var _panel_face_px: Vector2i = Vector2i(512, 640) ## the panel faces' render size: 512x640, or width-tuned with _panel_size
+var _panel_size: Vector2 = PANEL_SIZE ## the standing view's card size: CARD_SIZE, or the Tournament board size
+var _panel_face_px: Vector2i = CARD_FACE_PX ## the panel faces' render size (CARD_FACE_PX, or the board's)
 var _panel_art_aspect: Array[float] = [] ## per panel: its art's aspect (w/h) once its face lands, 0 = no art (title card)
+var _panel_frames: Array[MeshInstance3D] = [] ## per panel: the card's frame quad (prototype geometry; amber while the card is the centre)
+var _panel_plates: Array[MeshInstance3D] = [] ## per panel: the nameplate's dark plate behind the title label
+var _panel_labels: Array[Label3D] = [] ## per panel: the title label on its nameplate
+var _mat_frame_dark: StandardMaterial3D = null ## the cards' shared dark frame material
+var _mat_frame_amber: StandardMaterial3D = null ## the centred card's amber frame material (and the fins' edge)
+var _mat_plate: StandardMaterial3D = null ## the shared nameplate/status plate material (the marquee fade drives its alpha)
+var _window_fill_busy: bool = false ## a window face-fill pass is running (centre changes coalesce through _window_fill_dirty)
+var _window_fill_dirty: bool = false
+var _power_subject_inflight: Dictionary = {} ## game_id -> true while its power-on subject renders
+var _fin_start: Node3D = null ## the shelf's start bookend fin (child of the drum; DOME3/DOME4)
+var _fin_end: Node3D = null ## the shelf's end bookend fin
 var _power_panel: ClickableQuad = null ## the card currently performing (or holding) the power-on
 var _power_candidate: ClickableQuad = null ## the pop target the settle debounce is timing
 var _power_candidate_t: float = 0.0 ## seconds the candidate has rested
@@ -292,11 +312,10 @@ var _rail_quads: Dictionary = {} ## key -> ClickableQuad
 var _rail_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: every rail button face ever rendered, so a rebuild re-dresses the rail in its own frame
 var _strip_quads: Dictionary = {} ## letter key ("A".."Z", "THE", "#") -> ClickableQuad: the alphabet strip, built once with the rail
 var _strip_tex_cache: Dictionary = {} ## "key|state" -> Texture2D: every strip slot face ever rendered (the rail cache's pattern)
-var _banner_tex_cache: Dictionary = {} ## banner line -> Texture2D: the banner's face by its exact line (the pick-latency fix, 2026-10-27 - it re-rendered on every rebuild though the line rarely changes)
 var _btn_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: the panels' Launch/Failed button faces - two textures in existence, once rendered per panel per rebuild before the pick-latency fix
 var _face_tex_cache: Dictionary = {} ## "game_id|art_path|fav" -> [Texture2D, art_aspect]: rendered panel faces (the pick-latency fix - a revisit re-rendered every face from scratch)
 var _face_cache_order: Array[String] = [] ## the face cache's LRU order (oldest first)
-const FACE_CACHE_MAX: int = 48 ## four pages of faces - the working set a browsing session actually revisits
+const FACE_CACHE_MAX: int = 96 ## the drawn window is 63 faces; the cache holds it plus a swing's worth of margin
 var _strip_has_number: bool = false ## the library holds a non-letter title, so the "#" slot is laid out (see _refresh_strip)
 var _letter_net: String = "" ## "" | "THE" | "#": the standing net view - the wall shows exactly that net's games, in title order (see _jump_to_letter)
 var _tournament: bool = false ## the Tournament Room view stands: the wall shows WoVP challenge boards, not the library (see _build_tournament_rows)
@@ -307,12 +326,19 @@ var _wovp_challenges: Array = [] ## the last-good boards (Array of WovpChallenge
 var _wovp_fetched_at: int = 0 ## unix time the standing boards landed (0 = never)
 var _wovp_live: bool = false ## the standing boards came from a fetch this session (false = the disk cache's)
 var _wovp_fetch_error: String = "" ## the last fetch's failure, in words, when it failed - the wall says so rather than dressing stale boards as live
-var _slide_phase: int = 0 ## the page slide: 0 rest, 1 gliding out, 2 gliding back (see _update_slide)
-var _slide_dir: int = 0 ## the live slide's travel direction: +1 next page, -1 previous
-var _slide_t: float = 0.0 ## seconds into the live slide's current leg
-var _slide_step: int = 0 ## the pending page delta, applied at the far point
-var _slide_after: Callable = Callable() ## the pending swap's focus landing (the bumper rule), run at the far point
-var _slide_swapping: bool = false ## the far-point rebuild is in flight: _rebuild_wall must not cancel the slide for it
+var _centre_index: int = 0 ## the shelf index the drum is centred on: the popped card's index in _visible_games (the pop target and the power-on follow it; it is NOT the pad focus - focus may sit on the rail or the strip while the drum stays centred where browsing left it, and a letter pick swings the drum without moving the focus: the focus law)
+var _columns: int = 1 ## the standing view's column count: ceil(visible / 3 bands)
+var _swing_from: float = 0.0 ## drum yaw (radians) the live swing started from
+var _swing_to: float = 0.0 ## drum yaw the live swing is heading to (the centred column's angle)
+var _swing_t: float = 0.0 ## seconds into the live swing
+var _swing_duration: float = 0.2 ## the live swing's length (grows with the column travel)
+var _swing_active: bool = false
+var _drum_yaw: float = 0.0 ## the drum's current yaw, radians (== _swing_to at rest)
+var _panel_pool: Dictionary = {} ## game_id -> {root, launch, frame, plate, label, mode, plate_done}: card nodes built once per library adoption and re-seated per view (a rebuild that freed and rebuilt 300+ cards would tax every letter pick - the pick-latency law)
+var _panel_face_key: Dictionary = {} ## game_id -> the face key its standing texture was filled for ("" = never filled)
+var _panel_window_lo: int = -1 ## the drawn window's first COLUMN (visibility + face fill range), -1 = none yet
+var _panel_window_hi: int = -1 ## the drawn window's last COLUMN
+var _power_subject_cache: Dictionary = {} ## game_id -> [backglass path, Texture2D]: rendered power-on subjects (the backglass face, rendered once per game per library)
 var _focusables: Array[ClickableQuad] = []
 var _focused: ClickableQuad = null
 var _joy_cooldown: float = 0.0
@@ -361,39 +387,28 @@ func refresh_library() -> void:
 	# a rescan): they die with the library that minted them.
 	_face_tex_cache.clear()
 	_face_cache_order.clear()
-	_tune_panel_size()
+	_power_subject_cache.clear()
+	_free_panel_pool()
 	_recompute_visible()
 	_page = 0
+	_centre_index = 0
 	_rebuild_wall()
 
 
-## The grid tune (sizing half (a)): set _panel_size and
-## _panel_face_px from the library's median art aspect,
-## clamped to [PANEL_ASPECT_MIN, PANEL_ASPECT_MAX] around
-## the default. Runs at every library adoption, from the
-## art cached by then - a fresh install with nothing
-## extracted yet keeps the default exactly, and the tune
-## lands as the warmer fills the cache. Height never moves
-## (the rows' pitch is the wall's skeleton); width follows
-## the aspect, and the face renders at the matching pixel
-## proportions so no face is ever stretched by the tune.
-func _tune_panel_size() -> void:
-	_panel_size = PANEL_SIZE
-	_panel_face_px = Vector2i(512, 640)
-	if _scanner == null:
-		return
-	var games: Array[GameEntry] = []
-	games.assign(_scanner.games)
-	var samples: Array[float] = ArtProvider.library_art_aspect_samples(games)
-	if samples.size() < PANEL_ASPECT_MIN_SAMPLES:
-		return
-	var median: float = ArtProvider.median_float(samples)
-	var aspect: float = clampf(median, PANEL_ASPECT_MIN, PANEL_ASPECT_MAX)
-	var default_aspect: float = PANEL_SIZE.x / PANEL_SIZE.y
-	if absf(aspect - default_aspect) < 0.01:
-		return
-	_panel_size = Vector2(PANEL_SIZE.y * aspect, PANEL_SIZE.y)
-	_panel_face_px = Vector2i(int(round(640.0 * aspect)), 640)
+## The card pool dies with its library: every pooled card node
+## is freed (they are out of the tree or drum children - either
+## way queue_free takes them), and the next rebuild mints fresh
+## cards from the new scan's truth.
+func _free_panel_pool() -> void:
+	for gid: Variant in _panel_pool.keys():
+		var nodes: Dictionary = _panel_pool[gid] as Dictionary
+		var root: ClickableQuad = nodes.get("root") as ClickableQuad
+		if root != null and is_instance_valid(root):
+			if root.get_parent() != null:
+				root.get_parent().remove_child(root)
+			root.queue_free()
+	_panel_pool.clear()
+	_panel_face_key.clear()
 
 
 ## Take a fresh scanner as the room's library and rebuild
@@ -423,21 +438,17 @@ func adopt_library(scanner: LibraryScanner) -> void:
 	refresh_library()
 
 
-## After a restore, put the wall on the selected game's page and the
-## focus on its panel. Runs once at setup; harmless no-ops when the
-## game is not in the current filter.
+## After a restore, centre the drum on the selected game and
+## put the focus on its card. Runs once at setup; harmless
+## no-ops when the game is not in the current filter.
 func _restore_selection() -> void:
 	if _selected_game_id == "":
 		return
 	for i: int in range(_visible_games.size()):
 		if _visible_games[i].game_id == _selected_game_id:
-			var target_page: int = i / PAGE_SIZE
-			if target_page != _page:
-				_page = target_page
-				_rebuild_wall()
-			var slot: int = i % PAGE_SIZE
-			if slot < _panels.size():
-				_set_focused(_panels[slot])
+			_set_centre(i, true)
+			if i < _panels.size():
+				_set_focused(_panels[i])
 			return
 
 
@@ -778,6 +789,7 @@ func _enter_tournament() -> void:
 	_tournament = true
 	_letter_net = ""
 	_page = 0
+	_centre_index = 0
 	_recompute_visible()
 	_rebuild_wall()
 	_persist_view()
@@ -849,6 +861,317 @@ func _sort_visible() -> void:
 
 # ---------------------------------------------------------------- wall
 
+# ---------------------------------------------------------------- the drum
+
+## Grid math (the prototype's): a game's place on the shelf -
+## its column along its band, and its band. Consecutive games
+## fill the TOP band first, then the middle, then the bottom.
+func _grid_coord(index: int) -> Vector2i:
+	return Vector2i(index % _columns, index / _columns)
+
+
+func _index_at(col: int, row: int) -> int:
+	return clampi(row * _columns + col, 0, maxi(0, _visible_games.size() - 1))
+
+
+## A card's transform on the sphere (the prototype's
+## _card_transform_at, verbatim): the point at (column angle,
+## band elevation) on WALL_RADIUS around EYE, facing the eye.
+func _card_transform_at(col: int, row: int) -> Transform3D:
+	var az: float = deg_to_rad(float(col) * ANGLE_STEP_DEG)
+	var el: float = deg_to_rad(ROW_ELEVATIONS[clampi(row, 0, ROW_ELEVATIONS.size() - 1)])
+	var dir: Vector3 = Vector3(sin(az) * cos(el), sin(el), -cos(az) * cos(el))
+	var pos: Vector3 = EYE + dir * WALL_RADIUS
+	var z_axis: Vector3 = (EYE - pos).normalized()
+	var x_axis: Vector3 = Vector3.UP.cross(z_axis).normalized()
+	var y_axis: Vector3 = z_axis.cross(x_axis)
+	return Transform3D(Basis(x_axis, y_axis, z_axis), pos)
+
+
+## The drum's resting yaw for a column: the swing target that
+## brings that column in front of the player.
+func _yaw_for_column(col: int) -> float:
+	return deg_to_rad(float(col) * ANGLE_STEP_DEG)
+
+
+## Shared card materials (the prototype's palette): the dark
+## frame every card wears, the amber it takes while it is the
+## centred card, and the nameplate's dark plate.
+func _frame_mat(amber: bool) -> StandardMaterial3D:
+	if amber:
+		if _mat_frame_amber == null:
+			_mat_frame_amber = _unshaded_mat(Color(1.0, 0.66, 0.16), 1.0)
+		return _mat_frame_amber
+	if _mat_frame_dark == null:
+		_mat_frame_dark = _unshaded_mat(Color(0.025, 0.03, 0.06), 1.0)
+	return _mat_frame_dark
+
+
+func _plate_mat() -> StandardMaterial3D:
+	if _mat_plate == null:
+		_mat_plate = _unshaded_mat(Color(0.0, 0.0, 0.0), 0.66)
+	return _mat_plate
+
+
+func _unshaded_mat(color: Color, alpha: float) -> StandardMaterial3D:
+	var m: StandardMaterial3D = StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.albedo_color = Color(color, alpha)
+	if alpha < 0.999:
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	return m
+
+
+func _make_card_quad(parent: Node, size: Vector2, pos: Vector3, mat: Material) -> MeshInstance3D:
+	var mi: MeshInstance3D = MeshInstance3D.new()
+	var qm: QuadMesh = QuadMesh.new()
+	qm.size = size
+	mi.mesh = qm
+	mi.position = pos
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
+
+
+## A card's title label (the prototype's _make_label settings):
+## white, centre-wrapped inside the nameplate's column, with
+## the dark outline the busy art behind it demands.
+func _make_card_label(parent: Node, text: String) -> Label3D:
+	var l: Label3D = Label3D.new()
+	l.text = text
+	l.position = Vector3(0.0, LABEL_STRIP_Y, 0.012)
+	l.pixel_size = LABEL_PIXEL_SIZE
+	l.font_size = LABEL_FONT_SIZE
+	l.width = LABEL_WIDTH_PX
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.outline_size = 7
+	l.outline_modulate = Color(0.0, 0.0, 0.0, 0.9)
+	l.modulate = Color(0.96, 0.97, 1.0)
+	parent.add_child(l)
+	return l
+
+
+## Mint one game's card nodes (once per library adoption; the
+## pool re-seats them per view - see _panel_pool). The root is
+## the panel ClickableQuad the whole room already speaks
+## (payload = game_id); riding on it in card mode: the frame
+## quad behind, the nameplate plate + title label in front,
+## and the Launch button. Board mode mints the bare board
+## panel at the board's own size (its face carries its own
+## text; no plate, no label, no frame).
+func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
+	var size: Vector2 = RoomSpecs.board_panel_size() if mode == "board" else CARD_SIZE
+	var q: ClickableQuad = ClickableQuad.new()
+	q.setup("panel", game.game_id, _placeholder_tex, size)
+	# The quad's own highlight frame is sized off the face
+	# (x1.055): on a dome card that ring would outgrow the
+	# prototype's frame geometry the clearance proof measured,
+	# so the card-mode frame below replaces it - the built-in
+	# frame is shrunk to the face itself, where the card's own
+	# frame quad (a hair larger, behind) covers its edge.
+	if mode == "card":
+		q.set_frame_size(CARD_FRAME_SIZE)
+	var nodes: Dictionary = {"root": q, "mode": mode}
+	if mode == "card":
+		nodes["frame"] = _make_card_quad(q, CARD_FRAME_SIZE, Vector3(0.0, 0.0, -0.007), _frame_mat(false))
+		nodes["label"] = _make_card_label(q, game.title)
+		# The plate starts at the strip's floor size; _seat_card
+		# grows it to the title block's measured height once the
+		# label is in the tree and its AABB is real.
+		nodes["plate"] = _make_card_quad(q, LABEL_STRIP_SIZE, Vector3(0.0, LABEL_STRIP_Y, 0.005), _plate_mat())
+	var lq: ClickableQuad = ClickableQuad.new()
+	lq.setup("panel_launch", game.game_id, _placeholder_tex, PANEL_LAUNCH_SIZE)
+	lq.position = Vector3(0.0, RoomSpecs.board_launch_y() if mode == "board" else PANEL_LAUNCH_Y, 0.032)
+	q.add_child(lq)
+	nodes["launch"] = lq
+	return nodes
+
+
+## Get a game's card nodes from the pool, minting them if this
+## view's mode has none (a library card and a Tournament board
+## are different panels for the same game_id across views -
+## the mode tag keeps them honest; a mismatch is freed and
+## re-minted at the right size).
+func _pool_card(game: GameEntry) -> Dictionary:
+	var mode: String = "board" if _tournament else "card"
+	var nodes: Dictionary = _panel_pool.get(game.game_id, {}) as Dictionary
+	if not nodes.is_empty() and str(nodes.get("mode", "")) != mode:
+		var old_root: ClickableQuad = nodes.get("root") as ClickableQuad
+		if old_root != null and is_instance_valid(old_root):
+			if old_root.get_parent() != null:
+				old_root.get_parent().remove_child(old_root)
+			old_root.queue_free()
+		nodes = {}
+		_panel_face_key.erase(game.game_id)
+	if nodes.is_empty():
+		nodes = _make_card_nodes(game, mode)
+		_panel_pool[game.game_id] = nodes
+	return nodes
+
+
+## Seat a pooled card on the drum at its shelf place and set
+## its per-view state: transform, base position and pop
+## direction for the pop's bookkeeping, the nameplate's grown
+## plate (first seat only), and the Launch button's seat
+## (below the plate - or at the card's top when a long title's
+## plate grows down over the low seat).
+func _seat_card(idx: int, nodes: Dictionary) -> void:
+	var q: ClickableQuad = nodes["root"] as ClickableQuad
+	var coord: Vector2i = _grid_coord(idx)
+	var t: Transform3D = _card_transform_at(coord.x, coord.y)
+	if q.get_parent() != _wall:
+		_wall.add_child(q)
+	q.transform = t
+	_panel_base_pos[idx] = t.origin
+	_panel_pop_dir[idx] = t.basis.z.normalized()
+	if str(nodes.get("mode", "")) == "card" and not bool(nodes.get("plate_done", false)):
+		nodes["plate_done"] = true
+		var label: Label3D = nodes["label"] as Label3D
+		var plate: MeshInstance3D = nodes["plate"] as MeshInstance3D
+		var aabb: AABB = label.get_aabb()
+		var block_h: float = maxf(LABEL_STRIP_SIZE.y, aabb.size.y + 0.034)
+		var block_cy: float = LABEL_STRIP_Y + aabb.position.y + aabb.size.y * 0.5
+		var pq: QuadMesh = plate.mesh as QuadMesh
+		if pq != null:
+			pq.size = Vector2(LABEL_STRIP_SIZE.x, block_h)
+		plate.position = Vector3(0.0, block_cy, 0.005)
+		var plate_bottom: float = block_cy - block_h * 0.5
+		if plate_bottom < -0.40:
+			var lq: ClickableQuad = nodes["launch"] as ClickableQuad
+			lq.position = Vector3(0.0, PANEL_LAUNCH_Y_TOP, 0.032)
+
+
+## The shelf's bookend fins (DOME3): a dark slab with an amber
+## edge, three amber bars at the band heights, and a mark -
+## diamond for the opening end, square for the closing one.
+## They stand one column past each end of the shelf and obey
+## the card visibility window (DOME4's gating law, in
+## _refresh_window): an ungated fin folds back into the
+## forward view mid-shelf and paints over card art.
+func _make_bookend(display_col: int, is_start: bool) -> Node3D:
+	var root: Node3D = Node3D.new()
+	root.name = "BookendStart" if is_start else "BookendEnd"
+	root.transform = _card_transform_at(display_col, 1)
+	_make_card_quad(root, Vector2(0.42, 3.10), Vector3(0.0, 0.0, -0.006), _frame_mat(true))
+	_make_card_quad(root, Vector2(0.36, 3.04), Vector3.ZERO, _frame_mat(false))
+	for bar_y: float in [-1.11, 0.0, 1.11]:
+		_make_card_quad(root, Vector2(0.36, 0.06), Vector3(0.0, bar_y, 0.006), _frame_mat(true))
+	var mark: MeshInstance3D = _make_card_quad(root, Vector2(0.20, 0.20), Vector3(0.0, 0.0, 0.012), _frame_mat(true))
+	if is_start:
+		mark.rotation.z = PI * 0.25
+	return root
+
+
+## Centre the drum on a shelf index: the swing target moves,
+## the window and the centred frame follow, and the page
+## bookkeeping (the rail's readout, the persisted view) is
+## derived here so every travel - step, jump, pick, restore -
+## keeps one truth. Input is never gated by the swing: a step
+## mid-swing retargets from the drum's current angle.
+func _set_centre(index: int, snap: bool = false) -> void:
+	if _visible_games.is_empty():
+		return
+	var clamped: int = clampi(index, 0, _visible_games.size() - 1)
+	var col: int = _grid_coord(clamped).x
+	var target: float = _yaw_for_column(col)
+	var changed: bool = clamped != _centre_index
+	_centre_index = clamped
+	_page = _centre_index / PAGE_SIZE
+	if snap or _wall == null:
+		_drum_yaw = target
+		_swing_active = false
+		if _wall != null:
+			_wall.rotation.y = target
+	elif target != _swing_to or not _swing_active:
+		if absf(target - _drum_yaw) < 0.0001:
+			_drum_yaw = target
+			_swing_active = false
+			if _wall != null:
+				_wall.rotation.y = target
+		else:
+			_swing_from = _drum_yaw
+			_swing_to = target
+			_swing_t = 0.0
+			var cols: float = absf(target - _drum_yaw) / deg_to_rad(ANGLE_STEP_DEG)
+			_swing_duration = clampf(0.14 + 0.055 * sqrt(maxf(cols, 1.0)), SWING_MIN_SEC, SWING_MAX_SEC)
+			_swing_active = true
+	if changed:
+		_refresh_window()
+		_refresh_card_frames()
+		_request_window_fill()
+
+
+## Per-frame swing drive, from _process: the prototype's cubic
+## ease-out, landing on the target EXACTLY.
+func _update_swing(delta: float) -> void:
+	if not _swing_active or _wall == null:
+		return
+	_swing_t += delta
+	var p: float = clampf(_swing_t / _swing_duration, 0.0, 1.0)
+	var e: float = 1.0 - pow(1.0 - p, 3.0)
+	_drum_yaw = lerpf(_swing_from, _swing_to, e)
+	if p >= 1.0:
+		_drum_yaw = _swing_to
+		_swing_active = false
+	_wall.rotation.y = _drum_yaw
+
+
+## The centred card's frame goes amber; every other card's
+## stays dark. The ClickableQuad highlight frame still answers
+## hover/focus on top of this - the amber frame is the shelf's
+## own statement of where its centre stands.
+func _refresh_card_frames() -> void:
+	for idx: int in range(_panels.size()):
+		if idx >= _panel_frames.size():
+			break
+		var f: MeshInstance3D = _panel_frames[idx]
+		if f != null:
+			f.material_override = _frame_mat(idx == _centre_index)
+
+
+## The drawn window: cards within VISIBLE_HALF_COLUMNS of the
+## centred column are visible (and, in plain browsing, pickable);
+## the rest are dark and inert. The fins obey the same window
+## (DOME4): the start fin shows while the centred column is
+## within 9 of it, the end fin mirrored.
+func _refresh_window() -> void:
+	var n: int = _visible_games.size()
+	if n == 0 or _panels.is_empty():
+		_panel_window_lo = -1
+		_panel_window_hi = -1
+		return
+	var fc: int = _grid_coord(_centre_index).x
+	_panel_window_lo = maxi(0, fc - VISIBLE_HALF_COLUMNS)
+	_panel_window_hi = mini(_columns - 1, fc + VISIBLE_HALF_COLUMNS)
+	var browsing: bool = _mode == "wall" and not _placard_up and not _setup_panel_up and _launching_game_id == ""
+	for idx: int in range(_panels.size()):
+		var c: int = _grid_coord(idx).x
+		var vis: bool = c >= _panel_window_lo and c <= _panel_window_hi
+		_panels[idx].visible = vis
+		if browsing:
+			_panels[idx].pick_enabled = vis
+			if idx < _panel_launches.size():
+				_panel_launches[idx].pick_enabled = vis and not (_tournament and not _tournament_launchable(idx))
+	if _fin_start != null:
+		_fin_start.visible = fc <= VISIBLE_HALF_COLUMNS - 1
+	if _fin_end != null:
+		_fin_end.visible = fc >= _columns - VISIBLE_HALF_COLUMNS
+
+
+## Whether a Tournament panel may launch: only a challenge row
+## he owns (a state row and a not-owned board carry no launch
+## at all - the fill also hides their buttons; this is the
+## pick-side of the same law).
+func _tournament_launchable(idx: int) -> bool:
+	if idx < 0 or idx >= _tournament_rows.size():
+		return false
+	var row: Dictionary = _tournament_rows[idx] as Dictionary
+	return str(row.get("kind", "")) == "challenge" and bool(row.get("owned", false))
+
+
 func _rebuild_wall() -> void:
 	# The power-on's performer and its overlay die with
 	# the wall being torn down: drop the state without
@@ -864,74 +1187,73 @@ func _rebuild_wall() -> void:
 	_gen += 1
 	var gen: int = _gen
 	wall_ready = false
-	if _slide_phase != 0 and not _slide_swapping:
-		# A rebuild that is not the slide's own far-point swap (a
-		# filter change, a detail close, a launch failure) cancels
-		# any live slide outright: the pending travel is forgotten
-		# and the holder snaps back to exact rest rather than
-		# swapping pages under a wall the player already replaced.
-		_slide_phase = 0
-		_slide_after = Callable()
-		if _wall != null:
-			_wall.rotation.y = 0.0
-	for child: Node in _wall.get_children():
-		_wall.remove_child(child)
-		child.queue_free()
+	_swing_active = false
+	# Standing cards return to the pool (they are NOT freed:
+	# a rebuild re-seats the same nodes at the new view's
+	# places, faces and all - freeing and re-minting 300+
+	# cards per letter pick is the pick-latency tax the pool
+	# exists to refuse). The fins are the view's own and die
+	# with it; the banner is Room furniture now (built once,
+	# below) and never rides the drum.
+	for q: ClickableQuad in _panels:
+		if q != null and is_instance_valid(q) and q.get_parent() == _wall:
+			_wall.remove_child(q)
+	if _fin_start != null:
+		_fin_start.queue_free()
+		_fin_start = null
+	if _fin_end != null:
+		_fin_end.queue_free()
+		_fin_end = null
 	_panels.clear()
 	_panel_launches.clear()
 	_panel_base_pos.clear()
 	_panel_pop_dir.clear()
 	_panel_pop.clear()
 	_panel_pop_applied.clear()
+	_panel_art_aspect.clear()
+	_panel_frames.clear()
+	_panel_plates.clear()
+	_panel_labels.clear()
+	_panel_window_lo = -1
+	_panel_window_hi = -1
 	_wall_alpha_applied = 1.0 ## fresh quads start opaque; the marquee fade re-applies from there
 	_set_focused(null)
 
-	var placeholder: Texture2D = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
-	_placeholder_tex = placeholder
-	# Banner: above the eye line (~+23 degrees) with clear air between
-	# its lower edge and the top row of panels - it sits closer than
-	# the wall, so any angular overlap hides the middle panels' tops.
-	# It rose with the rows in the occlusion round (see WALL_ROW_YS),
-	# keeping that clear air the same size.
-	_banner_quad = _make_quad(_wall, "banner", "", placeholder, Vector2(1.8, 0.46), Vector3(0.0, 2.53, -2.9))
-	_banner_quad.pick_enabled = false
-	# Panels for this page: rows hugging the eye line (+12 / 0 / -12
-	# degrees). Panel height (0.64) stays under the row pitch (0.65) -
-	# a taller panel than the pitch makes rows overlap in projection.
-	var start: int = _page * PAGE_SIZE
-	for i: int in range(PAGE_SIZE):
-		var idx: int = start + i
-		if idx >= _visible_games.size():
-			break
+	_placeholder_tex = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
+	_panel_size = RoomSpecs.board_panel_size() if _tournament else CARD_SIZE
+	_panel_face_px = RoomSpecs.board_face_px() if _tournament else CARD_FACE_PX
+	_columns = maxi(1, int(ceil(float(maxi(1, _visible_games.size())) / 3.0)))
+	if _status_label == null:
+		_build_status_line()
+	# Panels for the whole standing view, seated on the drum.
+	for idx: int in range(_visible_games.size()):
 		var game: GameEntry = _visible_games[idx]
-		var col: int = i % PAGE_COLS
-		var row: int = i / PAGE_COLS
-		var angle: float = deg_to_rad(float(col - 1) - 0.5) * 14.0
-		var pos: Vector3 = Vector3(sin(angle) * WALL_RADIUS, WALL_ROW_YS[row], -cos(angle) * WALL_RADIUS)
-		# Tournament boards stand at their own, larger window -
-		# they are not table cards (TR3; RoomSpecs.board_panel_size).
-		var psize: Vector2 = RoomSpecs.board_panel_size() if _tournament else _panel_size
-		var q: ClickableQuad = _make_quad(_wall, "panel", game.game_id, placeholder, psize, pos)
-		_panels.append(q)
-		_panel_base_pos.append(pos)
-		_panel_pop_dir.append((EYE - pos).normalized())
+		var nodes: Dictionary = _pool_card(game)
+		_panels.append(nodes["root"] as ClickableQuad)
+		_panel_launches.append(nodes["launch"] as ClickableQuad)
+		_panel_base_pos.append(Vector3.ZERO)
+		_panel_pop_dir.append(Vector3.ZERO)
 		_panel_pop.append(0.0)
 		_panel_pop_applied.append(0.0)
 		_panel_art_aspect.append(0.0)
-		# The card's Launch button (Chris, 2026-10-21): a distinct
-		# quad riding the panel's lower third - pointing at the card
-		# browses (opens More Info); only the button commits to the
-		# ~20s VPX load. It inherits the panel's orientation and its
-		# pulse, sits proud of the card face so rays hit it first.
-		# Its height on the panel is PANEL_LAUNCH_Y: clear of the
-		# art face's name strip, never over the name.
-		var lq: ClickableQuad = ClickableQuad.new()
-		lq.setup("panel_launch", game.game_id, placeholder, PANEL_LAUNCH_SIZE)
-		# On a board the button centres on the face's footer
-		# band (TR3) - over the plinth, never over board text.
-		lq.position = Vector3(0.0, RoomSpecs.board_launch_y() if _tournament else PANEL_LAUNCH_Y, 0.032)
-		q.add_child(lq)
-		_panel_launches.append(lq)
+		_panel_frames.append(nodes.get("frame") as MeshInstance3D)
+		_panel_plates.append(nodes.get("plate") as MeshInstance3D)
+		_panel_labels.append(nodes.get("label") as Label3D)
+		_seat_card(idx, nodes)
+	# The bookends, one column past each end of the shelf.
+	if not _visible_games.is_empty():
+		_fin_start = _make_bookend(-1, true)
+		_wall.add_child(_fin_start)
+		_fin_end = _make_bookend(_columns, false)
+		_wall.add_child(_fin_end)
+	# The drum rests centred on the standing centre (a rebuild
+	# is a new wall: it snaps, exactly as the flat wall rebuilt
+	# flat; travel WITHIN a standing wall is the swing's job).
+	_centre_index = clampi(_centre_index, 0, maxi(0, _visible_games.size() - 1))
+	_page = _centre_index / PAGE_SIZE if not _visible_games.is_empty() else 0
+	_drum_yaw = _yaw_for_column(_grid_coord(_centre_index).x) if not _visible_games.is_empty() else 0.0
+	_swing_to = _drum_yaw
+	_wall.rotation.y = _drum_yaw
 	# Rail: built ONCE and persistent across rebuilds (the feel
 	# round, 2026-10-24). Destroying and recreating it on every
 	# page flip made every button pop back into existence as its
@@ -943,7 +1265,7 @@ func _rebuild_wall() -> void:
 	# branch below re-inerts them when it has to) and re-dresses
 	# them from the texture cache in this same frame.
 	if _rail_quads.is_empty():
-		_build_rail(placeholder)
+		_build_rail(_placeholder_tex)
 	else:
 		for k: Variant in _rail_quads.keys():
 			var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
@@ -963,10 +1285,12 @@ func _rebuild_wall() -> void:
 	# its pick states (greyed letters are not stops) and
 	# re-dresses it from its texture cache in this same frame.
 	if _strip_quads.is_empty():
-		_build_strip(placeholder)
+		_build_strip(_placeholder_tex)
 	_refresh_strip()
 	_apply_rail_textures()
 	_refresh_focusables()
+	_refresh_window()
+	_refresh_card_frames()
 	_fill_wall_textures(gen)
 	if _placard_up:
 		# A rebuild while the placard stands (the launch-failure
@@ -979,6 +1303,30 @@ func _rebuild_wall() -> void:
 		# and focus stays on the panel button it was on.
 		_inert_room_quads()
 		_set_focused(panel_focus if panel_focus != null else _setup_panel_scan_btn)
+
+
+## The status line (the wall's banner, re-homed): the library
+## summary / launch status the banner quad used to carry,
+## moved low and forward - the dome's top band stands where
+## the banner hung, and the prototype proved a low panel
+## clears every label. A dark plate with a Label3D line: no
+## factory render, so a status change is instant and the
+## pick-latency caches never see it. Not a quad: it is not
+## pickable, focusable, or part of any pick snapshot.
+func _build_status_line() -> void:
+	_status_plate = _make_card_quad(self, Vector2(2.3, 0.19), Vector3(0.0, 0.115, -1.70), _plate_mat())
+	_status_label = Label3D.new()
+	_status_label.position = Vector3(0.0, 0.115, -1.688)
+	_status_label.pixel_size = 0.0028
+	_status_label.font_size = 30
+	_status_label.width = 780.0
+	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_status_label.outline_size = 6
+	_status_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9)
+	_status_label.modulate = Color(0.92, 0.95, 1.0)
+	add_child(_status_label)
 
 
 func _build_rail(placeholder: Texture2D) -> void:
@@ -1043,20 +1391,16 @@ func _banner_line() -> String:
 	return line
 
 
+## The status line's refresh: a text set, not a render - the
+## plate + Label3D carry it now (see _build_status_line), so
+## a banner change costs nothing and never enters the face
+## caches. The line's CONTENT is unchanged (library summary,
+## view note, status note) - only its carrier moved.
 func _refresh_banner() -> void:
-	if _banner_quad == null or _scanner == null:
+	if _status_label == null or _scanner == null:
 		return
-	var gen: int = _gen
-	var line: String = _banner_line()
-	var tex: Texture2D = _banner_tex_cache.get(line) as Texture2D
-	if tex == null:
-		tex = await _factory.render_texture(RoomSpecs.banner_spec(line), Vector2i(1024, 262))
-		if tex != null:
-			if _banner_tex_cache.size() > 64:
-				_banner_tex_cache.clear()
-			_banner_tex_cache[line] = tex
-	if gen == _gen and _banner_quad != null and tex != null:
-		_banner_quad.set_texture(tex)
+	_status_text = _banner_line()
+	_status_label.text = _status_text
 
 
 ## A rail stop's [label, accent] under the room's current
@@ -1250,6 +1594,7 @@ func _jump_to_letter(key: String) -> void:
 	if key == "THE" or key == "#":
 		_letter_net = key
 		_page = 0
+		_centre_index = 0
 		_recompute_visible()
 		_rebuild_wall()
 		_persist_view()
@@ -1267,11 +1612,16 @@ func _jump_to_letter(key: String) -> void:
 		_persist_view()
 		_land_after_letter_pick(key, null)
 		return
-	_page = idx / PAGE_SIZE
+	# The drum swings to the letter's first game (the letter
+	# round's whole point: position the shelf at the letter);
+	# focus stays on the pressed slot (the focus law below).
+	# The rebuild stands because the pick forces the name
+	# sort - if the standing sort was another, the shelf's
+	# order itself changed and the cards must re-seat.
 	_rebuild_wall()
+	_set_centre(idx)
 	_persist_view()
-	var slot: int = idx % PAGE_SIZE
-	_land_after_letter_pick(key, _panels[slot] if slot < _panels.size() else null)
+	_land_after_letter_pick(key, _panels[idx] if idx < _panels.size() else null)
 
 
 ## The letter pick's focus landing - the one place the focus
@@ -1321,28 +1671,10 @@ func _face_cache_put(key: String, tex: Texture2D, aspect: float) -> void:
 func _fill_wall_textures(gen: int) -> void:
 	var bench_t0: int = Time.get_ticks_msec()
 	var bench_renders: int = 0
-	var bench_face_hits: int = 0
-	var bench_btn_hits: int = 0
-	var bench_banner_hit: bool = false
-	# Banner first: it carries the library summary line.
-	# The line is the cache key: across page turns and letter
-	# picks it usually does not change, and re-rendering it
-	# cost a factory round-trip on every single rebuild.
-	var banner_line: String = _banner_line()
-	var banner_tex: Texture2D = null
-	if _banner_tex_cache.has(banner_line):
-		banner_tex = _banner_tex_cache[banner_line] as Texture2D
-		bench_banner_hit = true
-	else:
-		bench_renders += 1
-		banner_tex = await _factory.render_texture(RoomSpecs.banner_spec(banner_line), Vector2i(1024, 262))
-		if gen == _gen and banner_tex != null:
-			if _banner_tex_cache.size() > 64:
-				_banner_tex_cache.clear()
-			_banner_tex_cache[banner_line] = banner_tex
-	if gen != _gen or _banner_quad == null:
-		return
-	_banner_quad.set_texture(banner_tex)
+	# The status line first: it carries the library summary.
+	# It is a Label3D now - a text set, no factory render, so
+	# it never touches the caches below.
+	_refresh_banner()
 	var bench_t_banner: int = Time.get_ticks_msec()
 	# Rail buttons SECOND - they used to render last, after a
 	# dozen panels and their Launch buttons, which is exactly
@@ -1392,117 +1724,193 @@ func _fill_wall_textures(gen: int) -> void:
 	if _tournament:
 		# The Tournament Room's panels are boards and state
 		# faces, not game cards - their own fill, below.
-		await _fill_tournament_textures(gen, _page * PAGE_SIZE)
+		await _fill_tournament_textures(gen, 0)
 		if gen == _gen:
 			wall_ready = true
 		return
-	# Panels. A face is a pure function of (game, its art
-	# file, favorite flag) inside one library adoption, so it
-	# is cached like the furniture's faces are (the pick-
-	# latency fix): a revisit used to re-decode the art and
-	# re-render the face through the serial factory, every
-	# panel, every rebuild - warm pages cost exactly what
-	# cold pages cost, which is the grinding gear the player
-	# reported on letter picks (2026-10-27).
-	var start: int = _page * PAGE_SIZE
-	for i: int in range(_panels.size()):
-		var game: GameEntry = _visible_games[start + i]
-		var quad: ClickableQuad = _panels[i]
-		var tex: Texture2D = null
-		var art_aspect: float = 0.0
-		var art_file: String = game.ensure_art()
-		var fav: bool = _store != null and _store.is_favorite(game.game_id)
-		var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "")
-		var cached_face: Array = _face_cache_get(fkey)
-		if not cached_face.is_empty():
-			tex = cached_face[0] as Texture2D
-			art_aspect = float(cached_face[1])
-			bench_face_hits += 1
-		else:
-			if art_file != "":
-				var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
-				if art_tex != null:
-					# The card's own art aspect rides along: the
-					# pop-out grows the card to it (sizing half (b)).
-					art_aspect = float(art_tex.get_width()) / float(art_tex.get_height())
-					bench_renders += 1
-					tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store), _panel_face_px)
-			if tex == null:
-				bench_renders += 1
-				tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), _panel_face_px)
-			if gen != _gen:
-				return
-			if tex != null:
-				_face_cache_put(fkey, tex, art_aspect)
-		quad.set_texture(tex)
-		# The face has landed. Two power-on debts settle here
-		# (the boot fault's other half): a performance that
-		# skipped this card for wearing the placeholder
-		# retries now - its missed mark clears and its settle
-		# clock primes, so the cascade starts on the real
-		# face with no input; and a performance already
-		# standing on this card bound the face it wore then,
-		# so it restarts on the face the card wears now (the
-		# candidate logic re-picks the same card - focus
-		# never moved).
-		if quad == _power_missed:
-			_power_missed = null
-			if _power_candidate == quad:
-				_power_candidate_t = POWER_SETTLE_SEC
-		if quad == _power_panel:
-			_restore_power("face_arrived")
-		_panel_art_aspect[i] = art_aspect
-		if art_aspect > 0.0 and _panel_pop[i] > 0.0:
-			# The card is already popped (focus rested while
-			# its face streamed in): force the pop transform
-			# to re-apply at the art's true aspect next frame.
-			_panel_pop_applied[i] = -1.0
-		if i < _panel_launches.size():
-			var failed: bool = game.game_id == _failed_game_id
-			# The Launch/Failed button has exactly two faces in
-			# existence; they are cached like the rail's (the
-			# pick-latency fix - they were twelve of the ~25
-			# serial renders every rebuild paid).
-			var blabel: String = "FAILED" if failed else "LAUNCH"
-			var baccent: bool = not failed
-			var bkey: String = blabel + "|" + ("a" if baccent else "p")
-			var ltex: Texture2D = _btn_tex_cache.get(bkey) as Texture2D
-			if ltex != null:
-				bench_btn_hits += 1
-			else:
-				bench_renders += 1
-				ltex = await _factory.render_texture(
-					RoomSpecs.button_spec(blabel, baccent), Vector2i(512, 164))
-				if gen != _gen:
-					return
-				if ltex != null:
-					_btn_tex_cache[bkey] = ltex
-			_panel_launches[i].set_texture(ltex)
+	# Cards: the window's faces stream in through the fill
+	# worker (see _request_window_fill) - the rebuild only
+	# asks; centre changes re-ask, and the worker coalesces.
+	_request_window_fill()
+	if debug_bench:
+		print("BENCH: fill gen=%d page=%d banner=%dms furniture=%dms renders=%d" % [
+			gen, _page, bench_t_banner - bench_t0, bench_t_furniture - bench_t_banner,
+			bench_renders])
+
+
+## The window fill worker: fills the standing window's faces,
+## centre card first, then outward. One pass at a time - a
+## centre change mid-pass marks the fill dirty and the pass
+## re-runs for the new window when the current one ends, so a
+## fast swing never stacks render queues. A face is a pure
+## function of (game, its face file, favorite flag) inside
+## one library adoption, cached like the furniture's faces
+## (the pick-latency fix): pooled cards keep their faces
+## across rebuilds, so a revisit usually costs nothing at all.
+func _request_window_fill() -> void:
+	if _window_fill_busy:
+		_window_fill_dirty = true
+		return
+	_run_window_fill()
+
+
+func _run_window_fill() -> void:
+	_window_fill_busy = true
+	_window_fill_dirty = false
+	var gen: int = _gen
+	await _fill_window_faces(gen)
+	_window_fill_busy = false
+	if _window_fill_dirty and gen == _gen:
+		_run_window_fill()
+
+
+func _fill_window_faces(gen: int) -> void:
+	if _panel_window_lo < 0:
+		return
+	var order: Array[int] = []
+	var centre_col: int = _grid_coord(_centre_index).x
+	for dist: int in range(0, centre_col + VISIBLE_HALF_COLUMNS + 1):
+		for c: int in [centre_col - dist, centre_col + dist]:
+			if dist == 0 and c != centre_col:
+				continue
+			if c < _panel_window_lo or c > _panel_window_hi:
+				continue
+			for row: int in range(3):
+				var idx: int = row * _columns + c
+				if idx < _panels.size():
+					order.append(idx)
+	for idx: int in order:
+		if gen != _gen:
+			return
+		await _fill_one_face(idx, gen)
 	if gen == _gen:
 		wall_ready = true
-		if debug_bench:
-			var bench_now: int = Time.get_ticks_msec()
-			print("BENCH: fill gen=%d page=%d banner=%dms furniture=%dms panels=%dms total=%dms renders=%d face_hits=%d btn_hits=%d banner_hit=%s" % [
-				gen, _page, bench_t_banner - bench_t0, bench_t_furniture - bench_t_banner,
-				bench_now - bench_t_furniture, bench_now - bench_t0, bench_renders,
-				bench_face_hits, bench_btn_hits, str(bench_banner_hit)])
-		# The page is settled: ask Main's warmer to bring the
-		# neighbouring pages' art forward (next page first), so a
-		# flip lands on warm art even mid-warm-up.
+		# The window is dressed: ask Main's warmer to bring
+		# the columns just outside it forward, so a swing
+		# lands on warm art even mid-warm-up.
 		var near: Array = []
-		var total: int = _visible_games.size()
-		var next_start: int = start + PAGE_SIZE
-		if next_start < total:
-			var next_cnt: int = mini(PAGE_SIZE, total - next_start)
-			for j: int in range(next_cnt):
-				near.append(_visible_games[next_start + j])
-		var prev_start: int = start - PAGE_SIZE
-		if prev_start >= 0:
-			var prev_cnt: int = mini(PAGE_SIZE, total - prev_start)
-			for j: int in range(prev_cnt):
-				near.append(_visible_games[prev_start + j])
+		for c: int in [_panel_window_lo - 1, _panel_window_hi + 1]:
+			if c < 0 or c >= _columns:
+				continue
+			for row: int in range(3):
+				var idx: int = row * _columns + c
+				if idx < _visible_games.size():
+					near.append(_visible_games[idx])
 		if not near.is_empty():
 			art_prefetch_requested.emit(near)
+
+
+## One card's face: the author shot first (GameEntry's
+## ranking), then the shipped fallback chain - rendered
+## WITHOUT the art's baked name strip: the nameplate's plate
+## + label is the card's name now (the DOME5 geometry put the
+## title there), and a second name painted into the art would
+## fight it. The favorite star stays inside the rendered
+## face, exactly as the shipped art_spec draws it.
+func _fill_one_face(idx: int, gen: int) -> void:
+	if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
+		return
+	var game: GameEntry = _visible_games[idx]
+	var quad: ClickableQuad = _panels[idx]
+	var art_file: String = game.face_path()
+	var fav: bool = _store != null and _store.is_favorite(game.game_id)
+	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "")
+	if str(_panel_face_key.get(game.game_id, "")) == fkey:
+		return  # already wearing exactly this face
+	var tex: Texture2D = null
+	var art_aspect: float = 0.0
+	var from_art: bool = false
+	var cached_face: Array = _face_cache_get(fkey)
+	if not cached_face.is_empty():
+		tex = cached_face[0] as Texture2D
+		art_aspect = float(cached_face[1])
+		from_art = art_aspect > 0.0
+	else:
+		if art_file != "":
+			var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
+			if art_tex != null:
+				art_aspect = float(art_tex.get_width()) / float(art_tex.get_height())
+				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store, false), _panel_face_px)
+				from_art = tex != null
+		if tex == null:
+			tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), _panel_face_px)
+			from_art = false
+		if gen != _gen:
+			return
+		if tex != null:
+			_face_cache_put(fkey, tex, art_aspect if from_art else 0.0)
+	if tex == null:
+		return
+	quad.set_texture(tex)
+	_panel_face_key[game.game_id] = fkey
+	# The nameplate shows only over an art face: a generated
+	# title card carries its own title, and a title under a
+	# title would double it.
+	if idx < _panel_plates.size() and _panel_plates[idx] != null:
+		_panel_plates[idx].visible = from_art
+		_panel_labels[idx].visible = from_art
+	# The face has landed. Two power-on debts settle here
+	# (the boot fault's halves): a performance that skipped
+	# this card for wearing the placeholder retries now - its
+	# missed mark clears and its settle clock primes, so the
+	# cascade starts on the real face with no input; and a
+	# performance already standing on this card bound the
+	# face it wore then, so it restarts on the face the card
+	# wears now (the candidate logic re-picks the same card -
+	# focus never moved).
+	if quad == _power_missed:
+		_power_missed = null
+		if _power_candidate == quad:
+			_power_candidate_t = POWER_SETTLE_SEC
+	if quad == _power_panel:
+		_restore_power("face_arrived")
+	_panel_art_aspect[idx] = art_aspect if from_art else 0.0
+	if _panel_pop[idx] > 0.0:
+		# The card is already popped (focus rested while its
+		# face streamed in): force the pop transform to
+		# re-apply next frame.
+		_panel_pop_applied[idx] = -1.0
+	if idx < _panel_launches.size():
+		var failed: bool = game.game_id == _failed_game_id
+		# The Launch/Failed button has exactly two faces in
+		# existence; they are cached like the rail's.
+		var blabel: String = "FAILED" if failed else "LAUNCH"
+		var baccent: bool = not failed
+		var bkey: String = blabel + "|" + ("a" if baccent else "p")
+		var ltex: Texture2D = _btn_tex_cache.get(bkey) as Texture2D
+		if ltex == null:
+			ltex = await _factory.render_texture(
+				RoomSpecs.button_spec(blabel, baccent), Vector2i(512, 164))
+			if gen != _gen:
+				return
+			if ltex != null:
+				_btn_tex_cache[bkey] = ltex
+		_panel_launches[idx].set_texture(ltex)
+	# Warm the power-on's subject while the card is dressed:
+	# the backglass extraction is claim-joined with the
+	# library warmer, so a card whose backglass is already
+	# extracted costs a stat, and focus time never pays an
+	# extraction of its own.
+	if game.backglass_source() != "":
+		game.backglass_face_path()
+
+
+## A shot landed for a game (Main's ShotFetcher): if its card
+## stands in the standing view and inside the window, its
+## face re-fills - the face key changed under it, so the card
+## swaps the fallback it wore for the author shot.
+func refresh_shot_faces(game: GameEntry) -> void:
+	if game == null or _tournament:
+		return
+	var idx: int = _visible_games.find(game)
+	if idx < 0 or idx >= _panels.size():
+		return
+	if _panel_window_lo < 0:
+		return
+	var c: int = _grid_coord(idx).x
+	if c < _panel_window_lo or c > _panel_window_hi:
+		return
+	_fill_one_face(idx, _gen)
 
 
 ## The Tournament Room's panel fill: board faces for
@@ -1671,8 +2079,6 @@ func _refresh_quad_states() -> void:
 				all.append(sq)
 	if _detail != null:
 		all.append_array(_detail.get_clickables())
-	if _banner_quad != null:
-		all.append(_banner_quad)
 	if _placard_face != null:
 		all.append(_placard_face)
 	if _placard_back != null:
@@ -1711,32 +2117,54 @@ func _panel_for(q: ClickableQuad) -> ClickableQuad:
 	return null
 
 
-## The one card that should be popped right now, on the room's
-## single shared focus: the pointer's card wins (VR laser and
-## mouse hover both arrive as the rig's hover), else the
-## gamepad/keyboard focus's card. No pop while the detail view or
-## the placard owns the room, and none during the load wait - the
-## wall is frozen behind the marquee there.
+## The one card that should be popped right now: the CENTRED
+## card (DOME5's law - on a drum the pop is the shelf's own
+## statement of where it stands, not a hover effect; hover
+## and pad focus MOVE the centre, in _update_pop's follow
+## step, and the pop follows the centre). No pop while the
+## detail view or the placard owns the room, and none during
+## the load wait - the wall is frozen behind the marquee.
 func _pop_target_panel() -> ClickableQuad:
 	if _mode != "wall" or _placard_up or _setup_panel_up or _launching_game_id != "":
 		return null
+	if _centre_index < 0 or _centre_index >= _panels.size():
+		return null
+	return _panels[_centre_index]
+
+
+## The centre follows the player's point: the pointer's card
+## wins (VR laser and mouse hover both arrive as the rig's
+## hover), else the gamepad/keyboard focus's card. Called
+## per frame from _update_pop; _set_centre early-outs when
+## the centre already stands there, and the swing retargets
+## from the drum's current angle, so a sweeping point swings
+## the drum with it - input is never gated by the travel.
+func _follow_centre() -> void:
+	if _mode != "wall" or _placard_up or _setup_panel_up or _launching_game_id != "":
+		return
 	var hovered: ClickableQuad = _rig.hovered if _rig != null else null
 	var p: ClickableQuad = _panel_for(hovered)
+	if p == null:
+		p = _panel_for(_focused)
 	if p != null:
-		return p
-	return _panel_for(_focused)
+		var idx: int = _panels.find(p)
+		if idx >= 0 and idx != _centre_index:
+			_set_centre(idx)
 
 
 ## Per-frame pop animation, driven from _process: each panel's
-## amount walks toward 1 (the target) or 0 at POP_OUT_SEC pace,
-## and the transform is written only while the amount is actually
-## moving - a resting panel is never touched, so a Launch
-## button's activation pulse (a scale tween) never fights this.
-## The Launch button rides its panel (it is a child), so it stays
-## glued to the card face and clickable while popped. The marquee
-## fade needs no help here: it drives material alpha, which a
-## popped card carries like any other.
+## amount walks toward 1 (the centred card) or 0 at POP_OUT_SEC
+## pace, and the transform is written only while the amount is
+## actually moving - a resting panel is never touched, so a
+## Launch button's activation pulse (a scale tween) never fights
+## this. The pop is UNIFORM (DOME5): scale POP_OUT_SCALE and a
+## POP_OUT_DISTANCE pull along the card's own normal - the
+## true-aspect grow the flat wall used is retired (the dome's
+## clearance proof was measured on the uniform pop). The Launch
+## button rides its panel (it is a child), so it stays glued to
+## the card face and clickable while popped.
 func _update_pop(delta: float) -> void:
+	_follow_centre()
 	if _panels.is_empty():
 		return
 	var target: ClickableQuad = _pop_target_panel()
@@ -1750,16 +2178,8 @@ func _update_pop(delta: float) -> void:
 		_panel_pop_applied[i] = amt
 		var q: ClickableQuad = _panels[i]
 		q.position = _panel_base_pos[i] + _panel_pop_dir[i] * (POP_OUT_DISTANCE * amt)
-		# The pop's scale: height is the old uniform grow;
-		# the WIDTH additionally follows the card's own art
-		# aspect (sizing half (b)) - at full pop the card
-		# stands at its glass's true proportions, eased by the
-		# same amount that drives the travel, so the two read
-		# as one gesture. No art (title card) or an art aspect
-		# equal to the grid's reduces this to the old uniform
-		# scale exactly.
-		var full: Vector2 = panel_full_pop_scale(q)
-		q.scale = Vector3(lerpf(1.0, full.x, amt), lerpf(1.0, full.y, amt), lerpf(1.0, full.y, amt))
+		var s: float = lerpf(1.0, POP_OUT_SCALE, amt)
+		q.scale = Vector3(s, s, s)
 
 
 func _on_select(quad: ClickableQuad) -> void:
@@ -1893,11 +2313,11 @@ func _info_focused_card() -> void:
 
 
 ## Rail handling. Page travel (page_prev / page_next) is the
-## one branch that does not rebuild on the spot: it starts the
-## page slide, and the page delta, rebuild, and view persist
-## land together at the slide's far point (see _begin_page_slide).
-## after_swap is the bumper path's focus landing, run in the
-## far-point frame; pointer and keyboard travel pass none.
+## one branch that does not rebuild: it jumps the centre a
+## page of shelf indices and the drum swings to it (see
+## _page_travel). after_swap is a press's focus landing, run
+## in the press's own frame; pointer and keyboard travel
+## pass none.
 func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 	if key.begins_with("filter:") or key == "sort" or key == "page_prev" or key == "page_next":
 		# Browsing onward retires the last launch's marks.
@@ -1908,6 +2328,7 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 		_letter_net = "" ## a filter press leaves the net view: the wall it rebuilds is the filter's own set
 		_exit_tournament() ## and the Tournament Room - the views are alternatives, never layers
 		_page = 0
+		_centre_index = 0
 		_recompute_visible()
 		_rebuild_wall()
 		_persist_view()
@@ -1918,6 +2339,7 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 		_letter_net = "" ## a sort press leaves the net view too - the net's order was title order by definition
 		_exit_tournament()
 		_page = 0
+		_centre_index = 0
 		_recompute_visible()
 		_rebuild_wall()
 		_persist_view()
@@ -1936,10 +2358,10 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 			_land_on_rail_stop(key)
 	elif key == "page_prev":
 		if _page > 0:
-			_begin_page_slide(-1, _page_travel_landing(key, after_swap))
+			_page_travel(-1, _page_travel_landing(key, after_swap))
 	elif key == "page_next":
 		if _page < page_count() - 1:
-			_begin_page_slide(1, _page_travel_landing(key, after_swap))
+			_page_travel(1, _page_travel_landing(key, after_swap))
 	elif key == "desk":
 		# SETUP: in the headset the operations live in the room
 		# now (the SETUP panel - the view may bend, it may not
@@ -2026,10 +2448,9 @@ func _toggle_focused_favorite() -> void:
 	var idx: int = _panels.find(_focused)
 	if idx < 0:
 		return
-	var start: int = _page * PAGE_SIZE
-	if start + idx >= _visible_games.size():
+	if idx >= _visible_games.size():
 		return
-	var game: GameEntry = _visible_games[start + idx]
+	var game: GameEntry = _visible_games[idx]
 	var now_on: bool = not _store.is_favorite(game.game_id)
 	_store.set_favorite(game.game_id, now_on)
 	_store.save_to_disk()
@@ -2038,118 +2459,40 @@ func _toggle_focused_favorite() -> void:
 		_rebuild_wall()
 		_persist_view()
 		if not _panels.is_empty():
-			_set_focused(_panels[mini(idx, _panels.size() - 1)])
+			var land: int = mini(idx, _panels.size() - 1)
+			_set_centre(land, true)
+			_set_focused(_panels[land])
 		return
 	_rerender_panel_face(idx)
 
 
 ## Re-render one wall panel's face in place (the X favorite
-## toggle's feedback): the same art-then-panel path
-## _fill_wall_textures walks for the slot, generation-guarded
-## so a rebuild landing mid-render retires the stale write.
+## toggle's feedback): the face key carries the favorite
+## flag, so the window fill's one-face path re-renders it -
+## same ranking, same strip law, same power-on debt settling
+## as any face arrival.
 func _rerender_panel_face(idx: int) -> void:
-	var gen: int = _gen
-	var start: int = _page * PAGE_SIZE
-	if idx < 0 or idx >= _panels.size() or start + idx >= _visible_games.size():
-		return
-	var game: GameEntry = _visible_games[start + idx]
-	var quad: ClickableQuad = _panels[idx]
-	var tex: Texture2D = null
-	var art_file: String = game.ensure_art()
-	if art_file != "":
-		var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
-		if art_tex != null:
-			tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store), Vector2i(512, 640))
-	if tex == null:
-		tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), Vector2i(512, 640))
-	if gen != _gen or idx >= _panels.size() or _panels[idx] != quad:
-		return
-	quad.set_texture(tex)
-	# The standing performance (the X'd card is the focused
-	# card, hence the performer) sampled the face as it was;
-	# restart it on the re-rendered face, same rule as the
-	# wall fill's face arrival.
-	if quad == _power_panel:
-		_restore_power("face_arrived")
+	_fill_one_face(idx, _gen)
 
 
-## A page change's ride (see PAGE_SLIDE_*): the press commits
-## to the travel at once, but the wall glides out over
-## PAGE_SLIDE_OUT_SEC, the page delta + rebuild + persist land
-## in ONE frame at the far point, and the wall glides back to
-## exact rest over PAGE_SLIDE_BACK_SEC. A press that lands
-## mid-slide fast-forwards the live slide first (its swap
-## lands, the holder snaps to rest) and starts fresh, so
-## presses never queue, stack, or corrupt. If the room has
-## left plain wall browsing by the far point (detail opened,
-## placard up, a launch begun), the pending travel is dropped
-## whole: the wall just glides home wearing its old page.
-func _begin_page_slide(step: int, after_swap: Callable) -> void:
-	_slide_finish_now()
-	_slide_dir = step
-	_slide_step = step
-	_slide_after = after_swap
-	_slide_t = 0.0
-	_slide_phase = 1
-
-
-## Complete a live slide on the spot: a pending far-point
-## swap lands now (subject to the same drop rule), and the
-## holder returns to exact rest.
-func _slide_finish_now() -> void:
-	if _slide_phase == 0:
-		return
-	if _slide_phase == 1:
-		_slide_do_swap()
-	_slide_phase = 0
-	_slide_t = 0.0
-	if _wall != null:
-		_wall.rotation.y = 0.0
-
-
-## The far point: page delta, rebuild, and persist in one
-## frame, then the press's focus landing. Dropped whole when
-## the room is no longer plain wall browsing - a rebuild
-## forced through here mid-load-wait would resurrect pickable
-## quads in a room that must stay deaf.
-func _slide_do_swap() -> void:
+## A page change's ride on the drum: the centre jumps one
+## page of shelf indices (PAGE_SIZE) and the drum SWINGS to
+## it - the flat wall's out-and-back slide is retired with
+## the wall itself; travel on a standing wall is always the
+## swing now. The press's focus landing runs in the same
+## frame (the drum glides under it): the rail/bumper landing
+## laws are unchanged, only their timing - there is no far
+## point on a drum, because there is no swap. A press that
+## lands mid-swing simply retargets the swing.
+func _page_travel(step: int, after_swap: Callable) -> void:
 	if _mode != "wall" or _placard_up or _setup_panel_up or _launching_game_id != "":
-		_slide_after = Callable()
 		return
-	_slide_swapping = true
-	_page += _slide_step
-	_rebuild_wall()
+	var target_page: int = clampi(_page + step, 0, page_count() - 1)
+	var idx: int = clampi(target_page * PAGE_SIZE, 0, maxi(0, _visible_games.size() - 1))
+	_set_centre(idx)
 	_persist_view()
-	_slide_swapping = false
-	var after: Callable = _slide_after
-	_slide_after = Callable()
-	if after.is_valid():
-		after.call()
-
-
-## Per-frame slide drive, from _process: eased yaw out, swap
-## at the far point, eased yaw home to EXACTLY zero.
-func _update_slide(delta: float) -> void:
-	if _slide_phase == 0 or _wall == null:
-		return
-	_slide_t += delta
-	if _slide_phase == 1:
-		var p: float = clampf(_slide_t / PAGE_SLIDE_OUT_SEC, 0.0, 1.0)
-		_wall.rotation.y = deg_to_rad(float(_slide_dir) * PAGE_SLIDE_YAW_DEG * _slide_ease(p))
-		if p >= 1.0:
-			_slide_do_swap()
-			_slide_phase = 2
-			_slide_t = 0.0
-	elif _slide_phase == 2:
-		var p2: float = clampf(_slide_t / PAGE_SLIDE_BACK_SEC, 0.0, 1.0)
-		_wall.rotation.y = deg_to_rad(float(_slide_dir) * PAGE_SLIDE_YAW_DEG * (1.0 - _slide_ease(p2)))
-		if p2 >= 1.0:
-			_wall.rotation.y = 0.0
-			_slide_phase = 0
-
-
-func _slide_ease(p: float) -> float:
-	return p * p * (3.0 - 2.0 * p)
+	if after_swap.is_valid():
+		after_swap.call()
 
 
 ## The strip's pickable slots, in drawn order: the ONE list
@@ -2200,29 +2543,24 @@ func _strip_anchor_step(step: int) -> void:
 		_set_focused(q)
 
 
-## A bumper press's page travel: the whole section shifts one
-## page over (Chris's clarification, 2026-10-24 - the bumpers
-## flip PAGES, never filters; the filters change only via the
-## rail). Routed through the rail pager's own handling, so the
-## bounds are the pager's bounds - CLAMPED at both ends, no
-## wrap - and page state persists exactly as a rail press's
-## does. Inert under the room's standing input law: the load
-## wait is deaf, the SETUP placard owns the room, and the
-## detail view is not the wall.
+## A bumper press's page travel: the centre jumps one page
+## of shelf indices (Chris's clarification, 2026-10-24 - the
+## bumpers flip PAGES, never filters; the filters change only
+## via the rail). CLAMPED at both ends, no wrap, and page
+## state persists exactly as a rail press's does. Inert under
+## the room's standing input law: the load wait is deaf, the
+## SETUP placard owns the room, and the detail view is not
+## the wall.
 ##
-## Focus rule (stated for the smoke to assert): focus keeps its
-## PLACE across the flip. A focused panel hands focus to the
-## panel in the same grid slot on the new page (the panel
-## itself, so a follow-up A press browses instead of firing a
-## load - a Launch button can never hold focus at all since
-## the cards-only focus round),
-## clamped to the new page's last panel when the page runs
-## short; a focused rail stop hands focus to the same stop on
-## the rebuilt rail; no focus lands on the first panel. The
-## landing runs at the slide's far point, in the swap frame -
-## until then the old wall (and its focus) rides the glide. A
-## clamped press changes nothing at all - no slide, no
-## rebuild, so focus keeps even its instance.
+## Focus rule (stated for the smoke to assert): focus keeps
+## its PLACE across the flip. A focused panel hands focus to
+## the panel one page over FROM IT (its own index ± PAGE_SIZE,
+## clamped to the shelf's last panel - on the drum a panel IS
+## its shelf place, so "the same place" is the index law, not
+## a slot on a page); a focused rail stop keeps its stop (the
+## rail is persistent furniture - the quad never moves); no
+## focus lands on the first panel of the new centre's window.
+## A clamped press changes nothing at all.
 func _bumper_page(step: int) -> void:
 	if _launching_game_id != "" or _placard_up or _setup_panel_up or _mode != "wall":
 		return
@@ -2235,33 +2573,32 @@ func _bumper_page(step: int) -> void:
 	if _focused != null and _is_strip_quad(_focused):
 		_strip_anchor_step(step)
 		return
-	var slot: int = -1
-	var rail_key: String = ""
-	if _focused != null:
-		if _panels.has(_focused):
-			slot = _panels.find(_focused)
-		elif _is_rail_quad(_focused):
-			for k: Variant in _rail_quads.keys():
-				if _rail_quads[k] == _focused:
-					rail_key = str(k)
-					break
-	_handle_rail("page_next" if step > 0 else "page_prev", _flip_focus_landing(slot, rail_key))
-
-
-## The bumper rule's landing, packaged for the far point: when
-## the slide's swap lands, focus takes the same PLACE on the
-## new wall - the same rail stop, or the panel in the same
-## grid slot, clamped to a short page's last panel; from no
-## focus, the first panel.
-func _flip_focus_landing(slot: int, rail_key: String) -> Callable:
-	return func() -> void:
-		if rail_key != "":
-			var rq: ClickableQuad = _rail_quads.get(rail_key) as ClickableQuad
-			if rq != null:
-				_set_focused(rq)
-		elif not _panels.is_empty():
-			var target: int = 0 if slot < 0 else mini(slot, _panels.size() - 1)
-			_set_focused(_panels[target])
+	if _visible_games.is_empty():
+		return
+	_failed_game_id = ""
+	_status_note = ""
+	if _focused != null and _panels.has(_focused):
+		var from: int = _panels.find(_focused)
+		var target: int = clampi(from + step * PAGE_SIZE, 0, _visible_games.size() - 1)
+		if target == from:
+			return ## clamped at the shelf's end: the press is spent
+		_set_centre(target)
+		_set_focused(_panels[target])
+		_persist_view()
+	elif _focused != null and _is_rail_quad(_focused):
+		var target_page: int = clampi(_page + step, 0, page_count() - 1)
+		if target_page == _page:
+			return
+		_set_centre(clampi(target_page * PAGE_SIZE, 0, _visible_games.size() - 1))
+		_persist_view()
+	else:
+		var target_page2: int = clampi(_page + step, 0, page_count() - 1)
+		if target_page2 == _page:
+			return
+		var idx: int = clampi(target_page2 * PAGE_SIZE, 0, _visible_games.size() - 1)
+		_set_centre(idx)
+		_set_focused(_panels[idx])
+		_persist_view()
 
 
 func _open_detail(game: GameEntry) -> void:
@@ -2410,8 +2747,6 @@ func _room_pickables() -> Array[ClickableQuad]:
 		var sq: ClickableQuad = _strip_quads[skey] as ClickableQuad
 		if sq != null:
 			out.append(sq)
-	if _banner_quad != null:
-		out.append(_banner_quad)
 	if _detail != null:
 		out.append_array(_detail.get_clickables())
 	return out
@@ -3003,8 +3338,18 @@ func _apply_wall_alpha(a: float) -> void:
 		var sq: ClickableQuad = _strip_quads[skey] as ClickableQuad
 		if sq != null:
 			sq.set_content_alpha(a)
-	if _banner_quad != null:
-		_banner_quad.set_content_alpha(a)
+	# The status line fades with the wall, and so do the
+	# cards' nameplates (plate + label ride their cards).
+	# The plates all share one material, so its alpha is
+	# set once, here.
+	if _status_label != null:
+		_status_label.modulate = Color(0.92, 0.95, 1.0, a)
+		_status_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * a)
+	_plate_mat().albedo_color = Color(0.0, 0.0, 0.0, 0.66 * a)
+	for idx: int in range(_panels.size()):
+		if idx < _panel_labels.size() and _panel_labels[idx] != null:
+			_panel_labels[idx].modulate = Color(0.96, 0.97, 1.0, a)
+			_panel_labels[idx].outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * a)
 
 
 ## Load-wait queries (the lockout smoke reads the room the way the
@@ -3088,30 +3433,23 @@ func panel_art_aspect(q: ClickableQuad) -> float:
 	return _panel_art_aspect[idx]
 
 
+## A panel's full-pop scale: UNIFORM on the dome (DOME5) -
+## the flat wall's true-aspect grow is retired; every card
+## pops to POP_OUT_SCALE on both axes. The signature stays
+## for the shot suites that pin the end state.
 func panel_full_pop_scale(q: ClickableQuad) -> Vector2:
-	var asp: float = panel_art_aspect(q)
-	if asp < POP_GATE_ASPECT_MIN or asp > POP_GATE_ASPECT_MAX:
-		# No art (0), a playfield sliver, a banner: none of
-		# these is a glass's shape, so the card pops at the
-		# pre-round uniform scale exactly. (The flicker
-		# round's first cut clamped the raw aspect INTO
-		# [0.55, 1.45] instead, which ballooned a wide
-		# embedded card to 1.86x and shrank a tall one to
-		# 0.70x - the wonky panels Chris photographed.)
-		return Vector2(POP_OUT_SCALE, POP_OUT_SCALE)
-	var w: float = (_panel_size.y * POP_OUT_SCALE * asp) / _panel_size.x
-	return Vector2(minf(w, POP_FULL_X_MAX), POP_OUT_SCALE)
+	return Vector2(POP_OUT_SCALE, POP_OUT_SCALE)
 
 
 # ------------------------------------------------------------ power-on mimic
 
 ## The power-on's per-frame driver, on _process beside the
-## pop and the slide. The performer is chosen from the pop
+## pop and the swing. The performer is chosen from the pop
 ## target (the room's one shared focus), but only after the
 ## candidate has RESTED for POWER_SETTLE_SEC - a focus that
 ## is still travelling (bumper flips, fast stick sweeps)
 ## never starts a cascade, so the wall stays calm under
-## fast navigation. A page slide reads as no candidate at
+## fast navigation. A swing reads as no candidate at
 ## all; detail, placard, SETUP and launch already null the
 ## pop target, so every cancel Chris named funnels through
 ## "the candidate changed (or vanished)": the performer
@@ -3121,7 +3459,7 @@ func _update_power(delta: float) -> void:
 	var cand: ClickableQuad = _pop_target_panel()
 	if _tournament:
 		cand = null ## boards are standings, not backglasses: no power-on performance stands on a Tournament panel
-	if _slide_phase != 0:
+	if _swing_active:
 		cand = null
 	if cand != _power_candidate:
 		_power_candidate = cand
@@ -3132,8 +3470,8 @@ func _update_power(delta: float) -> void:
 		_power_candidate_t += delta
 	if _power_panel != null and cand != _power_panel:
 		var trigger: String = "focus_moved"
-		if _slide_phase != 0:
-			trigger = "page_slide"
+		if _swing_active:
+			trigger = "swing"
 		elif cand == null:
 			trigger = "focus_cleared"
 		_restore_power(trigger)
@@ -3152,11 +3490,23 @@ func _update_power(delta: float) -> void:
 ## once, here: a pair card (its flat extraction cached the
 ## author's On half - GameEntry.pair_on_art) crossfades,
 ## mode 3; every other card takes the mimic grade, mode 2.
-## Either way the overlay samples the face the card already
-## wears, so no extraction or file work ever happens on
-## focus. A card whose face texture is somehow not ready
-## is skipped for this focus (marked missed), never
-## retried per frame.
+##
+## The SUBJECT the performance plays on (the graduation's
+## reading of the user's law): the card's resting face is
+## the author shot, so the mimic performs on the BACKGLASS
+## - the shipped subject from before the shot era - rendered
+## once per game and cached in _power_subject_cache (the
+## window fill warms the extraction itself; focus time never
+## extracts). A table with NO author shot keeps the shipped
+## behavior exactly: its resting face IS the backglass (or
+## the embedded/title face), and the performance samples
+## the face the card already wears. A shot table with no
+## backglass at all has nothing to perform on: the shot
+## simply stands (marked missed, like a not-ready face).
+## Either way the overlay samples a rendered face texture,
+## so no extraction or file work ever happens on focus. A
+## card whose face texture is somehow not ready is skipped
+## for this focus (marked missed), never retried per frame.
 func _start_power(panel: ClickableQuad) -> void:
 	var game: GameEntry = _scanner.game_by_id(panel.payload) if _scanner != null else null
 	var label: String = game.title if game != null else panel.payload
@@ -3174,7 +3524,7 @@ func _start_power(panel: ClickableQuad) -> void:
 		# any face has rendered, and the card stood dark
 		# until focus moved (Chris, 2026-10-27). Skip like
 		# the not-ready case above; the face's arrival in
-		# _fill_wall_textures clears the missed mark and the
+		# the window fill clears the missed mark and the
 		# performance starts on the real face, no input
 		# needed.
 		_power_missed = panel
@@ -3185,6 +3535,21 @@ func _start_power(panel: ClickableQuad) -> void:
 		var on_path: String = game.pair_on_art()
 		if on_path != "":
 			on_tex = TextureFactory.load_art_texture(on_path)
+	if on_tex == null and game != null and game.has_shot_face():
+		# The shot era's subject rule: perform on the
+		# backglass, not on the shot the card rests at.
+		if game.backglass_source() == "":
+			_power_missed = panel
+			print("POWER: start game=\"%s\" skipped (author shot stands; no backglass to perform on)" % label)
+			return
+		var subject: Texture2D = _power_subject_cached(game)
+		if subject == null:
+			# Not rendered yet: prepare it off the frame
+			# path; the preparation retries the start when
+			# it lands, if this card still holds the settle.
+			_prepare_power_subject(panel, game)
+			return
+		face_tex = subject
 	_power_panel = panel
 	_power_game = game
 	_power_t = 0.0
@@ -3199,17 +3564,54 @@ func _start_power(panel: ClickableQuad) -> void:
 	_apply_power()
 
 
+## The power-on's subject for a shot-faced game: its
+## backglass rendered as a face (the same art render the
+## card itself would wear without a shot - strip suppressed,
+## the nameplate carries the name), cached per game for the
+## library adoption. Null while unrendered.
+func _power_subject_cached(game: GameEntry) -> Texture2D:
+	var ent: Variant = _power_subject_cache.get(game.game_id, null)
+	if ent == null:
+		return null
+	return (ent as Array)[1] as Texture2D
+
+
+## Render a game's power-on subject off the frame path and,
+## if its card still holds the settle when the render lands,
+## start the performance then. One preparation per game at
+## a time; a stale preparation (focus moved, wall rebuilt)
+## just leaves the cache warm for the next visit.
+func _prepare_power_subject(panel: ClickableQuad, game: GameEntry) -> void:
+	if bool(_power_subject_inflight.get(game.game_id, false)):
+		return
+	_power_subject_inflight[game.game_id] = true
+	var gen: int = _gen
+	var path: String = game.backglass_face_path()
+	var tex: Texture2D = null
+	if path != "":
+		var src: Texture2D = TextureFactory.load_art_texture(path)
+		if src != null:
+			tex = await _factory.render_texture(RoomSpecs.art_spec(game, src, _store, false), _panel_face_px)
+	_power_subject_inflight.erase(game.game_id)
+	if tex != null:
+		_power_subject_cache[game.game_id] = [path, tex]
+	if gen != _gen:
+		return
+	if tex != null and _power_panel == null and _power_candidate == panel and panel != _power_missed:
+		_start_power(panel)
+
+
 ## Build the mimic's one overlay quad over the performing
-## card's face: sized to the face's art area (the whole
-## face above the name strip), sampling the face's own
-## texture through an atlas window over exactly that area.
-## A pair card's On texture rides as the shader's second
+## card's face: sized to the WHOLE face (a dome face is
+## full-bleed art - the nameplate is 3D furniture riding
+## above the overlay, not a band painted into the face), and
+## sampling the subject's rendered face texture whole. A
+## pair card's On texture rides as the shader's second
 ## source, windowed by the same centered cover rule
 ## CardFace draws the face with, so the crossfade's two
 ## pictures register pixel for pixel.
 func _build_power_overlay(panel: ClickableQuad, face_tex: Texture2D, on_tex: Texture2D) -> void:
-	var art_rect: Rect2 = Rect2(0.0, 0.0, float(_panel_face_px.x),
-		float(_panel_face_px.y - CardFace.ART_STRIP_HEIGHT_PX))
+	var art_rect: Rect2 = Rect2(0.0, 0.0, float(_panel_face_px.x), float(_panel_face_px.y))
 	var face_atlas: AtlasTexture = AtlasTexture.new()
 	face_atlas.atlas = face_tex
 	face_atlas.region = Rect2(art_rect.position, Vector2(
@@ -3356,25 +3758,29 @@ func power_overlay_count() -> int:
 	return 1 if (_power_overlay != null and is_instance_valid(_power_overlay)) else 0
 
 
-## Page-slide queries (the nav smoke and the slide shot read
-## the slide the way the other smokes read their subjects):
-## the wall holder's current yaw in degrees - 0.0 is exact
-## rest - and whether a slide is live.
+## Travel queries (the nav smoke and the shots read the
+## room's travel the way the other smokes read their
+## subjects): the drum's yaw DEVIATION from its swing target
+## in degrees - 0.0 is exact rest at the centred column -
+## and whether a swing is live. (The flat wall's slide seam,
+## kept under its name: the quantity it always meant was
+## "how far the wall stands from rest".)
 func page_slide_yaw_deg() -> float:
 	if _wall == null:
 		return 0.0
-	return rad_to_deg(_wall.rotation.y)
+	return rad_to_deg(absf(_drum_yaw - _swing_to))
 
 
 func page_slide_active() -> bool:
-	return _slide_phase != 0
+	return _swing_active
 
 
 func _swap_launch_textures() -> void:
 	var gen: int = _gen
-	var start: int = _page * PAGE_SIZE
 	for i: int in range(_panel_launches.size()):
-		var game: GameEntry = _visible_games[start + i]
+		if i >= _visible_games.size():
+			break
+		var game: GameEntry = _visible_games[i]
 		var is_this: bool = game.game_id == _launching_game_id
 		var tex: Texture2D = await _factory.render_texture(
 			RoomSpecs.button_spec("LOADING..." if is_this else "LAUNCH", is_this), Vector2i(512, 164))
@@ -3464,7 +3870,7 @@ func _process(delta: float) -> void:
 		# inside _request_setup_panel_render still applies).
 		_request_setup_panel_render(false)
 	_update_pop(delta)
-	_update_slide(delta)
+	_update_swing(delta)
 	_update_power(delta)
 	var deaf: bool = _launching_game_id != ""
 	_joy_cooldown = maxf(0.0, _joy_cooldown - delta)
@@ -3645,6 +4051,32 @@ func _move_focus(dir: Vector2) -> void:
 	if _focused == null or not _focusables.has(_focused):
 		_set_focused(_focusables[0])
 		return
+	# The drum's own stepping (DOME5's navigation): while a
+	# CARD holds focus, a sideways step moves one COLUMN along
+	# the shelf and a vertical step moves one BAND - grid
+	# steps on the index, not projection steps across a
+	# curved wall (the projection walk below would score a
+	# neighbour two columns away over the adjacent card at
+	# the sphere's edge). DOWN from the bottom band is the
+	# one exit: it falls through to the projection walk,
+	# whose country law lands it on the rail. The centre
+	# follows focus (see _update_pop), so the drum swings
+	# under every step.
+	var pidx: int = _panels.find(_focused)
+	if pidx >= 0 and _mode == "wall" and not _tournament:
+		var coord: Vector2i = _grid_coord(pidx)
+		if absf(dir.x) > 0.5:
+			var ncol: int = clampi(coord.x + (1 if dir.x > 0.0 else -1), 0, _columns - 1)
+			var nidx: int = _index_at(ncol, coord.y)
+			if nidx != pidx and nidx < _panels.size():
+				_set_focused(_panels[nidx])
+			return
+		if absf(dir.y) > 0.5 and dir.y < 0.0 and coord.y > 0:
+			_set_focused(_panels[_index_at(coord.x, coord.y - 1)])
+			return
+		if absf(dir.y) > 0.5 and dir.y > 0.0 and coord.y < 2:
+			_set_focused(_panels[_index_at(coord.x, coord.y + 1)])
+			return
 	# The rail is its own navigation country (Chris's field
 	# report, 2026-10-24): a sideways step along the control rail
 	# used to be scored against every quad in the room, and the

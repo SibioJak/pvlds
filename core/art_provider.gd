@@ -210,6 +210,81 @@ static func has_pair_on(b2s_path: String) -> bool:
 	return is_cache_current(b2s_path) and FileAccess.file_exists(pair_on_path_for(b2s_path))
 
 
+# ------------------------------------------- author screenshots
+
+## The author-screenshot cache (the graduation round): the VPS
+## db's tableFile imgUrl is the author's own screenshot of the
+## exact build - the card face's primary source. The URL is the
+## identity: a re-upload changes the URL, so the stamp is the
+## URL's own hash and a changed URL is simply a new entry. The
+## fetched bytes are decoded once and stored as a panel-fitted
+## PNG beside the extractions, so every standing mechanism -
+## the prune's keep set, the decode cache, Image.load - treats
+## a shot like any other cached face. Outcomes ride the same
+## index, keyed by the shot stamp and gated on SHOT_VERSION
+## (the "sv" field, so the backglass gates never read them and
+## they never read the backglass gates).
+const SHOT_VERSION: int = 1
+
+
+static func shot_stamp_key_for(url: String) -> String:
+	return ("shot|" + url).md5_text()
+
+
+static func shot_cache_path_for(url: String) -> String:
+	return CACHE_DIR.path_join(shot_stamp_key_for(url) + ".png")
+
+
+static func shot_is_cached(url: String) -> bool:
+	return url != "" and FileAccess.file_exists(shot_cache_path_for(url))
+
+
+## The recorded fetch outcome for this URL: STATUS_OK /
+## STATUS_FAILED, or "" when this URL has never been fetched
+## under the current shot generation.
+static func shot_outcome(url: String) -> String:
+	if url == "":
+		return ""
+	_index_mutex.lock()
+	_load_index_locked()
+	var entry: Variant = _index.get(shot_stamp_key_for(url), null)
+	_index_mutex.unlock()
+	if entry is Dictionary:
+		var d: Dictionary = entry as Dictionary
+		if int(d.get("sv", 0)) < SHOT_VERSION:
+			return ""
+		return str(d.get("status", ""))
+	return ""
+
+
+static func record_shot_outcome(url: String, status: String) -> void:
+	if url == "":
+		return
+	var key: String = shot_stamp_key_for(url)
+	_index_mutex.lock()
+	_load_index_locked()
+	_index[key] = {"status": status, "src": url, "sv": SHOT_VERSION}
+	_save_index_locked()
+	_index_mutex.unlock()
+
+
+## Land a fetched shot: decode the bytes (the db serves WebP;
+## the other formats ride the same tolerant decoder the
+## extractors use), fit to the panel cap, store as PNG, and
+## record the outcome either way - a failed fetch must be a
+## recorded negative, or every scan would re-fetch it forever.
+## Returns the outcome status.
+static func store_shot_bytes(url: String, bytes: PackedByteArray) -> String:
+	var img: Image = _decode_image_bytes(bytes)
+	if img == null or img.is_empty():
+		record_shot_outcome(url, STATUS_FAILED)
+		return STATUS_FAILED
+	var stored: Dictionary = _store_extracted(img, shot_cache_path_for(url))
+	var status: String = str(stored.get("status", STATUS_FAILED))
+	record_shot_outcome(url, status)
+	return status
+
+
 ## Whether a source's cached extraction may be SERVED as it
 ## stands: the cache file exists, and for a .directb2s it was
 ## written under the current extractor generation - its outcome

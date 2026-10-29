@@ -143,6 +143,7 @@ var _state: StateStore
 var _db: VpsDatabase
 var _scanner: LibraryScanner
 var _art_warmer: ArtWarmer
+var _shot_fetcher: ShotFetcher ## the author-shot fetcher (graduation): one pass per scan landing, cached or recorded for good
 var _factory: TextureFactory
 var _room: RoomView = null
 var _desk: SetupDesk = null
@@ -220,9 +221,10 @@ var _nav_rail_started: bool = false ## the rail-focus leg runs async (it waits o
 var _nav_rail_done: bool = false ## the rail-focus leg (async) has reported
 var _nav_fav_started: bool = false ## the X-favorites leg runs async (feeds + re-renders); kicked off once
 var _nav_fav_done: bool = false ## the X-favorites leg (async) has reported
-var _shot_slide_path: String = "" ## --pvlds-shot-slide P: capture the wall at the page slide's far point
+var _shot_slide_path: String = "" ## --pvlds-shot-slide P: capture the drum mid-swing
 var _shot_slide_phase: int = -1
 var _shot_slide_frames: int = 0
+var _shot_slide_yaw0: float = -1.0 ## the swing's full travel (deviation at the flip's first frame); the capture fires at 60% travelled
 var _nav_pop_panel: ClickableQuad = null ## bottom-row panel the nav smoke pops for the clearance re-check
 var _smoke_letters: bool = false ## --pvlds-smoke-letters: the alphabet strip + letter-jump contract
 var _letters_smoke_phase: int = 0
@@ -496,6 +498,14 @@ func _ready() -> void:
 	# art is warm before it is browsed to (art-speed round).
 	_art_warmer = ArtWarmer.new()
 	_art_warmer.on_drained = _on_art_warm_drained
+	# The author-shot fetcher: at each scan landing it walks the
+	# library once and brings every tableFile imgUrl home to the
+	# shot cache (the card faces' primary source). A landed shot
+	# tells the room, which swaps the standing card's fallback
+	# face for the shot in place.
+	_shot_fetcher = ShotFetcher.new()
+	add_child(_shot_fetcher)
+	_shot_fetcher.shot_arrived.connect(_on_shot_arrived)
 	# The WoVP client (read side only) + the last-good boards
 	# off the disk cache, so an offline boot still shows the
 	# boards with their stamp. The cached identity is trusted
@@ -677,6 +687,27 @@ func _shot_ready() -> bool:
 	return false
 
 
+## Whether this run may fetch author shots: real runs always;
+## dev/harness runs (any --pvlds-* user arg) only when the
+## environment opts in with PVLDS_SHOT_MODE=on (the graduation
+## harness serves the shots from a local stub via
+## PVLDS_SHOT_BASE and says so).
+func _shots_may_fetch() -> bool:
+	if OS.get_environment("PVLDS_SHOT_MODE") == "on":
+		return true
+	for a: String in OS.get_cmdline_user_args():
+		if a.begins_with("--pvlds-"):
+			return false
+	return true
+
+
+## A shot landed for a game: the room swaps its standing
+## card's face if the card is on the drum's window.
+func _on_shot_arrived(game: GameEntry) -> void:
+	if _room != null:
+		_room.refresh_shot_faces(game)
+
+
 func _scan_progress_text() -> String:
 	if _scan_progress == null:
 		return "Scanning..."
@@ -719,6 +750,14 @@ func _finish_scan() -> void:
 	# background (and re-arm on every later scan).
 	if _art_warmer != null and _scanner != null:
 		_art_warmer.warm_library(_scanner.games)
+	# ...and fetch the library's author shots (the card faces'
+	# primary source) on the same landing. Hermetic runs (any
+	# --pvlds-* dev arg: smokes, shots, core test) never touch
+	# the network for shots unless PVLDS_SHOT_MODE=on arms it -
+	# the graduation smoke points PVLDS_SHOT_BASE at a local
+	# stub and opts in explicitly.
+	if _shot_fetcher != null and _scanner != null and _shots_may_fetch():
+		_shot_fetcher.fetch_library(_scanner.games)
 	# The room eats from the same landing (the SETUP panel): the
 	# wall adopts the new scan - a panel-started scan must change
 	# the room it was started from. While the panel stands, the
@@ -2169,14 +2208,14 @@ func _save_shot_png(path: String) -> Error:
 	return img.save_png(path)
 
 
-## --pvlds-shot-slide P: the page slide's QA hook (the bumper
-## feel round). Boots the room, forces the ALL filter through
-## the room's own rail handler (the harness library needs its
-## stub pages for a flip to exist), lets the wall settle, then
-## flips a page through the room's bumper path and captures P
-## on the first frame the wall's yaw passes 60% of the slide's
-## far point - the old page at full glide, a frame or two
-## before the swap. Prints the verdict, quits.
+## --pvlds-shot-slide P: the drum swing's QA hook (the bumper
+## feel round, re-pointed at graduation). Boots the room,
+## forces the ALL filter through the room's own rail handler
+## (the harness library needs its stub pages for a flip to
+## exist), lets the wall settle, then flips a page through
+## the room's bumper path and captures P on the first frame
+## the swing has travelled 60% of its arc - the shelf at full
+## glide, mid-travel. Prints the verdict, quits.
 func _drive_shot_slide() -> void:
 	match _shot_slide_phase:
 		0:
@@ -2199,17 +2238,19 @@ func _drive_shot_slide() -> void:
 		2:
 			_shot_slide_frames += 1
 			var yaw: float = absf(_room.page_slide_yaw_deg())
-			if yaw >= RoomView.PAGE_SLIDE_YAW_DEG * 0.6:
+			if _shot_slide_yaw0 < 0.0:
+				_shot_slide_yaw0 = yaw
+			if _shot_slide_yaw0 > 0.0 and yaw <= _shot_slide_yaw0 * 0.4:
 				var path: String = _shot_slide_path
 				_shot_slide_phase = -1
 				var err: Error = _save_shot_png(path)
 				print("PVLDS SLIDE SHOT: ", path, " err=", err, " yaw=", snappedf(yaw, 0.01))
 				get_tree().quit(0 if err == OK else 1)
 			elif not _room.page_slide_active():
-				printerr("PVLDS SLIDE SHOT: FAIL - the slide ended before the capture frame (peak yaw %.2f)" % yaw)
+				printerr("PVLDS SLIDE SHOT: FAIL - the swing ended before the capture frame (peak yaw %.2f)" % yaw)
 				get_tree().quit(1)
 			elif _shot_slide_frames > 3600:
-				printerr("PVLDS SLIDE SHOT: FAIL - the slide never engaged")
+				printerr("PVLDS SLIDE SHOT: FAIL - the swing never engaged")
 				get_tree().quit(1)
 
 
@@ -2827,16 +2868,16 @@ func _drive_setup_panel_smoke() -> void:
 
 
 ## The deferral snapshot: every wall quad (cards, their
-## Launch buttons, the banner, the rail) with the texture it
-## wears as the panel's scan starts.
+## Launch buttons, the rail) with the texture it wears as
+## the panel's scan starts. (The graduation's status line is
+## a Label3D, not a quad, and was never pickable or
+## re-textured across this event, so it is not snapshotted.)
 func _setup_panel_smoke_snapshot_wall() -> void:
 	_setup_panel_smoke_wall_before.clear()
 	_setup_panel_smoke_tex_before.clear()
 	var quads: Array[ClickableQuad] = []
 	quads.append_array(_room._panels)
 	quads.append_array(_room._panel_launches)
-	if _room._banner_quad != null:
-		quads.append(_room._banner_quad)
 	for k: Variant in _room._rail_quads.keys():
 		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
 		if rq != null:
@@ -2852,8 +2893,6 @@ func _setup_panel_smoke_wall_untouched() -> bool:
 	var now: Array[ClickableQuad] = []
 	now.append_array(_room._panels)
 	now.append_array(_room._panel_launches)
-	if _room._banner_quad != null:
-		now.append(_room._banner_quad)
 	for k: Variant in _room._rail_quads.keys():
 		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
 		if rq != null:
@@ -2885,8 +2924,6 @@ func _setup_panel_smoke_orphan_highlight() -> bool:
 	var quads: Array[ClickableQuad] = []
 	quads.append_array(_room._panels)
 	quads.append_array(_room._panel_launches)
-	if _room._banner_quad != null:
-		quads.append(_room._banner_quad)
 	for k: Variant in _room._rail_quads.keys():
 		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
 		if rq != null:
@@ -6696,6 +6733,37 @@ func _run_core_test() -> void:
 	nonpair_entry.art_source_path = b2s_ok
 	_expect(nonpair_entry.ensure_art() != "" and nonpair_entry.pair_on_art() == "" and not ArtProvider.has_pair_on(b2s_ok),
 		"a plain backglass has no pair On half (it takes the mimic grade)", failures)
+	# The graduation's author shots: the db's tableFile imgUrl is
+	# the card face's PRIMARY source. A landed shot outranks
+	# every legacy source; a recorded-negative shot falls
+	# through to the legacy chain for good; an unlanded shot
+	# (no record either way) leaves the legacy face standing
+	# until the fetcher's verdict lands. Under a shot face the
+	# backglass stays available - it is the power-on's subject.
+	var shot_url: String = "https://example.invalid/shots/graduation-fixture.webp"
+	var shot_entry: GameEntry = GameEntry.new()
+	shot_entry.art_source_path = b2s_ok
+	shot_entry.shot_url = shot_url
+	_expect(shot_entry.face_path() == shot_entry.ensure_art() and not shot_entry.has_shot_face(),
+		"an unlanded author shot leaves the legacy face standing", failures)
+	var grad_shot_img: Image = mk_img.call(300, 534) as Image
+	_expect(ArtProvider.store_shot_bytes(shot_url, grad_shot_img.save_png_to_buffer()) != "",
+		"a fetched author shot stores into the shot cache", failures)
+	_expect(ArtProvider.shot_is_cached(shot_url) and ArtProvider.shot_outcome(shot_url) == ArtProvider.STATUS_OK,
+		"the stored shot records its ok outcome", failures)
+	_expect(shot_entry.face_path() == ArtProvider.shot_cache_path_for(shot_url) and shot_entry.has_shot_face(),
+		"a landed author shot outranks the backglass as the card face", failures)
+	_expect(shot_entry.backglass_face_path() == shot_entry.ensure_art() and shot_entry.backglass_face_path() != "",
+		"the backglass face stays available under a shot face (the power-on's subject)", failures)
+	_expect(shot_entry.pair_on_art() == "",
+		"a shot face does not invent a pair crossfade (the pair gate reads the backglass, not the face)", failures)
+	var shot_neg_url: String = "https://example.invalid/shots/graduation-missing.webp"
+	ArtProvider.record_shot_outcome(shot_neg_url, ArtProvider.STATUS_NO_IMAGE)
+	var shot_neg_entry: GameEntry = GameEntry.new()
+	shot_neg_entry.art_source_path = b2s_ok
+	shot_neg_entry.shot_url = shot_neg_url
+	_expect(shot_neg_entry.face_path() == shot_neg_entry.ensure_art() and not shot_neg_entry.has_shot_face(),
+		"a recorded-negative author shot falls through to the legacy face for good", failures)
 	# Variant 2: a BMP-encoded backglass (older designer files) -
 	# hand-built BMP bytes, the way an external tool writes them.
 	var b2s_bmp: String = art_dir.path_join("Bmp Table.directb2s")
@@ -7473,7 +7541,7 @@ func _run_core_test() -> void:
 			"year": 1982, "designers": ["D. Zed"],
 			"tableFiles": [
 				{"id": "fx-qq-1", "version": "1.0", "tableFormat": "VPX", "authors": ["Zippy"], "createdAt": 1700000000, "features": ["VR"], "urls": [{"url": "https://vpuniverse.com/files/file/24896-quasar-queen-starlite-1982-zippy/"}]},
-				{"id": "fx-qq-2", "version": "2.0", "tableFormat": "VPX", "authors": ["Zippy"], "createdAt": 1710000000, "features": [], "urls": [{"url": "https://www.vpforums.org/index.php?app=downloads&showfile=19031"}]},
+				{"id": "fx-qq-2", "version": "2.0", "tableFormat": "VPX", "authors": ["Zippy"], "createdAt": 1710000000, "features": [], "imgUrl": "https://example.invalid/shots/quasar-queen-v2.webp", "urls": [{"url": "https://www.vpforums.org/index.php?app=downloads&showfile=19031"}]},
 			],
 		},
 		{
@@ -7560,6 +7628,10 @@ func _run_core_test() -> void:
 		var reg2: TableBuild = mt_qq.build_by_path(mt_tables.path_join("Quasar Queen (Starlite 1982) v2.0.vpx"))
 		_expect(reg2 != null and reg2.table_file_id == "fx-qq-2" and reg2.match_tier == "slug",
 			"regression: the v2.0 file still resolves to build fx-qq-2 (slug names the game, the ladder the build)", failures)
+		_expect(reg2 != null and reg2.img_url == "https://example.invalid/shots/quasar-queen-v2.webp",
+			"the scanner captures the matched tableFile's imgUrl onto the build (the author shot's address)", failures)
+		_expect(mt_qq.shot_url == "https://example.invalid/shots/quasar-queen-v2.webp",
+			"the entry's shot_url is its current build's imgUrl (the v2.0 build is current: newest date)", failures)
 		var reg3: TableBuild = mt_qq.build_by_path(mt_tables.path_join("Quasar Queen (Starlite 1982) v9.9.vpx"))
 		_expect(reg3 != null and not reg3.matched_db and reg3.version == "9.9" and reg3.match_tier == "slug",
 			"regression: the unstated-in-db v9.9 is still game-only, never relabeled", failures)

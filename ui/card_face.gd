@@ -242,7 +242,12 @@ func apply_spec(spec: Dictionary) -> void:
 	var band: Color = _color_of(spec, "band", Color(0.25, 0.25, 0.38))
 	_bg.color = bg
 	_art_rect.visible = kind == "art"
-	_art_strip.visible = kind == "art"
+	# The name strip rides art faces by default; a spec may
+	# suppress it ("strip": false) when the surface carries
+	# the title itself - the dome room's cards wear a
+	# nameplate label on the card, and a second title inside
+	# the face would double it (the graduation round).
+	_art_strip.visible = kind == "art" and bool(spec.get("strip", true))
 	_art_fav.visible = kind == "art" and bool(spec.get("favorite", false))
 	_margin.visible = kind != "art"
 	if kind == "art":
