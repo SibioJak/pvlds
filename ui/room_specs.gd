@@ -35,8 +35,14 @@ const BUTTON_BG_ACCENT: Color = Color(0.36, 0.25, 0.06)
 ## card-size panels, the 512x640 face, the Launch button at
 ## RoomView.PANEL_LAUNCH_Y, no footer - so the layout legs
 ## can fail against it by name.
-const BOARD_PANEL_SIZE: Vector2 = Vector2(0.70, 0.672)
-const BOARD_FACE_PX: Vector2i = Vector2i(700, 672)
+## The board's size since the GRAD FIX round's Tournament
+## redesign: the board stands as furniture in the slot beside
+## the centred challenge's art card (0.62 wide), a touch
+## narrower and notably taller than the old grid boards -
+## the rows gain air, the score column keeps its law (the
+## layout legs prove the worst case at this size).
+const BOARD_PANEL_SIZE: Vector2 = Vector2(0.60, 0.80)
+const BOARD_FACE_PX: Vector2i = Vector2i(600, 800)
 const BOARD_FOOTER_PX: int = 128 ## the owned board face's bottom band: the Launch button's home
 const LEGACY_BOARD_PANEL_SIZE: Vector2 = Vector2(0.54, 0.64) ## == RoomView.PANEL_SIZE at the TR1/TR2 rounds
 const LEGACY_BOARD_FACE_PX: Vector2i = Vector2i(512, 640)

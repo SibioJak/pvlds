@@ -203,6 +203,7 @@ const WING_Y: float = 0.21 ## the wing's centre in its borrowed slot, card-local
 const WING_SIZE_NC: Vector2 = Vector2(0.66, 0.634)
 const WING_Y_NC: float = 0.225
 const WING_PROUD: float = 0.10 ## how far in front of the neighbour card the wing floats at full pop
+const TBOARD_PROUD: float = 0.06 ## how far in front of its borrowed slot the Tournament board floats at full pop
 const BG_STAR_SHADER: String = """
 shader_type spatial;
 render_mode unshaded, cull_front, depth_draw_opaque;
@@ -373,6 +374,21 @@ var _wing_key: String = "" ## the content key the wing's standing texture was re
 var _wing_game_id: String = "" ## the game the wing currently serves ("" = no wing content)
 var _wing_enabled: bool = true ## the SETUP dial (the GRAD FIX round): the wing stands only while this holds
 var _wing_borrowed_idx: int = -1 ## the panel whose slot the wing stands in, hidden + unpickable while borrowed (-1 = none)
+## The Tournament Room's standing board (the GRAD FIX
+## round's redesign): one board, standing as furniture in
+## the slot RIGHT of the centred challenge's art card, its
+## slot's card borrowed away - the pairing is art + board
+## side by side, and stepping re-pairs the board's content,
+## never the layout.
+var _tboard: Node3D = null
+var _tboard_quad: MeshInstance3D = null
+var _tboard_mat: StandardMaterial3D = null
+var _tboard_launch: ClickableQuad = null
+var _tboard_slot: Transform3D = Transform3D() ## the board's seated slot transform on the drum
+var _tboard_key: String = "" ## the standing board content's key (challenge + fetch stamp + player + owned)
+var _tboard_challenge_id: String = ""
+var _tboard_owned: bool = false
+var _tboard_borrowed_idx: int = -1 ## the panel whose slot the board stands in (-1 = none)
 var _wing_slot: Transform3D = Transform3D() ## the wing's seated slot transform on the drum (its pop offset applies per frame)
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
@@ -966,6 +982,7 @@ func set_wovp_data(d: Dictionary) -> void:
 		# did not have (or change the one it has).
 		_wing_key = ""
 		_refresh_wing()
+		_refresh_tboard()
 
 
 func tournament_active() -> bool:
@@ -1299,7 +1316,10 @@ func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 ## the mode tag keeps them honest; a mismatch is freed and
 ## re-minted at the right size).
 func _pool_card(game: GameEntry) -> Dictionary:
-	var mode: String = "board" if _tournament else "card"
+	# Since the Tournament redesign, challenge panels are
+	# CARDS (the board stands beside the centred one as
+	# furniture); only the state row still wears a board face.
+	var mode: String = "board" if (_tournament and game.game_id == "wovp:state") else "card"
 	var nodes: Dictionary = _panel_pool.get(game.game_id, {}) as Dictionary
 	if not nodes.is_empty() and str(nodes.get("mode", "")) != mode:
 		var old_root: ClickableQuad = nodes.get("root") as ClickableQuad
@@ -1422,6 +1442,7 @@ func _set_centre(index: int, snap: bool = false) -> void:
 		_refresh_card_frames()
 		_request_window_fill()
 		_refresh_wing()
+		_refresh_tboard()
 
 
 ## Per-frame swing drive, from _process: a critically damped
@@ -1490,7 +1511,7 @@ func _refresh_window() -> void:
 	var browsing: bool = _mode == "wall" and not _placard_up and not _setup_panel_up and _launching_game_id == ""
 	for idx: int in range(_panels.size()):
 		var c: int = _grid_coord(idx).x
-		var vis: bool = c >= _panel_window_lo and c <= _panel_window_hi and idx != _wing_borrowed_idx
+		var vis: bool = c >= _panel_window_lo and c <= _panel_window_hi and idx != _wing_borrowed_idx and idx != _tboard_borrowed_idx
 		_panels[idx].visible = vis
 		if browsing:
 			_panels[idx].pick_enabled = vis
@@ -1523,6 +1544,15 @@ func _rebuild_wall() -> void:
 	# the wall being torn down: drop the state without
 	# touching the (about to be freed) nodes.
 	_power_reset_state()
+	# The Tournament board's borrowed slot belongs to the
+	# wall being torn down: release it before the new wall's
+	# window refresh reads the borrow (a stale borrow would
+	# hide a library card).
+	_release_tboard_borrow()
+	if _tboard != null:
+		_tboard.visible = false
+		_tboard_challenge_id = ""
+		_tboard_key = ""
 	# The SETUP panel's focus, remembered across the rebuild:
 	# if a rebuild ever runs while the panel stands, the
 	# player's place on the panel must survive it (the tail
@@ -1568,8 +1598,8 @@ func _rebuild_wall() -> void:
 	_set_focused(null)
 
 	_placeholder_tex = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
-	_panel_size = RoomSpecs.board_panel_size() if _tournament else CARD_SIZE
-	_panel_face_px = RoomSpecs.board_face_px() if _tournament else CARD_FACE_PX
+	_panel_size = CARD_SIZE
+	_panel_face_px = CARD_FACE_PX
 	_columns = maxi(1, int(ceil(float(maxi(1, _visible_games.size())) / 3.0)))
 	if _status_label == null:
 		_build_status_line()
@@ -2090,9 +2120,15 @@ func _fill_wall_textures(gen: int) -> void:
 		squad.set_texture(stex)
 	var bench_t_furniture: int = Time.get_ticks_msec()
 	if _tournament:
-		# The Tournament Room's panels are boards and state
-		# faces, not game cards - their own fill, below.
-		await _fill_tournament_textures(gen, 0)
+		# The Tournament Room's challenge panels are cards and
+		# dress through the standard window fill below; the
+		# lone state panel (when the view is a state row) wears
+		# its board face here, and the standing board beside
+		# the centred challenge re-renders on its own refresh.
+		await _fill_tournament_state_faces(gen)
+		if gen != _gen:
+			return
+		_request_window_fill()
 		if gen == _gen:
 			wall_ready = true
 		return
@@ -2178,6 +2214,9 @@ func _fill_window_faces(gen: int) -> void:
 func _fill_one_face(idx: int, gen: int) -> void:
 	if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
 		return
+	if _tournament and idx < _tournament_rows.size() \
+			and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+		return # the state panel wears its board face (see _fill_tournament_state_faces), never a card face
 	var game: GameEntry = _visible_games[idx]
 	var quad: ClickableQuad = _panels[idx]
 	var art_file: String = game.face_path()
@@ -2258,6 +2297,14 @@ func _fill_one_face(idx: int, gen: int) -> void:
 			if ltex != null:
 				_btn_tex_cache[bkey] = ltex
 		_panel_launches[idx].set_texture(ltex)
+		if _tournament:
+			# A challenge card he does not own carries no
+			# Launch: there is nothing on it to press (the
+			# pick-side of the same law lives in
+			# _refresh_window via _tournament_launchable).
+			var launchable: bool = _tournament_launchable(idx)
+			_panel_launches[idx].visible = launchable
+			_panel_launches[idx].pick_enabled = launchable and _mode == "wall"
 	# Warm the power-on's subject while the card is dressed:
 	# the backglass extraction is claim-joined with the
 	# library warmer, so a card whose backglass is already
@@ -2272,7 +2319,7 @@ func _fill_one_face(idx: int, gen: int) -> void:
 ## face re-fills - the face key changed under it, so the card
 ## swaps the fallback it wore for the author shot.
 func refresh_shot_faces(game: GameEntry) -> void:
-	if game == null or _tournament:
+	if game == null:
 		return
 	var idx: int = _visible_games.find(game)
 	if idx < 0 or idx >= _panels.size():
@@ -2285,25 +2332,19 @@ func refresh_shot_faces(game: GameEntry) -> void:
 	_fill_one_face(idx, _gen)
 
 
-## The Tournament Room's panel fill: board faces for
-## challenges (his row highlighted by the spec), a state
-## face for the state row, and a Launch button only on a
-## panel whose table he owns - a not-owned board and a
-## state panel carry no launch at all, so there is nothing
-## on them to press by accident. Boards are not cached:
-## their content is a function of the standing data and the
-## clock, and the view's rebuilds are player-paced.
-func _fill_tournament_textures(gen: int, start: int) -> void:
-	var now_unix: int = int(Time.get_unix_time_from_system())
+## The state row's fill (the Tournament redesign): when the
+## view is a single state panel - no key, a failed fetch, no
+## live challenges - that panel wears the state face at the
+## board's size. Challenge panels are cards now and dress
+## through _fill_one_face; the standing board beside the
+## centred challenge renders in _render_tboard_content.
+func _fill_tournament_state_faces(gen: int) -> void:
 	for i: int in range(_panels.size()):
-		var row: Dictionary = _tournament_rows[start + i]
+		var row: Dictionary = _tournament_rows[i]
+		if str(row.get("kind", "")) != "state":
+			continue
 		var quad: ClickableQuad = _panels[i]
-		var spec: Dictionary
-		if str(row.get("kind", "")) == "state":
-			spec = RoomSpecs.tournament_state_spec(row.get("lines", []))
-		else:
-			spec = RoomSpecs.tournament_board_spec(row["challenge"] as WovpChallenge,
-				bool(row.get("owned", false)), _wovp_user_id, now_unix)
+		var spec: Dictionary = RoomSpecs.tournament_state_spec(row.get("lines", []))
 		var tex: Texture2D = await _factory.render_texture(spec, RoomSpecs.board_face_px())
 		if gen != _gen:
 			return
@@ -2561,6 +2602,7 @@ func _update_pop(delta: float) -> void:
 		var s: float = lerpf(1.0, POP_OUT_SCALE, amt)
 		q.scale = Vector3(s, s, s)
 	_update_wing_frame()
+	_update_tboard_frame()
 
 
 ## The focused card's wing (the user's design, 2026-10-28;
@@ -2637,6 +2679,7 @@ func set_wing_enabled(on: bool) -> void:
 			_wing.visible = false
 	else:
 		_refresh_wing()
+		_refresh_tboard()
 
 
 func wing_enabled() -> bool:
@@ -2741,6 +2784,155 @@ func _update_wing_frame() -> void:
 		_wing_slot.origin + _wing_slot.basis.z * proud)
 	var s: float = lerpf(0.92, 1.0, amt)
 	_wing.scale = Vector3(s, s, s)
+
+
+## ------------------------------------------------- the Tournament board
+
+## The standing board beside the centred challenge (the
+## GRAD FIX round's Tournament redesign): furniture on the
+## wing's pattern - built once, seated per centre at the
+## right neighbour's slot with that slot's card borrowed
+## away, content re-rendered when the pairing changes.
+func _build_tboard() -> void:
+	if _wall == null:
+		return
+	_tboard = Node3D.new()
+	_tboard.name = "TournamentBoard"
+	_tboard.visible = false
+	_tboard_quad = MeshInstance3D.new()
+	var qm: QuadMesh = QuadMesh.new()
+	qm.size = RoomSpecs.board_panel_size()
+	_tboard_quad.mesh = qm
+	_tboard_mat = StandardMaterial3D.new()
+	_tboard_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_tboard_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_tboard_quad.material_override = _tboard_mat
+	_tboard.add_child(_tboard_quad)
+	var backing: MeshInstance3D = _make_card_quad(_tboard, RoomSpecs.board_panel_size() + Vector2(0.02, 0.02), Vector3(0.0, 0.0, -0.006), _frame_mat(false))
+	backing.name = "BoardBacking"
+	_tboard_launch = ClickableQuad.new()
+	_tboard_launch.setup("panel_launch", "", _placeholder_tex, PANEL_LAUNCH_SIZE)
+	_tboard_launch.position = Vector3(0.0, RoomSpecs.board_launch_y(), 0.020)
+	_tboard_launch.visible = false
+	_tboard_launch.pick_enabled = false
+	_tboard.add_child(_tboard_launch)
+	_wall.add_child(_tboard)
+
+
+func _borrow_tboard_slot(coord: Vector2i) -> void:
+	var target: Vector2i = Vector2i(coord.x + 1, coord.y)
+	if _tboard_borrowed_idx >= 0:
+		if _tboard_borrowed_idx < _visible_games.size() and _grid_coord(_tboard_borrowed_idx) == target:
+			return
+		_release_tboard_borrow()
+	for idx: int in range(_visible_games.size()):
+		if idx == _centre_index:
+			continue
+		if _grid_coord(idx) == target:
+			_tboard_borrowed_idx = idx
+			if idx < _panels.size():
+				_panels[idx].visible = false
+				_panels[idx].pick_enabled = false
+				if idx < _panel_launches.size():
+					_panel_launches[idx].pick_enabled = false
+			return
+
+
+func _release_tboard_borrow() -> void:
+	if _tboard_borrowed_idx < 0:
+		return
+	var idx: int = _tboard_borrowed_idx
+	_tboard_borrowed_idx = -1
+	if idx < _panels.size() and _panel_window_lo >= 0:
+		var c: int = _grid_coord(idx).x
+		_panels[idx].visible = c >= _panel_window_lo and c <= _panel_window_hi and idx != _wing_borrowed_idx
+
+
+func _refresh_tboard() -> void:
+	if _tboard == null:
+		_build_tboard()
+	if _tboard == null:
+		return
+	if not _tournament or _centre_index < 0 or _centre_index >= _tournament_rows.size() \
+			or str((_tournament_rows[_centre_index] as Dictionary).get("kind", "")) != "challenge":
+		_release_tboard_borrow()
+		_tboard_challenge_id = ""
+		_tboard_key = ""
+		_tboard.visible = false
+		return
+	var row: Dictionary = _tournament_rows[_centre_index]
+	var ch: WovpChallenge = row["challenge"] as WovpChallenge
+	var game: GameEntry = _visible_games[_centre_index]
+	var coord: Vector2i = _grid_coord(_centre_index)
+	_borrow_tboard_slot(coord)
+	_tboard_slot = _card_transform_at(coord.x + 1, coord.y)
+	_tboard.transform = _tboard_slot
+	var owned: bool = bool(row.get("owned", false))
+	_tboard_owned = owned
+	if _tboard_launch != null:
+		_tboard_launch.payload = game.game_id
+		_tboard_launch.visible = owned
+	var key: String = ch.challenge_id + "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id \
+		+ "|" + ("owned" if owned else "none")
+	if key == _tboard_key and _tboard_challenge_id == ch.challenge_id:
+		return
+	_tboard_key = key
+	_tboard_challenge_id = ch.challenge_id
+	_render_tboard_content(ch, owned, key)
+
+
+func _render_tboard_content(ch: WovpChallenge, owned: bool, key: String) -> void:
+	var now_unix: int = int(Time.get_unix_time_from_system())
+	var spec: Dictionary = RoomSpecs.tournament_board_spec(ch, owned, _wovp_user_id, now_unix)
+	var tex: Texture2D = await _factory.render_texture(spec, RoomSpecs.board_face_px())
+	if tex == null or key != _tboard_key:
+		return
+	_tboard_mat.albedo_texture = tex
+	if owned and _tboard_launch != null:
+		var ltex: Texture2D = _btn_tex_cache.get("LAUNCH|a") as Texture2D
+		if ltex == null:
+			ltex = await _factory.render_texture(RoomSpecs.button_spec("LAUNCH", true), Vector2i(512, 164))
+			if ltex != null:
+				_btn_tex_cache["LAUNCH|a"] = ltex
+		if ltex != null and key == _tboard_key:
+			_tboard_launch.set_texture(ltex)
+
+
+## Per-frame board dressing, from _update_pop beside the
+## wing's: the board arrives with the centred card's pop and
+## stands only while the Tournament pairing stands.
+func _update_tboard_frame() -> void:
+	if _tboard == null:
+		return
+	var amt: float = 0.0
+	if _centre_index >= 0 and _centre_index < _panel_pop.size():
+		amt = _panel_pop[_centre_index]
+	var live: bool = _tournament and _tboard_challenge_id != "" and _mode == "wall" \
+		and not _placard_up and not _setup_panel_up and _launching_game_id == ""
+	_tboard.visible = live and amt > 0.02
+	if _tboard_launch != null:
+		_tboard_launch.pick_enabled = _tboard.visible and _tboard_owned
+	if not _tboard.visible:
+		return
+	_tboard.transform = Transform3D(_tboard_slot.basis,
+		_tboard_slot.origin + _tboard_slot.basis.z * (TBOARD_PROUD * amt))
+
+
+## Smoke support: the standing board's state.
+func tournament_board_state() -> Dictionary:
+	if _tboard == null:
+		return {"exists": false}
+	return {
+		"exists": true,
+		"visible": _tboard.visible,
+		"challenge_id": _tboard_challenge_id,
+		"has_board_texture": _tboard_mat != null and _tboard_mat.albedo_texture != null,
+		"texture": _tboard_mat.albedo_texture if _tboard_mat != null else null,
+		"transform": _tboard.global_transform,
+		"size": RoomSpecs.board_panel_size(),
+		"owned": _tboard_owned,
+		"borrowed_idx": _tboard_borrowed_idx,
+	}
 
 
 func _on_select(quad: ClickableQuad) -> void:
@@ -3331,6 +3523,8 @@ func _room_pickables() -> Array[ClickableQuad]:
 			out.append(sq)
 	if _detail != null:
 		out.append_array(_detail.get_clickables())
+	if _tboard_launch != null:
+		out.append(_tboard_launch)
 	return out
 
 
