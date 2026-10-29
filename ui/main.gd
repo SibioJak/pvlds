@@ -5597,6 +5597,12 @@ func _letters_ring_blue_count(img: Image, quad: ClickableQuad, size: Vector2) ->
 ## have to tap-tap-tap back down to arrow"). One step per
 ## _process call; returns true when the legs are done. Every
 ## press is the pad's real route: focus the arrow, press A.
+## The pager legs' step machine. The settle reads poll the
+## room's page_slide_active() seam (the dome's swing) -
+## GRADUATION AMENDMENT: they used to read the flat wall's
+## _slide_phase field, which the dome port removed; the
+## seam is the same question asked of the room's current
+## travel state.
 func _letters_leg_pager_step() -> bool:
 	match _letters_step:
 		0:
@@ -5607,7 +5613,7 @@ func _letters_leg_pager_step() -> bool:
 			_letters_smoke_wait = 0
 		1:
 			_letters_smoke_wait += 1
-			if _room._slide_phase == 0 and _letters_smoke_wait >= 8:
+			if not _room.page_slide_active() and _letters_smoke_wait >= 8:
 				_letters_expect(_room._page == 1,
 					"pager: NEXT turns to the second page (got %d)" % _room._page)
 				_letters_expect(_room.focused_quad() == _room.rail_quad("page_next"),
@@ -5631,7 +5637,7 @@ func _letters_leg_pager_step() -> bool:
 				_letters_smoke_wait = 0
 		3:
 			_letters_smoke_wait += 1
-			if _room._slide_phase == 0 and _letters_smoke_wait >= 8:
+			if not _room.page_slide_active() and _letters_smoke_wait >= 8:
 				_letters_expect(_room._page == 0,
 					"pager: PREV turns back to the first page (got %d)" % _room._page)
 				_letters_expect(_room.focused_quad() == _room.rail_quad("page_prev"),
