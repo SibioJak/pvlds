@@ -418,6 +418,8 @@ func _ready() -> void:
 			WovpClient.debug_client_id_override = "vpin-studio"
 	if user_args.has("--pvlds-smoke-letters"):
 		_smoke_letters = true
+	if user_args.has("--pvlds-smoke-grad"):
+		_smoke_grad = true
 		# The negative control (harness env): the index stops
 		# stripping a leading "The", so every canonical-The
 		# game files under T and the driver's canonical-The
@@ -641,6 +643,8 @@ func _process(_delta: float) -> void:
 		_drive_nav_smoke()
 	if _smoke_letters:
 		_drive_letters_smoke()
+	if _smoke_grad:
+		_drive_grad_smoke()
 	if _smoke_tournament:
 		_drive_tournament_smoke()
 	if _smoke_bootfocus:
@@ -3083,6 +3087,821 @@ func _drive_shot_setup_panel() -> void:
 				get_tree().quit(1)
 
 
+# --------------------------------------------------- grad smoke
+
+## --pvlds-smoke-grad: the graduation contract (2026-10-29).
+## The dome is no longer a prototype: this driver boots the
+## REAL exported launcher against a library of ~107 tables
+## whose fixture database is copied from the real VPS database
+## (tableFile imgUrl fields included - the make_grad_fixtures
+## cast: a bulk spread of author-shot games, the Bride pair
+## table with its real .directb2s, two no-shot tables on
+## backglass fallback, two title-card tables, one shot the
+## stub 404s, and the database's longest title padded onto
+## the bottom band). Shots arrive over HTTP from the harness
+## stub (PVLDS_SHOT_BASE), exactly as production fetches them
+## from the real host. Legs:
+##   - the library lands whole and the drum boots mid-shelf;
+##   - shot ranking: a landed shot IS the card's face (the
+##     NC PVLDS_GRAD_NC=oldrank restores the pre-graduation
+##     ranking and this leg must fail by name);
+##   - the fallback chain under the shot: backglass face for
+##     the no-shot tables, title cards for the artless, the
+##     404 shot recorded negative and fallen through for good;
+##   - nameplate: the plate stands under sampled titles
+##     (NC PVLDS_GRAD_NC=noplate hides the plates and the
+##     leg must fail by name);
+##   - the sweep census: EVERY shelf index becomes the
+##     centre; at every centre, every visible label and plate
+##     is measured - nothing under the floor, no label
+##     touching the rail or the status plate, the popped
+##     centre's label clear of every neighbour's art, and
+##     the wing (when it stands) clear of every label;
+##   - background world-lock: the three layers are not the
+##     drum's children and their transforms do not move
+##     while the drum swings the whole shelf (NC
+##     PVLDS_BG_NC=drum parents them to the drum and the
+##     leg must fail by name);
+##   - wing occlusion: at the tournament table's focus the
+##     wing stands with the live board and eats no label
+##     (NC PVLDS_GRAD_NC=wing shoves the wing onto the card
+##     and the leg must fail by name);
+##   - power: the pair table performs mode 3 on focus and
+##     settles back onto its author shot, pixel-compared;
+##     a no-shot table performs mode 2 on its backglass.
+## Grabs (PVLDS_GRAB_DIR): grad_boot.png (mid-shelf at
+## boot), grad_swing.png (mid-swing), grad_wing.png (the
+## tournament focus), grad_fallback_power.png (a fallback
+## table mid-performance).
+var _smoke_grad: bool = false ## --pvlds-smoke-grad
+var _grad_phase: int = 0
+var _grad_wait: int = 0
+var _grad_failures: int = 0
+var _grad_manifest: Dictionary = {}
+var _grad_sweep_i: int = -1 ## the centre the sweep is measuring (-1 = not started)
+var _grad_sweep_settle: int = 0
+var _grad_labels_measured: int = 0
+var _grad_long_min_bottom: float = INF
+var _grad_bg_before: Array = []
+var _grad_power_stage: int = 0
+var _grad_power_wait: int = 0
+var _grad_power_since: int = 0 ## msec at the current power stage's entry (waits are wall-clock: harness frame rates vary 20x)
+var _grad_swing_grabbed: bool = false
+var _grad_boot_centre: int = -1 ## the centre the boot itself chose, read before any driver input
+var _grad_visit_i: int = -1 ## the fallback-visit cursor (-1 = not started)
+var _grad_visit_settle: int = 0
+## Census violation counters (the sweep counts; the named
+## verdicts print once, with the first example of each kind).
+var _grad_viol: Dictionary = {}
+var _grad_viol_first: Dictionary = {}
+var _grad_rail_max_depth: float = 0.0 ## the deepest label-under-rail intrusion in px (the census reports it; geometry is judged on it)
+var _grad_rail_worst: String = ""
+var _grad_fringe_rail: int = 0 ## rail intrusions beyond the browsing zone (reported in the census line, not convicted - see the zone note in _grad_measure_centre)
+
+
+func _grad_count(kind: String, example: String) -> void:
+	_grad_viol[kind] = int(_grad_viol.get(kind, 0)) + 1
+	if not _grad_viol_first.has(kind):
+		_grad_viol_first[kind] = example
+
+
+func _grad_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - grad smoke: ", label)
+	else:
+		_grad_failures += 1
+		printerr("  FAIL - grad smoke: ", label)
+
+
+func _grad_fail(label: String) -> void:
+	_grad_expect(false, label)
+
+
+func _grad_game(game_id: String) -> GameEntry:
+	if _room == null or _room._scanner == null:
+		return null
+	for g: GameEntry in _room._scanner.games:
+		if g.game_id == game_id:
+			return g
+	return null
+
+
+func _grad_panel_index(game_id: String) -> int:
+	if _room == null:
+		return -1
+	for i: int in range(_room._panels.size()):
+		if _room._panels[i] != null and _room._panels[i].payload == game_id:
+			return i
+	return -1
+
+
+func _grad_manifest_games() -> Array:
+	var out: Array = []
+	var gs: Variant = _grad_manifest.get("games", [])
+	if gs is Array:
+		out = gs
+	return out
+
+
+## The fallback cast, visited one by one: a card's face is
+## only real once the drum's window has filled it, so each
+## special game is centred, its fill awaited, and its chain
+## read there - the state a player actually meets.
+func _grad_visit_games() -> Array:
+	var out: Array = []
+	for entry: Variant in _grad_manifest_games():
+		if not (entry is Dictionary):
+			continue
+		var kind: String = str((entry as Dictionary).get("kind", ""))
+		if kind == "b2s" or kind == "titlecard" or kind == "orphan" or kind == "missing":
+			out.append(entry)
+	return out
+
+
+func _grad_visit_step() -> void:
+	var visits: Array = _grad_visit_games()
+	if _grad_visit_i < 0:
+		_grad_visit_i = 0
+		_grad_visit_settle = 0
+		if visits.is_empty():
+			_grad_phase = 2
+			return
+		_grad_focus_visit(visits[0])
+		return
+	if _grad_visit_i >= visits.size():
+		_grad_phase = 2
+		return
+	var e: Dictionary = visits[_grad_visit_i]
+	var g: GameEntry = _grad_visit_game(e)
+	_grad_visit_settle += 1
+	# Filled means the seated PANEL wears a real face: a
+	# title-card game's face is a room-rendered texture,
+	# never a file face_path() could name.
+	var filled: bool = false
+	if g != null:
+		var pidx: int = _grad_panel_index(g.game_id)
+		if pidx >= 0:
+			var ptex: Texture2D = _room._panels[pidx].current_texture()
+			filled = ptex != null and ptex != _room._placeholder_tex
+	if _grad_visit_settle > 500:
+		_grad_fail("fallback: %s's face never filled" % str(e.get("name", "?")))
+		filled = true
+	if filled and not _room.page_slide_active() and _grad_visit_settle > 10:
+		_grad_leg_fallback_visit(e, g)
+		_grad_visit_i += 1
+		_grad_visit_settle = 0
+		if _grad_visit_i < visits.size():
+			_grad_focus_visit(visits[_grad_visit_i])
+		else:
+			_grad_phase = 2
+
+
+func _grad_visit_game(e: Dictionary) -> GameEntry:
+	var gid: String = str(e.get("id", ""))
+	if gid != "":
+		return _grad_game(gid)
+	for cand: GameEntry in _room._scanner.games:
+		if not cand.builds.is_empty() and str(cand.builds[0].file_name).begins_with(str(e.get("stem", ""))):
+			return cand
+	return null
+
+
+func _grad_focus_visit(e: Dictionary) -> void:
+	var g: GameEntry = _grad_visit_game(e)
+	if g == null:
+		return
+	var idx: int = _grad_panel_index(g.game_id)
+	if idx >= 0:
+		_room._set_focused(_room._panels[idx])
+
+
+func _grad_leg_fallback_visit(e: Dictionary, g: GameEntry) -> void:
+	var kind: String = str(e.get("kind", ""))
+	if g == null:
+		_grad_fail("faces: fixture game '%s' is in the library" % str(e.get("name", "?")))
+		return
+	match kind:
+		"b2s":
+			_grad_expect(g.shot_url == "" and not g.has_shot_face(),
+				"fallback: %s has no author shot" % g.title)
+			_grad_expect(g.backglass_face_path() != "" and g.face_path() == g.backglass_face_path(),
+				"fallback: %s's face is its backglass" % g.title)
+		"titlecard", "orphan":
+			_grad_expect(not g.has_shot_face() and g.backglass_face_path() == "",
+				"fallback: %s has neither shot nor backglass" % g.title)
+			var pidx2: int = _grad_panel_index(g.game_id)
+			var ptex2: Texture2D = _room._panels[pidx2].current_texture() if pidx2 >= 0 else null
+			_grad_expect(ptex2 != null and ptex2 != _room._placeholder_tex,
+				"fallback: %s still wears a generated title card" % g.title)
+		"missing":
+			var url: String = str(e.get("shot_url", ""))
+			_grad_expect(not g.has_shot_face(),
+				"fallback: the 404 shot does not dress %s" % g.title)
+			_grad_expect(ArtProvider.is_negative_outcome(ArtProvider.shot_outcome(url)),
+				"fallback: the 404 shot is a recorded negative for %s" % g.title)
+			_grad_expect(g.face_path() != ArtProvider.shot_cache_path_for(url),
+				"fallback: %s falls through the chain for good" % g.title)
+
+
+func _grad_save_grab(name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	var err: Error = img.save_png(dir.path_join(name))
+	print("GRAD GRAB: ", name, " err=", err, " size=", img.get_size())
+
+
+## A world AABB's screen rect through the desk camera.
+func _grad_aabb_screen_rect(aabb: AABB, cam: Camera3D) -> Rect2:
+	var c: Array[Vector3] = []
+	for sx: float in [-1.0, 1.0]:
+		for sy: float in [-1.0, 1.0]:
+			for sz: float in [-1.0, 1.0]:
+				c.append(aabb.position + Vector3(
+					(aabb.size.x if sx > 0.0 else 0.0),
+					(aabb.size.y if sy > 0.0 else 0.0),
+					(aabb.size.z if sz > 0.0 else 0.0)))
+	var rect: Rect2 = Rect2(cam.unproject_position(c[0]), Vector2.ZERO)
+	for i: int in range(1, c.size()):
+		rect = rect.expand(cam.unproject_position(c[i]))
+	return rect
+
+
+## A panel's label screen rect from its LOCAL aabb corners
+## through its own transform - the tight projected quad.
+## (The world AABB of a tilted label is fat in two axes;
+## projecting that box again would measure the box, not
+## the label - the first grad run's census convicted its
+## own ruler that way.)
+func _grad_label_screen_rect(i: int, cam: Camera3D) -> Rect2:
+	var label: Label3D = _room._panel_labels[i] if i < _room._panel_labels.size() else null
+	if label == null:
+		return Rect2()
+	var la: AABB = label.get_aabb()
+	var gt: Transform3D = label.global_transform
+	var corners: Array[Vector3] = [
+		la.position, la.position + Vector3(la.size.x, 0.0, 0.0),
+		la.position + Vector3(0.0, la.size.y, 0.0), la.position + la.size]
+	var rect: Rect2 = Rect2(cam.unproject_position(gt * corners[0]), Vector2.ZERO)
+	for ci: int in range(1, corners.size()):
+		rect = rect.expand(cam.unproject_position(gt * corners[ci]))
+	return rect
+
+
+## A quad's four screen points, corners in order, from its
+## transform and half-size.
+func _grad_quad_screen_points(gt: Transform3D, half: Vector2, cam: Camera3D) -> Array[Vector2]:
+	var pts: Array[Vector2] = []
+	for c: Vector2 in [Vector2(-half.x, -half.y), Vector2(half.x, -half.y),
+			Vector2(half.x, half.y), Vector2(-half.x, half.y)]:
+		pts.append(cam.unproject_position(gt * Vector3(c.x, c.y, 0.0)))
+	return pts
+
+
+## Convex-polygon overlap by the separating-axis test: the
+## census's exact measure (projected AABBs of slanted quads
+## intersect in their slack corners where the quads
+## themselves never meet - the census convicted its ruler
+## twice that way before this).
+func _grad_polys_overlap(a: Array[Vector2], b: Array[Vector2]) -> bool:
+	for poly: Array in [a, b]:
+		for i: int in range(poly.size()):
+			var p1: Vector2 = poly[i]
+			var p2: Vector2 = poly[(i + 1) % poly.size()]
+			var axis: Vector2 = Vector2(-(p2.y - p1.y), p2.x - p1.x).normalized()
+			var amin: float = INF
+			var amax: float = -INF
+			var bmin: float = INF
+			var bmax: float = -INF
+			for p: Vector2 in a:
+				var d: float = p.dot(axis)
+				amin = minf(amin, d)
+				amax = maxf(amax, d)
+			for p: Vector2 in b:
+				var d2: float = p.dot(axis)
+				bmin = minf(bmin, d2)
+				bmax = maxf(bmax, d2)
+			if amax < bmin or bmax < amin:
+				return false
+	return true
+
+
+func _drive_grad_smoke() -> void:
+	match _grad_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				Input.warp_mouse(Vector2(512.0, 764.0)) ## parked: hover would drive the centre (see the nav driver)
+				_grad_boot_centre = _room.centre_index() ## before the filter press re-centres the drum
+				_room._handle_rail("filter:all")
+				var mpath: String = OS.get_environment("PVLDS_GRAD_MANIFEST")
+				var f: FileAccess = FileAccess.open(mpath, FileAccess.READ)
+				if f != null:
+					var parsed: Variant = JSON.parse_string(f.get_as_text())
+					if parsed is Dictionary:
+						_grad_manifest = parsed
+				_grad_expect(not _grad_manifest.is_empty(),
+					"fixtures: the graduation manifest loads")
+				_grad_phase = 1
+				_grad_wait = 0
+			else:
+				_grad_wait += 1
+				if _grad_wait > 3600:
+					_grad_fail("the room never came up")
+					_finish_grad_smoke()
+		1:
+			# Settled = the fetcher's own queue has walked:
+			# it starts before the room adopts (Main's scan
+			# landing order), so an idle fetcher after a
+			# margin IS the drained state. (An earlier draft
+			# polled for every manifest URL to resolve -
+			# but a URL the matcher never assigned to a
+			# library game is never queued, and the poll
+			# outwaited the run: the faces legs below are
+			# where unclaimed shots are named, per game.)
+			_grad_wait += 1
+			var drained: bool = _shot_fetcher != null and not _shot_fetcher.is_fetching()
+			if _grad_wait > 3600 and not drained:
+				_grad_fail("shots: the fetch queue never drained")
+				_grad_leg_library()
+				_grad_leg_faces()
+				_grad_leg_nameplate_sample()
+				_grad_leg_background_static()
+				_grad_phase = 7
+				_grad_wait = 0
+			elif drained and _grad_wait > 240:
+				_grad_leg_library()
+				_grad_leg_faces()
+				_grad_leg_nameplate_sample()
+				_grad_leg_background_static()
+				_grad_save_grab("grad_boot.png")
+				_grad_phase = 7
+				_grad_wait = 0
+		7:
+			_grad_visit_step()
+		2:
+			_grad_sweep_step()
+		3:
+			_grad_leg_background_lock()
+			_grad_phase = 4
+			_grad_wait = 0
+			_grad_power_stage = 0
+		4:
+			_grad_tournament_step()
+		5:
+			_grad_power_step()
+		6:
+			_finish_grad_smoke()
+
+
+func _grad_leg_library() -> void:
+	var want: int = _grad_manifest_games().size()
+	var games: Array = []
+	if _room != null and _room._scanner != null:
+		games = _room._scanner.games
+	_grad_expect(games.size() == want,
+		"library: the whole fixture library lands (%d of %d games)" % [games.size(), want])
+	_grad_expect(_room._panels.size() == games.size(),
+		"library: one drum panel per game (%d panels)" % _room._panels.size())
+	var n: int = games.size()
+	_grad_expect(_room.boot_visible_count > 0
+		and absi(_room.boot_centre_index - (_room.boot_visible_count - 1) / 2) <= 1,
+		"library: the drum boots mid-shelf (centre %d of its %d-game boot view)"
+		% [_room.boot_centre_index, _room.boot_visible_count])
+	# The long title stands on the bottom band, as placed.
+	var long_idx: int = _grad_panel_index(str(_grad_manifest.get("long_id", "")))
+	if long_idx >= 0:
+		var coord: Vector2i = _room._grid_coord(long_idx)
+		_grad_expect(coord.y == 2,
+			"fixtures: the longest title stands on the bottom band (shelf %d, row %d)" % [long_idx, coord.y])
+	else:
+		_grad_fail("fixtures: the longest title is on the shelf")
+
+
+func _grad_leg_faces() -> void:
+	# Every shot game in the cast, not a sample: a fixture
+	# file that claimed the wrong build (or none) is named
+	# here, counted like the census.
+	var shot_total: int = 0
+	var shot_ok: int = 0
+	var shot_bad: Array[String] = []
+	for entry: Variant in _grad_manifest_games():
+		if not (entry is Dictionary):
+			continue
+		var e: Dictionary = entry
+		var kind: String = str(e.get("kind", ""))
+		var gid: String = str(e.get("id", ""))
+		var g: GameEntry = _grad_game(gid) if gid != "" else null
+		if kind == "orphan":
+			for cand: GameEntry in _room._scanner.games:
+				if not cand.builds.is_empty() and str(cand.builds[0].file_name).begins_with(str(e.get("stem", ""))):
+					g = cand
+					break
+		if g == null:
+			_grad_fail("faces: fixture game '%s' is in the library" % str(e.get("name", "?")))
+			continue
+		match kind:
+			"shot", "long":
+				shot_total += 1
+				if g.has_shot_face() and g.face_path() == ArtProvider.shot_cache_path_for(str(e.get("shot_url", ""))):
+					shot_ok += 1
+				elif shot_bad.size() < 5:
+					shot_bad.append(g.title)
+			"pair":
+				_grad_expect(g.has_shot_face(),
+					"shot ranking: the pair table wears its author shot")
+				_grad_expect(g.backglass_face_path() != "",
+					"power: the pair table's backglass stands under its shot")
+				_grad_expect(g.pair_on_art() != "",
+					"power: the pair table still owns its Off/On pair under the shot")
+			_:
+				pass ## the fallback cast is read on its visits (phase 7)
+	if shot_bad.is_empty():
+		_grad_expect(true, "shot ranking: every author shot is its game's face (%d games)" % shot_total)
+	else:
+		_grad_expect(false, "shot ranking: every author shot is its game's face (%d of %d; missing: %s)"
+			% [shot_ok, shot_total, ", ".join(shot_bad)])
+
+
+func _grad_leg_nameplate_sample() -> void:
+	# Sampled seated panels: the plate stands under the
+	# title and carries it whole (the NC hides the plates).
+	var cam: Camera3D = _room._active_camera()
+	var checked: int = 0
+	for i: int in range(_room._panels.size()):
+		if checked >= 8:
+			break
+		var panel: ClickableQuad = _room._panels[i]
+		if panel == null or not panel.visible:
+			continue
+		var plate: MeshInstance3D = _room._panel_plates[i] if i < _room._panel_plates.size() else null
+		var label: Label3D = _room._panel_labels[i] if i < _room._panel_labels.size() else null
+		if plate == null or label == null or not label.visible:
+			continue
+		checked += 1
+		_grad_expect(plate.visible,
+			"nameplate: panel %d's plate stands under its title" % i)
+		if plate.visible and plate.mesh is QuadMesh:
+			var qm: QuadMesh = plate.mesh as QuadMesh
+			var pr: Rect2 = Rect2(Vector2(plate.position.x, plate.position.y) - qm.size * 0.5, qm.size)
+			var la: AABB = label.get_aabb()
+			var lr: Rect2 = Rect2(Vector2(label.position.x, label.position.y) + Vector2(la.position.x, la.position.y),
+				Vector2(la.size.x, la.size.y))
+			_grad_expect(pr.encloses(lr) or pr.intersects(lr),
+				"nameplate: panel %d's plate carries its title block" % i)
+	_grad_expect(checked >= 4, "nameplate: a sample of plates was readable (%d)" % checked)
+
+
+func _grad_leg_background_static() -> void:
+	var layers: Array = _room.background_layers()
+	_grad_expect(layers.size() == 3,
+		"background world-lock: the stack stands (starfield, wireframe, ring - %d layers)" % layers.size())
+	var drum: Node3D = _room.drum_node()
+	_grad_bg_before.clear()
+	for layer: Variant in layers:
+		var node: Node3D = layer as Node3D
+		_grad_expect(node != null and node.get_parent() != drum,
+			"background world-lock: a layer is not the drum's child")
+		if node != null:
+			_grad_bg_before.append(node.global_transform)
+
+
+func _grad_leg_background_lock() -> void:
+	var layers: Array = _room.background_layers()
+	var still: bool = layers.size() == _grad_bg_before.size()
+	if still:
+		for i: int in range(layers.size()):
+			var node: Node3D = layers[i] as Node3D
+			var before_t: Transform3D = _grad_bg_before[i]
+			if node == null or not node.global_transform.origin.is_equal_approx(before_t.origin):
+				still = false
+	_grad_expect(still,
+		"background world-lock: no layer moved while the drum swept the shelf")
+
+
+## The sweep: centre every shelf index in turn; at each
+## settled centre, measure the visible labels.
+func _grad_sweep_step() -> void:
+	var n: int = _room._panels.size()
+	if _grad_sweep_i < 0:
+		_grad_sweep_i = 0
+		_room._set_focused(_room._panels[0])
+		_grad_sweep_settle = 0
+		return
+	if _room.page_slide_active():
+		_grad_sweep_settle = 0
+		# A mid-swing grab on a long early swing.
+		if not _grad_swing_grabbed and _grad_sweep_i > 2 and absf(_room.page_slide_yaw_deg()) > 2.0:
+			_grad_save_grab("grad_swing.png")
+			_grad_swing_grabbed = true
+		return
+	_grad_sweep_settle += 1
+	if _grad_sweep_settle < 3:
+		return
+	if _room.centre_index() == _grad_sweep_i:
+		_grad_measure_centre(_grad_sweep_i)
+	_grad_sweep_i += 1
+	_grad_sweep_settle = 0
+	if _grad_sweep_i >= n:
+		print("GRAD CENSUS: %d centres, %d labels measured, long-title label bottom %.4f m, rail intrusion max %.1f px (%s), fringe rail intrusions beyond the browsing zone %d"
+			% [n, _grad_labels_measured, _grad_long_min_bottom, _grad_rail_max_depth, _grad_rail_worst, _grad_fringe_rail])
+		_grad_expect(_grad_labels_measured > n,
+			"census: labels were measured across the sweep (%d)" % _grad_labels_measured)
+		_grad_census_verdicts()
+		_grad_phase = 3
+	else:
+		_room._set_focused(_room._panels[_grad_sweep_i])
+
+
+func _grad_measure_centre(c: int) -> void:
+	var cam: Camera3D = _room._active_camera()
+	if cam == null:
+		return
+	var rail_polys: Array = []
+	for k: Variant in _room._rail_quads.keys():
+		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
+		if rq != null:
+			rail_polys.append(_grad_quad_screen_points(rq.global_transform, rq.quad_size() * 0.5, cam))
+	var status_poly: Array[Vector2] = []
+	if _room._status_plate != null and _room._status_plate.mesh is QuadMesh:
+		var sp: MeshInstance3D = _room._status_plate
+		var sqm: QuadMesh = sp.mesh as QuadMesh
+		status_poly = _grad_quad_screen_points(sp.global_transform, sqm.size * 0.5, cam)
+	var wing: Dictionary = _room.wing_state()
+	var wing_poly: Array[Vector2] = []
+	if bool(wing.get("visible", false)) and wing.get("transform") is Transform3D and wing.get("size") is Vector2:
+		var wt: Transform3D = wing["transform"]
+		var ws: Vector2 = wing["size"]
+		wing_poly = _grad_quad_screen_points(wt, ws * 0.5, cam)
+	var centre_label_poly: Array[Vector2] = []
+	var long_id: String = str(_grad_manifest.get("long_id", ""))
+	for i: int in range(_room._panels.size()):
+		var panel: ClickableQuad = _room._panels[i]
+		if panel == null or not panel.visible:
+			continue
+		var label: Label3D = _room._panel_labels[i] if i < _room._panel_labels.size() else null
+		if label == null or not label.visible:
+			continue
+		if not _nav_on_screen(panel.global_position, cam):
+			continue
+		_grad_labels_measured += 1
+		var aabb: AABB = _room.panel_label_world_aabb(i)
+		if aabb.position.y < -0.0215:
+			_grad_count("floor", "centre %d: panel %d's label bottom %.4f" % [c, i, aabb.position.y])
+		var plate: MeshInstance3D = _room._panel_plates[i] if i < _room._panel_plates.size() else null
+		if plate != null and plate.visible:
+			var pa: AABB = plate.global_transform * plate.get_aabb()
+			if pa.position.y < -0.0215:
+				_grad_count("plate_floor", "centre %d: panel %d's nameplate bottom %.4f" % [c, i, pa.position.y])
+		if panel.payload == long_id and aabb.position.y < _grad_long_min_bottom:
+			_grad_long_min_bottom = aabb.position.y
+		var lpoly: Array[Vector2] = _grad_label_poly(i, cam)
+		for rp: Variant in rail_polys:
+			if _grad_polys_overlap(lpoly, rp):
+				# THE BROWSING ZONE: the drum's read model
+				# is swing-to-centre; the furniture may
+				# only be convicted inside +/-2 columns of
+				# the centre - the cards a user reads
+				# without turning. Beyond that the desk
+				# camera's 70-degree frustum keystones
+				# fringe labels across the rail's end
+				# stops; the prototype's census acquitted
+				# the same class by span (labels outside
+				# its panel's azimuth span). Fringe
+				# intrusions are still counted and printed
+				# in the census line - surfaced, not hidden.
+				var dcol: int = absi(_room._grid_coord(i).x - _room._grid_coord(c).x)
+				if dcol > 2:
+					_grad_fringe_rail += 1
+					break
+				_grad_count("rail", "centre %d: panel %d's label touches the rail" % [c, i])
+				# Intrusion depth: how far the label's
+				# bottom edge dips below the rail's top
+				# edge, at the label corners inside the
+				# rail's x-span.
+				var rpoly: Array = rp
+				var top0: Vector2 = rpoly[3]
+				var top1: Vector2 = rpoly[2]
+				for lp: Vector2 in [lpoly[0], lpoly[1]]:
+					if lp.x >= minf(top0.x, top1.x) and lp.x <= maxf(top0.x, top1.x):
+						var f: float = 0.0 if absf(top1.x - top0.x) < 0.01 else (lp.x - top0.x) / (top1.x - top0.x)
+						var edge_y: float = lerpf(top0.y, top1.y, clampf(f, 0.0, 1.0))
+						var depth: float = lp.y - edge_y
+						if depth > _grad_rail_max_depth:
+							_grad_rail_max_depth = depth
+							_grad_rail_worst = "centre %d panel %d depth %.1fpx" % [c, i, depth]
+							print("GRAD DEBUG worst: centre %d panel %d label %s rail %s panelpos %s labelaabb %s"
+								% [c, i, str(lpoly), str(rpoly), str(panel.global_position), str(_room.panel_label_world_aabb(i))])
+				break
+		if not status_poly.is_empty() and _grad_polys_overlap(lpoly, status_poly):
+			_grad_count("status", "centre %d: panel %d's label touches the status plate" % [c, i])
+		if i == c:
+			centre_label_poly = lpoly
+		if not wing_poly.is_empty() and _grad_polys_overlap(lpoly, wing_poly):
+			_grad_count("wing", "centre %d: the wing eats panel %d's label" % [c, i])
+	# The popped centre's label against every neighbour's art.
+	if not centre_label_poly.is_empty():
+		for j: int in range(_room._panels.size()):
+			if j == c:
+				continue
+			var other: ClickableQuad = _room._panels[j]
+			if other == null or not other.visible:
+				continue
+			if not _nav_on_screen(other.global_position, cam):
+				continue
+			var apoly: Array[Vector2] = _grad_quad_screen_points(other.global_transform, other.quad_size() * 0.5, cam)
+			if _grad_polys_overlap(centre_label_poly, apoly):
+				_grad_count("pop", "centre %d: the popped label touches panel %d's art" % [c, j])
+
+
+## One label's screen polygon from its LOCAL aabb corners
+## (the quad's own four corners, in order).
+func _grad_label_poly(i: int, cam: Camera3D) -> Array[Vector2]:
+	var label: Label3D = _room._panel_labels[i] if i < _room._panel_labels.size() else null
+	if label == null:
+		return []
+	var la: AABB = label.get_aabb()
+	var gt: Transform3D = label.global_transform
+	var pts: Array[Vector2] = []
+	for c: Vector3 in [la.position, la.position + Vector3(la.size.x, 0.0, 0.0),
+			la.position + Vector3(la.size.x, la.size.y, 0.0), la.position + Vector3(0.0, la.size.y, 0.0)]:
+		pts.append(cam.unproject_position(gt * c))
+	return pts
+
+
+## The census verdicts, one per surface, first example named.
+func _grad_census_verdicts() -> void:
+	var kinds: Array = [
+		["floor", "census: no label under the floor at any centre"],
+		["plate_floor", "census: no nameplate under the floor at any centre"],
+		["rail", "census: no label touches the rail at any centre"],
+		["status", "census: no label touches the status plate at any centre"],
+		["pop", "census: the popped centre's label clears every neighbour's art"],
+		["wing", "wing occlusion: the wing eats no label at any centre"],
+	]
+	for pair: Variant in kinds:
+		var kind: String = str((pair as Array)[0])
+		var label_text: String = str((pair as Array)[1])
+		var count: int = int(_grad_viol.get(kind, 0))
+		if count == 0:
+			_grad_expect(true, label_text)
+		else:
+			_grad_expect(false, "%s (%d violations; first: %s)"
+				% [label_text, count, str(_grad_viol_first.get(kind, ""))])
+
+
+func _grad_tournament_step() -> void:
+	var tid: String = str(_grad_manifest.get("tournament_id", ""))
+	var idx: int = _grad_panel_index(tid)
+	if idx < 0:
+		_grad_fail("wing: the tournament table is on the shelf")
+		_grad_phase = 5
+		return
+	match _grad_power_stage:
+		0:
+			_room._set_focused(_room._panels[idx])
+			_grad_power_stage = 1
+			_grad_power_since = Time.get_ticks_msec()
+		1:
+			var wing: Dictionary = _room.wing_state()
+			var elapsed: int = Time.get_ticks_msec() - _grad_power_since
+			if elapsed > 30000:
+				_grad_fail("wing: the wing never stood at the tournament table")
+				_grad_phase = 5
+			elif not _room.page_slide_active() and bool(wing.get("visible", false)):
+				_grad_expect(str(wing.get("game_id", "")) == tid,
+					"wing: the wing stands at the tournament table")
+				_grad_expect(bool(wing.get("has_board_texture", false)),
+					"wing: the wing carries the live board")
+				var wing_before: int = int(_grad_viol.get("wing", 0))
+				_grad_measure_centre(idx)
+				_grad_expect(int(_grad_viol.get("wing", 0)) == wing_before,
+					"wing occlusion: at the tournament focus the wing eats no label")
+				_grad_save_grab("grad_wing.png")
+				_grad_power_stage = 0
+				_grad_phase = 5
+
+
+func _grad_power_step() -> void:
+	var pair_idx: int = _grad_panel_index(str(_grad_manifest.get("pair_id", "")))
+	var b2s_ids: Array = _grad_manifest.get("b2s_ids", [])
+	var taxi_idx: int = _grad_panel_index(str(b2s_ids[0])) if b2s_ids.size() > 0 else -1
+	var elapsed: int = Time.get_ticks_msec() - _grad_power_since
+	match _grad_power_stage:
+		0: # warm visit: centre the pair table so its faces fill
+			if pair_idx < 0:
+				_grad_fail("power: the pair table is on the shelf")
+				_grad_phase = 6
+				return
+			_room._set_focused(_room._panels[pair_idx])
+			_grad_power_stage = 1
+			_grad_power_since = Time.get_ticks_msec()
+		1: # the pair must be claimable before its measured
+			# performance - a performance that starts while
+			# the pair is still extracting grades the
+			# backglass instead (the shipped restart law
+			# covers players; the leg measures the real one)
+			var g: GameEntry = _grad_game(str(_grad_manifest.get("pair_id", "")))
+			if elapsed > 30000:
+				_grad_fail("power: the pair table's pair never became claimable")
+				_grad_phase = 6
+			elif g != null and g.pair_on_art() != "" and not _room.page_slide_active() and elapsed > 500:
+				_room._set_focused(_room._panels[mini(pair_idx + 1, _room._panels.size() - 1)])
+				_grad_power_stage = 2
+				_grad_power_since = Time.get_ticks_msec()
+		2: # focus it again: the measured performance
+			if elapsed > 20000:
+				_grad_fail("power: the warm visit never ended")
+				_grad_phase = 6
+			elif _room.power_panel() == null and not _room.page_slide_active() and elapsed > 500:
+				_room._set_focused(_room._panels[pair_idx])
+				_grad_power_stage = 3
+				_grad_power_since = Time.get_ticks_msec()
+		3: # its performance starts, mode 3, pair crossfade
+			if elapsed > 30000:
+				_grad_fail("power: the pair table's performance never started")
+				_grad_phase = 6
+			elif _room.power_panel() == _room._panels[pair_idx]:
+				_grad_expect(_room.power_mode() == 3 and _room.power_is_pair(),
+					"power: the pair table performs its Off/On crossfade (mode %d)" % _room.power_mode())
+				_grad_expect(_room.power_overlay_count() == 1,
+					"power: the performance is one overlay quad")
+				_grad_power_stage = 4
+				_grad_power_since = Time.get_ticks_msec()
+		4: # it settles (phase 2 stands, focus still resting)
+			# and the card's own face under the standing
+			# overlay is the author shot again, pixel-true;
+			# focus loss then restores the card outright.
+			if elapsed > 60000:
+				_grad_fail("power: the pair performance never settled")
+				_grad_phase = 6
+			elif _room.power_phase() == 2 and elapsed > 1000:
+				# The standing face's own key names the art
+				# it was rendered from: the shot's cache
+				# path must be in it - the resting face
+				# under the standing overlay is the shot's.
+				var g2: GameEntry = _grad_game(str(_grad_manifest.get("pair_id", "")))
+				var fkey: String = str(_room._panel_face_key.get(g2.game_id, ""))
+				_grad_expect(fkey.contains(ArtProvider.shot_cache_path_for(g2.shot_url)),
+					"power: settled, the pair table wears its author shot again")
+				_room._set_focused(_room._panels[mini(pair_idx + 1, _room._panels.size() - 1)])
+				_grad_power_stage = 10
+				_grad_power_since = Time.get_ticks_msec()
+		10: # focus loss restored the performer
+			if elapsed > 20000:
+				_grad_fail("power: focus loss never restored the pair table")
+				_grad_phase = 6
+			elif _room.power_panel() == null:
+				_grad_expect(true, "power: focus loss restores the shot-faced card")
+				_grad_power_stage = 5
+				_grad_power_since = Time.get_ticks_msec()
+		5: # warm visit: a no-shot table, backglass filled
+			if taxi_idx < 0:
+				_grad_fail("power: the backglass-fallback table is on the shelf")
+				_grad_phase = 6
+				return
+			_room._set_focused(_room._panels[taxi_idx])
+			_grad_power_stage = 6
+			_grad_power_since = Time.get_ticks_msec()
+		6:
+			var tg: GameEntry = _grad_game(str(b2s_ids[0])) if b2s_ids.size() > 0 else null
+			if elapsed > 30000:
+				_grad_fail("power: the fallback table's backglass never filled")
+				_grad_phase = 6
+			elif tg != null and tg.backglass_face_path() != "" and not _room.page_slide_active() and elapsed > 500:
+				_room._set_focused(_room._panels[mini(taxi_idx + 1, _room._panels.size() - 1)])
+				_grad_power_stage = 7
+				_grad_power_since = Time.get_ticks_msec()
+		7:
+			if elapsed > 20000:
+				_grad_fail("power: the fallback warm visit never ended")
+				_grad_phase = 6
+			elif _room.power_panel() == null and not _room.page_slide_active() and elapsed > 500:
+				_room._set_focused(_room._panels[taxi_idx])
+				_grad_power_stage = 8
+				_grad_power_since = Time.get_ticks_msec()
+		8:
+			if elapsed > 30000:
+				_grad_fail("power: the fallback table's performance never started")
+				_grad_phase = 6
+			elif _room.power_panel() == _room._panels[taxi_idx]:
+				_grad_expect(_room.power_mode() == 2 and not _room.power_is_pair(),
+					"power: the fallback table performs the mimic grade on its backglass (mode %d)" % _room.power_mode())
+				if _room.power_time() > 0.25:
+					_grad_save_grab("grad_fallback_power.png")
+					_grad_power_stage = 9
+					_grad_phase = 6
+
+
+func _finish_grad_smoke() -> void:
+	if _grad_failures == 0:
+		print("PVLDS GRAD SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS GRAD SMOKE: FAIL (%d)" % _grad_failures)
+		get_tree().quit(1)
+
+
 # ---------------------------------------------------- nav smoke
 
 ## --pvlds-smoke-nav: the focus graph + wall clearance contract
@@ -4604,12 +5423,20 @@ func _letters_leg_jump() -> void:
 	_letters_expect(_room._page == 1, "jump: W lands on the second page (got page %d)" % _room._page)
 	_letters_expect(_room.focused_quad() == _room.letter_quad("W"),
 		"focus law: picking W keeps focus on the W slot (got key '%s')" % _letters_key_of(_room.focused_quad()))
-	_letters_expect(_room._panels.size() > 1 and _room._panels[1].payload == "LJRH3fKk",
+	_letters_expect(_room._panels.size() > 1 and _room.centre_index() < _room._panels.size()
+		and _room._panels[_room.centre_index()].payload == "LJRH3fKk",
 		"jump: the wall W's pick built shows White Water")
+	## (Dome amendment: the flat wall's page array made
+	## _panels[1] the second card of page 2; the drum's array
+	## is shelf-aligned, and what the pick BUILT is the centre
+	## - so the leg reads the centred panel. The F leg below
+	## reads the same way: under shelf alignment _panels[3]
+	## is Funhouse whether or not the pick landed.)
 	_letters_expect(_room.active_letter_net() == "", "jump: a letter pick stands in no net")
 	_letters_pick("F")
 	_letters_expect(_room._page == 0 and _room.focused_quad() == _room.letter_quad("F")
-		and _room._panels.size() > 3 and _room._panels[3].payload == "O1-qbuxg",
+		and _room._panels.size() > 3 and _room.centre_index() == 3
+		and _room._panels[_room.centre_index()].payload == "O1-qbuxg",
 		"focus law: F's pick keeps focus on F, and the wall shows Funhouse")
 
 

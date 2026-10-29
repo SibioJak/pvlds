@@ -116,7 +116,11 @@ func _ensure_from_source(src: String) -> String:
 ## failed is a recorded negative outcome - it never re-blocks
 ## the chain behind per-visit retries.
 func face_path() -> String:
-	if shot_url != "":
+	if shot_url != "" and OS.get_environment("PVLDS_GRAD_NC") != "oldrank":
+		# (The env check is the graduation smoke's negative
+		# control: PVLDS_GRAD_NC=oldrank restores the
+		# pre-graduation ranking - chain first, shot never -
+		# and the smoke's shot-ranking legs must fail by name.)
 		if ArtProvider.shot_is_cached(shot_url):
 			return ArtProvider.shot_cache_path_for(shot_url)
 		if not ArtProvider.is_negative_outcome(ArtProvider.shot_outcome(shot_url)):

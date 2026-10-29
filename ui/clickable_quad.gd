@@ -78,6 +78,14 @@ func set_texture(tex: Texture2D) -> void:
 		_mat.albedo_texture = tex
 
 
+## Resize the highlight frame (the dome room's cards carry
+## their own frame geometry - see RoomView._make_card_nodes -
+## and size this quad's ring to match it).
+func set_frame_size(size: Vector2) -> void:
+	if _frame != null and _frame.mesh is QuadMesh:
+		(_frame.mesh as QuadMesh).size = size
+
+
 ## The texture the face currently shows (the nav smoke reads
 ## it to prove the rail never falls back to the placeholder).
 func current_texture() -> Texture2D:
