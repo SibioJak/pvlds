@@ -3163,6 +3163,7 @@ var _grad_manifest: Dictionary = {}
 var _grad_sweep_i: int = -1 ## the centre the sweep is measuring (-1 = not started)
 var _grad_ink_stage: int = 0
 var _grad_ink_tries: int = 0 ## stability-wait cycles spent on the current ink target
+var _grad_ink_plate_checked: int = 0 ## targets whose plate leg actually ran (a performing panel is exempt)
 var _grad_ink_targets: Array = []
 var _grad_ink_img_a: Image = null
 var _grad_ink_img_b: Image = null
@@ -3724,6 +3725,8 @@ func _grad_ink_step() -> void:
 			_grad_wait = 0
 		1:
 			if _grad_ink_targets.is_empty():
+				_grad_expect(_grad_ink_plate_checked >= 5,
+					"plate ink: at least five panels stood plate-checked (%d did)" % _grad_ink_plate_checked)
 				_grad_phase = 3
 				return
 			var i: int = int(_grad_ink_targets[0])
@@ -3810,8 +3813,18 @@ func _grad_ink_step() -> void:
 					% [i, g.title, label_px, plate_lift, npix])
 				_grad_expect(label_px > 30,
 					"label ink: panel %d (%s) renders its title (%d px of label ink)" % [i, g.title, label_px])
-				_grad_expect(plate_lift > 0.01,
-					"plate ink: panel %d (%s) stands on its nameplate (lift %.4f when the plate hides)" % [i, g.title, plate_lift])
+				# A panel mid-performance is exempt from the
+				# plate leg: the settled power overlay owns the
+				# face (a pair's On image stands in for it whole),
+				# plate included, by design - the label above it
+				# is still judged. The coverage leg in stage 1
+				# keeps the exemption from swallowing the census.
+				if _room.power_panel() == _room._panels[i]:
+					printerr("GRAD INK: panel %d (%s) is performing - plate leg exempt" % [i, g.title])
+				else:
+					_grad_ink_plate_checked += 1
+					_grad_expect(plate_lift > 0.01,
+						"plate ink: panel %d (%s) stands on its nameplate (lift %.4f when the plate hides)" % [i, g.title, plate_lift])
 				_grad_ink_label.visible = true
 				_grad_ink_plate.visible = true
 				_grad_ink_img_a = null
