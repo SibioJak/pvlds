@@ -183,6 +183,37 @@ const LABEL_WIDTH_PX: float = 255.0 ## wrapped-title width: a long name takes up
 ## drum's current angle (the prototype's speed-gate law).
 const SWING_MIN_SEC: float = 0.16
 const SWING_MAX_SEC: float = 0.72
+## Stage B - the background stack (all WORLD-LOCKED; see
+## _build_background) and the focused card's wing.
+const BG_STAR_RADIUS: float = 30.0 ## the starfield shell's radius around the eye
+const BG_WIRE_RADIUS: float = 14.0 ## the lat/long wireframe shell's radius
+const BG_RING_RADIUS: float = 9.0 ## the one tilted orbit ring's radius
+const HAZE_FLOOR: float = 0.45 ## the far window columns' dim floor (see _haze_for)
+const WING_SIZE: Vector2 = Vector2(0.66, 0.634) ## the focused card's wing: the TR3 board at 94% - its whole height fits between the card top and the nameplate zone (see _refresh_wing)
+const WING_Y: float = 0.225 ## the wing's centre, card-local: its bottom edge (-0.092) clears every measured label-block top (-0.098 the worst, a 4-line title); its top (+0.542) stays at the card's own top
+const WING_PROUD: float = 0.10 ## how far in front of the neighbour card the wing floats at full pop
+const BG_STAR_SHADER: String = """
+shader_type spatial;
+render_mode unshaded, cull_front, depth_draw_opaque;
+uniform vec4 deep_color : source_color = vec4(0.006, 0.008, 0.018, 1.0);
+float cell_hash(vec2 cell) {
+	return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+}
+void fragment() {
+	vec2 grid = vec2(220.0, 110.0);
+	vec2 cell = floor(UV * grid);
+	vec2 f = fract(UV * grid) - 0.5;
+	float h = cell_hash(cell);
+	vec2 star_pos = vec2(cell_hash(cell + 19.19), cell_hash(cell + 47.47)) - 0.5;
+	float d = length(f - star_pos * 0.72);
+	float star = smoothstep(0.16, 0.0, d) * step(0.82, h);
+	float shade = 0.55 + 0.45 * cell_hash(cell + 91.31);
+	vec3 col = deep_color.rgb + vec3(0.90, 0.93, 1.0) * star * shade * 0.85;
+	float band = exp(-pow((UV.y - 0.62 + 0.18 * sin(UV.x * 6.2831)) * 4.2, 2.0));
+	col += vec3(0.020, 0.026, 0.045) * band;
+	ALBEDO = col;
+}
+"""
 
 ## The Launch button's seat on a card: the dome face carries
 ## NO name strip inside it (the nameplate rides on the card),
@@ -274,6 +305,22 @@ static var debug_focus_nc: String = ""
 ## and its factory render + cache-hit counts as BENCH lines -
 ## the pick-latency evidence. Silent in every real run.
 static var debug_bench: bool = false
+## Negative-control seam for the background stack (the
+## harness env PVLDS_BG_NC, set by Main before any room
+## exists): "drum" parents the stack to the drum, breaking
+## the world-lock so the graduation smoke's lock leg fails
+## by name. Empty in every real run.
+static var debug_bg_nc: String = ""
+var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
+var _bg_starfield: MeshInstance3D = null
+var _bg_wireframe: MeshInstance3D = null
+var _bg_ring: MeshInstance3D = null
+var _wing: Node3D = null ## the focused card's wing holder (a DRUM child: it must ride the swing glued to the centred card - it is a card companion, not a background layer)
+var _wing_quad: MeshInstance3D = null
+var _wing_mat: StandardMaterial3D = null
+var _wing_key: String = "" ## the content key the wing's standing texture was rendered for
+var _wing_game_id: String = "" ## the game the wing currently serves ("" = no wing content)
+var _wing_slot: Transform3D = Transform3D() ## the wing's seated slot transform on the drum (its pop offset applies per frame)
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
@@ -523,19 +570,11 @@ func _build_environment() -> void:
 	floor_inst.material_override = fm
 	add_child(floor_inst)
 
-	var backdrop: MeshInstance3D = MeshInstance3D.new()
-	var cyl: CylinderMesh = CylinderMesh.new()
-	cyl.top_radius = 4.4
-	cyl.bottom_radius = 4.4
-	cyl.height = 3.6
-	backdrop.mesh = cyl
-	backdrop.position = Vector3(0.0, 1.7, 0.0)
-	var bm: StandardMaterial3D = StandardMaterial3D.new()
-	bm.albedo_color = Color(0.03, 0.03, 0.05)
-	bm.cull_mode = BaseMaterial3D.CULL_FRONT
-	bm.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	backdrop.material_override = bm
-	add_child(backdrop)
+	# The flat room's backdrop cylinder stood here (r 4.4,
+	# a dark enclosure around the wall). The graduation
+	# retires it: the background stack's starfield shell is
+	# the room's enclosure now (see _build_background) - a
+	# cylinder at 4.4 would hide every far layer behind it.
 
 	var omni: OmniLight3D = OmniLight3D.new()
 	omni.position = Vector3(0.0, 2.6, -0.6)
@@ -559,6 +598,126 @@ func _build_environment() -> void:
 	_rail = Node3D.new()
 	_rail.name = "Rail"
 	add_child(_rail)
+	_build_background()
+
+
+## The room's background stack (the graduation's Stage B,
+## banked by the user 2026-10-29): a far starfield shell, a
+## faint latitude/longitude wireframe shell, and ONE tilted
+## orbit ring - plus the haze the far window columns wear
+## (see _haze_for). COMFORT LAW: every layer is WORLD-LOCKED
+## - the stack hangs on the Room, never on the drum, and no
+## layer animates, drifts, or breathes, ever; only the drum
+## moves. The one deliberate exception is the harness's NC
+## (PVLDS_BG_NC=drum parents the stack to the drum so the
+## graduation smoke's world-lock leg can fail by name).
+func _build_background() -> void:
+	_bg_root = Node3D.new()
+	_bg_root.name = "BackgroundStack"
+	if debug_bg_nc == "drum" and _wall != null:
+		_wall.add_child(_bg_root)
+	else:
+		add_child(_bg_root)
+	# The starfield shell: one inward sphere, a procedural
+	# star shader - no texture, no motion, the room's far
+	# enclosure (it replaces the flat room's backdrop
+	# cylinder, retired above).
+	var stars: MeshInstance3D = MeshInstance3D.new()
+	stars.name = "StarfieldShell"
+	var sphere: SphereMesh = SphereMesh.new()
+	sphere.radius = BG_STAR_RADIUS
+	sphere.height = BG_STAR_RADIUS * 2.0
+	sphere.radial_segments = 48
+	sphere.rings = 24
+	stars.mesh = sphere
+	var sm: ShaderMaterial = ShaderMaterial.new()
+	var sh: Shader = Shader.new()
+	sh.code = BG_STAR_SHADER
+	sm.shader = sh
+	stars.material_override = sm
+	stars.position = EYE
+	_bg_root.add_child(stars)
+	_bg_starfield = stars
+	# The wireframe shell: latitude/longitude lines drawn
+	# as line geometry on a nearer sphere - the dome's own
+	# ghost, faint enough to read as depth, not structure.
+	var wire: MeshInstance3D = MeshInstance3D.new()
+	wire.name = "WireframeShell"
+	wire.mesh = _wireframe_mesh()
+	var wm: StandardMaterial3D = StandardMaterial3D.new()
+	wm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	wm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	wm.albedo_color = Color(0.38, 0.48, 0.72, 0.13)
+	wire.material_override = wm
+	wire.position = EYE
+	_bg_root.add_child(wire)
+	_bg_wireframe = wire
+	# ONE orbit ring, tilted: a thin torus standing off the
+	# room's axis - the stack's only flourish.
+	var ring: MeshInstance3D = MeshInstance3D.new()
+	ring.name = "OrbitRing"
+	var torus: TorusMesh = TorusMesh.new()
+	torus.inner_radius = BG_RING_RADIUS - 0.14
+	torus.outer_radius = BG_RING_RADIUS
+	torus.rings = 96
+	torus.ring_segments = 6
+	ring.mesh = torus
+	var rm: StandardMaterial3D = StandardMaterial3D.new()
+	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	rm.albedo_color = Color(1.0, 0.66, 0.16, 0.26)
+	ring.material_override = rm
+	ring.position = EYE
+	ring.rotation_degrees = Vector3(63.0, 0.0, 17.0)
+	_bg_root.add_child(ring)
+	_bg_ring = ring
+
+
+## The wireframe shell's line geometry: meridians every 15
+## degrees, parallels every 15 from -75 to +75, on
+## BG_WIRE_RADIUS around the eye.
+func _wireframe_mesh() -> ArrayMesh:
+	var verts: PackedVector3Array = PackedVector3Array()
+	for mi: int in range(24):
+		var lon: float = deg_to_rad(float(mi) * 15.0)
+		var prev: Vector3 = Vector3.ZERO
+		for si: int in range(65):
+			var lat: float = deg_to_rad(-90.0 + float(si) * (180.0 / 64.0))
+			var p: Vector3 = Vector3(cos(lat) * sin(lon), sin(lat), -cos(lat) * cos(lon)) * BG_WIRE_RADIUS
+			if si > 0:
+				verts.append(prev)
+				verts.append(p)
+			prev = p
+	for li: int in range(11):
+		var lat2: float = deg_to_rad(-75.0 + float(li) * 15.0)
+		var prev2: Vector3 = Vector3.ZERO
+		for si2: int in range(65):
+			var lon2: float = deg_to_rad(float(si2) * (360.0 / 64.0))
+			var p2: Vector3 = Vector3(cos(lat2) * sin(lon2), sin(lat2), -cos(lat2) * cos(lon2)) * BG_WIRE_RADIUS
+			if si2 > 0:
+				verts.append(prev2)
+				verts.append(p2)
+			prev2 = p2
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	var mesh: ArrayMesh = ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_LINES, arrays)
+	return mesh
+
+
+## The haze a card wears by its column's distance from the
+## centre (the background stack's fourth layer): full
+## presence inside 6 columns, easing to HAZE_FLOOR at the
+## window's edge - far cards dim and cool into the room
+## instead of ending at a hard window edge.
+func _haze_for(idx: int) -> float:
+	if _centre_index < 0 or idx < 0 or idx >= _visible_games.size():
+		return 1.0
+	var dist: int = absi(_grid_coord(idx).x - _grid_coord(_centre_index).x)
+	if dist <= 6:
+		return 1.0
+	return lerpf(1.0, HAZE_FLOOR, clampf(float(dist - 6) / 4.0, 0.0, 1.0))
 
 
 # -------------------------------------------------------------- library
@@ -681,6 +840,11 @@ func set_wovp_data(d: Dictionary) -> void:
 	if _tournament:
 		_recompute_visible()
 		_rebuild_wall()
+	else:
+		# Fresh boards can give the centred card a wing it
+		# did not have (or change the one it has).
+		_wing_key = ""
+		_refresh_wing()
 
 
 func tournament_active() -> bool:
@@ -1102,6 +1266,7 @@ func _set_centre(index: int, snap: bool = false) -> void:
 		_refresh_window()
 		_refresh_card_frames()
 		_request_window_fill()
+		_refresh_wing()
 
 
 ## Per-frame swing drive, from _process: the prototype's cubic
@@ -1159,6 +1324,11 @@ func _refresh_window() -> void:
 		_fin_start.visible = fc <= VISIBLE_HALF_COLUMNS - 1
 	if _fin_end != null:
 		_fin_end.visible = fc >= _columns - VISIBLE_HALF_COLUMNS
+	# The haze follows the centre (see _haze_for): re-apply
+	# the standing wall fade with the new centre's factors.
+	var keep_alpha: float = _wall_alpha_applied
+	_wall_alpha_applied = -1.0
+	_apply_wall_alpha(keep_alpha)
 
 
 ## Whether a Tournament panel may launch: only a challenge row
@@ -2180,6 +2350,122 @@ func _update_pop(delta: float) -> void:
 		q.position = _panel_base_pos[i] + _panel_pop_dir[i] * (POP_OUT_DISTANCE * amt)
 		var s: float = lerpf(1.0, POP_OUT_SCALE, amt)
 		q.scale = Vector3(s, s, s)
+	_update_wing_frame()
+
+
+## The focused card's wing (the user's design, 2026-10-28;
+## built in the graduation's Stage B): a companion panel on
+## the LEFT of the centred card only, arriving with the pop.
+## For a tournament table it carries the live WoVP board
+## (his row, the leader, the cut/promotion line, the clock -
+## WovpChallenge.board_rows via the TR3 board spec); the
+## table's metadata (manufacturer / year / designer /
+## version) rides beneath the board inside the same render,
+## and a table with no board still gets its metadata wing.
+## Unfocused cards stay pure art - the wing exists once, for
+## the centre.
+##
+## Placement law (the DOME5 census's wing legs): the wing
+## stands at the left neighbour's slot on the drum (so it
+## rides the swing glued to the centred card), floated
+## WING_PROUD in front of the neighbour's ART - and its
+## whole height fits between the card's top edge and the
+## nameplate zone: with WING_Y and WING_SIZE its bottom edge
+## (-0.092 card-local) clears the tallest measured label
+## block's top (-0.098, a four-line title) and its top
+## (+0.542) stays at the card's own top, so no label of the
+## focused card, the left neighbour, or the card above is
+## ever under it. At the shelf's first column the slot is
+## the start fin's - the wing floats over the fin's upper
+## reach instead (the fin is a marker, not a label).
+func _refresh_wing() -> void:
+	if _wing == null:
+		_build_wing()
+	if _wing == null:
+		return
+	if _tournament or _centre_index < 0 or _centre_index >= _visible_games.size():
+		_wing_game_id = ""
+		_wing.visible = false
+		return
+	var game: GameEntry = _visible_games[_centre_index]
+	# Seat first (the slot follows the centre even while the
+	# content renders).
+	var coord: Vector2i = _grid_coord(_centre_index)
+	_wing_slot = _card_transform_at(coord.x - 1, coord.y)
+	_wing_slot.origin += _wing_slot.basis.y * WING_Y
+	_wing.transform = _wing_slot
+	# Content: the challenge whose table this is, if any.
+	var ch: WovpChallenge = null
+	for cv: Variant in _wovp_challenges:
+		var cand: WovpChallenge = cv as WovpChallenge
+		if cand != null and cand.table_external_id == game.game_id:
+			ch = cand
+			break
+	var key: String = game.game_id + "|" + (ch.challenge_id if ch != null else "") \
+		+ "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id
+	if key == _wing_key and _wing_game_id == game.game_id:
+		return
+	_wing_key = key
+	_wing_game_id = game.game_id
+	_render_wing_content(game, ch, key)
+
+
+func _build_wing() -> void:
+	if _wall == null:
+		return
+	_wing = Node3D.new()
+	_wing.name = "FocusWing"
+	_wing.visible = false
+	_wing_quad = MeshInstance3D.new()
+	var qm: QuadMesh = QuadMesh.new()
+	qm.size = WING_SIZE
+	_wing_quad.mesh = qm
+	_wing_mat = StandardMaterial3D.new()
+	_wing_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_wing_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_wing_quad.material_override = _wing_mat
+	_wing.add_child(_wing_quad)
+	# A dark backing a hair behind, the cards' own frame
+	# language, so the wing reads as furniture, not a sticker.
+	var backing: MeshInstance3D = _make_card_quad(_wing, WING_SIZE + Vector2(0.05, 0.03), Vector3(0.0, 0.0, -0.006), _frame_mat(false))
+	backing.name = "WingBacking"
+	_wall.add_child(_wing)
+
+
+func _render_wing_content(game: GameEntry, ch: WovpChallenge, key: String) -> void:
+	var now_unix: int = int(Time.get_unix_time_from_system())
+	var spec: Dictionary = RoomSpecs.wing_spec(game, ch, _wovp_user_id, now_unix)
+	var px: Vector2i = Vector2i(
+		int(float(RoomSpecs.board_face_px().x) * WING_SIZE.x / RoomSpecs.board_panel_size().x),
+		int(float(RoomSpecs.board_face_px().y) * WING_SIZE.y / RoomSpecs.board_panel_size().y))
+	var tex: Texture2D = await _factory.render_texture(spec, px)
+	if tex == null or key != _wing_key:
+		return
+	_wing_mat.albedo_texture = tex
+
+
+## Per-frame wing dressing, from _update_pop: the wing
+## arrives with the centred card's pop - it slides from the
+## neighbour card's surface to WING_PROUD and grows the
+## pop's last fraction as the amount rises, and it is gone
+## whenever the centre has no pop (detail, placard, panel,
+## load wait - the pop target's own law) or no content.
+func _update_wing_frame() -> void:
+	if _wing == null:
+		return
+	var amt: float = 0.0
+	if _centre_index >= 0 and _centre_index < _panel_pop.size():
+		amt = _panel_pop[_centre_index]
+	var live: bool = _wing_game_id != "" and not _tournament and _mode == "wall" \
+		and not _placard_up and not _setup_panel_up and _launching_game_id == ""
+	_wing.visible = live and amt > 0.02
+	if not _wing.visible:
+		return
+	var proud: float = WING_PROUD * amt
+	_wing.transform = Transform3D(_wing_slot.basis,
+		_wing_slot.origin + _wing_slot.basis.z * proud)
+	var s: float = lerpf(0.92, 1.0, amt)
+	_wing.scale = Vector3(s, s, s)
 
 
 func _on_select(quad: ClickableQuad) -> void:
@@ -3321,15 +3607,17 @@ func _update_marquee(delta: float) -> void:
 
 ## The wall fade itself: panels, their Launch buttons, the rail,
 ## and the banner. Change-guarded - _update_marquee calls this
-## every frame of the wait.
+## every frame of the wait. Each card's fade is multiplied by
+## its haze (the background stack's fourth layer): the marquee
+## dims the whole wall, the haze dims the far columns further.
 func _apply_wall_alpha(a: float) -> void:
 	if absf(a - _wall_alpha_applied) < 0.002:
 		return
 	_wall_alpha_applied = a
-	for q: ClickableQuad in _panels:
-		q.set_content_alpha(a)
-	for q: ClickableQuad in _panel_launches:
-		q.set_content_alpha(a)
+	for i: int in range(_panels.size()):
+		_panels[i].set_content_alpha(a * _haze_for(i))
+	for i2: int in range(_panel_launches.size()):
+		_panel_launches[i2].set_content_alpha(a * _haze_for(i2))
 	for k: Variant in _rail_quads.keys():
 		var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
 		if rq != null:
@@ -3348,8 +3636,9 @@ func _apply_wall_alpha(a: float) -> void:
 	_plate_mat().albedo_color = Color(0.0, 0.0, 0.0, 0.66 * a)
 	for idx: int in range(_panels.size()):
 		if idx < _panel_labels.size() and _panel_labels[idx] != null:
-			_panel_labels[idx].modulate = Color(0.96, 0.97, 1.0, a)
-			_panel_labels[idx].outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * a)
+			var la: float = a * _haze_for(idx)
+			_panel_labels[idx].modulate = Color(0.96, 0.97, 1.0, la)
+			_panel_labels[idx].outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * la)
 
 
 ## Load-wait queries (the lockout smoke reads the room the way the
@@ -3756,6 +4045,49 @@ func power_is_pair() -> bool:
 
 func power_overlay_count() -> int:
 	return 1 if (_power_overlay != null and is_instance_valid(_power_overlay)) else 0
+
+
+## Graduation queries (the graduation smoke reads the room's
+## Stage B surfaces the way the other smokes read theirs):
+## the centred shelf index, the background stack's layers
+## (with their parents - the world-lock leg), and the wing's
+## standing state for the occlusion census.
+func centre_index() -> int:
+	return _centre_index
+
+
+func drum_node() -> Node3D:
+	return _wall
+
+
+func background_layers() -> Array:
+	var out: Array = []
+	for n: Node in [_bg_starfield, _bg_wireframe, _bg_ring]:
+		if n != null:
+			out.append(n)
+	return out
+
+
+func wing_state() -> Dictionary:
+	if _wing == null:
+		return {"exists": false}
+	return {
+		"exists": true,
+		"visible": _wing.visible,
+		"game_id": _wing_game_id,
+		"has_board_texture": _wing_mat != null and _wing_mat.albedo_texture != null,
+		"transform": _wing.global_transform,
+		"size": WING_SIZE,
+	}
+
+
+## One card's title-label AABB in world space (the census
+## measures labels against occluders in exactly this form).
+func panel_label_world_aabb(idx: int) -> AABB:
+	if idx < 0 or idx >= _panel_labels.size() or _panel_labels[idx] == null:
+		return AABB()
+	var l: Label3D = _panel_labels[idx]
+	return l.global_transform * l.get_aabb()
 
 
 ## Travel queries (the nav smoke and the shots read the

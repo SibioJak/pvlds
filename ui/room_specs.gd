@@ -399,6 +399,55 @@ static func tournament_state_spec(lines: Array) -> Dictionary:
 	}
 
 
+## The focused card's wing face (the graduation's Stage B):
+## for a tournament table, the TR3 board itself (composed by
+## tournament_board_spec - his row, the leader, the cut line,
+## the clock) with the table's metadata appended beneath it
+## as note rows; a table with no board gets the metadata
+## alone under a TABLE DATA band. One render, one quad: the
+## wing's height budget (RoomView.WING_Y) leaves no room for
+## a second surface hanging beneath the board.
+static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_unix: int) -> Dictionary:
+	var meta: Array = []
+	var maker_line: String = game.manufacturer
+	if game.year > 0:
+		maker_line = (maker_line + " - " if maker_line != "" else "") + str(game.year)
+	if maker_line != "":
+		meta.append({"kind": "note", "text": maker_line, "size": 30})
+	var des: String = game.designer_text()
+	if des != "":
+		meta.append({"kind": "note", "text": "Design: " + des, "size": 30})
+	var b: TableBuild = game.current_build()
+	var ver_line: String = ""
+	if b != null and b.version != "":
+		ver_line = "Version " + b.version
+	if game.build_count() > 1:
+		ver_line += (" - " if ver_line != "" else "") + "%d builds" % game.build_count()
+	if ver_line != "":
+		meta.append({"kind": "note", "text": ver_line, "size": 30})
+	if ch != null:
+		var spec: Dictionary = tournament_board_spec(ch, true, user_id, now_unix)
+		var rows: Array = (spec.get("rows", []) as Array).duplicate()
+		for m: Variant in meta:
+			rows.append(m)
+		spec["rows"] = rows
+		spec["footer_px"] = 0 ## the wing carries no Launch button: the board's footer band is metadata room instead
+		return spec
+	return {
+		"kind": "board",
+		"bg": CARD_BG,
+		"band": manufacturer_color(game.manufacturer),
+		"band_text": "TABLE DATA",
+		"band_size": 28,
+		"title": game.title,
+		"title_size": 40,
+		"title_max_lines": 1,
+		"sub": "",
+		"rows": meta,
+		"footer_px": 0,
+	}
+
+
 static func banner_spec(line: String) -> Dictionary:
 	return {
 		"kind": "banner",

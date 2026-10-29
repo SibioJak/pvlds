@@ -441,6 +441,10 @@ func _ready() -> void:
 	# The pick-latency bench seam (PVLDS_BENCH): the room's
 	# fills print their phase timings + render counts.
 	RoomView.debug_bench = OS.has_environment("PVLDS_BENCH")
+	# The graduation's world-lock negative-control seam
+	# (PVLDS_BG_NC=drum): parents the background stack to the
+	# drum so the graduation smoke's lock leg fails by name.
+	RoomView.debug_bg_nc = OS.get_environment("PVLDS_BG_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
