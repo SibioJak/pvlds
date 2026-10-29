@@ -6786,20 +6786,36 @@ func _drive_tournament_full() -> void:
 					if ch4 != null and str(bs13.get("challenge_id", "")) == ch4.challenge_id and bool(bs13.get("has_board_texture", false)):
 						_tournament_expect(not bool(bs13.get("owned", true)),
 							"pairing: the board re-pairs to the not-owned challenge - board shown, no Launch")
-						_grad_save_grab("tournament_pairing_unowned.png")
-						_room._set_centre(0, false)
-						_tournament_pairing_stage = 2
+						_tournament_pairing_stage = 3
 						_tournament_smoke_wait = 0
 					elif _tournament_smoke_wait > 900:
 						_tournament_fail("pairing: the standing board never re-paired to the not-owned challenge")
 						_finish_tournament_smoke()
+				3:
+					# Let the pairing PRESENT (swing done, a
+					# few frames shown) before the grab - a
+					# grab on the condition's own tick reads
+					# the previous frame and can catch the
+					# board still wearing its blank material.
+					_tournament_smoke_wait += 1
+					if _tournament_smoke_wait >= 12 and not _room.page_slide_active():
+						_grad_save_grab("tournament_pairing_unowned.png")
+						_room._set_centre(0, false)
+						_tournament_pairing_stage = 2
+						_tournament_smoke_wait = 0
 				2:
 					_tournament_smoke_wait += 1
 					if ch0 != null and str(bs13.get("challenge_id", "")) == ch0.challenge_id and bool(bs13.get("has_board_texture", false)):
-						_tournament_smoke_phase = 3
+						_tournament_pairing_stage = 4
+						_tournament_smoke_wait = 0
 					elif _tournament_smoke_wait > 900:
 						_tournament_fail("pairing: the standing board never settled back on the first challenge")
 						_finish_tournament_smoke()
+				4:
+					_tournament_smoke_wait += 1
+					if _tournament_smoke_wait >= 12 and not _room.page_slide_active():
+						_grad_save_grab("tournament_pairing_owned.png")
+						_tournament_smoke_phase = 3
 		4:
 			# The SETUP panel's WoVP legs. Clear the saved key
 			# first (memory + file), so the paste leg proves
@@ -6967,7 +6983,6 @@ func _tournament_leg_rendered() -> void:
 			"pairing: the standing board pairs with the centred challenge (his season table, owned)")
 		_tournament_expect(bool(bs.get("has_board_texture", false)),
 			"pairing: the standing board carries its rendered board face")
-		_grad_save_grab("tournament_pairing_owned.png")
 		var tex: Texture2D = bs.get("texture") as Texture2D
 		var accent_px: int = 0
 		if tex != null:
