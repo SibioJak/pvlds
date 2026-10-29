@@ -1567,7 +1567,7 @@ func _drive_shot_mimic() -> void:
 				return
 			if _shot_mimic_stage == 0:
 				_room._handle_rail("filter:all")
-				get_viewport().warp_mouse(Vector2(4, 4))
+				get_viewport().warp_mouse(Vector2(512, 764)) ## parked over the furniture: on the drum a corner park can sit on a top-band card, and hover would drive the centre away from the legs' focused fixture (the nav driver's lesson)
 				_shot_mimic_stage = 1
 				_shot_mimic_since = now
 				return
@@ -1794,11 +1794,22 @@ func _drive_mimic_wide_leg(now: int) -> void:
 				if absf(float(sq[qi]) - float(refq[qi])) > 0.035:
 					_shot_mimic_problems.append("settled = grade leg failed: quadrant %d luma %.3f, reference %.3f" % [qi, float(sq[qi]), float(refq[qi])])
 			_shot_mimic_rest_img = _shot_mimic_grabs["rest"] as Image
-			_room._set_focused(null)
+			# GRADUATION AMENDMENT: the flat wall's
+			# performer followed the pad focus, so clearing
+			# focus restored it. On the drum the performer
+			# follows the CENTRE (the focus law): clearing
+			# focus leaves the centre - and the performance
+			# - standing. Focusing the partner moves the
+			# centre, and the restore fires as shipped.
+			_room._set_focused(_shot_mimic_partner)
 			_shot_mimic_stage = 4
 			_shot_mimic_since = now
 		4:
-			if _room.power_phase() == 0 and _room.power_overlay_count() == 0:
+			# The wide performance has restored once the
+			# performer is no longer this panel (the
+			# partner, now centred, may start its own -
+			# stage 5's refocus restores that in turn).
+			if _room.power_panel() != panel:
 				_room._set_focused(panel)
 				_shot_mimic_stage = 5
 				_shot_mimic_since = now
@@ -2083,7 +2094,7 @@ func _drive_shot_mimic_real(now: int) -> void:
 			return
 		if _shot_mimic_stage == 0:
 			_room._handle_rail("filter:all")
-			get_viewport().warp_mouse(Vector2(4, 4))
+			get_viewport().warp_mouse(Vector2(512, 764)) ## parked over the furniture: on the drum a corner park can sit on a top-band card, and hover would drive the centre away from the legs' focused fixture (the nav driver's lesson)
 			_shot_mimic_stage = 1
 			_shot_mimic_since = now
 			return
