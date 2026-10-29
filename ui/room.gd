@@ -1671,6 +1671,10 @@ func _rebuild_wall() -> void:
 	_refresh_window()
 	_refresh_card_frames()
 	_fill_wall_textures(gen)
+	# The standing board re-seats on every rebuilt wall (a
+	# boards refresh rebuilds the Tournament wall under the
+	# standing pairing; the teardown above cleared it).
+	_refresh_tboard()
 	if _placard_up:
 		# A rebuild while the placard stands (the launch-failure
 		# path) must not resurrect live controls behind it.
