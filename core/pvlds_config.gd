@@ -35,6 +35,13 @@ var focus_herding: bool = true ## watchdog window duty kill-switch (design secti
 ## desk and the in-room SETUP panel mask it, and the harness
 ## greps every produced log for a sentinel key.
 var wovp_api_key: String = ""
+## Display dials (the GRAD FIX round's taste settings, ridden
+## from the in-room SETUP panel): the focused card's info wing
+## stands or not, and the starfield's layering. Defaults are
+## the player's own picks: wing on, stars layered.
+var wing_enabled: bool = true
+var starfield_mode: String = "layered" ## "layered" | "flat" | "off"
+const STARFIELD_MODES: Array[String] = ["layered", "flat", "off"]
 ## Deliberately absent: any close-duty or hold-to-exit setting.
 ## The exit model was simplified by the player's ruling
 ## (2026-10-22): the watchdog's session-close duty is
@@ -90,6 +97,10 @@ func load_from_disk() -> bool:
 	vpsdb_path = str(d.get("vpsdb_path", ""))
 	focus_herding = bool(d.get("focus_herding", true))
 	wovp_api_key = str(d.get("wovp_api_key", ""))
+	wing_enabled = bool(d.get("wing_enabled", true))
+	starfield_mode = str(d.get("starfield_mode", "layered"))
+	if not STARFIELD_MODES.has(starfield_mode):
+		starfield_mode = "layered"
 	table_folders.clear()
 	var folders: Variant = d.get("table_folders", [])
 	if folders is Array:
@@ -108,6 +119,8 @@ func save_to_disk() -> bool:
 	d["vpsdb_path"] = vpsdb_path
 	d["focus_herding"] = focus_herding
 	d["wovp_api_key"] = wovp_api_key
+	d["wing_enabled"] = wing_enabled
+	d["starfield_mode"] = starfield_mode
 	var folders: Array = []
 	for f: String in table_folders:
 		folders.append(f)

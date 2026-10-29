@@ -25,6 +25,7 @@ signal art_prefetch_requested(games: Array) ## a page settled: Main's warmer sho
 signal tournament_refresh_requested ## the Tournament Room wants its boards (re)fetched: entering the view, or REFRESH pressed - Main owns the WoVP client
 signal wovp_key_pasted(api_key: String) ## the SETUP panel's PASTE KEY read a key off the clipboard: Main saves it to the config
 signal wovp_key_test_requested ## the SETUP panel's TEST KEY: Main validates the saved key and reports whose it is
+signal display_settings_changed ## a SETUP display dial turned (wing / starfield): Main persists the room's standing values to the config
 
 const PAGE_COLS: int = 4
 const PAGE_ROWS: int = 3
@@ -189,8 +190,18 @@ const BG_STAR_RADIUS: float = 30.0 ## the starfield shell's radius around the ey
 const BG_WIRE_RADIUS: float = 14.0 ## the lat/long wireframe shell's radius
 const BG_RING_RADIUS: float = 9.0 ## the one tilted orbit ring's radius
 const HAZE_FLOOR: float = 0.45 ## the far window columns' dim floor (see _haze_for)
-const WING_SIZE: Vector2 = Vector2(0.66, 0.634) ## the focused card's wing: the TR3 board at 94% - its whole height fits between the card top and the nameplate zone (see _refresh_wing)
-const WING_Y: float = 0.225 ## the wing's centre, card-local: its bottom edge (-0.092) clears every measured label-block top (-0.098 the worst, a 4-line title); its top (+0.542) stays at the card's own top
+const WING_SIZE: Vector2 = Vector2(0.58, 0.60) ## the focused card's wing, inside its borrowed slot (see _wing_size)
+const WING_Y: float = 0.21 ## the wing's centre in its borrowed slot, card-local: spans -0.09..+0.51 of the slot's +-0.54
+## The wing's seat discipline (the GRAD FIX round): the wing
+## stands IN the left neighbour's slot, shrunk inside the
+## slot's own bounds (0.62 x 1.08) with margin on every side,
+## and the slot's card is borrowed away - hidden and
+## unpickable - for as long as the wing stands there. The
+## pre-fix wing (0.66 x 0.634 at 0.225, no borrowing) hung
+## over the card below-left and ate its art; the NC seam
+## PVLDS_GRAD_NC=wing restores that size and seat, unborrowed.
+const WING_SIZE_NC: Vector2 = Vector2(0.66, 0.634)
+const WING_Y_NC: float = 0.225
 const WING_PROUD: float = 0.10 ## how far in front of the neighbour card the wing floats at full pop
 const BG_STAR_SHADER: String = """
 shader_type spatial;
@@ -315,6 +326,8 @@ static var debug_bench: bool = false
 static var debug_bg_nc: String = ""
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
 var _bg_starfield: MeshInstance3D = null
+var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD FIX round's depth layer)
+var _starfield_mode: String = "layered" ## the SETUP dial: "layered" | "flat" | "off" (see set_starfield_mode)
 var _bg_wireframe: MeshInstance3D = null
 var _bg_ring: MeshInstance3D = null
 var _wing: Node3D = null ## the focused card's wing holder (a DRUM child: it must ride the swing glued to the centred card - it is a card companion, not a background layer)
@@ -322,6 +335,8 @@ var _wing_quad: MeshInstance3D = null
 var _wing_mat: StandardMaterial3D = null
 var _wing_key: String = "" ## the content key the wing's standing texture was rendered for
 var _wing_game_id: String = "" ## the game the wing currently serves ("" = no wing content)
+var _wing_enabled: bool = true ## the SETUP dial (the GRAD FIX round): the wing stands only while this holds
+var _wing_borrowed_idx: int = -1 ## the panel whose slot the wing stands in, hidden + unpickable while borrowed (-1 = none)
 var _wing_slot: Transform3D = Transform3D() ## the wing's seated slot transform on the drum (its pop offset applies per frame)
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
@@ -345,6 +360,8 @@ var _setup_panel_scan_btn: ClickableQuad = null
 var _setup_panel_dl_btn: ClickableQuad = null
 var _setup_panel_wovp_paste_btn: ClickableQuad = null ## PASTE KEY: reads the WoVP key off the PC clipboard (VR has no keyboard - the paste IS the field)
 var _setup_panel_wovp_test_btn: ClickableQuad = null ## TEST KEY: Main validates the saved key and names whose it is
+var _setup_panel_wing_btn: ClickableQuad = null ## WING: ON/OFF - the display dial (the GRAD FIX round)
+var _setup_panel_stars_btn: ClickableQuad = null ## STARS: LAYERED/FLAT/OFF - the display dial (the GRAD FIX round)
 var _setup_panel_back_btn: ClickableQuad = null
 var _setup_panel_up: bool = false
 var _setup_panel_gen: int = 0
@@ -632,6 +649,29 @@ func _build_environment() -> void:
 ## moves. The one deliberate exception is the harness's NC
 ## (PVLDS_BG_NC=drum parents the stack to the drum so the
 ## graduation smoke's world-lock leg can fail by name).
+## The starfield dial (the SETUP panel's STARS button rides
+## it): "layered" shows both star shells (the depth the
+## player asked for), "flat" only the far shell (the
+## graduation's single layer), "off" no stars. The wireframe
+## shell and the orbit ring are structure, not stars - the
+## dial never touches them. Every layer stays WORLD-LOCKED:
+## the dial changes visibility, never parentage or motion.
+func set_starfield_mode(mode: String) -> void:
+	_starfield_mode = mode if ["layered", "flat", "off"].has(mode) else "layered"
+	_apply_starfield_mode()
+
+
+func starfield_mode() -> String:
+	return _starfield_mode
+
+
+func _apply_starfield_mode() -> void:
+	if _bg_starfield != null:
+		_bg_starfield.visible = _starfield_mode != "off"
+	if _bg_starfield_near != null:
+		_bg_starfield_near.visible = _starfield_mode == "layered"
+
+
 func _build_background() -> void:
 	_bg_root = Node3D.new()
 	_bg_root.name = "BackgroundStack"
@@ -1353,7 +1393,7 @@ func _refresh_window() -> void:
 	var browsing: bool = _mode == "wall" and not _placard_up and not _setup_panel_up and _launching_game_id == ""
 	for idx: int in range(_panels.size()):
 		var c: int = _grid_coord(idx).x
-		var vis: bool = c >= _panel_window_lo and c <= _panel_window_hi
+		var vis: bool = c >= _panel_window_lo and c <= _panel_window_hi and idx != _wing_borrowed_idx
 		_panels[idx].visible = vis
 		if browsing:
 			_panels[idx].pick_enabled = vis
@@ -2240,7 +2280,7 @@ func _refresh_focusables() -> void:
 		if _placard_back != null:
 			_focusables.append(_placard_back)
 	elif _setup_panel_up:
-		# The SETUP panel owns the room: its five buttons are
+		# The SETUP panel owns the room: its seven buttons are
 		# the only focus stops (see show_setup_panel).
 		if _setup_panel_scan_btn != null:
 			_focusables.append(_setup_panel_scan_btn)
@@ -2250,6 +2290,10 @@ func _refresh_focusables() -> void:
 			_focusables.append(_setup_panel_wovp_paste_btn)
 		if _setup_panel_wovp_test_btn != null:
 			_focusables.append(_setup_panel_wovp_test_btn)
+		if _setup_panel_wing_btn != null:
+			_focusables.append(_setup_panel_wing_btn)
+		if _setup_panel_stars_btn != null:
+			_focusables.append(_setup_panel_stars_btn)
 		if _setup_panel_back_btn != null:
 			_focusables.append(_setup_panel_back_btn)
 	elif _mode == "detail" and _detail != null:
@@ -2325,6 +2369,10 @@ func _refresh_quad_states() -> void:
 		all.append(_setup_panel_wovp_paste_btn)
 	if _setup_panel_wovp_test_btn != null:
 		all.append(_setup_panel_wovp_test_btn)
+	if _setup_panel_wing_btn != null:
+		all.append(_setup_panel_wing_btn)
+	if _setup_panel_stars_btn != null:
+		all.append(_setup_panel_stars_btn)
 	if _setup_panel_back_btn != null:
 		all.append(_setup_panel_back_btn)
 	for q: ClickableQuad in all:
@@ -2428,24 +2476,80 @@ func _update_pop(delta: float) -> void:
 ## the centre.
 ##
 ## Placement law (the DOME5 census's wing legs): the wing
-## stands at the left neighbour's slot on the drum (so it
+## stands in the left neighbour's slot on the drum (so it
 ## rides the swing glued to the centred card), floated
-## WING_PROUD in front of the neighbour's ART - and its
-## whole height fits between the card's top edge and the
-## nameplate zone: with WING_Y and WING_SIZE its bottom edge
-## (-0.092 card-local) clears the tallest measured label
-## block's top (-0.098, a four-line title) and its top
-## (+0.542) stays at the card's own top, so no label of the
-## focused card, the left neighbour, or the card above is
-## ever under it. At the shelf's first column the slot is
-## the start fin's - the wing floats over the fin's upper
-## reach instead (the fin is a marker, not a label).
+## WING_PROUD in front of the slot plane. The GRAD FIX
+## round's discipline: the wing is SMALLER than its slot on
+## every side (WING_SIZE inside the 0.62 x 1.08 slot, centred
+## at WING_Y), and the slot's own card is borrowed away -
+## hidden and unpickable - for as long as the wing stands
+## there, so no part of any card is ever under it. At the
+## shelf's first column there is no card to borrow: the wing
+## overhangs the start fin's ground instead (the fin is
+## furniture, not a card).
+## The wing's live size and seat height (the NC seam serves
+## the pre-fix values).
+func _wing_size() -> Vector2:
+	return WING_SIZE_NC if OS.get_environment("PVLDS_GRAD_NC") == "wing" else WING_SIZE
+
+
+## Borrow the slot at the centred card's left: its panel is
+## hidden and unpickable until the wing moves on. The
+## borrowed index is what _refresh_window consults, so a
+## window refresh mid-borrow keeps the card down; releasing
+## restores the card's standing visibility (its pick state
+## returns with the next window refresh).
+func _borrow_wing_slot(coord: Vector2i) -> void:
+	var want: int = -1
+	if coord.x >= 1:
+		var raw: int = coord.y * _columns + (coord.x - 1)
+		if raw >= 0 and raw < _panels.size() and _grid_coord(raw) == Vector2i(coord.x - 1, coord.y):
+			want = raw
+	if want == _wing_borrowed_idx:
+		return
+	_release_wing_borrow()
+	if want >= 0:
+		_wing_borrowed_idx = want
+		_panels[want].visible = false
+		_panels[want].pick_enabled = false
+		if want < _panel_launches.size():
+			_panel_launches[want].pick_enabled = false
+
+
+func _release_wing_borrow() -> void:
+	if _wing_borrowed_idx < 0:
+		return
+	var idx: int = _wing_borrowed_idx
+	_wing_borrowed_idx = -1
+	if idx < _panels.size() and _panel_window_lo >= 0:
+		var c: int = _grid_coord(idx).x
+		_panels[idx].visible = c >= _panel_window_lo and c <= _panel_window_hi
+
+
+## The wing dial (the SETUP panel's WING button rides it):
+## off releases the borrowed card and folds the wing away at
+## once; on re-seats it at the standing centre.
+func set_wing_enabled(on: bool) -> void:
+	_wing_enabled = on
+	if not on:
+		_release_wing_borrow()
+		if _wing != null:
+			_wing.visible = false
+	else:
+		_refresh_wing()
+
+
+func wing_enabled() -> bool:
+	return _wing_enabled
+
+
 func _refresh_wing() -> void:
 	if _wing == null:
 		_build_wing()
 	if _wing == null:
 		return
-	if _tournament or _centre_index < 0 or _centre_index >= _visible_games.size():
+	if _tournament or _centre_index < 0 or _centre_index >= _visible_games.size() or not _wing_enabled:
+		_release_wing_borrow()
 		_wing_game_id = ""
 		_wing.visible = false
 		return
@@ -2453,9 +2557,12 @@ func _refresh_wing() -> void:
 	# Seat first (the slot follows the centre even while the
 	# content renders).
 	var coord: Vector2i = _grid_coord(_centre_index)
+	var nc_wing: bool = OS.get_environment("PVLDS_GRAD_NC") == "wing"
+	if not nc_wing:
+		_borrow_wing_slot(coord)
 	_wing_slot = _card_transform_at(coord.x - 1, coord.y)
-	_wing_slot.origin += _wing_slot.basis.y * WING_Y
-	if OS.get_environment("PVLDS_GRAD_NC") == "wing":
+	_wing_slot.origin += _wing_slot.basis.y * (WING_Y_NC if nc_wing else WING_Y)
+	if nc_wing:
 		# NC seam (graduation smoke): the wing shoved onto
 		# the focused card and down over its label - the
 		# occlusion census must convict it.
@@ -2486,7 +2593,7 @@ func _build_wing() -> void:
 	_wing.visible = false
 	_wing_quad = MeshInstance3D.new()
 	var qm: QuadMesh = QuadMesh.new()
-	qm.size = WING_SIZE
+	qm.size = _wing_size()
 	_wing_quad.mesh = qm
 	_wing_mat = StandardMaterial3D.new()
 	_wing_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -2495,7 +2602,7 @@ func _build_wing() -> void:
 	_wing.add_child(_wing_quad)
 	# A dark backing a hair behind, the cards' own frame
 	# language, so the wing reads as furniture, not a sticker.
-	var backing: MeshInstance3D = _make_card_quad(_wing, WING_SIZE + Vector2(0.05, 0.03), Vector3(0.0, 0.0, -0.006), _frame_mat(false))
+	var backing: MeshInstance3D = _make_card_quad(_wing, _wing_size() + Vector2(0.02, 0.02), Vector3(0.0, 0.0, -0.006), _frame_mat(false))
 	backing.name = "WingBacking"
 	_wall.add_child(_wing)
 
@@ -2504,8 +2611,8 @@ func _render_wing_content(game: GameEntry, ch: WovpChallenge, key: String) -> vo
 	var now_unix: int = int(Time.get_unix_time_from_system())
 	var spec: Dictionary = RoomSpecs.wing_spec(game, ch, _wovp_user_id, now_unix)
 	var px: Vector2i = Vector2i(
-		int(float(RoomSpecs.board_face_px().x) * WING_SIZE.x / RoomSpecs.board_panel_size().x),
-		int(float(RoomSpecs.board_face_px().y) * WING_SIZE.y / RoomSpecs.board_panel_size().y))
+		int(float(RoomSpecs.board_face_px().x) * _wing_size().x / RoomSpecs.board_panel_size().x),
+		int(float(RoomSpecs.board_face_px().y) * _wing_size().y / RoomSpecs.board_panel_size().y))
 	var tex: Texture2D = await _factory.render_texture(spec, px)
 	if tex == null or key != _wing_key:
 		return
@@ -2524,7 +2631,7 @@ func _update_wing_frame() -> void:
 	var amt: float = 0.0
 	if _centre_index >= 0 and _centre_index < _panel_pop.size():
 		amt = _panel_pop[_centre_index]
-	var live: bool = _wing_game_id != "" and not _tournament and _mode == "wall" \
+	var live: bool = _wing_game_id != "" and _wing_enabled and not _tournament and _mode == "wall" \
 		and not _placard_up and not _setup_panel_up and _launching_game_id == ""
 	_wing.visible = live and amt > 0.02
 	if not _wing.visible:
@@ -2544,7 +2651,7 @@ func _on_select(quad: ClickableQuad) -> void:
 
 func _activate(quad: ClickableQuad) -> void:
 	if _setup_panel_up:
-		# While the SETUP panel stands, its five buttons are
+		# While the SETUP panel stands, its seven buttons are
 		# the room: everything else refuses. The pick flags
 		# already say so for the pointer; this is the lock for
 		# the keyboard/gamepad paths, which activate the
@@ -2568,6 +2675,18 @@ func _activate(quad: ClickableQuad) -> void:
 				quad.pulse()
 				set_setup_panel_message("Testing the saved WoVP key...")
 				wovp_key_test_requested.emit()
+			"setup_setting_wing":
+				quad.pulse()
+				set_wing_enabled(not _wing_enabled)
+				display_settings_changed.emit()
+				_request_setup_panel_render(true)
+			"setup_setting_stars":
+				quad.pulse()
+				var modes: Array[String] = ["layered", "flat", "off"]
+				var next: String = modes[(modes.find(_starfield_mode) + 1) % modes.size()]
+				set_starfield_mode(next)
+				display_settings_changed.emit()
+				_request_setup_panel_render(true)
 		return
 	if _placard_up:
 		# While the placard stands, everything else is inert. The
@@ -3197,7 +3316,7 @@ func _restore_room_pick_states() -> void:
 ## While the panel stands, the room behind it is inert,
 ## exactly as behind the placard: pick flags down (the
 ## snapshot restores them on the way out), focus confined
-## to the panel's five buttons, _activate refusing
+## to the panel's seven buttons, _activate refusing
 ## everything else, launching unreachable, and B / D-pad
 ## Right acting as BACK - the panel never exits the app.
 func show_setup_panel() -> void:
@@ -3301,6 +3420,14 @@ func setup_panel_wovp_paste_quad() -> ClickableQuad:
 
 func setup_panel_wovp_test_quad() -> ClickableQuad:
 	return _setup_panel_wovp_test_btn
+
+
+func setup_panel_wing_quad() -> ClickableQuad:
+	return _setup_panel_wing_btn
+
+
+func setup_panel_stars_quad() -> ClickableQuad:
+	return _setup_panel_stars_btn
 
 
 ## PASTE KEY: the room's paste field. VR has no keyboard,
@@ -3421,9 +3548,23 @@ func _build_setup_panel() -> void:
 	_setup_panel_wovp_test_btn.setup("setup_panel_wovp_test", "", placeholder, Vector2(0.66, 0.16))
 	_setup_panel_wovp_test_btn.position = Vector3(0.375, -0.5, 0.0)
 	_setup_panel.add_child(_setup_panel_wovp_test_btn)
+	# The display dials row (the GRAD FIX round): taste gets
+	# a dial, not a dictate - WING toggles the focused card's
+	# info wing, STARS cycles the starfield's layering. Each
+	# button's label states the standing value; a press turns
+	# the dial one step, applies it in the room at once, and
+	# Main persists it (display_settings_changed).
+	_setup_panel_wing_btn = ClickableQuad.new()
+	_setup_panel_wing_btn.setup("setup_setting_wing", "", placeholder, Vector2(0.66, 0.16))
+	_setup_panel_wing_btn.position = Vector3(-0.375, -0.76, 0.0)
+	_setup_panel.add_child(_setup_panel_wing_btn)
+	_setup_panel_stars_btn = ClickableQuad.new()
+	_setup_panel_stars_btn.setup("setup_setting_stars", "", placeholder, Vector2(0.66, 0.16))
+	_setup_panel_stars_btn.position = Vector3(0.375, -0.76, 0.0)
+	_setup_panel.add_child(_setup_panel_stars_btn)
 	_setup_panel_back_btn = ClickableQuad.new()
 	_setup_panel_back_btn.setup("setup_panel_back", "", placeholder, Vector2(0.5, 0.16))
-	_setup_panel_back_btn.position = Vector3(0.0, -0.76, 0.0)
+	_setup_panel_back_btn.position = Vector3(0.0, -1.02, 0.0)
 	_setup_panel.add_child(_setup_panel_back_btn)
 	if _setup_downloader == null:
 		_setup_downloader = VpsDownloader.new()
@@ -3435,7 +3576,7 @@ func _build_setup_panel() -> void:
 	# placard's lesson).
 
 
-## Panel textures - face plus the five buttons - render
+## Panel textures - face plus the seven buttons - render
 ## from current state, generation-guarded like the
 ## placard's. Renders serialize (the shared factory takes
 ## one at a time): a state change during a render, or
@@ -3496,6 +3637,18 @@ func _fill_setup_panel_textures(gen: int) -> void:
 		_after_setup_render()
 		return
 	_setup_panel_wovp_test_btn.set_texture(test_tex)
+	var wing_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.button_spec("WING: ON" if _wing_enabled else "WING: OFF", false), Vector2i(512, 124))
+	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_wing_btn == null:
+		_after_setup_render()
+		return
+	_setup_panel_wing_btn.set_texture(wing_tex)
+	var stars_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.button_spec("STARS: " + _starfield_mode.to_upper(), false), Vector2i(512, 124))
+	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_stars_btn == null:
+		_after_setup_render()
+		return
+	_setup_panel_stars_btn.set_texture(stars_tex)
 	var back_tex: Texture2D = await _factory.render_texture(
 		RoomSpecs.button_spec("BACK", true), Vector2i(512, 164))
 	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_back_btn == null:
@@ -4159,7 +4312,9 @@ func wing_state() -> Dictionary:
 		"game_id": _wing_game_id,
 		"has_board_texture": _wing_mat != null and _wing_mat.albedo_texture != null,
 		"transform": _wing.global_transform,
-		"size": WING_SIZE,
+		"size": _wing_size(),
+		"enabled": _wing_enabled,
+		"borrowed_idx": _wing_borrowed_idx,
 	}
 
 
