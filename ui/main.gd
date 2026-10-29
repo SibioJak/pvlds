@@ -950,6 +950,18 @@ func _on_wovp_challenges_finished(ok: bool, message: String, challenges: Array, 
 ## saved to the config here (the room never holds config).
 ## A save also fetches, so the Tournament Room is warm when
 ## he walks back to it.
+## A SETUP display dial turned in the room: the room already
+## applied the value; Main's half is persistence - the
+## standing values ride into the config file so the dials
+## survive the next boot.
+func _on_display_settings_changed() -> void:
+	if _config == null or _room == null:
+		return
+	_config.wing_enabled = _room.wing_enabled()
+	_config.starfield_mode = _room.starfield_mode()
+	_config.save_to_disk()
+
+
 func _on_room_wovp_key_pasted(api_key: String) -> void:
 	if _config == null:
 		return
@@ -1089,6 +1101,9 @@ func _enter_room() -> void:
 		_room.tournament_refresh_requested.connect(_wovp_fetch_boards)
 		_room.wovp_key_pasted.connect(_on_room_wovp_key_pasted)
 		_room.wovp_key_test_requested.connect(_on_room_wovp_key_test)
+		_room.display_settings_changed.connect(_on_display_settings_changed)
+		_room.set_wing_enabled(_config.wing_enabled)
+		_room.set_starfield_mode(_config.starfield_mode)
 		_room.launch_requested.connect(_on_launch_requested)
 		_room.exit_requested.connect(_on_exit_requested)
 		_room.art_prefetch_requested.connect(_on_art_prefetch)
@@ -2977,6 +2992,8 @@ func _setup_panel_surface_assertions() -> void:
 	_setup_panel_expect(_room.setup_panel_download_quad() != null, "XR setup: the panel has DOWNLOAD VPS DATABASE")
 	_setup_panel_expect(_room.setup_panel_wovp_paste_quad() != null, "XR setup: the panel has PASTE KEY (the WoVP row)")
 	_setup_panel_expect(_room.setup_panel_wovp_test_quad() != null, "XR setup: the panel has TEST KEY (the WoVP row)")
+	_setup_panel_expect(_room.setup_panel_wing_quad() != null, "XR setup: the panel has WING (the display dials row, the GRAD FIX round)")
+	_setup_panel_expect(_room.setup_panel_stars_quad() != null, "XR setup: the panel has STARS (the display dials row, the GRAD FIX round)")
 	_setup_panel_expect(_room.setup_panel_back_quad() != null, "XR setup: the panel has BACK")
 	_setup_panel_expect(_room.visible, "XR setup: the room stays visible")
 	_setup_panel_expect(not _room.is_setup_placard_up(), "XR setup: no placard - the desktop route is retired")
@@ -3000,15 +3017,19 @@ func _setup_panel_surface_assertions() -> void:
 		and _room.setup_panel_download_quad().pick_enabled
 		and _room.setup_panel_wovp_paste_quad().pick_enabled
 		and _room.setup_panel_wovp_test_quad().pick_enabled
+		and _room.setup_panel_wing_quad().pick_enabled
+		and _room.setup_panel_stars_quad().pick_enabled
 		and _room.setup_panel_back_quad().pick_enabled,
 		"XR setup: the panel's own buttons are live")
-	_setup_panel_expect(_room._focusables.size() == 5
+	_setup_panel_expect(_room._focusables.size() == 7
 		and _room._focusables.has(_room.setup_panel_scan_quad())
 		and _room._focusables.has(_room.setup_panel_download_quad())
 		and _room._focusables.has(_room.setup_panel_wovp_paste_quad())
 		and _room._focusables.has(_room.setup_panel_wovp_test_quad())
+		and _room._focusables.has(_room.setup_panel_wing_quad())
+		and _room._focusables.has(_room.setup_panel_stars_quad())
 		and _room._focusables.has(_room.setup_panel_back_quad()),
-		"XR setup: focus navigation is confined to the panel's five buttons")
+		"XR setup: focus navigation is confined to the panel's seven buttons")
 	_setup_panel_expect(_room._focused == _room.setup_panel_scan_quad(),
 		"XR setup: focus opens on SCAN LIBRARY")
 	# Confinement under travel: TAB around the stops and
@@ -3415,6 +3436,51 @@ func _grad_polys_overlap(a: Array[Vector2], b: Array[Vector2]) -> bool:
 			if amax < bmin or bmax < amin:
 				return false
 	return true
+
+
+## The intersection area of two convex screen polygons
+## (Sutherland-Hodgman: clip a against b's edges).
+func _grad_poly_intersect_area(a: Array[Vector2], b: Array[Vector2]) -> float:
+	var poly: Array[Vector2] = a.duplicate()
+	var bsign: float = 0.0
+	for e: int in range(b.size()):
+		var bp: Vector2 = b[e]
+		var bq: Vector2 = b[(e + 1) % b.size()]
+		bsign += bp.x * bq.y - bq.x * bp.y
+	var sgn: float = 1.0 if bsign >= 0.0 else -1.0
+	for e: int in range(b.size()):
+		if poly.is_empty():
+			return 0.0
+		var p1: Vector2 = b[e]
+		var p2: Vector2 = b[(e + 1) % b.size()]
+		var edge: Vector2 = p2 - p1
+		var out: Array[Vector2] = []
+		for i: int in range(poly.size()):
+			var cur: Vector2 = poly[i]
+			var prev: Vector2 = poly[(i + poly.size() - 1) % poly.size()]
+			var cur_in: bool = edge.cross(cur - p1) * sgn >= 0.0
+			var prev_in: bool = edge.cross(prev - p1) * sgn >= 0.0
+			if cur_in:
+				if not prev_in:
+					var d: Vector2 = cur - prev
+					var denom: float = edge.cross(d)
+					if absf(denom) > 0.00001:
+						var t: float = edge.cross(p1 - prev) / denom
+						out.append(prev + d * t)
+				out.append(cur)
+			elif prev_in:
+				var d: Vector2 = cur - prev
+				var denom: float = edge.cross(d)
+				if absf(denom) > 0.00001:
+					var t: float = edge.cross(p1 - prev) / denom
+					out.append(prev + d * t)
+		poly = out
+	var area: float = 0.0
+	for i: int in range(poly.size()):
+		var p: Vector2 = poly[i]
+		var q: Vector2 = poly[(i + 1) % poly.size()]
+		area += p.x * q.y - q.x * p.y
+	return absf(area) * 0.5
 
 
 func _drive_grad_smoke() -> void:
@@ -3920,6 +3986,24 @@ func _grad_measure_centre(c: int) -> void:
 			centre_label_poly = lpoly
 		if not wing_poly.is_empty() and _grad_polys_overlap(lpoly, wing_poly):
 			_grad_count("wing", "centre %d: the wing eats panel %d's label" % [c, i])
+	# The wing against every drawn card's art (the GRAD FIX
+	# round): the wing stands in a borrowed slot, so its screen
+	# polygon may not cover any part of any visible panel -
+	# the borrowed panel is hidden (not drawn, not measured),
+	# and every other card must stand clear by area, not by a
+	# grazed edge.
+	if not wing_poly.is_empty():
+		for j: int in range(_room._panels.size()):
+			var other: ClickableQuad = _room._panels[j]
+			if other == null or not other.visible:
+				continue
+			if not _nav_on_screen(other.global_position, cam):
+				continue
+			var cpoly: Array[Vector2] = _grad_quad_screen_points(other.global_transform, other.quad_size() * 0.5, cam)
+			if _grad_polys_overlap(wing_poly, cpoly):
+				var area: float = _grad_poly_intersect_area(wing_poly, cpoly)
+				if area > 4.0:
+					_grad_count("wingcard", "centre %d: the wing covers %.0f px of panel %d's card" % [c, area, j])
 	# The popped centre's label against every neighbour's art.
 	if not centre_label_poly.is_empty():
 		for j: int in range(_room._panels.size()):
@@ -3959,6 +4043,7 @@ func _grad_census_verdicts() -> void:
 		["status", "census: no label touches the status plate at any centre"],
 		["pop", "census: the popped centre's label clears every neighbour's art"],
 		["wing", "wing occlusion: the wing eats no label at any centre"],
+		["wingcard", "wing occlusion: the wing covers no part of any card at any centre"],
 	]
 	for pair: Variant in kinds:
 		var kind: String = str((pair as Array)[0])
