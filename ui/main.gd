@@ -175,6 +175,7 @@ var _tournament_smoke_failures: int = 0
 var _tournament_smoke_deadline_msec: int = 0
 var _tournament_validate_count_seen: int = 0 ## the stub's validate count when the panel length legs begin (their no-send witness)
 var _tournament_smoke_mode: String = "full" ## PVLDS_WOVP_SMOKE_MODE: full | nokey | failfetch | errbody | errempty | cache | layout - which harness boot this is
+var _tournament_pairing_stage: int = 0 ## full mode phase 13 (the re-pair proof): 0 step out, 1 verify + step back, 2 verify settle
 var _layout_probe_results: Dictionary = {} ## layout mode: panel index -> RoomView.board_layout_probe result, filled async
 var _layout_probes_in_flight: bool = false
 var _smoke_launch_game: String = ""
@@ -6747,7 +6748,7 @@ func _drive_tournament_full() -> void:
 			if _tournament_search_count() >= 2 and _wovp_client != null and not _wovp_client.is_busy() and _room.wall_ready:
 				_tournament_expect(true, "refresh: REFRESH on the rail re-fetches the boards")
 				_tournament_smoke_wait = 0
-				_tournament_smoke_phase = 3
+				_tournament_smoke_phase = 13
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
 				_tournament_fail("refresh: REFRESH never produced a second search")
 				_finish_tournament_smoke()
@@ -6756,28 +6757,44 @@ func _drive_tournament_full() -> void:
 			if _room.wall_ready and _tournament_smoke_wait >= 4:
 				_tournament_leg_rendered()
 				_tournament_smoke_wait = 0
-				_tournament_smoke_phase = 13
+				_tournament_smoke_phase = 4
 		13:
-			# The re-pair (the redesign's core law): stepping
-			# to the not-owned challenge re-pairs the standing
-			# board - same place, same size, its content; the
-			# pairing carries no Launch.
-			if _tournament_smoke_wait == 0 and _room._panels.size() >= 5:
-				_room._set_centre(4, false)
-			_tournament_smoke_wait += 1
+			# The re-pair (the redesign's core law), run while
+			# the Tournament Room stands: stepping to the
+			# not-owned challenge re-pairs the standing board -
+			# same place, same size, its content; the pairing
+			# carries no Launch. The phase ends only once the
+			# board has settled back on the first challenge, so
+			# the rendered leg reads a standing pairing.
 			var bs13: Dictionary = _room.tournament_board_state()
 			var rows13: Array = _room.tournament_rows()
 			var ch4: WovpChallenge = (rows13[4] as Dictionary).get("challenge") as WovpChallenge if rows13.size() >= 5 else null
-			if ch4 != null and str(bs13.get("challenge_id", "")) == ch4.challenge_id and bool(bs13.get("has_board_texture", false)):
-				_tournament_expect(not bool(bs13.get("owned", true)),
-					"pairing: the board re-pairs to the not-owned challenge - board shown, no Launch")
-				_grad_save_grab("tournament_pairing_unowned.png")
-				_room._set_centre(0, false)
-				_tournament_smoke_wait = 0
-				_tournament_smoke_phase = 4
-			elif _tournament_smoke_wait > 900:
-				_tournament_fail("pairing: the standing board never re-paired to the not-owned challenge")
-				_finish_tournament_smoke()
+			var ch0: WovpChallenge = (rows13[0] as Dictionary).get("challenge") as WovpChallenge if rows13.size() >= 1 else null
+			match _tournament_pairing_stage:
+				0:
+					if _room._panels.size() >= 5:
+						_room._set_centre(4, false)
+						_tournament_pairing_stage = 1
+						_tournament_smoke_wait = 0
+				1:
+					_tournament_smoke_wait += 1
+					if ch4 != null and str(bs13.get("challenge_id", "")) == ch4.challenge_id and bool(bs13.get("has_board_texture", false)):
+						_tournament_expect(not bool(bs13.get("owned", true)),
+							"pairing: the board re-pairs to the not-owned challenge - board shown, no Launch")
+						_grad_save_grab("tournament_pairing_unowned.png")
+						_room._set_centre(0, false)
+						_tournament_pairing_stage = 2
+						_tournament_smoke_wait = 0
+					elif _tournament_smoke_wait > 900:
+						_tournament_fail("pairing: the standing board never re-paired to the not-owned challenge")
+						_finish_tournament_smoke()
+				2:
+					_tournament_smoke_wait += 1
+					if ch0 != null and str(bs13.get("challenge_id", "")) == ch0.challenge_id and bool(bs13.get("has_board_texture", false)):
+						_tournament_smoke_phase = 3
+					elif _tournament_smoke_wait > 900:
+						_tournament_fail("pairing: the standing board never settled back on the first challenge")
+						_finish_tournament_smoke()
 		4:
 			# The SETUP panel's WoVP legs. Clear the saved key
 			# first (memory + file), so the paste leg proves
