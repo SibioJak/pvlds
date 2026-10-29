@@ -78,6 +78,26 @@ func set_texture(tex: Texture2D) -> void:
 		_mat.albedo_texture = tex
 
 
+## The quad's place in the transparent draw order, for stacks
+## built ON the quad (the dome room's cards: frame, face,
+## nameplate, label, Launch). Both this quad's materials are
+## transparent, and the face writes depth always - so at equal
+## render priority the transparent sort alone decides whether
+## the face paints before or AFTER anything seated in front
+## of it, and when it paints after, it erases them: the plate
+## and label left no depth of their own, and the face's
+## opaque-coloured blend simply replaced them (the GRAD FIX
+## round's convicted "names come and go" mechanism - state,
+## alpha and geometry all correct, the ink never drawn).
+## Owners with a stack declare the order here and the sort
+## can no longer flip it.
+func set_stack_order(frame_priority: int, face_priority: int) -> void:
+	if _frame_mat != null:
+		_frame_mat.render_priority = frame_priority
+	if _mat != null:
+		_mat.render_priority = face_priority
+
+
 ## Resize the highlight frame (the dome room's cards carry
 ## their own frame geometry - see RoomView._make_card_nodes -
 ## and size this quad's ring to match it).

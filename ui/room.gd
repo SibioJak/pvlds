@@ -1095,6 +1095,11 @@ func _frame_mat(amber: bool) -> StandardMaterial3D:
 func _plate_mat() -> StandardMaterial3D:
 	if _mat_plate == null:
 		_mat_plate = _unshaded_mat(Color(0.0, 0.0, 0.0), 0.66)
+		# The nameplate's rung in the card stack (see
+		# _make_card_nodes): above the face (-3), below the
+		# label (0). The NC seam leaves it undeclared.
+		if OS.get_environment("PVLDS_GRAD_NC") != "nofaceorder":
+			_mat_plate.render_priority = -2
 	return _mat_plate
 
 
@@ -1172,6 +1177,19 @@ func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 	lq.position = Vector3(0.0, RoomSpecs.board_launch_y() if mode == "board" else PANEL_LAUNCH_Y, 0.020)
 	q.add_child(lq)
 	nodes["launch"] = lq
+	# The card's layer stack, declared (the GRAD FIX round):
+	# at equal render priority the transparent sort could seat
+	# the depth-writing face AFTER its own nameplate and label
+	# and paint over both - the "names come and go" fault. The
+	# order is now contractual: the quad's highlight frame
+	# first, the face next, then the plate (its material's
+	# priority, in _plate_mat), the power overlay above the
+	# face (-1, in _build_power_overlay), the label at the
+	# default 0, and the Launch pair on top. The NC seam
+	# PVLDS_GRAD_NC=nofaceorder restores the undeclared stack.
+	if OS.get_environment("PVLDS_GRAD_NC") != "nofaceorder":
+		q.set_stack_order(-4, -3)
+		lq.set_stack_order(0, 1)
 	return nodes
 
 
@@ -3967,6 +3985,11 @@ func _build_power_overlay(panel: ClickableQuad, face_tex: Texture2D, on_tex: Tex
 		minf(art_rect.size.y, float(face_tex.get_height()))))
 	_power_mat = ShaderMaterial.new()
 	_power_mat.shader = MIMIC_SHADER
+	# The overlay's rung in the card stack (see
+	# _make_card_nodes): it grades the FACE, so it draws after
+	# the face (-3) and the plate (-2), under the label (0).
+	if OS.get_environment("PVLDS_GRAD_NC") != "nofaceorder":
+		_power_mat.render_priority = -1
 	_power_mat.set_shader_parameter("face_tex", face_atlas)
 	_power_mat.set_shader_parameter("power", 0.0)
 	_power_mat.set_shader_parameter("sweep", 0.0)
