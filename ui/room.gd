@@ -256,12 +256,11 @@ void fragment() {
 	vec2 star_pos = vec2(cell_hash(cell + 19.19), cell_hash(cell + 47.47)) - 0.5;
 	float d = length(f - star_pos * 0.72);
 	float star = smoothstep(star_radius, 0.0, d) * step(density, h);
-	# No blend, no alpha: the shell is opaque and DISCARDS
-	# every fragment that is not a star, so the far field
-	# shows through the holes with plain depth. (The first
-	# cut blended with depth_draw_disabled - a render mode
-	# the Compatibility renderer refuses, so the shell never
-	# compiled there at all.)
+	// No blend, no alpha: the shell is opaque and DISCARDS
+	// every fragment that is not a star, so the far field
+	// shows through the holes with plain depth. (The first
+	// cut blended with a depth render mode the Compatibility
+	// renderer refuses, so the shell never compiled there.)
 	if (star < 0.35) {
 		discard;
 	}
