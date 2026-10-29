@@ -14,7 +14,7 @@ var authors: PackedStringArray = PackedStringArray()
 var date_unix: int = 0 ## Release date from the db when matched, else file mtime.
 var features: PackedStringArray = PackedStringArray()
 var matched_db: bool = false ## True when this exact build exists in the VPS db.
-var match_tier: String = "" ## How the scan identified this build's game: "slug" (the db's download-page slug for the build) | "name" (title) | "scrubbed" (cleaned title) | "local" (db does not know it). "" until matched.
+var match_tier: String = "" ## How the scan identified this build's game: "slug" (the db's download-page slug for the build) | "name" (title) | "scrubbed" (cleaned title) | "edition" (full name, edition words included) | "local" (db does not know it). "" until matched.
 
 
 func display_version() -> String:

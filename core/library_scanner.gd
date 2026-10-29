@@ -256,6 +256,27 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 				survivors.append(sid)
 		if survivors.size() == 1:
 			return _finish_game_match(b, db, survivors[0], "scrubbed", version_guess)
+		# 3b) Edition referee: the file states a game's EDITION
+		# words - trailing ("AC-DC LUCI Premium ... VPW v1.13"),
+		# behind the maker parens, or in a no-year paren of its
+		# own - and every road above refused it: the download
+		# slug undershoots the edition ("acdc-luci"), the title
+		# guess chokes on the decoration carrying the words, and
+		# the cleaned title strips them, leaving the base name
+		# shared by every trim. The file's FULL token stream -
+		# edition words included - must equal exactly one db
+		# game's full name, edition included, and the file's
+		# (Maker Year) parens are refereed as always. Exactness
+		# is the guard: a file naming one edition can never land
+		# on another edition's entry, and words naming no game's
+		# edition complete nothing.
+		var edition_ids: Array[String] = db.find_game_ids_by_edition(b.file_name)
+		var ed_survivors: Array[String] = []
+		for eid: String in edition_ids:
+			if _meta_consistent(db, eid, b.file_name):
+				ed_survivors.append(eid)
+		if ed_survivors.size() == 1:
+			return _finish_game_match(b, db, ed_survivors[0], "edition", version_guess)
 	# 4) Unknown to the db: group by normalized title from the filename.
 	b.game_key = "local:" + VpsDatabase.normalize_name(title_guess)
 	b.version = version_guess

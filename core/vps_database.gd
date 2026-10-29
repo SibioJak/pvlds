@@ -18,6 +18,7 @@ var _games_by_norm_name: Dictionary = {} ## normalized title -> Array of game id
 var _author_tokens: Dictionary = {} ## token -> true, from every db table file's authors (the matcher's author vocabulary)
 var _files_by_slug_key: Dictionary = {} ## slug match key of a VPX table file's download URL -> Array of {game_id, table_file} claiming it
 var _games_by_scrub_name: Dictionary = {} ## match key of a db game name -> Array of game ids
+var _games_by_edition_key: Dictionary = {} ## edition key (full name, edition words kept) of a db game name -> Array of game ids
 var loaded: bool = false
 var source_path: String = ""
 
@@ -118,8 +119,15 @@ static func string_scrub(s: String) -> String:
 ## game's own name gets the identical treatment, and a collision
 ## with a room-less twin is refused by the ambiguity rules.
 static func scrub_tokens(s: String) -> PackedStringArray:
+	return _tokens_of(string_scrub(s))
+
+
+## The shared tail of both token views: tokenize a scrubbed
+## string, drop decoration words, a leading "The", and a
+## trailing VR-room suffix.
+static func _tokens_of(t: String) -> PackedStringArray:
 	var out: PackedStringArray = PackedStringArray()
-	for tok: String in raw_tokens(string_scrub(s)):
+	for tok: String in raw_tokens(t):
 		if DECORATION_TOKENS.has(tok):
 			continue
 		out.append(tok)
@@ -141,6 +149,84 @@ static func scrub_tokens(s: String) -> PackedStringArray:
 ## author token keeps it rather than collapsing to "".
 func match_key(s: String) -> String:
 	var toks: PackedStringArray = scrub_tokens(s)
+	var kept: PackedStringArray = PackedStringArray()
+	for tok: String in toks:
+		if not _author_tokens.has(tok):
+			kept.append(tok)
+	if kept.is_empty():
+		kept = toks
+	return "".join(kept)
+
+
+## Whether a "(...)" segment carries a year-shaped number - the
+## mark of the "(Maker Year)" convention, as the scanner's parens
+## referee reads it.
+static func _segment_has_year(seg: String) -> bool:
+	var year_re: RegEx = RegEx.new()
+	year_re.compile("(19|20)\\d\\d")
+	return year_re.search(seg) != null
+
+
+## String-level scrub for the EDITION key: string_scrub's sibling,
+## but "(...)" segments are not deleted wholesale. A segment
+## carrying a year is "(Maker Year)" meta and drops - the
+## scanner's parens referee judges it separately; a segment
+## without a year ("(LUCI Premium)", "(Remake)") is part of the
+## name the file states, and its words stay in the token stream,
+## in place. With keep_meta_parens set - the GAME side, whose
+## names are authoritative - every segment's words stay: a db
+## edition may itself carry a year ("(1986)"), and the game's
+## key must keep what the game's name says. Bracket groups,
+## version substrings and the " - Author" tail scrub exactly as
+## in string_scrub.
+static func string_scrub_edition(s: String, keep_meta_parens: bool) -> String:
+	var t: String = s.replace("_", " ")
+	var out: String = ""
+	var i: int = 0
+	while i < t.length():
+		if t[i] == "(":
+			var close: int = t.find(")", i)
+			if close < 0:
+				break ## unbalanced: the rest states nothing usable
+			var seg: String = t.substr(i + 1, close - i - 1)
+			if keep_meta_parens or not _segment_has_year(seg):
+				out += " " + seg + " "
+			i = close + 1
+		else:
+			out += t[i]
+			i += 1
+	t = out
+	var bracket_re: RegEx = RegEx.new()
+	bracket_re.compile("\\[[^\\]]*\\]")
+	t = bracket_re.sub(t, " ", true)
+	var vver_re: RegEx = RegEx.new()
+	vver_re.compile("(?i)\\bv\\d+(?:\\.\\d+)*[a-z]?\\b")
+	t = vver_re.sub(t, " ", true)
+	var dver_re: RegEx = RegEx.new()
+	dver_re.compile("(?i)\\b\\d+\\.\\d+(?:\\.\\d+)?[a-z]?\\b")
+	t = dver_re.sub(t, " ", true)
+	var dash: int = t.find(" - ")
+	if dash >= 0:
+		t = t.substr(0, dash)
+	return t
+
+
+## The edition-aware token view of a name: scrub_tokens' sibling
+## over string_scrub_edition - the full token stream, edition
+## words included, with the same decoration shedding.
+static func edition_tokens(s: String, keep_meta_parens: bool) -> PackedStringArray:
+	return _tokens_of(string_scrub_edition(s, keep_meta_parens))
+
+
+## This database's EDITION match key for a name: the full token
+## stream - base title AND edition words - reduced like
+## match_key (the db's author tokens removed as well; author
+## removal never empties a key). Two names share an edition key
+## only when they state the same title and the same edition:
+## "AC-DC LUCI Premium" and the db's "AC/DC (LUCI Premium)" meet
+## here, while "AC/DC (Pro)" and the plain "AC/DC" never do.
+func edition_key(s: String, keep_meta_parens: bool) -> String:
+	var toks: PackedStringArray = edition_tokens(s, keep_meta_parens)
 	var kept: PackedStringArray = PackedStringArray()
 	for tok: String in toks:
 		if not _author_tokens.has(tok):
@@ -300,6 +386,7 @@ func load_db(path: String) -> bool:
 	_author_tokens.clear()
 	_files_by_slug_key.clear()
 	_games_by_scrub_name.clear()
+	_games_by_edition_key.clear()
 	if path == "" or not FileAccess.file_exists(path):
 		return false
 	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
@@ -364,6 +451,14 @@ func load_db(path: String) -> bool:
 				ids = existing_ids
 			ids.append(scrub_game_id)
 			_games_by_scrub_name[name_key] = ids
+		var ed_key: String = edition_key(str(sgame.get("name", "")), true)
+		if ed_key != "":
+			var eids: Array = []
+			var existing_eids: Variant = _games_by_edition_key.get(ed_key, [])
+			if existing_eids is Array:
+				eids = existing_eids
+			eids.append(scrub_game_id)
+			_games_by_edition_key[ed_key] = eids
 		for item: Variant in vpx_table_files_of(scrub_game_id):
 			if item is Dictionary:
 				var stf: Dictionary = item
@@ -468,6 +563,26 @@ func find_game_ids_by_scrubbed_name(file_name: String) -> Array[String]:
 	if key == "":
 		return out
 	var v: Variant = _games_by_scrub_name.get(key, [])
+	if v is Array:
+		var arr: Array = v
+		for item: Variant in arr:
+			out.append(str(item))
+	return out
+
+
+## Db games whose FULL name - parenthesized edition included -
+## reduces to the same edition key as this file name: the file
+## states the game's own edition words (trailing, or in a
+## no-year paren) and they agree exactly. The caller decides
+## what the claimant set means, as with the slug road: exactly
+## one claimant identifies a game; several make the key
+## ambiguous and unusable.
+func find_game_ids_by_edition(file_name: String) -> Array[String]:
+	var out: Array[String] = []
+	var key: String = edition_key(file_name, false)
+	if key == "":
+		return out
+	var v: Variant = _games_by_edition_key.get(key, [])
 	if v is Array:
 		var arr: Array = v
 		for item: Variant in arr:
