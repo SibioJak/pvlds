@@ -430,10 +430,11 @@ var _wovp_live: bool = false ## the standing boards came from a fetch this sessi
 var _wovp_fetch_error: String = "" ## the last fetch's failure, in words, when it failed - the wall says so rather than dressing stale boards as live
 var _centre_index: int = 0 ## the shelf index the drum is centred on: the popped card's index in _visible_games (the pop target and the power-on follow it; it is NOT the pad focus - focus may sit on the rail or the strip while the drum stays centred where browsing left it, and a letter pick swings the drum without moving the focus: the focus law)
 var _columns: int = 1 ## the standing view's column count: ceil(visible / 3 bands)
-var _swing_from: float = 0.0 ## drum yaw (radians) the live swing started from
 var _swing_to: float = 0.0 ## drum yaw the live swing is heading to (the centred column's angle)
-var _swing_t: float = 0.0 ## seconds into the live swing
-var _swing_duration: float = 0.2 ## the live swing's length (grows with the column travel)
+var _swing_duration: float = 0.2 ## the live swing's calibrated length (grows with the column travel; the spring's stiffness derives from it)
+var _swing_vel: float = 0.0 ## drum yaw velocity (rad/s), carried across retargets - the glide's continuity lives here
+var _swing_cols: float = 1.0 ## the live swing's remaining travel in columns (the spring stiffens with distance: its settle tail grows logarithmically, the duration law only as a square root)
+var _swing_journey: bool = false ## a retarget arrived mid-travel in the travel's own direction: the spring softens to the stepping cadence so a held scroll builds to a cruise instead of settling between steps
 var _swing_active: bool = false
 var _drum_yaw: float = 0.0 ## the drum's current yaw, radians (== _swing_to at rest)
 var _panel_pool: Dictionary = {} ## game_id -> {root, launch, frame, plate, label, mode, plate_done}: card nodes built once per library adoption and re-seated per view (a rebuild that freed and rebuilt 300+ cards would tax every letter pick - the pick-latency law)
@@ -1384,20 +1385,36 @@ func _set_centre(index: int, snap: bool = false) -> void:
 	_page = _centre_index / PAGE_SIZE
 	if snap or _wall == null:
 		_drum_yaw = target
+		_swing_vel = 0.0
 		_swing_active = false
+		_swing_journey = false
 		if _wall != null:
 			_wall.rotation.y = target
 	elif target != _swing_to or not _swing_active:
-		if absf(target - _drum_yaw) < 0.0001:
+		if absf(target - _drum_yaw) < 0.0001 and absf(_swing_vel) < 0.001:
 			_drum_yaw = target
+			_swing_vel = 0.0
 			_swing_active = false
+			_swing_journey = false
 			if _wall != null:
 				_wall.rotation.y = target
 		else:
-			_swing_from = _drum_yaw
+			# A retarget only names the new target and
+			# recalibrates the spring from the distance left:
+			# the velocity is NOT reset - the drum bends its
+			# path instead of restarting a curve (the GRAD
+			# FIX round's glide; see _update_swing). A
+			# retarget that arrives while the drum is already
+			# travelling the same way marks a journey: the
+			# spring softens to the stepping cadence, so a
+			# held scroll builds to a cruise rather than
+			# settling between steps.
+			if _swing_active and absf(_swing_vel) > 0.05 \
+					and signf(target - _drum_yaw) == signf(_swing_vel):
+				_swing_journey = true
 			_swing_to = target
-			_swing_t = 0.0
 			var cols: float = absf(target - _drum_yaw) / deg_to_rad(ANGLE_STEP_DEG)
+			_swing_cols = cols
 			_swing_duration = clampf(0.14 + 0.055 * sqrt(maxf(cols, 1.0)), SWING_MIN_SEC, SWING_MAX_SEC)
 			_swing_active = true
 	if changed:
@@ -1407,18 +1424,39 @@ func _set_centre(index: int, snap: bool = false) -> void:
 		_refresh_wing()
 
 
-## Per-frame swing drive, from _process: the prototype's cubic
-## ease-out, landing on the target EXACTLY.
+## Per-frame swing drive, from _process: a critically damped
+## spring (the classic smooth-damp form) carries the drum to
+## its target, velocity included. The prototype's per-step
+## cubic ease-out restarted its curve at every retarget, so a
+## stepped journey - or a laser hover sweeping the shelf -
+## moved as dart-and-settle, dart-and-settle: the ratchet the
+## player reported (the GRAD FIX round). The spring never
+## restarts: a retarget bends the path, the velocity carries
+## through, and travel reads as one continuous glide. Its
+## stiffness is calibrated from the standing duration law
+## (tau = duration / 3.5), so arrival times stay inside the
+## envelope the law always promised - motion never gates
+## input and no journey takes longer than it used to - and
+## the landing is exact: inside a hair of the target the drum
+## snaps onto it, at rest, like it always did.
 func _update_swing(delta: float) -> void:
 	if not _swing_active or _wall == null:
 		return
-	_swing_t += delta
-	var p: float = clampf(_swing_t / _swing_duration, 0.0, 1.0)
-	var e: float = 1.0 - pow(1.0 - p, 3.0)
-	_drum_yaw = lerpf(_swing_from, _swing_to, e)
-	if p >= 1.0:
+	var tau: float = maxf(_swing_duration / (3.5 + 0.55 * log(maxf(_swing_cols, 1.0))), 0.02)
+	if _swing_journey:
+		tau = maxf(tau, 0.11)
+	var omega: float = 2.0 / tau
+	var x: float = omega * delta
+	var ex: float = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
+	var change: float = _drum_yaw - _swing_to
+	var temp: float = (_swing_vel + omega * change) * delta
+	_swing_vel = (_swing_vel - omega * temp) * ex
+	_drum_yaw = _swing_to + (change + temp) * ex
+	if absf(_drum_yaw - _swing_to) < 0.00035 and absf(_swing_vel) < 0.05:
 		_drum_yaw = _swing_to
+		_swing_vel = 0.0
 		_swing_active = false
+		_swing_journey = false
 	_wall.rotation.y = _drum_yaw
 
 
@@ -1496,6 +1534,8 @@ func _rebuild_wall() -> void:
 	var gen: int = _gen
 	wall_ready = false
 	_swing_active = false
+	_swing_vel = 0.0
+	_swing_journey = false
 	# Standing cards return to the pool (they are NOT freed:
 	# a rebuild re-seats the same nodes at the new view's
 	# places, faces and all - freeing and re-minting 300+
@@ -1561,6 +1601,7 @@ func _rebuild_wall() -> void:
 	_page = _centre_index / PAGE_SIZE if not _visible_games.is_empty() else 0
 	_drum_yaw = _yaw_for_column(_grid_coord(_centre_index).x) if not _visible_games.is_empty() else 0.0
 	_swing_to = _drum_yaw
+	_swing_vel = 0.0
 	_wall.rotation.y = _drum_yaw
 	# Rail: built ONCE and persistent across rebuilds (the feel
 	# round, 2026-10-24). Destroying and recreating it on every
