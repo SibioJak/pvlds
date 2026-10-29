@@ -3122,6 +3122,17 @@ func _drive_shot_setup_panel() -> void:
 ##   - nameplate: the plate stands under sampled titles
 ##     (NC PVLDS_GRAD_NC=noplate hides the plates and the
 ##     leg must fail by name);
+##   - label state + label ink (the GRAD FIX round): the
+##     state audit reads every filled panel's plate/label
+##     visibility against the face its fill recorded, and
+##     the ink legs prove the name is actually DRAWN - the
+##     graduation census measured geometry only, and the
+##     field fault (names that come and go) was the card's
+##     own transparent face sorting after its nameplate in
+##     the draw and painting over it. The card stack now
+##     declares its render order; NC PVLDS_GRAD_NC=
+##     nofaceorder undeclares it and the ink legs must fail
+##     by name;
 ##   - the sweep census: EVERY shelf index becomes the
 ##     centre; at every centre, every visible label and plate
 ##     is measured - nothing under the floor, no label
@@ -3150,6 +3161,12 @@ var _grad_wait: int = 0
 var _grad_failures: int = 0
 var _grad_manifest: Dictionary = {}
 var _grad_sweep_i: int = -1 ## the centre the sweep is measuring (-1 = not started)
+var _grad_ink_stage: int = 0
+var _grad_ink_targets: Array = []
+var _grad_ink_img_a: Image = null
+var _grad_ink_img_b: Image = null
+var _grad_ink_label: Label3D = null
+var _grad_ink_plate: MeshInstance3D = null
 var _grad_sweep_settle: int = 0
 var _grad_labels_measured: int = 0
 var _grad_long_min_bottom: float = INF
@@ -3444,6 +3461,7 @@ func _drive_grad_smoke() -> void:
 				_grad_leg_library()
 				_grad_leg_faces()
 				_grad_leg_nameplate_sample()
+				_grad_audit_labels("drained")
 				_grad_leg_background_static()
 				_grad_save_grab("grad_boot.png")
 				_grad_phase = 7
@@ -3463,6 +3481,8 @@ func _drive_grad_smoke() -> void:
 			_grad_power_step()
 		6:
 			_finish_grad_smoke()
+		10:
+			_grad_ink_step()
 
 
 func _grad_leg_library() -> void:
@@ -3563,6 +3583,50 @@ func _grad_leg_nameplate_sample() -> void:
 	_grad_expect(checked >= 4, "nameplate: a sample of plates was readable (%d)" % checked)
 
 
+## Label-state audit (the GRAD FIX round's diagnostic, kept
+## as a standing leg): every filled panel's nameplate state
+## must agree with the face its own fill recorded - an art
+## face (a non-empty art segment in the face key) stands its
+## plate + label up; a generated title card (empty segment)
+## keeps both down, because the card carries its own title.
+## The graduation census measured only labels that were
+## visible; a label wrongly hidden was invisible to it -
+## this audit reads the state itself, at several points in
+## the run, so a divergence is named with its game and key.
+func _grad_audit_labels(tag: String) -> void:
+	var checked: int = 0
+	for i: int in range(_room._panels.size()):
+		if i >= _room._visible_games.size():
+			break
+		var game: GameEntry = _room._visible_games[i]
+		var fkey: String = str(_room._panel_face_key.get(game.game_id, ""))
+		if fkey == "":
+			continue
+		var parts: PackedStringArray = fkey.split("|")
+		var art_seg: String = parts[1] if parts.size() > 1 else ""
+		var want: bool = art_seg != ""
+		var label: Label3D = _room._panel_labels[i] if i < _room._panel_labels.size() else null
+		var plate: MeshInstance3D = _room._panel_plates[i] if i < _room._panel_plates.size() else null
+		if label == null or plate == null:
+			continue
+		checked += 1
+		if label.visible != want or plate.visible != want:
+			_grad_expect(false,
+				"label state (%s): panel %d (%s) wears face key '%s' but label=%s plate=%s (want both %s)"
+				% [tag, i, game.title, fkey, str(label.visible), str(plate.visible), str(want)])
+		if want:
+			if label.text != game.title:
+				_grad_expect(false,
+					"label state (%s): panel %d's label text '%s' != title '%s'"
+					% [tag, i, label.text, game.title])
+			var aabb: AABB = label.get_aabb()
+			if aabb.size.y <= 0.0:
+				_grad_expect(false,
+					"label state (%s): panel %d's label has no height (%s)"
+					% [tag, i, game.title])
+	print("GRAD LABEL AUDIT (%s): %d panels checked" % [tag, checked])
+
+
 func _grad_leg_background_static() -> void:
 	var layers: Array = _room.background_layers()
 	_grad_expect(layers.size() == 3,
@@ -3618,10 +3682,113 @@ func _grad_sweep_step() -> void:
 			% [n, _grad_labels_measured, _grad_long_min_bottom, _grad_rail_max_depth, _grad_rail_worst, _grad_fringe_rail])
 		_grad_expect(_grad_labels_measured > n,
 			"census: labels were measured across the sweep (%d)" % _grad_labels_measured)
+		_grad_audit_labels("post-sweep")
 		_grad_census_verdicts()
-		_grad_phase = 3
+		_grad_phase = 10
+		_grad_ink_stage = 0
+		_grad_wait = 0
 	else:
 		_room._set_focused(_room._panels[_grad_sweep_i])
+
+
+## The ink legs (the GRAD FIX round, kept standing): the
+## graduation census measured label GEOMETRY, and the field
+## fault - names that come and go - lived entirely in the
+## ink: the card's own transparent face could sort after its
+## nameplate plate and label in the transparent pass and
+## paint over both, leaving state, alpha and geometry all
+## correct and the name simply not drawn. For a spread of
+## art-faced panels across the shelf: centre the panel, let
+## the room go quiet, take the frame; hide the label, take
+## it again (the label's ink is the diff); hide the plate
+## too, take a third (the plate's presence is the mean
+## darkening it lends the label's rect). Both must register,
+## per panel, or the leg fails by name.
+func _grad_ink_step() -> void:
+	_grad_wait += 1
+	match _grad_ink_stage:
+		0:
+			_grad_ink_targets.clear()
+			var n: int = _room._panels.size()
+			for k: int in range(8):
+				var i: int = int(round(float(k) * float(maxi(n - 1, 0)) / 7.0))
+				if i < _room._visible_games.size():
+					var g: GameEntry = _room._visible_games[i]
+					var fk: String = str(_room._panel_face_key.get(g.game_id, ""))
+					if fk.split("|").size() > 1 and fk.split("|")[1] != "":
+						_grad_ink_targets.append(i)
+			_grad_expect(not _grad_ink_targets.is_empty(),
+				"label ink: art-faced panels exist to probe")
+			_grad_ink_stage = 1
+			_grad_wait = 0
+		1:
+			if _grad_ink_targets.is_empty():
+				_grad_phase = 3
+				return
+			var i: int = int(_grad_ink_targets[0])
+			_room._set_focused(_room._panels[i])
+			_grad_ink_stage = 2
+			_grad_wait = 0
+		2:
+			var quiet: bool = not _room.page_slide_active() \
+				and (_room.power_panel() == null or _room.power_time() > 1.3)
+			if quiet and _grad_wait > 30:
+				var i: int = int(_grad_ink_targets[0])
+				_grad_ink_label = _room._panel_labels[i]
+				_grad_ink_plate = _room._panel_plates[i]
+				_grad_ink_img_a = get_viewport().get_texture().get_image()
+				_grad_ink_label.visible = false
+				_grad_ink_stage = 3
+				_grad_wait = 0
+			elif _grad_wait > 3600:
+				_grad_fail("label ink: the room never went quiet")
+				_grad_phase = 3
+		3:
+			if _grad_wait > 3:
+				_grad_ink_img_b = get_viewport().get_texture().get_image()
+				_grad_ink_plate.visible = false
+				_grad_ink_stage = 4
+				_grad_wait = 0
+		4:
+			if _grad_wait > 3:
+				var img_c: Image = get_viewport().get_texture().get_image()
+				var i: int = int(_grad_ink_targets[0])
+				var cam: Camera3D = _room._active_camera()
+				var rect: Rect2 = _grad_label_screen_rect(i, cam).intersection(
+					Rect2(Vector2.ZERO, Vector2(img_c.get_size())))
+				var label_px: int = 0
+				var sum_b: float = 0.0
+				var sum_c: float = 0.0
+				var npix: int = 0
+				var x0: int = int(rect.position.x)
+				var y0: int = int(rect.position.y)
+				var x1: int = int(rect.position.x + rect.size.x)
+				var y1: int = int(rect.position.y + rect.size.y)
+				for y: int in range(y0, y1):
+					for x: int in range(x0, x1):
+						var pa: Color = _grad_ink_img_a.get_pixel(x, y)
+						var pb: Color = _grad_ink_img_b.get_pixel(x, y)
+						var pc: Color = img_c.get_pixel(x, y)
+						if absf(pa.r - pb.r) + absf(pa.g - pb.g) + absf(pa.b - pb.b) > 0.24:
+							label_px += 1
+						sum_b += (pb.r + pb.g + pb.b) / 3.0
+						sum_c += (pc.r + pc.g + pc.b) / 3.0
+						npix += 1
+				var plate_lift: float = (sum_c - sum_b) / float(maxi(npix, 1))
+				var g: GameEntry = _room._visible_games[i]
+				printerr("GRAD INK: panel %d (%s) label px %d plate lift %.4f over %d px"
+					% [i, g.title, label_px, plate_lift, npix])
+				_grad_expect(label_px > 30,
+					"label ink: panel %d (%s) renders its title (%d px of label ink)" % [i, g.title, label_px])
+				_grad_expect(plate_lift > 0.01,
+					"plate ink: panel %d (%s) stands on its nameplate (lift %.4f when the plate hides)" % [i, g.title, plate_lift])
+				_grad_ink_label.visible = true
+				_grad_ink_plate.visible = true
+				_grad_ink_img_a = null
+				_grad_ink_img_b = null
+				_grad_ink_targets.pop_front()
+				_grad_ink_stage = 1
+				_grad_wait = 0
 
 
 func _grad_measure_centre(c: int) -> void:
@@ -3905,6 +4072,7 @@ func _grad_power_step() -> void:
 
 
 func _finish_grad_smoke() -> void:
+	_grad_audit_labels("final")
 	if _grad_failures == 0:
 		print("PVLDS GRAD SMOKE: PASS")
 		get_tree().quit(0)
