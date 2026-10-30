@@ -250,58 +250,92 @@ const WING_CLEAR: float = 0.0
 const WING_SIZE_GF1: Vector2 = Vector2(0.54, 0.58) ## the GRAD FIX round's wing size (the oldwing NC's restore)
 const WING_Y_GF1: float = 0.21 ## the GRAD FIX round's wing seat height (the oldwing NC's restore)
 const TBOARD_PROUD: float = 0.30 ## how far in front of its slot the Tournament board floats at full pop (GRADFIX3: the Standing Book's depth law, the wing's own - see WING_PROUD; the pre-book board floated 0.06)
+## The starfield shaders (GRADFIX4 item 5, the sky pass): the
+## field is computed from the fragment's DIRECTION in the
+## shell's local space, hashed over 3D cells - never from the
+## sphere's UV. The old UV grid pinched every cell into the
+## poles (his field capture: looking straight up, the stars
+## swirled into a point) and drew soft smoothstep blobs (his
+## direction: pinpoint stars, small and hard). A direction
+## field has no poles: density stays even looking straight
+## up or down, the shell fully surrounds the viewer by
+## construction, and a star is a hard pinpoint - a tight
+## smoothstep whose edge is a fraction of its radius. The
+## vertex stage carries the local position out; the shells
+## are centred on the eye, so the normalized position IS the
+## look direction.
 const BG_STAR_SHADER: String = """
 shader_type spatial;
 render_mode unshaded, cull_front, depth_draw_opaque;
 uniform vec4 deep_color : source_color = vec4(0.006, 0.008, 0.018, 1.0);
-uniform vec2 grid_size = vec2(220.0, 110.0);
-uniform float density = 0.82;
-uniform float star_radius = 0.16;
-uniform float brightness = 0.85;
-uniform float band_strength = 1.0;
-uniform vec2 seed_offset = vec2(0.0, 0.0);
-float cell_hash(vec2 cell) {
-	return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+uniform float cells = 120.0;
+uniform float density = 0.30;
+uniform float star_radius = 0.10;
+uniform float brightness = 0.9;
+varying vec3 local_pos;
+void vertex() {
+	local_pos = VERTEX;
+}
+vec3 hash33(vec3 p) {
+	p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+	p += dot(p, p.yxz + 33.33);
+	return fract((p.xxy + p.yxx) * p.zyx);
 }
 void fragment() {
-	vec2 cell = floor(UV * grid_size) + seed_offset;
-	vec2 f = fract(UV * grid_size) - 0.5;
-	float h = cell_hash(cell);
-	vec2 star_pos = vec2(cell_hash(cell + 19.19), cell_hash(cell + 47.47)) - 0.5;
-	float d = length(f - star_pos * 0.72);
-	float star = smoothstep(star_radius, 0.0, d) * step(density, h);
-	float shade = 0.55 + 0.45 * cell_hash(cell + 91.31);
+	vec3 dir = normalize(local_pos);
+	vec3 p = dir * cells;
+	vec3 cell = floor(p);
+	vec3 f = fract(p) - 0.5;
+	vec3 h = hash33(cell);
+	vec3 spos = (hash33(cell + 19.19) - 0.5) * 0.72;
+	float d = length(f - spos);
+	float star = smoothstep(star_radius, star_radius * 0.35, d) * step(density, h.x);
+	float shade = 0.5 + 0.5 * h.y;
 	vec3 col = deep_color.rgb + vec3(0.90, 0.93, 1.0) * star * shade * brightness;
-	float band = exp(-pow((UV.y - 0.62 + 0.18 * sin(UV.x * 6.2831)) * 4.2, 2.0));
-	col += vec3(0.020, 0.026, 0.045) * band * band_strength;
+	// The milky band rides the direction's height now, not
+	// the UV - it circles the room's equator at every yaw.
+	float band = exp(-pow(dir.y * 3.2, 2.0));
+	col += vec3(0.016, 0.021, 0.038) * band;
 	ALBEDO = col;
 }
 """
-## The near star shell's shader: the same hash field, drawn
-## stars-only (no sky of its own) so the far shell shows
-## through between its bigger, brighter, sparser stars - the
-## two shells at 30 m and 12 m are the starfield's depth
-## (the GRAD FIX round): under any head motion the layers
-## parallax against each other and against the wireframe
-## shell (14 m) and the ring (9 m) between them.
+## The near star shell's shader: the same direction field,
+## drawn stars-only (no sky of its own) so the far shell shows
+## through between its nearer, brighter, sparser pinpoints -
+## the two shells at 30 m and 12 m are the starfield's depth:
+## under any head motion the layers parallax against each
+## other and against the wireframe shell (14 m) and the ring
+## (9 m) between them, and under the LAYERED dial both shells
+## DRIFT on their own world-space rotations (see
+## _update_background) - near faster than far, so a head turn
+## sweeps both across the view opposite the turn, the near
+## layer sweeping faster: direction-correct parallax, the
+## user's own test for the drift.
 const BG_STAR_NEAR_SHADER: String = """
 shader_type spatial;
 render_mode unshaded, cull_front, depth_draw_opaque;
-uniform vec2 grid_size = vec2(120.0, 60.0);
-uniform float density = 0.86;
-uniform float star_radius = 0.26;
+uniform float cells = 52.0;
+uniform float density = 0.42;
+uniform float star_radius = 0.13;
 uniform float brightness = 1.0;
-uniform vec2 seed_offset = vec2(37.7, 91.3);
-float cell_hash(vec2 cell) {
-	return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+varying vec3 local_pos;
+void vertex() {
+	local_pos = VERTEX;
+}
+vec3 hash33(vec3 p) {
+	p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+	p += dot(p, p.yxz + 33.33);
+	return fract((p.xxy + p.yxx) * p.zyx);
 }
 void fragment() {
-	vec2 cell = floor(UV * grid_size) + seed_offset;
-	vec2 f = fract(UV * grid_size) - 0.5;
-	float h = cell_hash(cell);
-	vec2 star_pos = vec2(cell_hash(cell + 19.19), cell_hash(cell + 47.47)) - 0.5;
-	float d = length(f - star_pos * 0.72);
-	float star = smoothstep(star_radius, 0.0, d) * step(density, h);
+	vec3 dir = normalize(local_pos);
+	vec3 p = dir * cells + vec3(37.7, 91.3, 53.1);
+	vec3 cell = floor(p);
+	vec3 f = fract(p) - 0.5;
+	vec3 h = hash33(cell);
+	vec3 spos = (hash33(cell + 19.19) - 0.5) * 0.72;
+	float d = length(f - spos);
+	float star = smoothstep(star_radius, star_radius * 0.35, d) * step(density, h.x);
 	// No blend, no alpha: the shell is opaque and DISCARDS
 	// every fragment that is not a star, so the far field
 	// shows through the holes with plain depth. (The first
@@ -310,10 +344,23 @@ void fragment() {
 	if (star < 0.35) {
 		discard;
 	}
-	float shade = 0.55 + 0.45 * cell_hash(cell + 91.31);
+	float shade = 0.55 + 0.45 * h.y;
 	ALBEDO = vec3(0.90, 0.93, 1.0) * (star * shade * brightness);
 }
 """
+## The drift (GRADFIX4 item 5d): each star shell rotates
+## about the viewer in WORLD space at its own slow angular
+## speed - the near shell faster - so the field reads as
+## floating through space and a head turn sweeps both layers
+## across the view opposite the turn at their true relative
+## rates. Positive rotation about +Y carries the forward
+## stars leftward across the view: the room drifts rightward
+## through the field. One steady direction, always; the
+## drift never gates input, never moves the drum, pauses
+## nothing. Only the LAYERED dial drifts - FLAT is a single
+## static layer, OFF is none (see _update_background).
+const BG_DRIFT_FAR_DEG: float = 0.20 ## the far shell's world-space drift, degrees per second
+const BG_DRIFT_NEAR_DEG: float = 0.45 ## the near shell's world-space drift, degrees per second (faster: it is nearer)
 const BG_STAR_NEAR_RADIUS: float = 12.0 ## the near star shell's distance (the far shell rides BG_STAR_RADIUS, 30)
 
 ## The Launch button's seat on a card: the dome face carries
@@ -818,12 +865,15 @@ func _build_environment() -> void:
 ## (PVLDS_BG_NC=drum parents the stack to the drum so the
 ## graduation smoke's world-lock leg can fail by name).
 ## The starfield dial (the SETUP panel's STARS button rides
-## it): "layered" shows both star shells (the depth the
-## player asked for), "flat" only the far shell (the
-## graduation's single layer), "off" no stars. The wireframe
-## shell and the orbit ring are structure, not stars - the
-## dial never touches them. Every layer stays WORLD-LOCKED:
-## the dial changes visibility, never parentage or motion.
+## it), with the GRADFIX4 sky-pass semantics: "layered"
+## shows both star shells AND drifts them (each on its own
+## slow world-space rotation about the viewer - the floating
+## parallax the user specced), "flat" shows the far shell
+## alone, static, "off" no stars. The wireframe shell and
+## the orbit ring are structure, not stars - the dial never
+## touches them. Every layer stays parented to the room
+## (world space, centred on the eye): the drift is a
+## rotation about the viewer, never a slide with the view.
 func set_starfield_mode(mode: String) -> void:
 	_starfield_mode = mode if ["layered", "flat", "off"].has(mode) else "layered"
 	_apply_starfield_mode()
@@ -840,6 +890,34 @@ func _apply_starfield_mode() -> void:
 		_bg_starfield_near.visible = _starfield_mode == "layered"
 
 
+## The drift, one frame's worth (GRADFIX4 item 5d): in
+## LAYERED mode each star shell turns about the viewer at
+## its own speed (BG_DRIFT_*_DEG) - world-space rotation, so
+## a head turn sweeps both layers across the view opposite
+## the turn, the near layer faster, with the drift adding
+## on top. FLAT and OFF stand still. Called from _process;
+## never gated on input state.
+func _update_background(delta: float) -> void:
+	if _starfield_mode != "layered":
+		return
+	if _bg_starfield != null:
+		_bg_starfield.rotation.y += deg_to_rad(BG_DRIFT_FAR_DEG) * delta
+	if _bg_starfield_near != null:
+		_bg_starfield_near.rotation.y += deg_to_rad(BG_DRIFT_NEAR_DEG) * delta
+
+
+## The drift's standing state (the sky-pass proofs read it):
+## each shell's accumulated world-space yaw about the viewer.
+func starfield_drift_state() -> Dictionary:
+	return {
+		"mode": _starfield_mode,
+		"far_yaw_deg": rad_to_deg(_bg_starfield.rotation.y) if _bg_starfield != null else 0.0,
+		"near_yaw_deg": rad_to_deg(_bg_starfield_near.rotation.y) if _bg_starfield_near != null else 0.0,
+		"far_speed_deg_s": BG_DRIFT_FAR_DEG,
+		"near_speed_deg_s": BG_DRIFT_NEAR_DEG,
+	}
+
+
 func _build_background() -> void:
 	_bg_root = Node3D.new()
 	_bg_root.name = "BackgroundStack"
@@ -848,9 +926,10 @@ func _build_background() -> void:
 	else:
 		add_child(_bg_root)
 	# The starfield shell: one inward sphere, a procedural
-	# star shader - no texture, no motion, the room's far
-	# enclosure (it replaces the flat room's backdrop
-	# cylinder, retired above).
+	# direction-field star shader - no texture, the room's
+	# far enclosure (it replaces the flat room's backdrop
+	# cylinder, retired above). In LAYERED mode it drifts on
+	# its own world-space rotation (see _update_background).
 	var stars: MeshInstance3D = MeshInstance3D.new()
 	stars.name = "StarfieldShell"
 	var sphere: SphereMesh = SphereMesh.new()
@@ -868,11 +947,13 @@ func _build_background() -> void:
 	_bg_root.add_child(stars)
 	_bg_starfield = stars
 	# The near star shell (the GRAD FIX round): a second,
-	# nearer sphere of bigger, brighter, sparser stars with
-	# no sky of its own - the far shell shows through it.
-	# Layered mode stands both (the field parallaxes); flat
-	# keeps the far shell alone (the graduation's field);
-	# off kills both. All world-locked, like every layer.
+	# nearer sphere of brighter, sparser pinpoints with no
+	# sky of its own - the far shell shows through it.
+	# Layered mode stands both and drifts both (the field
+	# parallaxes under head motion AND under the drift);
+	# flat keeps the far shell alone, static; off kills
+	# both. Both shells stay centred on the eye in world
+	# space, like every layer.
 	var near_stars: MeshInstance3D = MeshInstance3D.new()
 	near_stars.name = "StarfieldNearShell"
 	var near_sphere: SphereMesh = SphereMesh.new()
@@ -908,7 +989,7 @@ func _build_background() -> void:
 	var ring: MeshInstance3D = MeshInstance3D.new()
 	ring.name = "OrbitRing"
 	var torus: TorusMesh = TorusMesh.new()
-	torus.inner_radius = BG_RING_RADIUS - 0.14
+	torus.inner_radius = BG_RING_RADIUS - 0.20
 	torus.outer_radius = BG_RING_RADIUS
 	torus.rings = 96
 	torus.ring_segments = 6
@@ -919,7 +1000,13 @@ func _build_background() -> void:
 	rm.albedo_color = Color(1.0, 0.66, 0.16, 0.26)
 	ring.material_override = rm
 	ring.position = EYE
-	ring.rotation_degrees = Vector3(63.0, 0.0, 17.0)
+	# GRADFIX4 (item 5e): the old 63/17 tilt put the ring's
+	# plane near edge-on to the working eye angles, and from
+	# below it read as a straight scratch line across the sky
+	# (his capture). The gentler 32/7 tilt keeps the ring's
+	# ellipse open from level and below angles alike; the
+	# tube is a touch thicker so the band reads as a band.
+	ring.rotation_degrees = Vector3(32.0, 0.0, 7.0)
 	_bg_root.add_child(ring)
 	_bg_ring = ring
 	_apply_starfield_mode()
@@ -5220,6 +5307,7 @@ func _process(delta: float) -> void:
 	# The loading marquee animates on this same per-frame beat.
 	if _marquee_up:
 		_update_marquee(delta)
+	_update_background(delta) ## the starfield drift (GRADFIX4 item 5d) - its own beat, ungated
 	if _plates_pending:
 		# Nameplates re-derive from the labels' live AABBs
 		# until every standing card's plate wears its shaped
