@@ -4050,29 +4050,52 @@ func _grad_sky_blobs(img: Image) -> Array:
 	return blobs
 
 
-## The median x-displacement of blobs matched between two
-## grabs (nearest neighbour within 60 px), and the match
-## count. -9999.0 when too few blobs match to judge.
-func _grad_sky_median_shift(a: Array, b: Array) -> Vector2:
-	var shifts: Array[float] = []
-	for bb: Variant in b:
-		var bd: Dictionary = bb
-		var best_d: float = 3600.0
-		var best_dx: float = 0.0
-		for aa: Variant in a:
-			var ad: Dictionary = aa
+## The registered x-displacement between two grabs'
+## blob fields: every pair difference (largest blobs of
+## each) votes in a 6 px histogram, and the true shift is
+## the peak bin's median - nearest-neighbour matching
+## aliases hopelessly here, because the field's own
+## translation (tens to hundreds of px) dwarfs the ~30 px
+## star spacing, but the constellation's shared shift
+## outvotes every accidental pairing. Returns (shift,
+## votes, reference count); shift -9999.0 when no peak
+## gathers a quarter of the reference blobs.
+func _grad_sky_register(a: Array, b: Array) -> Vector3:
+	var ra: Array = a.duplicate()
+	var rb: Array = b.duplicate()
+	ra.sort_custom(func(p: Dictionary, q: Dictionary) -> bool: return float(p["size"]) > float(q["size"]))
+	rb.sort_custom(func(p: Dictionary, q: Dictionary) -> bool: return float(p["size"]) > float(q["size"]))
+	ra = ra.slice(0, mini(48, ra.size()))
+	rb = rb.slice(0, mini(96, rb.size()))
+	var hist: Dictionary = {}
+	var dxs: Dictionary = {}
+	for av: Variant in ra:
+		var ad: Dictionary = av
+		for bv: Variant in rb:
+			var bd: Dictionary = bv
 			var dx: float = float(bd["x"]) - float(ad["x"])
 			var dy: float = float(bd["y"]) - float(ad["y"])
-			var d2: float = dx * dx + dy * dy
-			if d2 < best_d:
-				best_d = d2
-				best_dx = dx
-		if best_d < 3600.0:
-			shifts.append(best_dx)
-	if shifts.size() < 12:
-		return Vector2(-9999.0, float(shifts.size()))
-	shifts.sort()
-	return Vector2(shifts[shifts.size() / 2], float(shifts.size()))
+			if absf(dy) > 9.0 or absf(dx) > 250.0:
+				continue
+			var bin: int = int(round(dx / 6.0))
+			hist[bin] = int(hist.get(bin, 0)) + 1
+			if not dxs.has(bin):
+				dxs[bin] = []
+			(dxs[bin] as Array).append(dx)
+	var peak_bin: int = 0
+	var peak_n: int = 0
+	for k: Variant in hist.keys():
+		if int(hist[k]) > peak_n:
+			peak_n = int(hist[k])
+			peak_bin = int(k)
+	if peak_n < ra.size() / 4 or peak_n == 0:
+		return Vector3(-9999.0, float(peak_n), float(ra.size()))
+	var pool: Array = []
+	for b2: int in [peak_bin - 1, peak_bin, peak_bin + 1]:
+		if dxs.has(b2):
+			pool.append_array(dxs[b2])
+	pool.sort()
+	return Vector3(float(pool[pool.size() / 2]), float(peak_n), float(ra.size()))
 
 
 ## The sky pass proofs (GRADFIX4 item 5, phase 13): the
@@ -4147,15 +4170,15 @@ func _grad_sky_step() -> void:
 				var nblobs1: Array = _grad_sky_blobs(_grad_sky_img["near1"])
 				var fblobs0: Array = _grad_sky_blobs(_grad_sky_img["far0"])
 				var fblobs1: Array = _grad_sky_blobs(_grad_sky_img["far1"])
-				var nmed: Vector2 = _grad_sky_median_shift(nblobs0, nblobs1)
-				var fmed: Vector2 = _grad_sky_median_shift(fblobs0, fblobs1)
-				var nshift: float = nmed.x
-				var fshift: float = fmed.x
-				print("GRAD SKY: rendered drift - near median star shift %.1f px (%d matched of %d/%d blobs), far %.1f px (%d matched of %d/%d)"
-					% [nshift, int(nmed.y), nblobs0.size(), nblobs1.size(), fshift, int(fmed.y), fblobs0.size(), fblobs1.size()])
+				var nreg: Vector3 = _grad_sky_register(nblobs0, nblobs1)
+				var freg: Vector3 = _grad_sky_register(fblobs0, fblobs1)
+				var nshift: float = nreg.x
+				var fshift: float = freg.x
+				print("GRAD SKY: rendered drift - near registered shift %.1f px (%d votes of %d reference blobs), far %.1f px (%d votes of %d)"
+					% [nshift, int(nreg.y), int(nreg.z), fshift, int(freg.y), int(freg.z)])
 				_grad_expect(nblobs0.size() > 30 and fblobs0.size() > 30,
 					"sky parallax: both layers carry measurable stars (near %d blobs, far %d blobs)" % [nblobs0.size(), fblobs0.size()])
-				_grad_expect(nshift < -8.0 and fshift < -3.0 and absf(nshift) > absf(fshift) * 1.3,
+				_grad_expect(nshift < -20.0 and fshift < -5.0 and absf(nshift) > absf(fshift) * 1.4,
 					"sky parallax: rendered pairs displace leftward under the drift, the near layer more than the far (near %.1f px, far %.1f px)" % [nshift, fshift])
 				_grad_sky_img["near_blobs"] = nblobs0
 				_room.set_starfield_mode("flat")
@@ -4170,16 +4193,16 @@ func _grad_sky_step() -> void:
 		6:
 			if _grad_wait > 6:
 				_grad_sky_img["yaw1"] = get_viewport().get_texture().get_image()
-				var ymed: Vector2 = _grad_sky_median_shift(
+				var yreg: Vector3 = _grad_sky_register(
 					_grad_sky_blobs(_grad_sky_img["yaw0"]), _grad_sky_blobs(_grad_sky_img["yaw1"]))
 				var img_w: float = float((_grad_sky_img["yaw0"] as Image).get_width())
 				var aspect: float = img_w / float((_grad_sky_img["yaw0"] as Image).get_height())
 				var hfov: float = rad_to_deg(2.0 * atan(tan(deg_to_rad(cam.fov * 0.5)) * aspect))
 				var expected: float = 14.0 / hfov * img_w
-				print("GRAD SKY: yaw pair - median star shift %.1f px (%d matched) against an expected %.1f px for a 14 deg turn"
-					% [ymed.x, int(ymed.y), expected])
-				_grad_expect(ymed.x < -0.45 * expected,
-					"sky yaw: a right head turn sweeps the static field LEFT, opposite the turn, by the turned amount (%.1f px of %.1f expected)" % [ymed.x, expected])
+				print("GRAD SKY: yaw pair - registered shift %.1f px (%d votes of %d) against an expected %.1f px for a 14 deg turn"
+					% [yreg.x, int(yreg.y), int(yreg.z), expected])
+				_grad_expect(yreg.x < -0.45 * expected and yreg.x > -1.6 * expected,
+					"sky yaw: a right head turn sweeps the static field LEFT, opposite the turn, by the turned amount (%.1f px of %.1f expected)" % [yreg.x, expected])
 				_room._desk_rig.rotation.y = 0.0
 				_room.set_starfield_mode("layered")
 				far_shell.visible = true
