@@ -543,11 +543,11 @@ static var debug_grid_nc: String = ""
 static var debug_b_nc: String = ""
 ## Negative-control seam for the blank-board heal (the
 ## harness env PVLDS_GRADFIX4_NC, set by Main before any room
-## exists): "solidboard" makes the standing board's first
-## render per key land the factory's fallback solid AND
-## count it as the board (the pre-GRADFIX4 bookkeeping) -
-## the field's empty-faced board, stuck - so the heal leg
-## fails by name. Empty in every real run.
+## exists): "solidboard" makes every board render land
+## the factory's fallback solid AND count it as the board
+## (the pre-GRADFIX4 bookkeeping) - the field's empty-
+## faced board, stuck - so the heal leg fails by name.
+## Empty in every real run.
 static var debug_gf4_nc: String = ""
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
 var _bg_starfield: MeshInstance3D = null
@@ -603,7 +603,6 @@ var _wing_render_key: String = "" ## the key a wing render is in flight for ("" 
 var _wing_retry_key: String = ""
 var _wing_retries: int = 0
 var _wing_retry_msec: int = 0
-var _gf4_solid_spent: Dictionary = {} ## the solidboard NC's spent keys (see _render_tboard_content)
 const BOARD_TEX_MAX_RETRIES: int = 5 ## the blank-face heal's bound per standing key
 const BOARD_TEX_RETRY_MS: int = 600 ## the heal's minimum interval between re-renders
 var _wing_slot: Transform3D = Transform3D() ## the wing's seated slot transform on the drum (its pop offset applies per frame)
@@ -3591,13 +3590,17 @@ func _render_tboard_content(ch: WovpChallenge, owned: bool, key: String) -> void
 	var spec: Dictionary = RoomSpecs.tournament_board_spec(ch, owned, _wovp_user_id, now_unix)
 	var tex: Texture2D = await _factory.render_texture(spec, RoomSpecs.board_face_px())
 	var real: bool = _tex_is_real(tex)
-	if debug_gf4_nc == "solidboard" and real and not _gf4_solid_spent.has(key):
+	if debug_gf4_nc == "solidboard" and real:
 		# NC (PVLDS_GRADFIX4_NC=solidboard): the field's
-		# fault, restored - the first capture for the key
-		# comes back empty, the fallback solid stands as the
-		# board, and the pre-fix bookkeeping counts it as the
-		# board, so nothing ever re-renders it.
-		_gf4_solid_spent[key] = true
+		# fault, restored - the capture comes back empty,
+		# the fallback solid stands as the board, and the
+		# pre-fix bookkeeping counts it as the board, so the
+		# heal never re-renders it. EVERY render lands the
+		# solid under the NC: the applied-face bookkeeping
+		# is single-slot, so a first-render-only fault is
+		# undone by the walk's own re-pairings before the
+		# judge samples (measured - the spent-gated version
+		# of this NC passed the healthy legs).
 		tex = TextureFactory.make_solid(Color(0.055, 0.055, 0.095))
 		real = true
 	if tex == null or key != _tboard_key:

@@ -482,9 +482,9 @@ func _ready() -> void:
 	# the nav smoke's B-exit leg fails against it by name.
 	RoomView.debug_b_nc = OS.get_environment("PVLDS_B_NC")
 	# GRADFIX4's blank-board negative-control seam
-	# (PVLDS_GRADFIX4_NC=solidboard): the standing board's
-	# first render lands the fallback solid and counts it,
-	# so the tournament smoke's heal leg fails by name.
+	# (PVLDS_GRADFIX4_NC=solidboard): every board render
+	# lands the fallback solid and counts it, so the
+	# tournament smoke's heal leg fails by name.
 	RoomView.debug_gf4_nc = OS.get_environment("PVLDS_GRADFIX4_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
@@ -8165,9 +8165,9 @@ func _tournament_walk_judge_centre(i: int, row: Dictionary) -> void:
 	# REAL rendered board - full face size, inked with text
 	# variance - never the factory's fallback solid standing
 	# blank (the field's empty Walking Dead board). Under
-	# PVLDS_GRADFIX4_NC=solidboard the first render per key
-	# lands the solid and counts it, and this leg fails by
-	# name at every centre.
+	# PVLDS_GRADFIX4_NC=solidboard every render lands the
+	# solid and counts it, and this leg fails by name at
+	# every centre.
 	var btex: Texture2D = bs.get("texture") as Texture2D
 	var bink: float = -1.0
 	if btex != null:
