@@ -298,6 +298,11 @@ var _page: int = 0
 var wall_ready: bool = false ## true once the current wall's textures have all landed
 var boot_centre_index: int = -1 ## the centre the boot itself chose (mid-shelf, or the restored selection) - set once in setup(), before any pointer or pad can move it
 var boot_visible_count: int = 0 ## the view's size at that same moment (the shipped default filter is 'vr': the boot centre is the mid of THAT shelf)
+var _boot_guard: bool = false ## the boot seating guard stands: the restore's seating (or the mid-shelf law's) may not be taken by a pointer that has not moved yet (see setup and _follow_centre)
+var _boot_hover_sampled: bool = false ## the resting hover has been recorded (once the wall lands) as the guard's change reference
+var _boot_hover_ref: ClickableQuad = null ## the hover the room opened with - the pointer's resting place, not its point
+var _boot_focus_ref: ClickableQuad = null ## the focus the restore seated (setup's end)
+var _boot_centre_ref: int = -1 ## the centre the restore seated (setup's end)
 var _visible_games: Array[GameEntry] = []
 var _gen: int = 0
 var _mode: String = "wall" ## "wall" | "detail"
@@ -368,6 +373,15 @@ static var debug_bench: bool = false
 ## the world-lock so the graduation smoke's lock leg fails
 ## by name. Empty in every real run.
 static var debug_bg_nc: String = ""
+## Negative-control seam for the boot seating guard (the
+## harness env PVLDS_BOOT_NC, set by Main before any room
+## exists): "oldbind" never arms the guard, restoring the
+## pre-BOOTFIX binding - the resting pointer's hover owns
+## the centre from the first frame, so the boot power-on
+## binds the hovered card instead of the restored focus -
+## and the bootfocus smoke's legs fail by name. Empty in
+## every real run.
+static var debug_boot_nc: String = ""
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
 var _bg_starfield: MeshInstance3D = null
 var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD FIX round's depth layer)
@@ -517,6 +531,36 @@ func setup(factory: TextureFactory, scanner: LibraryScanner, store: StateStore, 
 	boot_visible_count = _visible_games.size()
 	print("ROOM SETUP: %d visible, boot centre %d (selected '%s', filter '%s', sort '%s')"
 		% [_visible_games.size(), _centre_index, _selected_game_id, _filter, _sort])
+	# The boot seating guard (BOOTFIX, convicted on the
+	# bootfocus harness against the shipped build): the
+	# power-on's subject is the CENTRE (see _update_power),
+	# and the centre is seated correctly HERE - on the
+	# restored selection, or on the mid-shelf card when
+	# there is nothing to restore. But _follow_centre hands
+	# the centre to the pointer's hover from the very first
+	# frame, and a pointer nobody has moved yet still
+	# hovers SOMEWHERE: on the flat path the resting mouse
+	# ray lands on the middle-band card of the restored
+	# column (the shelf seats row-major, so the restored
+	# card may sit in another band of that column - the
+	# harness's White Water below The Shadow), and in the
+	# headset a resting laser can lie on any card. That
+	# unmeant hover unseated the restore before the
+	# power-on's settle ever ran, so the standing
+	# performance bound the hovered card while the focus
+	# sat on the restored one. The guard holds the
+	# seating: until the pointer's hover CHANGES from the
+	# resting place recorded when the wall lands, or the
+	# focus or the centre is moved by any other path,
+	# hover does not drive the centre (see _follow_centre)
+	# - the restore does, through the focus. The first
+	# genuine point or step releases the guard for the
+	# session; the shipped follow law then rules exactly
+	# as before.
+	if debug_boot_nc != "oldbind":
+		_boot_guard = true
+		_boot_focus_ref = _focused
+		_boot_centre_ref = _centre_index
 
 
 func refresh_library() -> void:
@@ -2575,6 +2619,30 @@ func _follow_centre() -> void:
 	if _mode != "wall" or _placard_up or _setup_panel_up or _launching_game_id != "":
 		return
 	var hovered: ClickableQuad = _rig.hovered if _rig != null else null
+	if _boot_guard:
+		# The boot seating guard (see setup): while it
+		# stands, the pointer's RESTING hover is not a
+		# point - the follow runs on the focus alone,
+		# which is the restore's seating. The guard falls
+		# to the first genuine act: the hover CHANGES
+		# from the resting place recorded when the wall
+		# landed (the player pointed somewhere), or the
+		# focus or centre was seated by another path
+		# (a pad step, a letter pick, a page turn - the
+		# input's own seating lands that frame, and the
+		# shipped pointer law resumes from the next).
+		var released_by_seat: bool = false
+		if _focused != _boot_focus_ref or _centre_index != _boot_centre_ref:
+			_boot_guard = false
+			released_by_seat = true
+		elif not _boot_hover_sampled:
+			if wall_ready:
+				_boot_hover_ref = hovered
+				_boot_hover_sampled = true
+		elif hovered != _boot_hover_ref:
+			_boot_guard = false
+		if _boot_guard or released_by_seat:
+			hovered = null
 	var p: ClickableQuad = _panel_for(hovered)
 	if p == null:
 		p = _panel_for(_focused)
@@ -2949,6 +3017,7 @@ func tournament_board_state() -> Dictionary:
 func _on_select(quad: ClickableQuad) -> void:
 	if quad == null or not quad.pick_enabled:
 		return
+	_boot_guard = false ## a delivered select is a genuine act: the boot seating guard's work is done (see setup)
 	_activate(quad)
 
 

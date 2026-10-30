@@ -448,6 +448,11 @@ func _ready() -> void:
 	# (PVLDS_BG_NC=drum): parents the background stack to the
 	# drum so the graduation smoke's lock leg fails by name.
 	RoomView.debug_bg_nc = OS.get_environment("PVLDS_BG_NC")
+	# The boot seating guard's negative-control seam
+	# (PVLDS_BOOT_NC=oldbind): the guard never arms, so the
+	# resting pointer owns the boot centre again and the
+	# bootfocus smoke's legs fail against the pre-fix binding.
+	RoomView.debug_boot_nc = OS.get_environment("PVLDS_BOOT_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
