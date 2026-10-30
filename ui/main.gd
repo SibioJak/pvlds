@@ -4072,6 +4072,7 @@ func _grad_sky_warp_match(a: Array, b: Array, theta_deg: float, img_w: float, im
 	var hfov: float = 2.0 * atan(tan(deg_to_rad(fov_deg * 0.5)) * aspect)
 	var f: float = (img_w * 0.5) / tan(hfov * 0.5)
 	var cx: float = img_w * 0.5
+	var cy: float = img_h * 0.5
 	var th: float = deg_to_rad(theta_deg)
 	var residuals: Array[float] = []
 	var matched: int = 0
@@ -4080,13 +4081,29 @@ func _grad_sky_warp_match(a: Array, b: Array, theta_deg: float, img_w: float, im
 		var ad: Dictionary = av
 		var ax: float = float(ad["x"])
 		var ay: float = float(ad["y"])
-		var wx: float = cx + f * tan(atan((ax - cx) / f) - th)
+		# The full direction warp: the blob's look direction,
+		# rotated about the view's Y axis by +theta and
+		# reprojected. (Under R_y(+theta) a direction's
+		# screen azimuth falls by theta - the pattern sweeps
+		# left - which is the motion both the shell drift
+		# and a right head turn produce; the x-only form of
+		# this warp already landed at 0.1 px residuals.)
+		# A Y-rotation sags y toward the frame's corners as
+		# well as sweeping x - an x-only warp mis-picks
+		# neighbours there and spreads its own residuals.
+		var d: Vector3 = Vector3((ax - cx) / f, (cy - ay) / f, -1.0).normalized()
+		var cs: float = cos(th)
+		var sn: float = sin(th)
+		var rx: float = d.x * cs + d.z * sn
+		var rz: float = -d.x * sn + d.z * cs
+		var wx: float = cx + f * rx / (-rz)
+		var wy: float = cy - f * d.y / (-rz)
 		var best_d: float = 1600.0
 		var best_dx: float = 0.0
 		for bv: Variant in b:
 			var bd: Dictionary = bv
 			var dx: float = float(bd["x"]) - wx
-			var dy: float = float(bd["y"]) - ay
+			var dy: float = float(bd["y"]) - wy
 			var d2: float = dx * dx + dy * dy
 			if d2 < best_d:
 				best_d = d2
