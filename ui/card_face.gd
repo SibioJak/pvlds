@@ -265,7 +265,24 @@ func apply_spec(spec: Dictionary) -> void:
 		# A spec may set its own band size ("band_size") -
 		# boards run theirs smaller. Re-asserted on every
 		# spec, stock 30 as the default.
-		_band_label.add_theme_font_size_override("font_size", int(spec.get("band_size", 30)))
+		var band_px: int = int(spec.get("band_size", 30))
+		if kind == "board" and size.x > 0.0 and _band_label.text != "":
+			# A board's band never clips (GRADFIX2 item 2):
+			# the label carries no overrun discipline, so on
+			# a render narrower than the board's own face -
+			# the room's wing - a long band ("SEASON - EXTRA
+			# - Phantom of the Opera") simply ran off the
+			# canvas's right edge, cut mid-word. The band
+			# font scales down until the whole line fits the
+			# face's inner width, the same never-clip law
+			# the score column lives by. At the board's own
+			# width the band fits at its spec size and
+			# nothing changes.
+			var avail: float = size.x - 52.0 - 28.0 ## the face's side margins plus the band box's content margins
+			var need: float = _text_w(_measure_font(), _band_label.text, band_px)
+			if need > avail and need > 0.0:
+				band_px = maxi(18, int(floor(float(band_px) * avail / need)))
+		_band_label.add_theme_font_size_override("font_size", band_px)
 
 	var centered: bool = kind == "button" or kind == "banner"
 	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT

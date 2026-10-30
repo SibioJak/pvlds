@@ -54,6 +54,12 @@ func face_board_metrics() -> Dictionary:
 
 func _render_now(spec: Dictionary, px_size: Vector2i) -> Texture2D:
 	_viewport.size = px_size
+	# The face's size is asserted before the spec applies:
+	# a spec's layout reads it (a board's band fits itself
+	# to the face's width - see CardFace.apply_spec), and
+	# the viewport's own resize propagation is a frame
+	# later than this call.
+	_face.size = Vector2(px_size)
 	_face.apply_spec(spec)
 	await get_tree().process_frame
 	_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE

@@ -190,8 +190,8 @@ const BG_STAR_RADIUS: float = 30.0 ## the starfield shell's radius around the ey
 const BG_WIRE_RADIUS: float = 14.0 ## the lat/long wireframe shell's radius
 const BG_RING_RADIUS: float = 9.0 ## the one tilted orbit ring's radius
 const HAZE_FLOOR: float = 0.45 ## the far window columns' dim floor (see _haze_for)
-const WING_SIZE: Vector2 = Vector2(0.54, 0.58) ## the focused card's wing, inside its borrowed slot (see _wing_size)
-const WING_Y: float = 0.21 ## the wing's centre in its borrowed slot, card-local: spans -0.09..+0.51 of the slot's +-0.54
+const WING_SIZE: Vector2 = Vector2(0.54, 0.72) ## the focused card's wing, inside its borrowed slot (see _wing_size) - GRADFIX2: the board's own aspect (0.75), so the wing renders the board spec at the proportions it was laid out for instead of squashing it toward square (was 0.54 x 0.58)
+const WING_Y: float = 0.14 ## the wing's centre in its borrowed slot, card-local: spans -0.22..+0.50 of the slot's +-0.54 (the top edge keeps the GRAD FIX seat's clearance under the card above; the taller wing grows downward)
 ## The wing's seat discipline (the GRAD FIX round): the wing
 ## stands IN the left neighbour's slot, shrunk inside the
 ## slot's own bounds (0.62 x 1.08) with margin on every side,
@@ -203,6 +203,21 @@ const WING_Y: float = 0.21 ## the wing's centre in its borrowed slot, card-local
 const WING_SIZE_NC: Vector2 = Vector2(0.66, 0.634)
 const WING_Y_NC: float = 0.225
 const WING_PROUD: float = 0.08 ## how far in front of the neighbour card the wing floats at full pop
+## The companion clearance (GRADFIX2 item 2): a standing
+## companion (the wing, the Tournament board) also shifts
+## this far along the drum AWAY from the centred card, on
+## top of its slot seat. The popped centre card (0.15 out,
+## 1.04x) otherwise covers the companion's inner strip from
+## real viewpoints - the field's eaten board edges (the
+## Phantom board's right-hand text, the Addams board's
+## score tails) - a cover the old census's depth acquittal
+## never charged. The borrowed/freed slot's ground is
+## empty, so the shift costs nothing visually. The NC seam
+## PVLDS_GRADFIX_NC=oldwing restores the pre-fix wing
+## (0.54 x 0.58 at 0.21, no shift).
+const COMPANION_CLEAR: float = 0.12
+const WING_SIZE_GF1: Vector2 = Vector2(0.54, 0.58) ## the GRAD FIX round's wing size (the oldwing NC's restore)
+const WING_Y_GF1: float = 0.21 ## the GRAD FIX round's wing seat height (the oldwing NC's restore)
 const TBOARD_PROUD: float = 0.06 ## how far in front of its borrowed slot the Tournament board floats at full pop
 const BG_STAR_SHADER: String = """
 shader_type spatial;
@@ -2779,10 +2794,34 @@ func _update_pop(delta: float) -> void:
 ## shelf's first column there is no card to borrow: the wing
 ## overhangs the start fin's ground instead (the fin is
 ## furniture, not a card).
-## The wing's live size and seat height (the NC seam serves
-## the pre-fix values).
+## The wing's live size and seat height (the NC seams serve
+## the pre-fix values: PVLDS_GRAD_NC=wing the graduation
+## round's oversize wing, PVLDS_GRADFIX_NC=oldwing the
+## GRAD FIX round's squarer wing with no clearance shift).
 func _wing_size() -> Vector2:
+	if OS.get_environment("PVLDS_GRADFIX_NC") == "oldwing":
+		return WING_SIZE_GF1
 	return WING_SIZE_NC if OS.get_environment("PVLDS_GRAD_NC") == "wing" else WING_SIZE
+
+
+func _wing_y() -> float:
+	if OS.get_environment("PVLDS_GRADFIX_NC") == "oldwing":
+		return WING_Y_GF1
+	return WING_Y
+
+
+## The horizontal direction along the drum from the centred
+## card's seat to a companion's seat - the direction a
+## companion shifts to keep the popped centre card's
+## silhouette off its text (COMPANION_CLEAR, GRADFIX2
+## item 2). Zero when the seats coincide (no drum direction
+## exists to shift along).
+func _companion_away(centre_origin: Vector3, seat_origin: Vector3) -> Vector3:
+	var away: Vector3 = seat_origin - centre_origin
+	away.y = 0.0
+	if away.length() < 0.001:
+		return Vector3.ZERO
+	return away.normalized()
 
 
 ## Borrow the slot at the centred card's left: its panel is
@@ -2854,7 +2893,14 @@ func _refresh_wing() -> void:
 	if not nc_wing:
 		_borrow_wing_slot(coord)
 	_wing_slot = _card_transform_at(coord.x - 1, coord.y)
-	_wing_slot.origin += _wing_slot.basis.y * (WING_Y_NC if nc_wing else WING_Y)
+	_wing_slot.origin += _wing_slot.basis.y * (WING_Y_NC if nc_wing else _wing_y())
+	if not nc_wing and OS.get_environment("PVLDS_GRADFIX_NC") != "oldwing":
+		# The companion clearance (GRADFIX2 item 2): shift
+		# the wing along the drum away from the centred
+		# card, so the popped card's silhouette never
+		# covers the wing's text from a real viewpoint.
+		var centre_origin: Vector3 = _card_transform_at(coord.x, coord.y).origin
+		_wing_slot.origin += _companion_away(centre_origin, _wing_slot.origin) * COMPANION_CLEAR
 	if nc_wing:
 		# NC seam (graduation smoke): the wing shoved onto
 		# the focused card and down over its label - the
