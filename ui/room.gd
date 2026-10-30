@@ -427,6 +427,13 @@ static var debug_bg_nc: String = ""
 ## and the bootfocus smoke's legs fail by name. Empty in
 ## every real run.
 static var debug_boot_nc: String = ""
+## Negative-control seam for the shelf's fill order (the
+## harness env PVLDS_GRID_NC, set by Main before any room
+## exists): "rowmajor" restores the shipped across-the-band
+## fill, so the grad census's column-order leg fails by
+## name. Empty in every real run (the shelf fills
+## column-major - see _grid_coord).
+static var debug_grid_nc: String = ""
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
 var _bg_starfield: MeshInstance3D = null
 var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD FIX round's depth layer)
@@ -590,11 +597,11 @@ func setup(factory: TextureFactory, scanner: LibraryScanner, store: StateStore, 
 	# the centre to the pointer's hover from the very first
 	# frame, and a pointer nobody has moved yet still
 	# hovers SOMEWHERE: on the flat path the resting mouse
-	# ray lands on the middle-band card of the restored
-	# column (the shelf seats row-major, so the restored
-	# card may sit in another band of that column - the
-	# harness's White Water below The Shadow), and in the
-	# headset a resting laser can lie on any card. That
+	# ray lands on some card of the restored column (under
+	# the column-major fill, GRADFIX3, often the restored
+	# card's own column-mates - the geography changed, the
+	# hazard did not), and in the headset a resting laser
+	# can lie on any card. That
 	# unmeant hover unseated the restore before the
 	# power-on's settle ever ran, so the standing
 	# performance bound the hovered card while the focus
@@ -1266,15 +1273,41 @@ func _sort_visible() -> void:
 
 # ---------------------------------------------------------------- the drum
 
-## Grid math (the prototype's): a game's place on the shelf -
-## its column along its band, and its band. Consecutive games
-## fill the TOP band first, then the middle, then the bottom.
+## Grid math: a game's place on the shelf - its column and
+## its band. The shelf fills TOP TO BOTTOM in a column,
+## then steps right (COLUMN-MAJOR, GRADFIX3 - the user's
+## design call): consecutive games run down one column's
+## three bands before the next column begins, so a title's
+## horizontal position is monotonic with its alphabetical
+## rank - far right is always late alphabet. The shipped
+## row-major fill ran the alphabet along a band and wrapped
+## it back to the left edge one band down, so a title's
+## column said nothing about its letter ("I may get there
+## and find the table is actually a few spots from the left
+## side" - his words). The row-major mapping survives only
+## behind the NC seam (debug_grid_nc, from harness env
+## PVLDS_GRID_NC=rowmajor), so the census's column-order
+## leg can fail against it by name.
+const BAND_COUNT: int = 3 ## the shelf's bands per column (== ROW_ELEVATIONS.size())
+
+
 func _grid_coord(index: int) -> Vector2i:
-	return Vector2i(index % _columns, index / _columns)
+	if debug_grid_nc == "rowmajor":
+		return Vector2i(index % _columns, index / _columns)
+	return Vector2i(index / BAND_COUNT, index % BAND_COUNT)
+
+
+## The unclamped shelf index at a grid place, under the
+## standing mapping - the raw material _index_at clamps
+## and the wing's borrow arithmetic compares.
+func _raw_index(col: int, row: int) -> int:
+	if debug_grid_nc == "rowmajor":
+		return row * _columns + col
+	return col * BAND_COUNT + row
 
 
 func _index_at(col: int, row: int) -> int:
-	return clampi(row * _columns + col, 0, maxi(0, _visible_games.size() - 1))
+	return clampi(_raw_index(col, row), 0, maxi(0, _visible_games.size() - 1))
 
 
 ## A card's transform on the sphere (the prototype's
@@ -2362,8 +2395,8 @@ func _fill_window_faces(gen: int) -> void:
 			if c < _panel_window_lo or c > _panel_window_hi:
 				continue
 			for row: int in range(3):
-				var idx: int = row * _columns + c
-				if idx < _panels.size():
+				var idx: int = _raw_index(c, row)
+				if idx >= 0 and idx < _panels.size():
 					order.append(idx)
 	for idx: int in order:
 		if gen != _gen:
@@ -2379,8 +2412,8 @@ func _fill_window_faces(gen: int) -> void:
 			if c < 0 or c >= _columns:
 				continue
 			for row: int in range(3):
-				var idx: int = row * _columns + c
-				if idx < _visible_games.size():
+				var idx: int = _raw_index(c, row)
+				if idx >= 0 and idx < _visible_games.size():
 					near.append(_visible_games[idx])
 		if not near.is_empty():
 			art_prefetch_requested.emit(near)
@@ -2874,7 +2907,7 @@ func _companion_away(centre_origin: Vector3, seat_origin: Vector3) -> Vector3:
 func _borrow_wing_slot(coord: Vector2i) -> void:
 	var want: int = -1
 	if coord.x >= 1:
-		var raw: int = coord.y * _columns + (coord.x - 1)
+		var raw: int = _raw_index(coord.x - 1, coord.y)
 		if raw >= 0 and raw < _panels.size() and _grid_coord(raw) == Vector2i(coord.x - 1, coord.y):
 			want = raw
 	if want == _wing_borrowed_idx:
@@ -2930,6 +2963,7 @@ func _refresh_wing() -> void:
 	# Seat first (the slot follows the centre even while the
 	# content renders).
 	var coord: Vector2i = _grid_coord(_centre_index)
+	_wing_seat = Vector2i(coord.x - 1, coord.y)
 	var nc_wing: bool = OS.get_environment("PVLDS_GRAD_NC") == "wing"
 	if not nc_wing:
 		_borrow_wing_slot(coord)
