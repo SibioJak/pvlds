@@ -4058,8 +4058,12 @@ func _grad_sky_blobs(img: Image) -> Array:
 ## frame's edges, so no single translation can register
 ## the pair), then matched to the nearest blob of `b`
 ## within 40 px. Returns (median x-residual, match
-## fraction, TIGHT fraction - matches whose |x-residual|
-## is under 6 px). A correct warp in the correct direction
+## fraction, TIGHT fraction - matches whose residuals are
+## under 6 px on BOTH axes; an x-only tight at this star
+## density lets a wrong warp land ~28% by nearest-neighbour
+## luck alone, while a 2D tight is the honest test of "the
+## warp predicts where the star went"). A correct warp in
+## the correct direction
 ## lands the whole constellation on itself (residual ~0,
 ## most blobs matched, most matches tight); the opposite
 ## direction - the control - still finds stray blobs
@@ -4100,6 +4104,7 @@ func _grad_sky_warp_match(a: Array, b: Array, theta_deg: float, img_w: float, im
 		var wy: float = cy - f * d.y / (-rz)
 		var best_d: float = 1600.0
 		var best_dx: float = 0.0
+		var best_dy: float = 0.0
 		for bv: Variant in b:
 			var bd: Dictionary = bv
 			var dx: float = float(bd["x"]) - wx
@@ -4108,10 +4113,11 @@ func _grad_sky_warp_match(a: Array, b: Array, theta_deg: float, img_w: float, im
 			if d2 < best_d:
 				best_d = d2
 				best_dx = dx
+				best_dy = dy
 		if best_d < 1600.0:
 			matched += 1
 			residuals.append(best_dx)
-			if absf(best_dx) <= 6.0:
+			if absf(best_dx) <= 6.0 and absf(best_dy) <= 6.0:
 				tight += 1
 	var frac: float = float(matched) / float(maxi(a.size(), 1))
 	var tfrac: float = float(tight) / float(maxi(a.size(), 1))
