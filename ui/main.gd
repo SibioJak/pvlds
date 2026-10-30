@@ -176,6 +176,17 @@ var _tournament_smoke_deadline_msec: int = 0
 var _tournament_validate_count_seen: int = 0 ## the stub's validate count when the panel length legs begin (their no-send witness)
 var _tournament_smoke_mode: String = "full" ## PVLDS_WOVP_SMOKE_MODE: full | nokey | failfetch | errbody | errempty | cache | layout - which harness boot this is
 var _tournament_pairing_stage: int = 0 ## full mode phase 13 (the re-pair proof): 0 step out, 1 verify + step back, 2 verify settle
+var _tw_stage: int = 0 ## full mode phase 14 (the GRADFIX2 selection walk): 0 expand the focus graph, 1 pair-verify per challenge, 2 the Battle Royale grab
+var _tw_queue: Array = [] ## quads waiting to be expanded (the entry rail stop, then every panel the walk lands on)
+var _tw_expanded: Dictionary = {} ## quad instance id -> true
+var _tw_visited: Dictionary = {} ## panel index -> true: focus landed there by stick steps alone
+var _tw_current: Object = null ## the quad being expanded
+var _tw_sub: int = 0 ## the walk's sub-state inside an expansion / verification
+var _tw_dir_i: int = 0
+var _tw_wait: int = 0
+var _tw_pair_i: int = 0
+var _layout_wing_probe: Dictionary = {} ## layout mode: the Phantom board rendered at the wing's size (GRADFIX2 board-whole legs)
+var _layout_wing_probe_done: bool = false
 var _layout_probe_results: Dictionary = {} ## layout mode: panel index -> RoomView.board_layout_probe result, filled async
 var _layout_probes_in_flight: bool = false
 var _smoke_launch_game: String = ""
@@ -3243,7 +3254,30 @@ var _grad_failures: int = 0
 var _grad_manifest: Dictionary = {}
 var _grad_sweep_i: int = -1 ## the centre the sweep is measuring (-1 = not started)
 var _grad_ink_stage: int = 0
+## The eye ring the companion-wholeness legs judge from
+## (GRADFIX2 item 2): offsets from the room camera - the
+## wall stands at -z, so the threatening eyes are the
+## CLOSER ones (a seated player sits inside the drum's
+## axis, head low and off-centre), never the farther
+## ones. The first ring drafted for these legs reached
+## only +z (away from the wall) and acquitted the GRAD
+## FIX wing the field had already convicted - the
+## oldwing NC exposed it (the control boot passed).
+const COMPANION_EYE_RING: Array[Vector3] = [
+	Vector3.ZERO,
+	Vector3(0.25, 0.0, -0.15), Vector3(-0.25, 0.0, -0.15),
+	Vector3(0.0, 0.12, -0.15), Vector3(0.0, -0.16, -0.15),
+	Vector3(0.38, 0.06, -0.30), Vector3(-0.38, -0.06, -0.30),
+	Vector3(0.18, -0.10, -0.38),
+	Vector3(0.55, 0.0, -0.30), Vector3(-0.55, -0.10, -0.30),
+	Vector3(0.45, -0.18, -0.45),
+]
+var _grad_wingwhole_max: float = 0.0 ## worst centre-over-wing-text overlap the census measured (px), printed with the census stats - the margin the wing-whole verdict stands on
+var _grad_wingwhole_min_gap: float = 1.0e9 ## closest approach of the centre card to the wing's text (px) where they do not overlap - the graze margin, printed with the census stats
 var _grad_swing_stage: int = 0
+var _grad_named_stage: int = 0 ## phase 12 (GRADFIX2 named cases): 0 focus the title, 1 judge + grab it
+var _grad_named_i: int = 0
+var _grad_named_wait: int = 0
 var _grad_swing_samples: Array = [] ## [msec since journey start, target deviation in degrees]
 var _grad_swing_cmds: Array = [] ## msec offsets at which step commands were issued
 var _grad_swing_cmd_i: int = 0
@@ -3476,6 +3510,36 @@ func _grad_quad_screen_points(gt: Transform3D, half: Vector2, cam: Camera3D) -> 
 	return pts
 
 
+## Project a world point from an arbitrary eye position
+## through the camera's own orientation and fov (the
+## GRADFIX2 companion legs judge occlusion from a ring of
+## eye offsets around the seated viewpoint - a player's
+## head is never exactly on the drum's axis, and the
+## field's eaten board edges lived in that difference).
+## Scale-only: consistent across the polys it compares, in
+## the same units _grad_quad_screen_points returns at the
+## harness's 1280x720.
+func _grad_project_from(cam: Camera3D, eye: Vector3, p: Vector3) -> Vector2:
+	var rel: Vector3 = p - eye
+	var b: Basis = cam.global_transform.basis
+	var cx: float = rel.dot(b.x)
+	var cy: float = rel.dot(b.y)
+	var cz: float = rel.dot(-b.z)
+	if cz < 0.05:
+		cz = 0.05
+	var t: float = tan(deg_to_rad(cam.fov) * 0.5)
+	var aspect: float = 1280.0 / 720.0
+	return Vector2(cx / (cz * t * aspect), cy / (cz * t)) * 360.0 + Vector2(640.0, 360.0)
+
+
+func _grad_quad_screen_points_from(cam: Camera3D, eye: Vector3, gt: Transform3D, half: Vector2) -> Array[Vector2]:
+	var pts: Array[Vector2] = []
+	for c: Vector2 in [Vector2(-half.x, -half.y), Vector2(half.x, -half.y),
+			Vector2(half.x, half.y), Vector2(-half.x, half.y)]:
+		pts.append(_grad_project_from(cam, eye, gt * Vector3(c.x, c.y, 0.0)))
+	return pts
+
+
 ## Convex-polygon overlap by the separating-axis test: the
 ## census's exact measure (projected AABBs of slanted quads
 ## intersect in their slack corners where the quads
@@ -3506,6 +3570,40 @@ func _grad_polys_overlap(a: Array[Vector2], b: Array[Vector2]) -> bool:
 
 ## The intersection area of two convex screen polygons
 ## (Sutherland-Hodgman: clip a against b's edges).
+## The closest approach of two screen polygons (px): the
+## companion-wholeness legs' margin measure - a companion
+## whose text merely GRAZES its card (a pixel or two of
+## clearance at the harness's 1280x720) has no clearance
+## at all at headset resolution with a moving head, which
+## is how the GRAD FIX wing's text read as eaten in the
+## field even where the card never quite covered it.
+func _grad_poly_min_gap(a: Array[Vector2], b: Array[Vector2]) -> float:
+	var best: float = 1.0e9
+	for i: int in range(a.size()):
+		var a1: Vector2 = a[i]
+		var a2: Vector2 = a[(i + 1) % a.size()]
+		for j: int in range(b.size()):
+			best = minf(best, _grad_seg_seg_dist(a1, a2, b[j], b[(j + 1) % b.size()]))
+	return best
+
+
+func _grad_seg_seg_dist(p1: Vector2, p2: Vector2, p3: Vector2, p4: Vector2) -> float:
+	var d1: float = _grad_point_seg_dist(p1, p3, p4)
+	var d2: float = _grad_point_seg_dist(p2, p3, p4)
+	var d3: float = _grad_point_seg_dist(p3, p1, p2)
+	var d4: float = _grad_point_seg_dist(p4, p1, p2)
+	return minf(minf(d1, d2), minf(d3, d4))
+
+
+func _grad_point_seg_dist(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab: Vector2 = b - a
+	var len2: float = ab.length_squared()
+	if len2 < 0.000001:
+		return p.distance_to(a)
+	var t: float = clampf((p - a).dot(ab) / len2, 0.0, 1.0)
+	return p.distance_to(a + ab * t)
+
+
 func _grad_poly_intersect_area(a: Array[Vector2], b: Array[Vector2]) -> float:
 	var poly: Array[Vector2] = a.duplicate()
 	var bsign: float = 0.0
@@ -3619,6 +3717,8 @@ func _drive_grad_smoke() -> void:
 			_grad_ink_step()
 		11:
 			_grad_swing_step()
+		12:
+			_grad_named_step()
 
 
 func _grad_leg_library() -> void:
@@ -3834,8 +3934,8 @@ func _grad_sweep_step() -> void:
 	_grad_sweep_i += 1
 	_grad_sweep_settle = 0
 	if _grad_sweep_i >= n:
-		print("GRAD CENSUS: %d centres, %d labels measured, long-title label bottom %.4f m, rail intrusion max %.1f px (%s), fringe rail intrusions beyond the browsing zone %d"
-			% [n, _grad_labels_measured, _grad_long_min_bottom, _grad_rail_max_depth, _grad_rail_worst, _grad_fringe_rail])
+		print("GRAD CENSUS: %d centres, %d labels measured, long-title label bottom %.4f m, rail intrusion max %.1f px (%s), fringe rail intrusions beyond the browsing zone %d, wing-whole worst overlap %.1f px, wing-whole worst clearance %.1f px"
+			% [n, _grad_labels_measured, _grad_long_min_bottom, _grad_rail_max_depth, _grad_rail_worst, _grad_fringe_rail, _grad_wingwhole_max, _grad_wingwhole_min_gap if _grad_wingwhole_min_gap < 1.0e8 else -1.0])
 		_grad_expect(_grad_labels_measured > n,
 			"census: labels were measured across the sweep (%d)" % _grad_labels_measured)
 		_grad_audit_labels("post-sweep")
@@ -4045,7 +4145,10 @@ func _grad_swing_step() -> void:
 			_grad_swing_samples.append([now2, _room.page_slide_yaw_deg(), rad_to_deg(_room._drum_yaw)])
 			if not _room.page_slide_active() and now2 > 100:
 				_grad_swing_eval_long()
-				_grad_phase = 3
+				_grad_phase = 12
+				_grad_named_stage = 0
+				_grad_named_i = 0
+				_grad_named_wait = 0
 			elif now2 > 5000:
 				_grad_fail("swing glide: the long swing never settled")
 				_grad_phase = 3
@@ -4188,8 +4291,53 @@ func _grad_measure_centre(c: int) -> void:
 		var plate: MeshInstance3D = _room._panel_plates[i] if i < _room._panel_plates.size() else null
 		if plate != null and plate.visible:
 			var pa: AABB = plate.global_transform * plate.get_aabb()
-			if pa.position.y < -0.0215:
+			# The plate's floor line sits one plate-padding
+			# BELOW the label's -0.0215 calibration: a grown
+			# plate (GRADFIX2 item 1) backs its block with
+			# 17 mm of plate beneath the ink by design, so a
+			# plate at ink-floor minus its padding is the
+			# plate standing exactly where its ink stands.
+			# The label leg above keeps the -0.0215 line for
+			# the ink itself; a plate past -0.042 is grown
+			# or dropped BEYOND its padding (a five-line
+			# bottom-band name would land near -0.088) and
+			# still convicts here.
+			if pa.position.y < -0.042:
 				_grad_count("plate_floor", "centre %d: panel %d's nameplate bottom %.4f" % [c, i, pa.position.y])
+		# The GRADFIX2 legs (items 1+5), in panel-local space
+		# (centre-invariant: the same geometry at every
+		# centre): the name BLOCK (the label's shaped AABB,
+		# offset by the label's seat in the panel) must stand
+		# wholly on its plate, clear of the Launch plinth's
+		# rectangle wherever the plinth seats, and inside its
+		# own card's silhouette. The shipped fault lived here:
+		# the plate stayed one line tall and the plinth sat on
+		# the block's last line - invisible to every leg that
+		# judged the plate's presence or the label's world
+		# position instead of the three rectangles' relation.
+		var la2: AABB = label.get_aabb()
+		if la2.size.y > 0.0:
+			var block: Rect2 = Rect2(
+				Vector2(la2.position.x + label.position.x, la2.position.y + label.position.y), Vector2(la2.size.x, la2.size.y))
+			if plate != null and plate.mesh is QuadMesh:
+				var pqm: QuadMesh = plate.mesh as QuadMesh
+				var plate_rect: Rect2 = Rect2(
+					Vector2(plate.position.x - pqm.size.x * 0.5, plate.position.y - pqm.size.y * 0.5), pqm.size)
+				if plate_rect.position.y > block.position.y + 0.003 or plate_rect.end.y < block.end.y - 0.003:
+					_grad_count("platecover", "centre %d: panel %d's name block (%.3f..%.3f) stands off its plate (%.3f..%.3f)"
+						% [c, i, block.position.y, block.end.y, plate_rect.position.y, plate_rect.end.y])
+			var lq3: ClickableQuad = _room._panel_launches[i] if i < _room._panel_launches.size() else null
+			if lq3 != null:
+				var lsz: Vector2 = lq3.quad_size()
+				var launch_rect: Rect2 = Rect2(
+					Vector2(lq3.position.x - lsz.x * 0.5, lq3.position.y - lsz.y * 0.5), lsz)
+				if block.grow(-0.002).intersects(launch_rect):
+					_grad_count("plinth", "centre %d: panel %d's name block (%.3f..%.3f) runs under its Launch plinth (%.3f..%.3f)"
+						% [c, i, block.position.y, block.end.y, launch_rect.position.y, launch_rect.end.y])
+			var card_half: float = panel.quad_size().x * 0.5
+			if block.position.x < -card_half + 0.006 or block.end.x > card_half - 0.006:
+				_grad_count("cardbounds", "centre %d: panel %d's name block (%.3f..%.3f) hugs its card's edge (half %.3f)"
+					% [c, i, block.position.x, block.end.x, card_half])
 		if panel.payload == long_id and aabb.position.y < _grad_long_min_bottom:
 			_grad_long_min_bottom = aabb.position.y
 		var lpoly: Array[Vector2] = _grad_label_poly(i, cam)
@@ -4262,6 +4410,47 @@ func _grad_measure_centre(c: int) -> void:
 				var area: float = _grad_poly_intersect_area(wing_poly, cpoly)
 				if area > 4.0:
 					_grad_count("wingcard", "centre %d: the wing covers %.0f px of panel %d's card" % [c, area, j])
+	# The wing's TEXT against the popped centre card
+	# (GRADFIX2 item 2): the wingcard leg above acquits
+	# wherever the card stands nearer - which is always the
+	# centre card. The field's eaten wing text ("You have
+	# no score on this...", "Design: Joe Kaminkow, E...")
+	# was convicted in the TEXTURE (the band ran off the
+	# squashed canvas - the layout suite's wing-board
+	# probe + oldband NC carry that proof); the geometry's
+	# own share, measured here, is a GRAZE: the GRAD FIX
+	# wing's text ran 1-2 px from the card's silhouette at
+	# real viewpoints, which at headset resolution with a
+	# moving head reads as eaten. So this leg charges both
+	# a cover (overlap over 4 px) and a graze (clearance
+	# under 4 px), judged from a ring of eye offsets around
+	# the camera - a player's head is never exactly on the
+	# drum's axis, and the threatening eyes sit CLOSER to
+	# the wall (COMPANION_EYE_RING).
+	if not wing_poly.is_empty() and c < _room._panels.size():
+		var centre_panel: ClickableQuad = _room._panels[c]
+		if centre_panel != null and centre_panel.visible:
+			var wt2: Transform3D = wing["transform"]
+			var ws2: Vector2 = wing["size"]
+			var text_half: Vector2 = Vector2(ws2.x * 0.44, ws2.y * 0.47)
+			for off: Vector3 in COMPANION_EYE_RING:
+				var eye: Vector3 = cam.global_position + off
+				var wpoly: Array[Vector2] = _grad_quad_screen_points_from(cam, eye, wt2, text_half)
+				var cpoly2: Array[Vector2] = _grad_quad_screen_points_from(cam, eye, centre_panel.global_transform, centre_panel.quad_size() * 0.5)
+				var warea: float = 0.0
+				var wgap: float = 0.0
+				if _grad_polys_overlap(wpoly, cpoly2):
+					warea = _grad_poly_intersect_area(wpoly, cpoly2)
+				else:
+					wgap = _grad_poly_min_gap(wpoly, cpoly2)
+					_grad_wingwhole_min_gap = minf(_grad_wingwhole_min_gap, wgap)
+				_grad_wingwhole_max = maxf(_grad_wingwhole_max, warea)
+				if warea > 4.0:
+					_grad_count("wingwhole", "centre %d: the centre card covers the wing's text from eye offset %s" % [c, str(off)])
+					break
+				if wgap < 4.0:
+					_grad_count("wingwhole", "centre %d: the centre card grazes the wing's text (%.1f px clear) from eye offset %s" % [c, wgap, str(off)])
+					break
 	# The popped centre's label against every neighbour's art.
 	if not centre_label_poly.is_empty():
 		for j: int in range(_room._panels.size()):
@@ -4302,6 +4491,10 @@ func _grad_census_verdicts() -> void:
 		["pop", "census: the popped centre's label clears every neighbour's art"],
 		["wing", "wing occlusion: the wing eats no label at any centre"],
 		["wingcard", "wing occlusion: the wing covers no part of any card at any centre"],
+		["plinth", "plinth: no name block under its Launch plinth at any centre"],
+		["platecover", "nameplate cover: every name block stands wholly on its plate at any centre"],
+		["cardbounds", "nameplate bounds: every name block stands inside its own card at any centre"],
+		["wingwhole", "wing whole: the centre card never covers or grazes the wing's text at any centre"],
 	]
 	for pair: Variant in kinds:
 		var kind: String = str((pair as Array)[0])
@@ -4312,6 +4505,81 @@ func _grad_census_verdicts() -> void:
 		else:
 			_grad_expect(false, "%s (%d violations; first: %s)"
 				% [label_text, count, str(_grad_viol_first.get(kind, ""))])
+
+
+## One panel's name verdicts in panel-local space (the
+## census's plinth / plate-cover / card-bounds math,
+## returned as words): empty when the name stands whole.
+func _grad_panel_name_verdicts(i: int) -> Array:
+	var out: Array = []
+	if i < 0 or i >= _room._panels.size():
+		return ["not on the shelf"]
+	var label: Label3D = _room._panel_labels[i] if i < _room._panel_labels.size() else null
+	var plate: MeshInstance3D = _room._panel_plates[i] if i < _room._panel_plates.size() else null
+	if label == null:
+		return ["no label"]
+	var la: AABB = label.get_aabb()
+	if la.size.y <= 0.0:
+		return ["label unshaped"]
+	var block: Rect2 = Rect2(Vector2(la.position.x + label.position.x, la.position.y + label.position.y), Vector2(la.size.x, la.size.y))
+	if plate != null and plate.mesh is QuadMesh:
+		var pqm: QuadMesh = plate.mesh as QuadMesh
+		var plate_rect: Rect2 = Rect2(Vector2(plate.position.x - pqm.size.x * 0.5, plate.position.y - pqm.size.y * 0.5), pqm.size)
+		if plate_rect.position.y > block.position.y + 0.003 or plate_rect.end.y < block.end.y - 0.003:
+			out.append("block %.3f..%.3f off its plate %.3f..%.3f" % [block.position.y, block.end.y, plate_rect.position.y, plate_rect.end.y])
+	var lq: ClickableQuad = _room._panel_launches[i] if i < _room._panel_launches.size() else null
+	if lq != null:
+		var lsz: Vector2 = lq.quad_size()
+		var launch_rect: Rect2 = Rect2(Vector2(lq.position.x - lsz.x * 0.5, lq.position.y - lsz.y * 0.5), lsz)
+		if block.grow(-0.002).intersects(launch_rect):
+			out.append("block under its plinth %.3f..%.3f" % [launch_rect.position.y, launch_rect.end.y])
+	var panel: ClickableQuad = _room._panels[i]
+	var card_half: float = panel.quad_size().x * 0.5
+	if block.position.x < -card_half + 0.006 or block.end.x > card_half - 0.006:
+		out.append("block hugs its card's edge")
+	return out
+
+
+## The named cases (GRADFIX2, phase 12): the field
+## session's own defect titles, centred one by one and
+## judged BY NAME - the census proves the rule over the
+## whole shelf; these prove the user's actual cards. A
+## viewport grab of each stands beside the log.
+func _grad_named_step() -> void:
+	var named: Dictionary = _grad_manifest.get("named_ids", {}) as Dictionary
+	var titles: Array = named.keys()
+	if _grad_named_i >= titles.size():
+		_grad_phase = 3
+		_grad_wait = 0
+		_grad_power_stage = 0
+		return
+	var title: String = str(titles[_grad_named_i])
+	var idx: int = _grad_panel_index(str(named[title]))
+	match _grad_named_stage:
+		0:
+			_grad_expect(idx >= 0, "named case: '%s' is on the shelf" % title)
+			if idx < 0:
+				_grad_named_i += 1
+				return
+			_room._set_focused(_room._panels[idx])
+			_grad_named_wait = 0
+			_grad_named_stage = 1
+		1:
+			_grad_named_wait += 1
+			if not _room.page_slide_active() and _grad_named_wait >= 14:
+				var verdicts: Array = _grad_panel_name_verdicts(idx)
+				_grad_expect(verdicts.is_empty(),
+					"named case: '%s' stands whole on its plate, clear of its plinth, inside its card%s"
+						% [title, "" if verdicts.is_empty() else " - " + str(verdicts)])
+				var slug: String = title.to_lower().replace("'", "").replace("-", " ").replace(".", "")
+				slug = "_".join(slug.split(" ", false)).substr(0, 24)
+				_grad_save_grab("gradfix_" + slug + ".png")
+				_grad_named_i += 1
+				_grad_named_stage = 0
+			elif _grad_named_wait > 1800:
+				_grad_fail("named case: the drum never settled at '%s'" % title)
+				_grad_named_i += 1
+				_grad_named_stage = 0
 
 
 func _grad_tournament_step() -> void:
@@ -6578,14 +6846,16 @@ func _drive_tournament_layout() -> void:
 			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _room._panels.size() >= 2:
 				_tournament_leg_layout_boards()
 				_layout_start_probes()
+				_layout_wing_probe_start()
 				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 30000
 				_tournament_smoke_phase = 2
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
 				_tournament_fail("layout: the boards never went live against the stub")
 				_finish_tournament_smoke()
 		2:
-			if not _layout_probes_in_flight and _layout_probe_results.size() >= 2:
+			if not _layout_probes_in_flight and _layout_probe_results.size() >= 2 and _layout_wing_probe_done:
 				_tournament_leg_layout()
+				_tournament_leg_wing_board()
 				_finish_tournament_smoke()
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
 				_tournament_fail("layout: the board layout probes never landed")
@@ -6820,7 +7090,30 @@ func _drive_tournament_full() -> void:
 					_tournament_smoke_wait += 1
 					if _tournament_smoke_wait >= 12 and not _room.page_slide_active():
 						_grad_save_grab("tournament_pairing_owned.png")
-						_tournament_smoke_phase = 3
+						# On to the selection walk (phase
+						# 14): the pairing above teleported
+						# the centre; the walk must now prove
+						# the pad can REACH every challenge.
+						# Park the mouse over the furniture
+						# first (the nav driver's lesson, the
+						# grad driver's practice): the walk
+						# drives the PAD's focus, and a pointer
+						# left resting on the wall wins the
+						# centre back every frame - on the
+						# two-column wall it limit-cycled the
+						# centre between neighbours and no
+						# pairing ever stood still to be
+						# judged.
+						get_viewport().warp_mouse(Vector2(512, 764))
+						_tw_stage = 0
+						_tw_queue = [_room.rail_quad("tournament")]
+						_tw_expanded = {}
+						_tw_visited = {}
+						_tw_current = null
+						_tw_sub = 0
+						_tournament_smoke_phase = 14
+		14:
+			_tournament_walk_step()
 		4:
 			# The SETUP panel's WoVP legs. Clear the saved key
 			# first (memory + file), so the paste leg proves
@@ -6919,6 +7212,285 @@ func _drive_tournament_full() -> void:
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
 				_tournament_fail("panel length: the good key was never restored (panel says: %s)" % _room.setup_panel_message())
 				_finish_tournament_smoke()
+
+
+## The selection walk (GRADFIX2 item 4, full mode phase
+## 14): the pairing legs teleport the centre with
+## _set_centre; this leg proves the PAD can get there.
+## Starting from the TOURNAMENT rail stop (where entering
+## the room leaves focus), it expands the focus graph
+## through the room's own _move_focus - the exact call the
+## pad poll makes - and asserts every challenge panel is
+## landed on by stick steps alone. Then, per challenge, it
+## selects the panel and judges the standing state: the
+## board pairs it, no challenge is hidden or borrowed at
+## that centre, the board's seat holds no card, and the
+## board's text stands clear of the centred card from a
+## ring of viewpoints (items 2+3). Under
+## PVLDS_TOURN_NC=oldseat the borrowed slot hides a
+## challenge at every centre and the legs fail by name.
+func _tournament_walk_step() -> void:
+	var rows: Array = _room.tournament_rows()
+	match _tw_stage:
+		0:
+			match _tw_sub:
+				0:
+					if _tw_queue.is_empty():
+						for i: int in range(rows.size()):
+							_tournament_expect(_tw_visited.has(i),
+								"selection walk: '%s' can be selected on the tournie screen (stick steps from the TOURNAMENT stop reach it)" % _tournament_row_table_name(rows[i]))
+						_tw_stage = 1
+						_tw_pair_i = 0
+						_tw_sub = 0
+						_tw_wait = 0
+						return
+					_tw_current = _tw_queue.pop_front()
+					_tw_expanded[(_tw_current as Object).get_instance_id()] = true
+					_room._set_focused(_tw_current as ClickableQuad)
+					_tw_wait = 0
+					_tw_sub = 1
+				1:
+					_tw_wait += 1
+					if _tw_wait >= 6:
+						_tw_dir_i = 0
+						_tw_sub = 2
+				2:
+					if _tw_dir_i >= 4:
+						_tw_current = null
+						_tw_sub = 0
+						return
+					var dirs: Array[Vector2] = [Vector2(-1, 0), Vector2(1, 0), Vector2(0, -1), Vector2(0, 1)]
+					_room._set_focused(_tw_current as ClickableQuad)
+					_room._move_focus(dirs[_tw_dir_i])
+					_tw_dir_i += 1
+					var landed: ClickableQuad = _room.focused_quad()
+					if landed == null:
+						return
+					var li: int = _room._panels.find(landed)
+					if li >= 0:
+						_tw_visited[li] = true
+					if not _tw_expanded.has(landed.get_instance_id()) and not _tw_queue.has(landed):
+						_tw_queue.append(landed)
+		1:
+			if _tw_pair_i >= rows.size():
+				_tw_stage = 2
+				_tw_sub = 0
+				_tw_wait = 0
+				return
+			var row: Dictionary = rows[_tw_pair_i]
+			var ch: WovpChallenge = row.get("challenge") as WovpChallenge
+			match _tw_sub:
+				0:
+					_room._set_focused(_room._panels[_tw_pair_i])
+					_tw_wait = 0
+					_tw_sub = 1
+				1:
+					_tw_wait += 1
+					var bs: Dictionary = _room.tournament_board_state()
+					if ch != null and str(bs.get("challenge_id", "")) == ch.challenge_id and not _room.page_slide_active():
+						_tw_sub = 2
+						_tw_wait = 0
+					elif _tw_wait > 900:
+						_tournament_fail("selection walk: '%s' never pairs its board when selected" % _tournament_row_table_name(row))
+						_tw_pair_i += 1
+						_tw_sub = 0
+				2:
+					_tw_wait += 1
+					if _tw_wait >= 10:
+						_tournament_walk_judge_centre(_tw_pair_i, row)
+						_tw_pair_i += 1
+						_tw_sub = 0
+		2:
+			var br_idx: int = -1
+			for i: int in range(rows.size()):
+				var ch2: WovpChallenge = (rows[i] as Dictionary).get("challenge") as WovpChallenge
+				if ch2 != null and ch2.type_code == WovpChallenge.TYPE_TOURNAMENT:
+					br_idx = i
+					break
+			if br_idx < 0:
+				_tw_stage = 3
+				_tw_sub = 0
+				_tw_wait = 0
+				return
+			match _tw_sub:
+				0:
+					_room._set_focused(_room._panels[br_idx])
+					_tw_wait = 0
+					_tw_sub = 1
+				1:
+					_tw_wait += 1
+					var bs2: Dictionary = _room.tournament_board_state()
+					var ch3: WovpChallenge = (rows[br_idx] as Dictionary).get("challenge") as WovpChallenge
+					if ch3 != null and str(bs2.get("challenge_id", "")) == ch3.challenge_id \
+							and not _room.page_slide_active() and _tw_wait >= 12:
+						_grad_save_grab("tournament_walk_br.png")
+						_tw_stage = 3
+						_tw_sub = 0
+						_tw_wait = 0
+					elif _tw_wait > 900:
+						_tournament_fail("selection walk: the Battle Royale board never paired for its grab")
+						_tw_stage = 3
+						_tw_sub = 0
+						_tw_wait = 0
+		3:
+			# Hand the room back the way the pairing phase
+			# used to: centred on the season table with its
+			# board paired - the rendered legs below were
+			# written against that standing state.
+			match _tw_sub:
+				0:
+					_room._set_focused(_room._panels[0])
+					_tw_wait = 0
+					_tw_sub = 1
+				1:
+					_tw_wait += 1
+					var bs3: Dictionary = _room.tournament_board_state()
+					var ch0: WovpChallenge = (rows[0] as Dictionary).get("challenge") as WovpChallenge
+					if ch0 != null and str(bs3.get("challenge_id", "")) == ch0.challenge_id \
+							and not _room.page_slide_active() and _tw_wait >= 12:
+						_tournament_smoke_phase = 3
+					elif _tw_wait > 900:
+						_tournament_fail("selection walk: the season board never re-paired for the rendered legs")
+						_tournament_smoke_phase = 3
+
+
+func _tournament_row_table_name(row: Dictionary) -> String:
+	var g: GameEntry = row.get("game") as GameEntry
+	if g != null and g.title != "":
+		return g.title
+	var ch: WovpChallenge = row.get("challenge") as WovpChallenge
+	return ch.table_name if ch != null else "?"
+
+
+## One centre's standing-state verdicts (the walk's stage
+## 1): the pairing stands, no challenge is hidden or
+## borrowed away, the board's seat holds no card, and the
+## board's text region stands clear of the centred card's
+## silhouette from a ring of eye offsets (the same ring
+## the grad census judges the wing by).
+func _tournament_walk_judge_centre(i: int, row: Dictionary) -> void:
+	var tname: String = _tournament_row_table_name(row)
+	var ch: WovpChallenge = row.get("challenge") as WovpChallenge
+	var bs: Dictionary = _room.tournament_board_state()
+	_tournament_expect(ch != null and str(bs.get("challenge_id", "")) == ch.challenge_id,
+		"selection walk: '%s' pairs its board when selected" % tname)
+	var hidden: Array = []
+	for j: int in range(_room._panels.size()):
+		var p: ClickableQuad = _room._panels[j]
+		if p == null or not p.visible or not p.pick_enabled:
+			hidden.append(j)
+	_tournament_expect(int(bs.get("borrowed_idx", -1)) == -1 and hidden.is_empty(),
+		"selection walk: no challenge is hidden by the board at '%s' (borrowed %d, hidden %s)"
+			% [tname, int(bs.get("borrowed_idx", -1)), str(hidden)])
+	var seat: Vector2i = bs.get("seat", Vector2i(-1, -1))
+	var seat_holds: int = -1
+	for j: int in range(_room._visible_games.size()):
+		if j != i and _room._grid_coord(j) == seat:
+			seat_holds = j
+	_tournament_expect(seat.x > _room._grid_coord(i).x and seat_holds < 0,
+		"pairing ends: the board's seat at '%s' holds no card (seat %s)" % [tname, str(seat)])
+	var cam: Camera3D = _room._active_camera()
+	if cam == null or not bool(bs.get("exists", false)):
+		return
+	var bt: Transform3D = bs.get("transform", Transform3D())
+	var bsz: Vector2 = bs.get("size", Vector2.ZERO)
+	var centre_panel: ClickableQuad = _room._panels[i]
+	var covered: String = ""
+	for off: Vector3 in COMPANION_EYE_RING:
+		var eye: Vector3 = cam.global_position + off
+		var bpoly: Array[Vector2] = _grad_quad_screen_points_from(cam, eye, bt, Vector2(bsz.x * 0.46, bsz.y * 0.47))
+		var cpoly: Array[Vector2] = _grad_quad_screen_points_from(cam, eye, centre_panel.global_transform, centre_panel.quad_size() * 0.5)
+		if _grad_polys_overlap(bpoly, cpoly):
+			if _grad_poly_intersect_area(bpoly, cpoly) > 4.0:
+				covered = str(off)
+				break
+		elif _grad_poly_min_gap(bpoly, cpoly) < 4.0:
+			covered = str(off) + " (graze)"
+			break
+	_tournament_expect(covered == "",
+		"board whole: '%s' board text stands clear of its card from every viewpoint%s"
+			% [tname, "" if covered == "" else " (covered from " + covered + ")"])
+
+
+## The wing-sized board probe (layout mode, GRADFIX2
+## item 2): the field's own board - the Phantom extra from
+## the repo's real-shaped fixture, parsed by the
+## production parser - rendered at the WING's pixel size.
+## Its band is the longest in the league's set ("SEASON -
+## EXTRA - Phantom of the Opera"): at the GRAD FIX wing's
+## squash it ran off the canvas; here the band must ink
+## whole with nothing touching the canvas's right edge,
+## and every score must fit its column. Under
+## PVLDS_GRADFIX_NC=oldband the band's fit is off and the
+## leg fails by name.
+func _layout_wing_probe_start() -> void:
+	_layout_wing_probe_done = false
+	_layout_wing_probe = {}
+	var text: String = FileAccess.get_file_as_string("res://data/wovp/challenges_search.json")
+	var parsed: Dictionary = WovpClient.parse_challenges(text)
+	if not bool(parsed.get("ok", false)):
+		_layout_wing_probe_done = true
+		return
+	var phantom: WovpChallenge = null
+	for cv: Variant in (parsed.get("challenges", []) as Array):
+		var cand: WovpChallenge = cv as WovpChallenge
+		if cand != null and cand.type_code == WovpChallenge.TYPE_EXTRA:
+			phantom = cand
+			break
+	if phantom == null:
+		_layout_wing_probe_done = true
+		return
+	var now_unix: int = int(Time.get_unix_time_from_system())
+	var spec: Dictionary = RoomSpecs.tournament_board_spec(phantom, true, _wovp_user_id, now_unix)
+	var px: Vector2i = Vector2i(Vector2(RoomSpecs.board_face_px()) * _room._wing_size() / RoomSpecs.board_panel_size())
+	var tex: Texture2D = await _room._factory.render_texture(spec, px)
+	var metrics: Dictionary = _room._factory.face_board_metrics()
+	_layout_wing_probe = {"texture": tex, "rows": metrics.get("rows", []), "px": px,
+		"band_text": str(spec.get("band_text", ""))}
+	_layout_wing_probe_done = true
+
+
+func _tournament_leg_wing_board() -> void:
+	_tournament_expect(not _layout_wing_probe.is_empty(),
+		"board whole: the Phantom board rendered at the wing's size to be judged")
+	if _layout_wing_probe.is_empty():
+		return
+	var scores_ok: bool = true
+	var score_why: String = ""
+	for rv: Variant in (_layout_wing_probe.get("rows", []) as Array):
+		var rd: Dictionary = rv
+		if str(rd.get("kind", "")) != "score":
+			continue
+		var need: float = float(rd.get("score_need_px", 0.0))
+		var allot: float = float(rd.get("score_allot_px", 0.0))
+		if need > allot + 1.0:
+			scores_ok = false
+			score_why = "score '%s' needs %.0fpx, allotted %.0fpx" % [str(rd.get("score_text", "")), need, allot]
+			break
+	_tournament_expect(scores_ok,
+		"board whole: at the wing's width every Phantom score fits its column%s" % ("" if scores_ok else " - " + score_why))
+	var tex: Texture2D = _layout_wing_probe.get("texture") as Texture2D
+	var img: Image = tex.get_image() if tex != null else null
+	_tournament_expect(img != null and not img.is_empty(),
+		"board whole: the wing-sized Phantom render carries an image")
+	if img == null or img.is_empty():
+		return
+	var w: int = img.get_width()
+	var band_ink: int = 0
+	var edge_ink: int = 0
+	for x: int in range(30, w):
+		for y: int in range(10, 58):
+			var px2: Color = img.get_pixel(x, y)
+			if px2.r + px2.g + px2.b > 1.7:
+				band_ink += 1
+				if x >= w - 3:
+					edge_ink += 1
+	_tournament_expect(band_ink > 40 and edge_ink == 0,
+		"board whole: the band '%s' renders whole at the wing's width (band ink %d, edge ink %d)"
+			% [str(_layout_wing_probe.get("band_text", "")), band_ink, edge_ink])
+	var grab_dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if grab_dir != "":
+		img.save_png(grab_dir.path_join("tournament_board_phantom_wing.png"))
 
 
 func _tournament_leg_boards() -> void:
