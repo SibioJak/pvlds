@@ -239,6 +239,8 @@ var _nav_rail_started: bool = false ## the rail-focus leg runs async (it waits o
 var _nav_rail_done: bool = false ## the rail-focus leg (async) has reported
 var _nav_fav_started: bool = false ## the X-favorites leg runs async (feeds + re-renders); kicked off once
 var _nav_fav_done: bool = false ## the X-favorites leg (async) has reported
+var _nav_b_started: bool = false ## the B-exit leg (GRADFIX4 item 4) runs async; kicked off once
+var _nav_b_done: bool = false ## the B-exit leg has reported
 var _shot_slide_path: String = "" ## --pvlds-shot-slide P: capture the drum mid-swing
 var _shot_slide_phase: int = -1
 var _shot_slide_frames: int = 0
@@ -3326,6 +3328,12 @@ var _grad_sweep_settle: int = 0
 var _grad_labels_measured: int = 0
 var _grad_long_min_bottom: float = INF
 var _grad_bg_before: Array = []
+var _grad_bookcover_worst: float = 0.0 ## worst whole-book excess over its untilted twin (px) - GRADFIX4 item 2's margin
+var _grad_sky_stage: int = 0 ## the sky-pass proof's stage (phase 13)
+var _grad_sky_since: int = 0 ## the sky stage's start stamp (msec)
+var _grad_sky_far_yaw0: float = 0.0
+var _grad_sky_near_yaw0: float = 0.0
+var _grad_sky_img: Dictionary = {} ## named sky grabs held for centroid measurement
 var _grad_power_stage: int = 0
 var _grad_power_wait: int = 0
 var _grad_power_since: int = 0 ## msec at the current power stage's entry (waits are wall-clock: harness frame rates vary 20x)
@@ -3751,6 +3759,8 @@ func _drive_grad_smoke() -> void:
 			_grad_swing_step()
 		12:
 			_grad_named_step()
+		13:
+			_grad_sky_step()
 
 
 func _grad_leg_library() -> void:
@@ -3974,6 +3984,213 @@ func _grad_leg_background_lock() -> void:
 		"background world-lock: no layer moved while the drum swept the shelf")
 
 
+## A sky grab's brightness centroid over its top band (the
+## wall's band of frame, drum hidden): the parallax proofs'
+## raw measure. Returns the ink-weighted mean x and the ink
+## count; a translating star field moves the centroid by
+## (very nearly) its own translation.
+func _grad_sky_centroid(img: Image) -> Vector2:
+	var w: int = img.get_width()
+	var h: int = int(float(img.get_height()) * 0.45)
+	var sum: float = 0.0
+	var wsum: float = 0.0
+	for y: int in range(0, h, 2):
+		for x: int in range(0, w, 2):
+			var lum: float = img.get_pixel(x, y).get_luminance()
+			if lum > 0.30:
+				sum += lum * float(x)
+				wsum += lum
+	return Vector2(sum / wsum if wsum > 0.0 else -1.0, wsum)
+
+
+## The sky pass proofs (GRADFIX4 item 5, phase 13): the
+## drift's world-space truth read off the room's own state,
+## the parallax read off RENDERED pairs (each layer isolated,
+## displaced opposite the motion, near more than far), the
+## head-yaw direction proof (a static layer sweeps opposite
+## a right turn by the turned amount), the zenith's even
+## density (no pole pinch), and the pinpoint profile. Grabs:
+## gradfix4_sky_up.png (straight up), gradfix4_sky_level.png
+## and gradfix4_sky_below.png (the ring from level and from
+## below). Under PVLDS_BG_NC=uv the pre-fix UV field stands
+## and the zenith + pinpoint legs fail by name.
+func _grad_sky_step() -> void:
+	var layers: Array = _room.background_layers()
+	if layers.size() != 4:
+		_grad_fail("sky: the background stack is missing")
+		_grad_phase = 3
+		_grad_wait = 0
+		return
+	var far_shell: Node3D = layers[0] as Node3D
+	var near_shell: Node3D = layers[1] as Node3D
+	var wire: Node3D = layers[2] as Node3D
+	var ring: Node3D = layers[3] as Node3D
+	var cam: Camera3D = _room._active_camera()
+	_grad_wait += 1
+	match _grad_sky_stage:
+		0:
+			_room.drum_node().visible = false
+			wire.visible = false
+			ring.visible = false
+			_room.set_starfield_mode("layered")
+			far_shell.visible = false
+			near_shell.visible = true
+			_grad_sky_stage = 1
+			_grad_wait = 0
+		1:
+			if _grad_wait > 6:
+				_grad_sky_img["near0"] = get_viewport().get_texture().get_image()
+				_grad_sky_near_yaw0 = float(_room.starfield_drift_state().get("near_yaw_deg", 0.0))
+				far_shell.visible = true
+				near_shell.visible = false
+				_grad_sky_stage = 2
+				_grad_wait = 0
+		2:
+			if _grad_wait > 6:
+				_grad_sky_img["far0"] = get_viewport().get_texture().get_image()
+				_grad_sky_far_yaw0 = float(_room.starfield_drift_state().get("far_yaw_deg", 0.0))
+				_grad_sky_since = Time.get_ticks_msec()
+				_grad_sky_stage = 3
+				_grad_wait = 0
+		3:
+			if Time.get_ticks_msec() - _grad_sky_since > 9000:
+				_grad_sky_img["far1"] = get_viewport().get_texture().get_image()
+				_grad_sky_img["far_yaw1"] = float(_room.starfield_drift_state().get("far_yaw_deg", 0.0))
+				far_shell.visible = false
+				near_shell.visible = true
+				_grad_sky_stage = 4
+				_grad_wait = 0
+		4:
+			if _grad_wait > 6:
+				_grad_sky_img["near1"] = get_viewport().get_texture().get_image()
+				var near_yaw1: float = float(_room.starfield_drift_state().get("near_yaw_deg", 0.0))
+				var far_yaw1: float = float(_grad_sky_img.get("far_yaw1", 0.0))
+				var far_adv: float = fposmod(far_yaw1 - _grad_sky_far_yaw0, 360.0)
+				var near_adv: float = fposmod(near_yaw1 - _grad_sky_near_yaw0, 360.0)
+				print("GRAD SKY: drift over the window - far advanced %.2f deg, near %.2f deg (speeds %.2f / %.2f deg/s)"
+					% [far_adv, near_adv, RoomView.BG_DRIFT_FAR_DEG, RoomView.BG_DRIFT_NEAR_DEG])
+				_grad_expect(far_adv > 0.5 and near_adv > far_adv * 1.5,
+					"sky drift: both layers drift in world space, the near layer faster (far %.2f deg, near %.2f deg over the window)" % [far_adv, near_adv])
+				var nc0: Vector2 = _grad_sky_centroid(_grad_sky_img["near0"])
+				var nc1: Vector2 = _grad_sky_centroid(_grad_sky_img["near1"])
+				var fc0: Vector2 = _grad_sky_centroid(_grad_sky_img["far0"])
+				var fc1: Vector2 = _grad_sky_centroid(_grad_sky_img["far1"])
+				var nshift: float = nc1.x - nc0.x
+				var fshift: float = fc1.x - fc0.x
+				print("GRAD SKY: rendered drift - near centroid %.1f -> %.1f (%.1f px), far %.1f -> %.1f (%.1f px)"
+					% [nc0.x, nc1.x, nshift, fc0.x, fc1.x, fshift])
+				_grad_expect(nc0.y > 200.0 and fc0.y > 200.0,
+					"sky parallax: both layers carry measurable ink (near %.0f, far %.0f)" % [nc0.y, fc0.y])
+				_grad_expect(nshift < -8.0 and fshift < -3.0 and absf(nshift) > absf(fshift) * 1.3,
+					"sky parallax: rendered pairs displace leftward under the drift, the near layer more than the far (near %.1f px, far %.1f px)" % [nshift, fshift])
+				_room.set_starfield_mode("flat")
+				_grad_sky_stage = 5
+				_grad_wait = 0
+		5:
+			if _grad_wait > 6:
+				_grad_sky_img["yaw0"] = get_viewport().get_texture().get_image()
+				_room._desk_rig.rotation.y = deg_to_rad(-14.0) ## the head turns RIGHT
+				_grad_sky_stage = 6
+				_grad_wait = 0
+		6:
+			if _grad_wait > 6:
+				_grad_sky_img["yaw1"] = get_viewport().get_texture().get_image()
+				var yc0: Vector2 = _grad_sky_centroid(_grad_sky_img["yaw0"])
+				var yc1: Vector2 = _grad_sky_centroid(_grad_sky_img["yaw1"])
+				var img_w: float = float((_grad_sky_img["yaw0"] as Image).get_width())
+				var aspect: float = img_w / float((_grad_sky_img["yaw0"] as Image).get_height())
+				var hfov: float = rad_to_deg(2.0 * atan(tan(deg_to_rad(cam.fov * 0.5)) * aspect))
+				var expected: float = 14.0 / hfov * img_w
+				print("GRAD SKY: yaw pair - centroid %.1f -> %.1f (%.1f px against an expected %.1f px for a 14 deg turn)"
+					% [yc0.x, yc1.x, yc1.x - yc0.x, expected])
+				_grad_expect(yc1.x - yc0.x < -0.45 * expected,
+					"sky yaw: a right head turn sweeps the static field LEFT, opposite the turn, by the turned amount (%.1f px of %.1f expected)" % [yc1.x - yc0.x, expected])
+				_room._desk_rig.rotation.y = 0.0
+				_room.set_starfield_mode("layered")
+				far_shell.visible = true
+				near_shell.visible = true
+				_grad_sky_stage = 7
+				_grad_wait = 0
+		7:
+			if _grad_wait > 6:
+				cam.rotation_degrees = Vector3(90.0, 0.0, 0.0) ## straight up
+				_grad_sky_stage = 8
+				_grad_wait = 0
+		8:
+			if _grad_wait > 6:
+				_grad_save_grab("gradfix4_sky_up.png")
+				var up: Image = get_viewport().get_texture().get_image()
+				var uw: int = up.get_width()
+				var uh: int = up.get_height()
+				var cx: float = float(uw) * 0.5
+				var cy: float = float(uh) * 0.5
+				var rmax: float = float(mini(uw, uh))
+				var c_in: int = 0
+				var c_tot: int = 0
+				var r_in: int = 0
+				var r_tot: int = 0
+				for yy: int in range(0, uh, 3):
+					for xx: int in range(0, uw, 3):
+						var rr: float = Vector2(float(xx) - cx, float(yy) - cy).length() / rmax
+						var ink: bool = up.get_pixel(xx, yy).get_luminance() > 0.30
+						if rr < 0.25:
+							c_tot += 1
+							if ink:
+								c_in += 1
+						elif rr > 0.55 and rr < 0.75:
+							r_tot += 1
+							if ink:
+								r_in += 1
+				var cdens: float = float(c_in) / float(maxi(c_tot, 1))
+				var rdens: float = float(r_in) / float(maxi(r_tot, 1))
+				var ratio: float = cdens / maxf(rdens, 0.0001)
+				print("GRAD SKY: zenith densities - centre %.4f, ring %.4f, ratio %.2f" % [cdens, rdens, ratio])
+				_grad_expect(ratio > 0.45 and ratio < 2.2,
+					"sky zenith: looking straight up, the star density stays even - no pole pinch (centre/ring %.2f)" % ratio)
+				# Pinpoint: the far field's hard-core fraction -
+				# ink above 0.85 against ink above 0.30. A soft
+				# blob spends most of its footprint under its
+				# core; a pinpoint is nearly all core.
+				var fimg: Image = _grad_sky_img["far0"]
+				var ink30: int = 0
+				var ink85: int = 0
+				for yy2: int in range(0, int(float(fimg.get_height()) * 0.45), 2):
+					for xx2: int in range(0, fimg.get_width(), 2):
+						var lum2: float = fimg.get_pixel(xx2, yy2).get_luminance()
+						if lum2 > 0.30:
+							ink30 += 1
+						if lum2 > 0.85:
+							ink85 += 1
+				var core: float = float(ink85) / float(maxi(ink30, 1))
+				print("GRAD SKY: pinpoint core fraction %.3f (ink30 %d, ink85 %d)" % [core, ink30, ink85])
+				_grad_expect(core > 0.20,
+					"sky pinpoint: the stars are hard points, not soft blobs (core fraction %.3f)" % core)
+				cam.rotation_degrees = Vector3.ZERO
+				_grad_sky_stage = 9
+				_grad_wait = 0
+		9:
+			if _grad_wait > 4:
+				ring.visible = true
+				_grad_sky_stage = 10
+				_grad_wait = 0
+		10:
+			if _grad_wait > 6:
+				_grad_save_grab("gradfix4_sky_level.png")
+				cam.rotation_degrees = Vector3(24.0, 0.0, 0.0)
+				_grad_sky_stage = 11
+				_grad_wait = 0
+		11:
+			if _grad_wait > 6:
+				_grad_save_grab("gradfix4_sky_below.png")
+				cam.rotation_degrees = Vector3.ZERO
+				_room.drum_node().visible = true
+				wire.visible = true
+				_room.set_starfield_mode("layered")
+				_grad_phase = 3
+				_grad_wait = 0
+				_grad_power_stage = 0
+
+
 ## The sweep: centre every shelf index in turn; at each
 ## settled centre, measure the visible labels.
 func _grad_sweep_step() -> void:
@@ -3998,8 +4215,8 @@ func _grad_sweep_step() -> void:
 	_grad_sweep_i += 1
 	_grad_sweep_settle = 0
 	if _grad_sweep_i >= n:
-		print("GRAD CENSUS: %d centres, %d labels measured, long-title label bottom %.4f m, rail intrusion max %.1f px (%s), fringe rail intrusions beyond the browsing zone %d, wing-whole worst overlap %.1f px, wing-whole worst clearance %.1f px, pop fringe worst %.1f px, wingcard excess worst %.1f px"
-			% [n, _grad_labels_measured, _grad_long_min_bottom, _grad_rail_max_depth, _grad_rail_worst, _grad_fringe_rail, _grad_wingwhole_max, _grad_wingwhole_min_gap if _grad_wingwhole_min_gap < 1.0e8 else -1.0, _grad_pop_worst, _grad_wingcard_worst])
+		print("GRAD CENSUS: %d centres, %d labels measured, long-title label bottom %.4f m, rail intrusion max %.1f px (%s), fringe rail intrusions beyond the browsing zone %d, wing-whole worst overlap %.1f px, wing-whole worst clearance %.1f px, pop fringe worst %.1f px, wingcard excess worst %.1f px, bookcover excess worst %.1f px"
+			% [n, _grad_labels_measured, _grad_long_min_bottom, _grad_rail_max_depth, _grad_rail_worst, _grad_fringe_rail, _grad_wingwhole_max, _grad_wingwhole_min_gap if _grad_wingwhole_min_gap < 1.0e8 else -1.0, _grad_pop_worst, _grad_wingcard_worst, _grad_bookcover_worst])
 		_grad_expect(_grad_labels_measured > n,
 			"census: labels were measured across the sweep (%d)" % _grad_labels_measured)
 		_grad_audit_labels("post-sweep")
@@ -4517,6 +4734,48 @@ func _grad_measure_centre(c: int) -> void:
 				_grad_wingcard_worst = maxf(_grad_wingcard_worst, area - baseline)
 				if area - baseline > 512.0:
 					_grad_count("wingcard", "centre %d: the wing encroaches on panel %d's card (%.0f px beyond the same book untilted at its seat)" % [c, j, area - baseline])
+	# The WHOLE BOOK against every drawn card (GRADFIX4
+	# item 2): the field's NFL capture had the panel covering
+	# its left neighbour - and the GRADFIX3 census charged
+	# only the page's face, never the dressing around it (the
+	# cast-shadow slab and page slabs the field fault
+	# actually wore stood outside the charged silhouette
+	# entirely). This leg charges the book's FULL silhouette
+	# - face + shared frame + spine knuckle (the frame size,
+	# padded by the knuckle's reach) - against every card,
+	# on the same untilted-twin baseline at the same seat and
+	# depth, under a TIGHTER bound: 256 px, half the old
+	# face-only fringe. The GRADFIX4 book carries no slabs
+	# and no shadow; what remains chargeable is the hinge
+	# tilt's own swing, and the worst excess prints with the
+	# census line.
+	if not wing_poly.is_empty():
+		var book_half: Vector2 = (wing["frame_size"] as Vector2) * 0.5 + Vector2(0.02, 0.0)
+		var book_t: Transform3D = wing["transform"]
+		var book_poly: Array[Vector2] = _grad_quad_screen_points(book_t, book_half, cam)
+		var book_holder_t: Transform3D = wing.get("holder_transform", Transform3D())
+		var book_base_poly: Array[Vector2] = _grad_quad_screen_points(book_holder_t, book_half, cam)
+		var book_dist: float = book_t.origin.distance_to(cam.global_position)
+		var book_borrowed_idx: int = int(wing.get("borrowed_idx", -1))
+		for j2: int in range(_room._panels.size()):
+			if j2 == book_borrowed_idx:
+				continue # the book stands in this card's slot - its own ground
+			var other2: ClickableQuad = _room._panels[j2]
+			if other2 == null or not other2.visible:
+				continue
+			if not _nav_on_screen(other2.global_position, cam):
+				continue
+			if other2.global_transform.origin.distance_to(cam.global_position) < book_dist - 0.01:
+				continue # the card stands in front of the book - it covers, it is not covered
+			var cpoly3: Array[Vector2] = _grad_quad_screen_points(other2.global_transform, other2.quad_size() * 0.5, cam)
+			if _grad_polys_overlap(book_poly, cpoly3):
+				var barea: float = _grad_poly_intersect_area(book_poly, cpoly3)
+				var bbase: float = 0.0
+				if not book_base_poly.is_empty() and _grad_polys_overlap(book_base_poly, cpoly3):
+					bbase = _grad_poly_intersect_area(book_base_poly, cpoly3)
+				_grad_bookcover_worst = maxf(_grad_bookcover_worst, barea - bbase)
+				if barea - bbase > 256.0:
+					_grad_count("bookcover", "centre %d: the book (both pages' dressing) covers panel %d's card (%.0f px beyond the same book untilted at its seat)" % [c, j2, barea - bbase])
 	# The wing's TEXT against the popped centre card.
 	# GRADFIX2's leg charged any overlap or graze of a
 	# text rect (0.44 x 0.47 of the face) from an eye ring
@@ -4620,6 +4879,7 @@ func _grad_census_verdicts() -> void:
 		["pop", "census: the popped centre's label never drapes a neighbour's art (fringe bound 512 px)"],
 		["wing", "wing occlusion: the wing eats no label at any centre"],
 		["wingcard", "wing occlusion: the wing encroaches on no card past the fringe bound at any centre"],
+		["bookcover", "book cover: the whole book (frame, knuckle, page) covers no card past its bound at any centre"],
 		["plinth", "plinth: no name block under its Launch plinth at any centre"],
 		["platecover", "nameplate cover: every name block stands wholly on its plate at any centre"],
 		["cardbounds", "nameplate bounds: every name block stands inside its own card at any centre"],
@@ -4678,9 +4938,9 @@ func _grad_named_step() -> void:
 	var named: Dictionary = _grad_manifest.get("named_ids", {}) as Dictionary
 	var titles: Array = named.keys()
 	if _grad_named_i >= titles.size():
-		_grad_phase = 3
+		_grad_phase = 13
+		_grad_sky_stage = 0
 		_grad_wait = 0
-		_grad_power_stage = 0
 		return
 	var title: String = str(titles[_grad_named_i])
 	var idx: int = _grad_panel_index(str(named[title]))
@@ -5025,7 +5285,8 @@ func _drive_nav_smoke() -> void:
 				_nav_leg_rail_focus_async()
 		7:
 			if _nav_fav_done:
-				_finish_nav_smoke()
+				_nav_smoke_wait = 0
+				_nav_smoke_phase = 8
 				return
 			_nav_smoke_wait += 1
 			if _nav_smoke_wait > 7200:
@@ -5034,6 +5295,17 @@ func _drive_nav_smoke() -> void:
 			elif not _nav_fav_started and _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
 				_nav_fav_started = true
 				_nav_leg_favorites_async()
+		8:
+			if _nav_b_done:
+				_finish_nav_smoke()
+				return
+			_nav_smoke_wait += 1
+			if _nav_smoke_wait > 7200:
+				_nav_smoke_fail("the B-exit leg never finished")
+				_finish_nav_smoke()
+			elif not _nav_b_started and _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
+				_nav_b_started = true
+				_nav_leg_b_exit_async()
 
 
 func _nav_expect(cond: bool, label: String) -> void:
@@ -5573,6 +5845,30 @@ func _nav_leg_bumpers_async() -> void:
 ## frames, release, two frames: the release matters, because
 ## the room's edge tracking keys off the poll seeing the
 ## button up again before the next press can count.
+## The B exit (GRADFIX4 item 4, async): in the Tournament
+## view, B returns to Table Select. B was unassigned in the
+## room's wall mode before this round (it served only the
+## detail escape and the SETUP panel's close); the leg
+## enters the Tournament view on the rail stop, feeds a real
+## B press through the pad poll, and judges the landing: the
+## library wall stands again and focus rests on the bar's
+## tournament stop, where his hand already is. A second B in
+## the library must do nothing. Under PVLDS_B_NC=nobexit
+## the press does nothing and the leg fails by name.
+func _nav_leg_b_exit_async() -> void:
+	_room._handle_rail("tournament")
+	_nav_expect(_room.tournament_active(), "B exit: the TOURNAMENT stop raises the Tournament view")
+	await _nav_feed_button(JOY_BUTTON_B)
+	_nav_expect(not _room.tournament_active(),
+		"B exit: B in the Tournament view returns to Table Select")
+	_nav_expect(_nav_key_of(_room.focused_quad()) == "tournament",
+		"B exit: focus lands on the bar's tournament stop")
+	await _nav_feed_button(JOY_BUTTON_B)
+	_nav_expect(not _room.tournament_active() and _room._mode == "wall",
+		"B exit: B in Table Select does nothing")
+	_nav_b_done = true
+
+
 func _nav_feed_button(btn: JoyButton) -> void:
 	var press: InputEventJoypadButton = InputEventJoypadButton.new()
 	press.device = 0
@@ -7140,6 +7436,42 @@ func _layout_digit_ink(tex: Texture2D, row: Dictionary) -> bool:
 	return ink >= 3 and spill == 0
 
 
+## The block (GRADFIX4 item 3): the challenges compose a
+## shelf section of their own - a two-band block starting
+## TOURN_BLOCK_COL0 columns in - instead of the skinny
+## single column the fin removal left behind. Judged from
+## the room's own seat map: every challenge inside the
+## block, every seat distinct, the block's first column
+## exactly the pad, its width the two-band fill's width.
+func _tournament_leg_block() -> void:
+	var rows: Array = _room.tournament_rows()
+	_tournament_expect(rows.size() >= 4,
+		"tourn layout: the seeded challenges stand to compose the block (got %d)" % rows.size())
+	var seen: Dictionary = {}
+	var min_col: int = 1 << 30
+	var max_col: int = -1
+	var bad: String = ""
+	for i: int in range(rows.size()):
+		var cc: Vector2i = _room._grid_coord(i)
+		if cc.x < RoomView.TOURN_BLOCK_COL0 or cc.y < RoomView.TOURN_BAND0 or cc.y >= RoomView.TOURN_BAND0 + RoomView.TOURN_BAND_COUNT:
+			bad = "challenge %d stands at %s, outside the block" % [i, str(cc)]
+			break
+		if seen.has(str(cc)):
+			bad = "two challenges share seat %s" % str(cc)
+			break
+		seen[str(cc)] = true
+		min_col = mini(min_col, cc.x)
+		max_col = maxi(max_col, cc.x)
+	if bad == "":
+		var want_cols: int = int(ceil(float(rows.size()) / float(RoomView.TOURN_BAND_COUNT)))
+		if min_col != RoomView.TOURN_BLOCK_COL0 or max_col - min_col + 1 != want_cols:
+			bad = "the block spans columns %d..%d, want %d columns from %d" % [min_col, max_col, want_cols, RoomView.TOURN_BLOCK_COL0]
+	_tournament_expect(bad == "",
+		"tourn layout: the challenges compose the two-band block (pad %d, bands %d-%d, one seat each, intentional ends)%s"
+			% [RoomView.TOURN_BLOCK_COL0, RoomView.TOURN_BAND0, RoomView.TOURN_BAND0 + RoomView.TOURN_BAND_COUNT - 1,
+				"" if bad == "" else " - " + bad])
+
+
 func _drive_tournament_full() -> void:
 	match _tournament_smoke_phase:
 		0:
@@ -7158,6 +7490,7 @@ func _drive_tournament_full() -> void:
 		1:
 			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy():
 				_tournament_leg_boards()
+				_tournament_leg_block()
 				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 20000
 				_tournament_smoke_phase = 2
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
@@ -7226,6 +7559,7 @@ func _drive_tournament_full() -> void:
 					_tournament_smoke_wait += 1
 					if _tournament_smoke_wait >= 12 and not _room.page_slide_active():
 						_grad_save_grab("tournament_pairing_unowned.png")
+						_grad_save_grab("tournament_block_end.png") ## GRADFIX4: the block's far end, composed
 						_room._set_centre(0, false)
 						_tournament_pairing_stage = 2
 						_tournament_smoke_wait = 0
@@ -7241,6 +7575,7 @@ func _drive_tournament_full() -> void:
 					_tournament_smoke_wait += 1
 					if _tournament_smoke_wait >= 12 and not _room.page_slide_active():
 						_grad_save_grab("tournament_pairing_owned.png")
+						_grad_save_grab("tournament_block_start.png") ## GRADFIX4: the block's near end, composed
 						# On to the selection walk (phase
 						# 14): the pairing above teleported
 						# the centre; the walk must now prove
@@ -7659,8 +7994,43 @@ func _tournament_walk_judge_centre(i: int, row: Dictionary) -> void:
 	for j: int in range(_room._visible_games.size()):
 		if j != i and _room._grid_coord(j) == seat:
 			seat_holds = j
-	_tournament_expect(seat.x > _room._grid_coord(i).x and seat_holds < 0,
-		"pairing ends: the board's seat at '%s' holds no card (seat %s)" % [tname, str(seat)])
+	# GRADFIX4 (item 3): the seat law inside the block - the
+	# book's home is the OTHER BAND of the focused column,
+	# else a free slot rightward; never a card's slot, never
+	# the centre's own.
+	var ccoord: Vector2i = _room._grid_coord(i)
+	var other_band: int = RoomView.TOURN_BAND0 + (1 - (ccoord.y - RoomView.TOURN_BAND0))
+	_tournament_expect(seat_holds < 0 and seat != ccoord
+			and (seat == Vector2i(ccoord.x, other_band) or seat.x > ccoord.x),
+		"pairing ends: the board's seat at '%s' holds no card (seat %s, centre %s)" % [tname, str(seat), str(ccoord)])
+	# GRADFIX4 (item 6): the standing board's face must be a
+	# REAL rendered board - full face size, inked with text
+	# variance - never the factory's fallback solid standing
+	# blank (the field's empty Walking Dead board). Under
+	# PVLDS_GRADFIX4_NC=solidboard the first render per key
+	# lands the solid and counts it, and this leg fails by
+	# name at every centre.
+	var btex: Texture2D = bs.get("texture") as Texture2D
+	var bink: float = -1.0
+	if btex != null:
+		var bimg: Image = btex.get_image()
+		if bimg != null and not bimg.is_empty():
+			var mean: float = 0.0
+			var cnt: int = 0
+			for yy: int in range(0, bimg.get_height(), 16):
+				for xx: int in range(0, bimg.get_width(), 16):
+					mean += bimg.get_pixel(xx, yy).get_luminance()
+					cnt += 1
+			mean /= float(maxi(cnt, 1))
+			var varr: float = 0.0
+			for yy2: int in range(0, bimg.get_height(), 16):
+				for xx2: int in range(0, bimg.get_width(), 16):
+					var d: float = bimg.get_pixel(xx2, yy2).get_luminance() - mean
+					varr += d * d
+			bink = sqrt(varr / float(maxi(cnt, 1)))
+	_tournament_expect(btex != null and btex.get_width() == RoomSpecs.board_face_px().x
+			and btex.get_height() == RoomSpecs.board_face_px().y and bink > 0.02,
+		"blank board: '%s' board face is a real rendered board (size %s, ink stdev %.3f)" % [tname, str(btex.get_size()) if btex != null else "none", bink])
 	var cam: Camera3D = _room._active_camera()
 	if cam == null or not bool(bs.get("exists", false)):
 		return

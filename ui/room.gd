@@ -361,6 +361,57 @@ void fragment() {
 ## static layer, OFF is none (see _update_background).
 const BG_DRIFT_FAR_DEG: float = 0.20 ## the far shell's world-space drift, degrees per second
 const BG_DRIFT_NEAR_DEG: float = 0.45 ## the near shell's world-space drift, degrees per second (faster: it is nearer)
+## The pre-GRADFIX4 UV-grid star shaders, kept ONLY behind
+## the sky NC (PVLDS_BG_NC=uv): the UV field pinches into the
+## poles and draws soft blobs, so the sky legs (zenith,
+## pinpoint) fail against it by name. Never shipped live.
+const BG_STAR_SHADER_UV: String = """
+shader_type spatial;
+render_mode unshaded, cull_front, depth_draw_opaque;
+uniform vec4 deep_color : source_color = vec4(0.006, 0.008, 0.018, 1.0);
+uniform vec2 grid_size = vec2(220.0, 110.0);
+uniform float density = 0.82;
+uniform float star_radius = 0.16;
+uniform float brightness = 0.85;
+float cell_hash(vec2 cell) {
+	return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+}
+void fragment() {
+	vec2 cell = floor(UV * grid_size);
+	vec2 f = fract(UV * grid_size) - 0.5;
+	float h = cell_hash(cell);
+	vec2 star_pos = vec2(cell_hash(cell + 19.19), cell_hash(cell + 47.47)) - 0.5;
+	float d = length(f - star_pos * 0.72);
+	float star = smoothstep(star_radius, 0.0, d) * step(density, h);
+	float shade = 0.55 + 0.45 * cell_hash(cell + 91.31);
+	vec3 col = deep_color.rgb + vec3(0.90, 0.93, 1.0) * star * shade * brightness;
+	ALBEDO = col;
+}
+"""
+const BG_STAR_NEAR_SHADER_UV: String = """
+shader_type spatial;
+render_mode unshaded, cull_front, depth_draw_opaque;
+uniform vec2 grid_size = vec2(120.0, 60.0);
+uniform float density = 0.86;
+uniform float star_radius = 0.26;
+uniform float brightness = 1.0;
+float cell_hash(vec2 cell) {
+	return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+}
+void fragment() {
+	vec2 cell = floor(UV * grid_size) + vec2(37.7, 91.3);
+	vec2 f = fract(UV * grid_size) - 0.5;
+	float h = cell_hash(cell);
+	vec2 star_pos = vec2(cell_hash(cell + 19.19), cell_hash(cell + 47.47)) - 0.5;
+	float d = length(f - star_pos * 0.72);
+	float star = smoothstep(star_radius, 0.0, d) * step(density, h);
+	if (star < 0.35) {
+		discard;
+	}
+	float shade = 0.55 + 0.45 * cell_hash(cell + 91.31);
+	ALBEDO = vec3(0.90, 0.93, 1.0) * (star * shade * brightness);
+}
+"""
 const BG_STAR_NEAR_RADIUS: float = 12.0 ## the near star shell's distance (the far shell rides BG_STAR_RADIUS, 30)
 
 ## The Launch button's seat on a card: the dome face carries
@@ -974,7 +1025,7 @@ func _build_background() -> void:
 	stars.mesh = sphere
 	var sm: ShaderMaterial = ShaderMaterial.new()
 	var sh: Shader = Shader.new()
-	sh.code = BG_STAR_SHADER
+	sh.code = BG_STAR_SHADER_UV if debug_bg_nc == "uv" else BG_STAR_SHADER
 	sm.shader = sh
 	stars.material_override = sm
 	stars.position = EYE
@@ -998,7 +1049,7 @@ func _build_background() -> void:
 	near_stars.mesh = near_sphere
 	var nsm: ShaderMaterial = ShaderMaterial.new()
 	var nsh: Shader = Shader.new()
-	nsh.code = BG_STAR_NEAR_SHADER
+	nsh.code = BG_STAR_NEAR_SHADER_UV if debug_bg_nc == "uv" else BG_STAR_NEAR_SHADER
 	nsm.shader = nsh
 	near_stars.material_override = nsm
 	near_stars.position = EYE
@@ -5307,6 +5358,11 @@ func wing_state() -> Dictionary:
 		"transform": _wing_quad.global_transform if _wing_quad != null else _wing.global_transform,
 		"holder_transform": _wing.global_transform,
 		"size": _wing_size(),
+		# GRADFIX4: the book's full silhouette size - the
+		# face plus its shared frame (the census's
+		# book-cover leg judges the whole book, dressing
+		# included, not just the page).
+		"frame_size": _wing_size() + (CARD_FRAME_SIZE - CARD_SIZE),
 		"seat": _wing_seat,
 		"enabled": _wing_enabled,
 		"borrowed_idx": _wing_borrowed_idx,
