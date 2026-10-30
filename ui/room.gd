@@ -488,6 +488,14 @@ static var debug_grid_nc: String = ""
 ## view again (its pre-GRADFIX4 state), so the nav smoke's
 ## B-exit leg fails by name. Empty in every real run.
 static var debug_b_nc: String = ""
+## Negative-control seam for the blank-board heal (the
+## harness env PVLDS_GRADFIX4_NC, set by Main before any room
+## exists): "solidboard" makes the standing board's first
+## render per key land the factory's fallback solid AND
+## count it as the board (the pre-GRADFIX4 bookkeeping) -
+## the field's empty-faced board, stuck - so the heal leg
+## fails by name. Empty in every real run.
+static var debug_gf4_nc: String = ""
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
 var _bg_starfield: MeshInstance3D = null
 var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD FIX round's depth layer)
@@ -519,6 +527,32 @@ var _tboard_challenge_id: String = ""
 var _tboard_owned: bool = false
 var _tboard_borrowed_idx: int = -1 ## the panel whose slot the board stands in (-1 = none; the GRADFIX2 seating borrows none - the field survives for the oldseat NC)
 var _tboard_seat: Vector2i = Vector2i(-1, -1) ## the board's standing seat coord (see _tboard_seat_coord; the smoke's pairing legs read it)
+## GRADFIX4 item 6 (the blank-board heal): a companion's
+## standing key and its APPLIED texture's key are different
+## facts. A render whose capture came back empty lands the
+## factory's 4x4 fallback solid - a dark, textless face,
+## exactly the field's empty Walking Dead board - and under
+## the old bookkeeping that counted as the board, forever:
+## no later refresh ever re-rendered a standing key. Now the
+## applied texture's key and whether it is a REAL capture are
+## tracked separately, and a per-frame watchdog re-issues
+## the render (bounded) whenever the standing key's face is
+## missing or unreal. Same bookkeeping on both companions.
+var _tboard_tex_key: String = "" ## the key the board's APPLIED texture was rendered for
+var _tboard_tex_real: bool = false ## the applied board texture is a real capture, not the fallback solid
+var _tboard_render_key: String = "" ## the key a board render is in flight for ("" = none)
+var _tboard_retry_key: String = ""
+var _tboard_retries: int = 0
+var _tboard_retry_msec: int = 0
+var _wing_tex_key: String = "" ## the key the wing's APPLIED texture was rendered for
+var _wing_tex_real: bool = false ## the applied wing texture is a real capture, not the fallback solid
+var _wing_render_key: String = "" ## the key a wing render is in flight for ("" = none)
+var _wing_retry_key: String = ""
+var _wing_retries: int = 0
+var _wing_retry_msec: int = 0
+var _gf4_solid_spent: Dictionary = {} ## the solidboard NC's spent keys (see _render_tboard_content)
+const BOARD_TEX_MAX_RETRIES: int = 5 ## the blank-face heal's bound per standing key
+const BOARD_TEX_RETRY_MS: int = 600 ## the heal's minimum interval between re-renders
 var _wing_slot: Transform3D = Transform3D() ## the wing's seated slot transform on the drum (its pop offset applies per frame)
 var _wing_seat: Vector2i = Vector2i(-1, -1) ## the wing's standing seat coord (the grad census's baseline reads it)
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
@@ -3133,10 +3167,13 @@ func _refresh_wing() -> void:
 			break
 	var key: String = game.game_id + "|" + (ch.challenge_id if ch != null else "") \
 		+ "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id
-	if key == _wing_key and _wing_game_id == game.game_id:
-		return
 	_wing_key = key
 	_wing_game_id = game.game_id
+	if key == _wing_tex_key and _wing_tex_real:
+		return ## the standing key's real face already stands
+	if _wing_render_key == key:
+		return ## its render is already in flight
+	_wing_render_key = key
 	_render_wing_content(game, ch, key)
 
 
@@ -3234,8 +3271,64 @@ func _render_wing_content(game: GameEntry, ch: WovpChallenge, key: String) -> vo
 		int(float(RoomSpecs.board_face_px().y) * _wing_size().y / RoomSpecs.board_panel_size().y))
 	var tex: Texture2D = await _factory.render_texture(spec, px)
 	if tex == null or key != _wing_key:
+		if _wing_render_key == key:
+			_wing_render_key = ""
 		return
+	_wing_render_key = ""
 	_wing_mat.albedo_texture = tex
+	_wing_tex_key = key
+	_wing_tex_real = _tex_is_real(tex)
+
+
+## A real capture is never the factory's fallback: the
+## fallback solid is 4x4, every real face renders at its
+## spec size (hundreds of pixels). The blank-face heal
+## (GRADFIX4 item 6) keys on this.
+func _tex_is_real(tex: Texture2D) -> bool:
+	return tex != null and tex.get_width() > 16 and tex.get_height() > 16
+
+
+## The blank-face heal, wing side (GRADFIX4 item 6): while
+## the wing stands, if its standing key's applied face is
+## missing or a fallback solid, re-issue the render -
+## throttled, and bounded per key so a truly broken renderer
+## costs five renders, not a spin.
+func _heal_wing_face() -> void:
+	if _wing_key == "" or _wing_render_key != "":
+		return
+	if _wing_tex_key == _wing_key and _wing_tex_real:
+		return
+	if _wing_retry_key != _wing_key:
+		_wing_retry_key = _wing_key
+		_wing_retries = 0
+	if _wing_retries >= BOARD_TEX_MAX_RETRIES:
+		return
+	var now: int = Time.get_ticks_msec()
+	if now - _wing_retry_msec < BOARD_TEX_RETRY_MS:
+		return
+	_wing_retry_msec = now
+	_wing_retries += 1
+	_refresh_wing()
+
+
+## The blank-face heal, board side: the same law on the
+## Tournament board's standing key.
+func _heal_tboard_face() -> void:
+	if _tboard_key == "" or _tboard_render_key != "":
+		return
+	if _tboard_tex_key == _tboard_key and _tboard_tex_real:
+		return
+	if _tboard_retry_key != _tboard_key:
+		_tboard_retry_key = _tboard_key
+		_tboard_retries = 0
+	if _tboard_retries >= BOARD_TEX_MAX_RETRIES:
+		return
+	var now: int = Time.get_ticks_msec()
+	if now - _tboard_retry_msec < BOARD_TEX_RETRY_MS:
+		return
+	_tboard_retry_msec = now
+	_tboard_retries += 1
+	_refresh_tboard()
 
 
 ## Per-frame wing dressing, from _update_pop: the wing
@@ -3252,6 +3345,8 @@ func _update_wing_frame() -> void:
 		amt = _panel_pop[_centre_index]
 	var live: bool = _wing_game_id != "" and _wing_enabled and not _tournament and _mode == "wall" \
 		and not _placard_up and not _setup_panel_up and _launching_game_id == ""
+	if live:
+		_heal_wing_face()
 	_wing.visible = live and amt > 0.02
 	if not _wing.visible:
 		return
@@ -3442,10 +3537,13 @@ func _refresh_tboard() -> void:
 		_tboard_launch.visible = owned
 	var key: String = ch.challenge_id + "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id \
 		+ "|" + ("owned" if owned else "none")
-	if key == _tboard_key and _tboard_challenge_id == ch.challenge_id:
-		return
 	_tboard_key = key
 	_tboard_challenge_id = ch.challenge_id
+	if key == _tboard_tex_key and _tboard_tex_real:
+		return ## the standing key's real face already stands
+	if _tboard_render_key == key:
+		return ## its render is already in flight
+	_tboard_render_key = key
 	_render_tboard_content(ch, owned, key)
 
 
@@ -3453,9 +3551,24 @@ func _render_tboard_content(ch: WovpChallenge, owned: bool, key: String) -> void
 	var now_unix: int = int(Time.get_unix_time_from_system())
 	var spec: Dictionary = RoomSpecs.tournament_board_spec(ch, owned, _wovp_user_id, now_unix)
 	var tex: Texture2D = await _factory.render_texture(spec, RoomSpecs.board_face_px())
+	var real: bool = _tex_is_real(tex)
+	if debug_gf4_nc == "solidboard" and real and not _gf4_solid_spent.has(key):
+		# NC (PVLDS_GRADFIX4_NC=solidboard): the field's
+		# fault, restored - the first capture for the key
+		# comes back empty, the fallback solid stands as the
+		# board, and the pre-fix bookkeeping counts it as the
+		# board, so nothing ever re-renders it.
+		_gf4_solid_spent[key] = true
+		tex = TextureFactory.make_solid(Color(0.055, 0.055, 0.095))
+		real = true
 	if tex == null or key != _tboard_key:
+		if _tboard_render_key == key:
+			_tboard_render_key = ""
 		return
+	_tboard_render_key = ""
 	_tboard_mat.albedo_texture = tex
+	_tboard_tex_key = key
+	_tboard_tex_real = real
 	if owned and _tboard_launch != null:
 		var ltex: Texture2D = _btn_tex_cache.get("LAUNCH|a") as Texture2D
 		if ltex == null:
@@ -3477,6 +3590,8 @@ func _update_tboard_frame() -> void:
 		amt = _panel_pop[_centre_index]
 	var live: bool = _tournament and _tboard_challenge_id != "" and _mode == "wall" \
 		and not _placard_up and not _setup_panel_up and _launching_game_id == ""
+	if live:
+		_heal_tboard_face()
 	_tboard.visible = live and amt > 0.02
 	if _tboard_launch != null:
 		_tboard_launch.pick_enabled = _tboard.visible and _tboard_owned
@@ -3496,6 +3611,12 @@ func tournament_board_state() -> Dictionary:
 		"challenge_id": _tboard_challenge_id,
 		"has_board_texture": _tboard_mat != null and _tboard_mat.albedo_texture != null,
 		"texture": _tboard_mat.albedo_texture if _tboard_mat != null else null,
+		# GRADFIX4 item 6: the heal's bookkeeping, readable -
+		# the applied texture's key, and whether it is a real
+		# capture rather than the factory's fallback solid.
+		"texture_key": _tboard_tex_key,
+		"texture_real": _tboard_tex_real,
+		"standing_key": _tboard_key,
 		# GRADFIX3: the judged surface is the book's FACE -
 		# the tilted quad inside the book frame - not the
 		# seat holder; its global transform is the page the

@@ -479,6 +479,11 @@ func _ready() -> void:
 	# nobexit): B stays unassigned in the Tournament view, so
 	# the nav smoke's B-exit leg fails against it by name.
 	RoomView.debug_b_nc = OS.get_environment("PVLDS_B_NC")
+	# GRADFIX4's blank-board negative-control seam
+	# (PVLDS_GRADFIX4_NC=solidboard): the standing board's
+	# first render lands the fallback solid and counts it,
+	# so the tournament smoke's heal leg fails by name.
+	RoomView.debug_gf4_nc = OS.get_environment("PVLDS_GRADFIX4_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
