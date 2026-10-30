@@ -203,22 +203,23 @@ const WING_Y: float = -0.02 ## the book's centre in its slot, card-local: a brea
 const WING_SIZE_NC: Vector2 = Vector2(0.66, 0.634)
 const WING_Y_NC: float = 0.225
 const WING_PROUD: float = 0.30 ## how far in front of the neighbour card the wing floats at full pop. GRADFIX3: the Standing Book separates by depth - at 0.30 the book stands a full pop (0.15) in front of the popped centre card, so no viewpoint in the room puts the card's silhouette over the book's page; GRADFIX2's 0.08 floated it inside the pop's own reach, which is how the shipped build's wing lost its right quarter behind the focused card in the field while the census (judging a nearer, timider eye ring) acquitted it.
-## The Standing Book's tilt (GRADFIX3): the book pivots on
-## its RIGHT edge - the spine side - by this many degrees,
-## its left edge swung toward the viewer (the user's
-## flipped mock: spine + shading on the right, the page
-## opening toward the tables on its left). The tilt does
-## the mock's separation work in the room: the spine edge
-## (nearest the centred card) turns AWAY from the card
-## while the page's lit left edge comes forward. Five
-## degrees, not the mock's thirteen: the census walked it
-## down - at nine the swung left edge's projection
-## scissored into the neighbouring cards' edges and the
-## wide labels among them (the grad census's wing legs
-## carry the numbers); at five the slabs, the shadow and
-## the proud float do the separating and the swing is a
-## finishing angle, not a reach.
+## The One Book's hinge angle (GRADFIX4): the text page
+## pivots on its SPINE edge - the edge nearest the centred
+## card - by this many degrees, leaning BACK from the hinge
+## so the art page and the text page read as one object
+## opened toward the viewer. The hinge, the shared frame
+## and the cover do the separating now; GRADFIX3's slabs and
+## cast shadow are gone (see _make_book). Five degrees: the
+## census walked the earlier swing down to this (at nine the
+## swung edge's projection scissored into the neighbouring
+## cards' edges), and the hinge pivot points the swing the
+## other way - the free edge turns AWAY from the neighbours
+## behind the page instead of reaching over them.
 const BOOK_TILT_DEG: float = 5.0
+## The book's cover stock: the spine knuckle's tone, in the
+## card frame's own family (the frame material itself is
+## _frame_mat - one stock, two cuts).
+const BOOK_COVER_COLOR: Color = Color(0.03, 0.035, 0.07)
 ## The companion clearance (GRADFIX2 item 2): a standing
 ## companion (the wing, the Tournament board) also shifts
 ## this far along the drum AWAY from the centred card, on
@@ -3010,55 +3011,53 @@ func _book_mat(color: Color) -> StandardMaterial3D:
 	return m
 
 
-## The Standing Book (GRADFIX3, the user's pick from the
-## panel mocks, flipped at his instruction): the dressing
-## both info panels wear - the library wing and the
-## Tournament board are ONE treatment. A book stood open
-## toward the viewer at card size: a hard cast shadow
-## thrown down-left behind it, a page block of stepped
-## slabs, a spine ridge standing on its RIGHT edge, and
-## the whole book tilted on that spine edge - the left
-## (lit) edge swung toward the viewer, the spine edge
-## turned away from the art it stands beside. The depth
-## is physical: slabs and shadow separate the book from
-## its neighbours at every viewpoint, not just the
-## census's. Returns the tilt pivot and the face holder:
-## the caller parents its face quad (and any furniture,
-## like a Launch button) to "inner", whose local frame
-## is the book's face frame.
-func _make_book(root: Node3D, size: Vector2, prefix: String) -> Dictionary:
+## ONE BOOK (GRADFIX4, the user's pick after the GRADFIX3
+## field session): the dressing both info panels wear - the
+## library wing and the Tournament board are ONE treatment,
+## and the treatment is a PAGE OF THE FOCUSED CARD'S OWN
+## BOOK. The centred card is the art page; this panel is the
+## text page; the two share a spine at their join and ONE
+## frame language - the card's own frame stock runs around
+## the text page's face exactly as it runs around the card
+## (same stock, same inset), and the face's paper sits inside
+## a cover border of the same stock (see CardFace's page).
+## The hinge is the SPINE EDGE - the edge NEAREST the centred
+## card - and the page leans back BOOK_TILT_DEG on that edge:
+## spine_sign +1 puts the spine at the page's right edge (the
+## wing, which stands LEFT of its card), -1 at its left edge
+## (the board, which stands RIGHT of its card). GRADFIX3's
+## cast-shadow slab and page-block slabs are GONE (GRADFIX4
+## item 2: the black opaque slab on left-seated panels goes
+## entirely, not softened) - separation comes from the hinge
+## and the shared cover. What remains: the frame, one spine
+## knuckle straddling the join edge, and the face. Returns
+## the tilt pivot and the face holder: the caller parents its
+## face quad (and any furniture, like a Launch button) to
+## "inner", whose local frame is the book's face frame.
+func _make_book(root: Node3D, size: Vector2, prefix: String, spine_sign: float) -> Dictionary:
 	var tilt: Node3D = Node3D.new()
 	tilt.name = prefix + "BookTilt"
-	tilt.position = Vector3(size.x * 0.5, 0.0, 0.0)
-	tilt.rotation.y = deg_to_rad(BOOK_TILT_DEG)
+	tilt.position = Vector3(spine_sign * size.x * 0.5, 0.0, 0.0)
+	tilt.rotation.y = spine_sign * deg_to_rad(BOOK_TILT_DEG)
 	root.add_child(tilt)
 	var inner: Node3D = Node3D.new()
 	inner.name = prefix + "BookFace"
-	inner.position = Vector3(-size.x * 0.5, 0.0, 0.0)
+	inner.position = Vector3(-spine_sign * size.x * 0.5, 0.0, 0.0)
 	tilt.add_child(inner)
-	# The cast shadow: a dark slab behind the book, thrown
-	# down and to the LEFT - the flipped mock's shadow
-	# falls away from its right-hand spine.
-	var shadow: MeshInstance3D = _make_card_quad(inner,
-		size + Vector2(0.07, 0.07), Vector3(-0.04, -0.05, -0.085),
-		_book_mat(Color(0.0, 0.0, 0.0, 0.5)))
-	shadow.name = prefix + "BookShadow"
-	# The page block: three slabs stepping back and
-	# growing - the book's thickness, made of page edges.
-	var edge_cols: Array[Color] = [Color(0.13, 0.15, 0.22), Color(0.09, 0.105, 0.16), Color(0.055, 0.065, 0.105)]
-	for i: int in range(3):
-		var slab: MeshInstance3D = _make_card_quad(inner,
-			size + Vector2(0.016, 0.016) * float(i + 1),
-			Vector3(0.0, 0.0, -0.02 * float(i + 1)),
-			_book_mat(edge_cols[i]))
-		slab.name = prefix + "BookPage" + str(i + 1)
-	# The spine ridge: a dark bar down the RIGHT edge,
-	# standing slightly proud of the page block behind
-	# the face - the book's hinge, and the side its
-	# shading deepens toward (see CardFace's page).
+	# The shared frame: the card's frame stock at the card's
+	# own inset, so the text page and the art page carry the
+	# same border - the single-object read lives here.
+	var frame: MeshInstance3D = _make_card_quad(inner,
+		size + (CARD_FRAME_SIZE - CARD_SIZE), Vector3(0.0, 0.0, -0.007),
+		_frame_mat(false))
+	frame.name = prefix + "BookFrame"
+	# The spine knuckle: a dark bar straddling the join edge,
+	# the book's hinge made visible - it reaches a little
+	# INTO the gap toward the art page, never onto it.
 	var spine: MeshInstance3D = _make_card_quad(inner,
-		Vector2(0.05, size.y + 0.035), Vector3(size.x * 0.5 - 0.01, 0.0, -0.03),
-		_book_mat(Color(0.03, 0.035, 0.06)))
+		Vector2(0.055, size.y + (CARD_FRAME_SIZE.y - CARD_SIZE.y)),
+		Vector3(spine_sign * (size.x * 0.5 + 0.010), 0.0, -0.012),
+		_book_mat(BOOK_COVER_COLOR))
 	spine.name = prefix + "BookSpine"
 	return {"tilt": tilt, "inner": inner}
 
@@ -3069,10 +3068,11 @@ func _build_wing() -> void:
 	_wing = Node3D.new()
 	_wing.name = "FocusWing"
 	_wing.visible = false
-	# The Standing Book (GRADFIX3): the wing wears the
-	# book's dressing - shadow, page block, spine, tilt -
-	# and its face quad lives in the book's face frame.
-	var book: Dictionary = _make_book(_wing, _wing_size(), "Wing")
+	# The One Book (GRADFIX4): the wing is the text page of
+	# the centred card's book - spine at its right edge, the
+	# join with the art page - and its face quad lives in the
+	# book's face frame.
+	var book: Dictionary = _make_book(_wing, _wing_size(), "Wing", 1.0)
 	_wing_tilt = book["tilt"] as Node3D
 	_wing_quad = MeshInstance3D.new()
 	var qm: QuadMesh = QuadMesh.new()
@@ -3141,11 +3141,12 @@ func _build_tboard() -> void:
 	_tboard = Node3D.new()
 	_tboard.name = "TournamentBoard"
 	_tboard.visible = false
-	# The Standing Book (GRADFIX3): the Tournament board
-	# wears the wing's book dressing - one treatment for
-	# both info panels. Its Launch button lives in the
-	# book's face frame, over the face's footer plinth.
-	var book: Dictionary = _make_book(_tboard, RoomSpecs.board_panel_size(), "Board")
+	# The One Book (GRADFIX4): the Tournament board is the
+	# text page of the focused challenge card's book - spine
+	# at its LEFT edge, the join with the art page. Its
+	# Launch button lives in the book's face frame, over the
+	# face's footer plinth.
+	var book: Dictionary = _make_book(_tboard, RoomSpecs.board_panel_size(), "Board", -1.0)
 	_tboard_tilt = book["tilt"] as Node3D
 	var tinner: Node3D = book["inner"] as Node3D
 	_tboard_quad = MeshInstance3D.new()

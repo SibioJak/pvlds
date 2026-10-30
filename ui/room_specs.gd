@@ -393,6 +393,10 @@ static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: Strin
 		"chips": chips,
 		"rows": rows,
 		"footer_px": (0 if board_nc_old else BOARD_FOOTER_PX) if owned else 0,
+		# GRADFIX4 (One Book): the standing board stands RIGHT
+		# of its card, so its spine - the join with the art
+		# page - is its LEFT edge.
+		"spine_side": "left",
 	}
 
 
@@ -451,6 +455,11 @@ static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_u
 			rows.append(m)
 		spec["rows"] = rows
 		spec["footer_px"] = 0 ## the wing carries no Launch button: the board's footer band is metadata room instead
+		# GRADFIX4 (One Book): the wing stands LEFT of its
+		# card, so its spine - the join with the art page -
+		# is its RIGHT edge (tournament_board_spec defaults
+		# to the standing board's left).
+		spec["spine_side"] = "right"
 		return spec
 	return {
 		"kind": "board",
@@ -464,6 +473,7 @@ static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_u
 		"sub": "",
 		"rows": meta,
 		"footer_px": 0,
+		"spine_side": "right",
 	}
 
 

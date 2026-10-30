@@ -13,9 +13,12 @@ extends Control
 ##            deadline line, then stacked board rows - score
 ##            rows (his carries the accent ground), a divider
 ##            row where the cutoff line falls, and note rows.
-##            GRADFIX3 (the Standing Book): the face is a
-##            book page - a gradient darkening toward a
-##            spine ridge on the RIGHT, and EVERY line is
+##            GRADFIX4 (One Book): the face is a page of the
+##            focused card's own book - the paper sits inside
+##            a cover border of the card frame's stock, a
+##            gradient darkening toward a spine ridge on the
+##            page's SPINE edge (spec "spine_side": the edge
+##            that joins the art page), and EVERY line is
 ##            centred: band, title, deadline, and each score
 ##            row as a centred block (position / name / score
 ##            at natural widths, the name ellipsizing in the
@@ -69,9 +72,11 @@ const FAVORITE_STAR_COLOR: Color = Color(1.0, 0.78, 0.25)
 const BOARD_SCORE_COL_MAX_PX: float = 330.0
 
 var _bg: ColorRect
-var _page_rect: TextureRect ## board kind: the Standing Book's page gradient (light at the left, darkening toward the spine at the right)
-var _spine_line: ColorRect ## board kind: the spine ridge's highlight hairline, near the face's right edge
-var _spine_shade: ColorRect ## board kind: the dark fall past the spine hairline, to the face's right edge
+var _cover_rect: ColorRect ## board kind (GRADFIX4, One Book): the book's cover - a border of the card frame's own stock around the page, so the text page and the art page wear the same frame
+var _page_tex: GradientTexture2D ## board kind: the page gradient, aimed per spec at the spine side
+var _page_rect: TextureRect ## board kind: the One Book's page gradient (lit at the free edge, darkening toward the spine)
+var _spine_line: ColorRect ## board kind: the spine ridge's highlight hairline, just inside the spine edge
+var _spine_shade: ColorRect ## board kind: the dark fall past the spine hairline, to the spine edge
 var _margin: MarginContainer
 var _vbox: VBoxContainer
 var _band_panel: PanelContainer
@@ -97,25 +102,38 @@ func _init() -> void:
 	_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(_bg)
 
-	# The Standing Book's page (GRADFIX3): a board face is a
-	# page stood open - lit at its left, shading down toward
-	# the spine on its RIGHT (the user's flipped mock). The
-	# gradient and the spine furniture draw over the ground
-	# and under every line of type; they stand only for the
-	# board kind, asserted per spec like everything else on
-	# this shared face.
+	# The One Book's page (GRADFIX4): a board face is a page
+	# of the focused card's own book - the paper sits inside
+	# a COVER of the card frame's stock (the border the 3D
+	# frame quad continues around the page), lit at its free
+	# edge and shading down toward the spine, which sits at
+	# whichever edge joins the art page (spec "spine_side":
+	# "right" for the library wing, "left" for the Tournament
+	# board). The gradient and the spine furniture draw over
+	# the ground and under every line of type; they stand
+	# only for the board kind, asserted per spec like
+	# everything else on this shared face.
+	_cover_rect = ColorRect.new()
+	_cover_rect.color = Color(0.025, 0.03, 0.06)
+	_cover_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_cover_rect.visible = false
+	add_child(_cover_rect)
 	_page_rect = TextureRect.new()
 	var page_grad: Gradient = Gradient.new()
 	page_grad.set_color(0, Color(0.115, 0.145, 0.225))
 	page_grad.set_color(1, Color(0.035, 0.045, 0.09))
-	var page_tex: GradientTexture2D = GradientTexture2D.new()
-	page_tex.gradient = page_grad
-	page_tex.fill_from = Vector2(0.0, 0.5)
-	page_tex.fill_to = Vector2(1.0, 0.5)
-	page_tex.width = 256
-	page_tex.height = 8
-	_page_rect.texture = page_tex
+	_page_tex = GradientTexture2D.new()
+	_page_tex.gradient = page_grad
+	_page_tex.fill_from = Vector2(0.0, 0.5)
+	_page_tex.fill_to = Vector2(1.0, 0.5)
+	_page_tex.width = 256
+	_page_tex.height = 8
+	_page_rect.texture = _page_tex
 	_page_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_page_rect.offset_left = 10.0
+	_page_rect.offset_top = 10.0
+	_page_rect.offset_right = -10.0
+	_page_rect.offset_bottom = -10.0
 	_page_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_page_rect.stretch_mode = TextureRect.STRETCH_SCALE
 	_page_rect.visible = false
@@ -282,18 +300,30 @@ func apply_spec(spec: Dictionary) -> void:
 	var bg: Color = _color_of(spec, "bg", Color(0.05, 0.05, 0.09))
 	var band: Color = _color_of(spec, "band", Color(0.25, 0.25, 0.38))
 	_bg.color = bg
-	# The Standing Book's page furniture stands for board
-	# faces only (GRADFIX3); the spine ridge hugs the face's
-	# RIGHT edge - the gradient darkens toward it and the
-	# hairline + fall sit just inside the edge.
+	# The One Book's page furniture stands for board faces
+	# only (GRADFIX4); the spine ridge hugs the page's SPINE
+	# edge - the edge that joins the art page (spec
+	# "spine_side", default "right") - the gradient darkens
+	# toward it and the hairline + fall sit just inside the
+	# cover border.
+	_cover_rect.visible = kind == "board"
 	_page_rect.visible = kind == "board"
 	_spine_line.visible = kind == "board"
 	_spine_shade.visible = kind == "board"
 	if kind == "board" and size.x > 0.0:
-		_spine_line.position = Vector2(size.x - 34.0, 0.0)
-		_spine_line.size = Vector2(3.0, size.y)
-		_spine_shade.position = Vector2(size.x - 31.0, 0.0)
-		_spine_shade.size = Vector2(31.0, size.y)
+		var spine_left: bool = str(spec.get("spine_side", "right")) == "left"
+		_page_tex.fill_from = Vector2(1.0, 0.5) if spine_left else Vector2(0.0, 0.5)
+		_page_tex.fill_to = Vector2(0.0, 0.5) if spine_left else Vector2(1.0, 0.5)
+		if spine_left:
+			_spine_shade.position = Vector2(10.0, 10.0)
+			_spine_shade.size = Vector2(31.0, size.y - 20.0)
+			_spine_line.position = Vector2(41.0, 10.0)
+			_spine_line.size = Vector2(3.0, size.y - 20.0)
+		else:
+			_spine_line.position = Vector2(size.x - 44.0, 10.0)
+			_spine_line.size = Vector2(3.0, size.y - 20.0)
+			_spine_shade.position = Vector2(size.x - 41.0, 10.0)
+			_spine_shade.size = Vector2(31.0, size.y - 20.0)
 	_art_rect.visible = kind == "art"
 	# The name strip rides art faces by default; a spec may
 	# suppress it ("strip": false) when the surface carries
