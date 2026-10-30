@@ -5294,6 +5294,53 @@ func _rail_focus_neighbour(step: int) -> ClickableQuad:
 	return null
 
 
+## The trap NC (GRADFIX3 item 3): PVLDS_TOURN_NC=trap
+## restores the shipped descent - DOWN from the bottom of a
+## column falls through to the screen-projection walk
+## instead of taking the deterministic descent edge. Its
+## scope is stated plainly: on this box's mono desk camera
+## the shipped projection still lands on the bar, so the
+## tournament smoke's descent legs pass under the NC too -
+## the trap is a headset-camera condition (the walk scored
+## through the XR camera's unprojection) that no mono
+## camera here reproduces. What the NC restores is the
+## DEPENDENCE; the fix removes it, which is the strongest
+## statement the evidence supports. Empty in every real
+## run.
+func _descent_legacy() -> bool:
+	return OS.get_environment("PVLDS_TOURN_NC") == "trap"
+
+
+## The descent to the bar (GRADFIX3 item 3): DOWN from the
+## bottom of a card column lands on the desk bar - the rail
+## stop nearest the card in CAMERA SPACE (the camera's own
+## sideways axis), a projection-free measure that holds for
+## the headset's camera exactly as for the desk's: which
+## stop is "under where you are" is a fact about the room,
+## not about a viewport. The bar is always reachable from
+## the cards by this edge, in every view that has cards -
+## the exit legs judge it from every tournament challenge.
+func _descend_to_bar() -> void:
+	var cam: Camera3D = _active_camera()
+	var from_x: float = 0.0
+	if cam != null and _focused != null:
+		from_x = (cam.global_transform.affine_inverse() * _focused.global_position).x
+	var best: ClickableQuad = null
+	var best_d: float = INF
+	for key: String in RAIL_FOCUS_ORDER:
+		var q: ClickableQuad = _rail_quads.get(key) as ClickableQuad
+		if q == null or not q.pick_enabled or not _focusables.has(q):
+			continue
+		var d: float = 0.0
+		if cam != null:
+			d = absf((cam.global_transform.affine_inverse() * q.global_position).x - from_x)
+		if best == null or d < best_d - 0.001:
+			best_d = d
+			best = q
+	if best != null:
+		_set_focused(best)
+
+
 func _move_focus(dir: Vector2) -> void:
 	if _focusables.is_empty():
 		return
@@ -5306,11 +5353,17 @@ func _move_focus(dir: Vector2) -> void:
 	# steps on the index, not projection steps across a
 	# curved wall (the projection walk below would score a
 	# neighbour two columns away over the adjacent card at
-	# the sphere's edge). DOWN from the bottom band is the
-	# one exit: it falls through to the projection walk,
-	# whose country law lands it on the rail. The centre
-	# follows focus (see _update_pop), so the drum swings
-	# under every step.
+	# the sphere's edge). DOWN from the bottom of a column
+	# is the one exit, and since GRADFIX3 it is a graph edge
+	# of its own (the descent to the bar, _descend_to_bar):
+	# the shipped room let it fall through to the projection
+	# walk - the focus graph's only view-dependent edge -
+	# and in the headset that edge is the one that died
+	# ("cant't exit tournie screen, cant get back down to
+	# bar once up top", the user's field report); every
+	# projection-independent step worked there, as here. The
+	# centre follows focus (see _update_pop), so the drum
+	# swings under every step.
 	var pidx: int = _panels.find(_focused)
 	if pidx >= 0 and _mode == "wall" and (not _tournament or not _tournament_legacy()):
 		var coord: Vector2i = _grid_coord(pidx)
@@ -5323,9 +5376,26 @@ func _move_focus(dir: Vector2) -> void:
 		if absf(dir.y) > 0.5 and dir.y < 0.0 and coord.y > 0:
 			_set_focused(_panels[_index_at(coord.x, coord.y - 1)])
 			return
-		if absf(dir.y) > 0.5 and dir.y > 0.0 and coord.y < 2:
-			_set_focused(_panels[_index_at(coord.x, coord.y + 1)])
-			return
+		if absf(dir.y) > 0.5 and dir.y > 0.0:
+			var below: int = _index_at(coord.x, coord.y + 1) if coord.y < 2 else pidx
+			if below != pidx:
+				_set_focused(_panels[below])
+				return
+			if not _descent_legacy():
+				# The bottom of the column: the descent
+				# to the bar (GRADFIX3 item 3) - a graph
+				# edge of its own (see _descend_to_bar),
+				# not a fall through to the projection
+				# walk below.
+				_descend_to_bar()
+				return
+			# The trap NC (PVLDS_TOURN_NC=trap) restores
+			# the shipped behaviour: the descent falls
+			# through to the projection walk - the one
+			# view-dependent edge in the focus graph,
+			# and the one the field convicted ("cant't
+			# exit tournie screen, cant get back down to
+			# bar once up top").
 	# The rail is its own navigation country (Chris's field
 	# report, 2026-10-24): a sideways step along the control rail
 	# used to be scored against every quad in the room, and the
