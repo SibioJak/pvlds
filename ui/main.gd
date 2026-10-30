@@ -4281,13 +4281,15 @@ func _grad_sky_step() -> void:
 					"sky zenith: looking straight up, the star density stays even - no pole pinch (centre/ring %.2f)" % ratio)
 				# The pinch's sharper signature is in the COUNT,
 				# not the coverage: where a UV field's cells
-				# converge on the pole, its stars overlap and
-				# merge, so the centre holds FEWER, fatter blobs
-				# per unit area while the bright-pixel coverage
-				# barely moves (measured 1.09 under the UV NC -
-				# coverage alone cannot convict it). A direction
-				# field keeps its stars separate everywhere, so
-				# the count density stays even centre to ring.
+				# converge on the pole, vastly more cells (hence
+				# star discs) crowd into each unit of sky, so the
+				# centre's countable blobs per unit area EXPLODE
+				# (measured 7.71x under the UV NC) while the
+				# bright-pixel coverage barely moves (0.90-1.09 -
+				# the crowded discs are squashed as fast as they
+				# multiply, so coverage alone cannot convict it).
+				# A direction field distributes by solid angle,
+				# so the count density stays even centre to ring.
 				var zblobs: Array = _grad_sky_blobs(up, 1.0)
 				var zc: int = 0
 				var zr: int = 0
