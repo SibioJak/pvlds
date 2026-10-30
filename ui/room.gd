@@ -435,6 +435,12 @@ static var debug_boot_nc: String = ""
 ## name. Empty in every real run (the shelf fills
 ## column-major - see _grid_coord).
 static var debug_grid_nc: String = ""
+## Negative-control seam for the Tournament view's B exit
+## (the harness env PVLDS_B_NC, set by Main before any room
+## exists): "nobexit" leaves B unassigned in the Tournament
+## view again (its pre-GRADFIX4 state), so the nav smoke's
+## B-exit leg fails by name. Empty in every real run.
+static var debug_b_nc: String = ""
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
 var _bg_starfield: MeshInstance3D = null
 var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD FIX round's depth layer)
@@ -1214,6 +1220,27 @@ func _enter_tournament() -> void:
 ## alternatives, never layers.
 func _exit_tournament() -> void:
 	_tournament = false
+
+
+## B in the Tournament view returns to Table Select
+## (GRADFIX4 item 4 - the user's hand voted: "I feel like I
+## want to press B in tournie screen to get to table
+## select"). B was unassigned in the room's wall mode - it
+## served only the detail view's escape and the SETUP
+## panel's close - so this claims no other mapping. The
+## exit mirrors the rail exits exactly (fresh centre, the
+## library wall rebuilt, the view persisted) and lands the
+## focus on the bar's tournament stop, where his hand
+## already is - the rail law (an activation keeps focus on
+## the bar) applied to a departure.
+func _b_exit_tournament() -> void:
+	_exit_tournament()
+	_page = 0
+	_centre_index = 0
+	_recompute_visible()
+	_rebuild_wall()
+	_persist_view()
+	_land_on_rail_stop("tournament")
 
 
 func page_count() -> int:
@@ -5234,6 +5261,8 @@ func _process(delta: float) -> void:
 			_detail.handle_escape()
 		elif _setup_panel_up:
 			hide_setup_panel() ## B is BACK on the SETUP panel too
+		elif _tournament and _mode == "wall" and debug_b_nc != "nobexit":
+			_b_exit_tournament() ## B leaves the Tournament view for Table Select (GRADFIX4 item 4)
 	_joy_prev_b = b_now
 	# Y: More Info for the focused card (Chris's swap ruling,
 	# 2026-10-26 - A starts, Y informs). Edge only, like A

@@ -475,6 +475,10 @@ func _ready() -> void:
 	# across-the-band shelf fill so the grad census's
 	# column-order leg fails against it by name.
 	RoomView.debug_grid_nc = OS.get_environment("PVLDS_GRID_NC")
+	# GRADFIX4's B-exit negative-control seam (PVLDS_B_NC=
+	# nobexit): B stays unassigned in the Tournament view, so
+	# the nav smoke's B-exit leg fails against it by name.
+	RoomView.debug_b_nc = OS.get_environment("PVLDS_B_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
