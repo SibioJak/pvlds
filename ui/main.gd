@@ -3984,23 +3984,95 @@ func _grad_leg_background_lock() -> void:
 		"background world-lock: no layer moved while the drum swept the shelf")
 
 
-## A sky grab's brightness centroid over its top band (the
-## wall's band of frame, drum hidden): the parallax proofs'
-## raw measure. Returns the ink-weighted mean x and the ink
-## count; a translating star field moves the centroid by
-## (very nearly) its own translation.
-func _grad_sky_centroid(img: Image) -> Vector2:
+## A sky grab's star blobs over its top band (the wall's
+## band of frame, drum hidden): the image is max-pooled 3x3
+## (a pinpoint star survives pooling; the pooled grid keeps
+## the flood fill cheap), thresholded, and flood-filled
+## into blobs - each {x, y (full-res px), size (full-res
+## px^2)}. The parallax proofs match blobs between a pair
+## of grabs and take the MEDIAN displacement: a sparse
+## field's raw centroid is dominated by edge entries and
+## exits, but the median matched star moves by the field's
+## own translation.
+func _grad_sky_blobs(img: Image) -> Array:
 	var w: int = img.get_width()
 	var h: int = int(float(img.get_height()) * 0.45)
-	var sum: float = 0.0
-	var wsum: float = 0.0
-	for y: int in range(0, h, 2):
-		for x: int in range(0, w, 2):
-			var lum: float = img.get_pixel(x, y).get_luminance()
-			if lum > 0.30:
-				sum += lum * float(x)
-				wsum += lum
-	return Vector2(sum / wsum if wsum > 0.0 else -1.0, wsum)
+	var pw: int = w / 3
+	var ph: int = h / 3
+	var grid: Array = []
+	grid.resize(pw * ph)
+	for py: int in range(ph):
+		for px: int in range(pw):
+			var best: float = 0.0
+			for dy: int in range(3):
+				for dx: int in range(3):
+					var lum: float = img.get_pixel(px * 3 + dx, py * 3 + dy).get_luminance()
+					if lum > best:
+						best = lum
+			grid[py * pw + px] = 1 if best > 0.30 else 0
+	var blobs: Array = []
+	var stack: Array[int] = []
+	for start: int in range(pw * ph):
+		if int(grid[start]) != 1:
+			continue
+		grid[start] = 2
+		stack.clear()
+		stack.append(start)
+		var cnt: int = 0
+		var sx: float = 0.0
+		var sy: float = 0.0
+		while not stack.is_empty():
+			var cur: int = stack.pop_back()
+			var cx: int = cur % pw
+			var cy: int = cur / pw
+			cnt += 1
+			sx += float(cx)
+			sy += float(cy)
+			var nbs: Array[int] = []
+			if cx > 0:
+				nbs.append(cur - 1)
+			if cx < pw - 1:
+				nbs.append(cur + 1)
+			if cy > 0:
+				nbs.append(cur - pw)
+			if cy < ph - 1:
+				nbs.append(cur + pw)
+			for nb: int in nbs:
+				if int(grid[nb]) != 1:
+					continue
+				grid[nb] = 2
+				stack.append(nb)
+		blobs.append({
+			"x": (sx / float(cnt)) * 3.0 + 1.0,
+			"y": (sy / float(cnt)) * 3.0 + 1.0,
+			"size": float(cnt) * 9.0,
+		})
+	return blobs
+
+
+## The median x-displacement of blobs matched between two
+## grabs (nearest neighbour within 60 px), and the match
+## count. -9999.0 when too few blobs match to judge.
+func _grad_sky_median_shift(a: Array, b: Array) -> Vector2:
+	var shifts: Array[float] = []
+	for bb: Variant in b:
+		var bd: Dictionary = bb
+		var best_d: float = 3600.0
+		var best_dx: float = 0.0
+		for aa: Variant in a:
+			var ad: Dictionary = aa
+			var dx: float = float(bd["x"]) - float(ad["x"])
+			var dy: float = float(bd["y"]) - float(ad["y"])
+			var d2: float = dx * dx + dy * dy
+			if d2 < best_d:
+				best_d = d2
+				best_dx = dx
+		if best_d < 3600.0:
+			shifts.append(best_dx)
+	if shifts.size() < 12:
+		return Vector2(-9999.0, float(shifts.size()))
+	shifts.sort()
+	return Vector2(shifts[shifts.size() / 2], float(shifts.size()))
 
 
 ## The sky pass proofs (GRADFIX4 item 5, phase 13): the
@@ -4071,18 +4143,21 @@ func _grad_sky_step() -> void:
 					% [far_adv, near_adv, RoomView.BG_DRIFT_FAR_DEG, RoomView.BG_DRIFT_NEAR_DEG])
 				_grad_expect(far_adv > 0.5 and near_adv > far_adv * 1.5,
 					"sky drift: both layers drift in world space, the near layer faster (far %.2f deg, near %.2f deg over the window)" % [far_adv, near_adv])
-				var nc0: Vector2 = _grad_sky_centroid(_grad_sky_img["near0"])
-				var nc1: Vector2 = _grad_sky_centroid(_grad_sky_img["near1"])
-				var fc0: Vector2 = _grad_sky_centroid(_grad_sky_img["far0"])
-				var fc1: Vector2 = _grad_sky_centroid(_grad_sky_img["far1"])
-				var nshift: float = nc1.x - nc0.x
-				var fshift: float = fc1.x - fc0.x
-				print("GRAD SKY: rendered drift - near centroid %.1f -> %.1f (%.1f px), far %.1f -> %.1f (%.1f px)"
-					% [nc0.x, nc1.x, nshift, fc0.x, fc1.x, fshift])
-				_grad_expect(nc0.y > 200.0 and fc0.y > 200.0,
-					"sky parallax: both layers carry measurable ink (near %.0f, far %.0f)" % [nc0.y, fc0.y])
+				var nblobs0: Array = _grad_sky_blobs(_grad_sky_img["near0"])
+				var nblobs1: Array = _grad_sky_blobs(_grad_sky_img["near1"])
+				var fblobs0: Array = _grad_sky_blobs(_grad_sky_img["far0"])
+				var fblobs1: Array = _grad_sky_blobs(_grad_sky_img["far1"])
+				var nmed: Vector2 = _grad_sky_median_shift(nblobs0, nblobs1)
+				var fmed: Vector2 = _grad_sky_median_shift(fblobs0, fblobs1)
+				var nshift: float = nmed.x
+				var fshift: float = fmed.x
+				print("GRAD SKY: rendered drift - near median star shift %.1f px (%d matched of %d/%d blobs), far %.1f px (%d matched of %d/%d)"
+					% [nshift, int(nmed.y), nblobs0.size(), nblobs1.size(), fshift, int(fmed.y), fblobs0.size(), fblobs1.size()])
+				_grad_expect(nblobs0.size() > 30 and fblobs0.size() > 30,
+					"sky parallax: both layers carry measurable stars (near %d blobs, far %d blobs)" % [nblobs0.size(), fblobs0.size()])
 				_grad_expect(nshift < -8.0 and fshift < -3.0 and absf(nshift) > absf(fshift) * 1.3,
 					"sky parallax: rendered pairs displace leftward under the drift, the near layer more than the far (near %.1f px, far %.1f px)" % [nshift, fshift])
+				_grad_sky_img["near_blobs"] = nblobs0
 				_room.set_starfield_mode("flat")
 				_grad_sky_stage = 5
 				_grad_wait = 0
@@ -4095,16 +4170,16 @@ func _grad_sky_step() -> void:
 		6:
 			if _grad_wait > 6:
 				_grad_sky_img["yaw1"] = get_viewport().get_texture().get_image()
-				var yc0: Vector2 = _grad_sky_centroid(_grad_sky_img["yaw0"])
-				var yc1: Vector2 = _grad_sky_centroid(_grad_sky_img["yaw1"])
+				var ymed: Vector2 = _grad_sky_median_shift(
+					_grad_sky_blobs(_grad_sky_img["yaw0"]), _grad_sky_blobs(_grad_sky_img["yaw1"]))
 				var img_w: float = float((_grad_sky_img["yaw0"] as Image).get_width())
 				var aspect: float = img_w / float((_grad_sky_img["yaw0"] as Image).get_height())
 				var hfov: float = rad_to_deg(2.0 * atan(tan(deg_to_rad(cam.fov * 0.5)) * aspect))
 				var expected: float = 14.0 / hfov * img_w
-				print("GRAD SKY: yaw pair - centroid %.1f -> %.1f (%.1f px against an expected %.1f px for a 14 deg turn)"
-					% [yc0.x, yc1.x, yc1.x - yc0.x, expected])
-				_grad_expect(yc1.x - yc0.x < -0.45 * expected,
-					"sky yaw: a right head turn sweeps the static field LEFT, opposite the turn, by the turned amount (%.1f px of %.1f expected)" % [yc1.x - yc0.x, expected])
+				print("GRAD SKY: yaw pair - median star shift %.1f px (%d matched) against an expected %.1f px for a 14 deg turn"
+					% [ymed.x, int(ymed.y), expected])
+				_grad_expect(ymed.x < -0.45 * expected,
+					"sky yaw: a right head turn sweeps the static field LEFT, opposite the turn, by the turned amount (%.1f px of %.1f expected)" % [ymed.x, expected])
 				_room._desk_rig.rotation.y = 0.0
 				_room.set_starfield_mode("layered")
 				far_shell.visible = true
@@ -4147,24 +4222,20 @@ func _grad_sky_step() -> void:
 				print("GRAD SKY: zenith densities - centre %.4f, ring %.4f, ratio %.2f" % [cdens, rdens, ratio])
 				_grad_expect(ratio > 0.45 and ratio < 2.2,
 					"sky zenith: looking straight up, the star density stays even - no pole pinch (centre/ring %.2f)" % ratio)
-				# Pinpoint: the far field's hard-core fraction -
-				# ink above 0.85 against ink above 0.30. A soft
-				# blob spends most of its footprint under its
-				# core; a pinpoint is nearly all core.
-				var fimg: Image = _grad_sky_img["far0"]
-				var ink30: int = 0
-				var ink85: int = 0
-				for yy2: int in range(0, int(float(fimg.get_height()) * 0.45), 2):
-					for xx2: int in range(0, fimg.get_width(), 2):
-						var lum2: float = fimg.get_pixel(xx2, yy2).get_luminance()
-						if lum2 > 0.30:
-							ink30 += 1
-						if lum2 > 0.85:
-							ink85 += 1
-				var core: float = float(ink85) / float(maxi(ink30, 1))
-				print("GRAD SKY: pinpoint core fraction %.3f (ink30 %d, ink85 %d)" % [core, ink30, ink85])
-				_grad_expect(core > 0.20,
-					"sky pinpoint: the stars are hard points, not soft blobs (core fraction %.3f)" % core)
+				# Pinpoint: the NEAR layer's median blob size.
+				# A pinpoint star is a couple of pixels across
+				# even pooled; the old UV field's soft discs
+				# (radius 0.26 of a much larger cell) pool into
+				# blobs several times that area.
+				var nblobs: Array = _grad_sky_img.get("near_blobs", [])
+				var sizes: Array[float] = []
+				for nb: Variant in nblobs:
+					sizes.append(float((nb as Dictionary).get("size", 0.0)))
+				sizes.sort()
+				var med_size: float = sizes[sizes.size() / 2] if not sizes.is_empty() else -1.0
+				print("GRAD SKY: pinpoint median near-star blob %.1f px^2 over %d blobs" % [med_size, sizes.size()])
+				_grad_expect(med_size > 0.0 and med_size < 27.0,
+					"sky pinpoint: the stars are hard points, not soft blobs (median blob %.1f px^2)" % med_size)
 				cam.rotation_degrees = Vector3.ZERO
 				_grad_sky_stage = 9
 				_grad_wait = 0
