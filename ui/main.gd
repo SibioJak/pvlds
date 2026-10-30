@@ -3993,9 +3993,9 @@ func _grad_leg_background_lock() -> void:
 ## field's raw centroid is dominated by edge entries and
 ## exits, but the median matched star moves by the field's
 ## own translation.
-func _grad_sky_blobs(img: Image) -> Array:
+func _grad_sky_blobs(img: Image, band_frac: float = 0.45) -> Array:
 	var w: int = img.get_width()
-	var h: int = int(float(img.get_height()) * 0.45)
+	var h: int = int(float(img.get_height()) * band_frac)
 	var pw: int = w / 3
 	var ph: int = h / 3
 	var grid: Array = []
@@ -4279,6 +4279,29 @@ func _grad_sky_step() -> void:
 				print("GRAD SKY: zenith densities - centre %.4f, ring %.4f, ratio %.2f" % [cdens, rdens, ratio])
 				_grad_expect(ratio > 0.45 and ratio < 2.2,
 					"sky zenith: looking straight up, the star density stays even - no pole pinch (centre/ring %.2f)" % ratio)
+				# The pinch's sharper signature is in the COUNT,
+				# not the coverage: where a UV field's cells
+				# converge on the pole, its stars overlap and
+				# merge, so the centre holds FEWER, fatter blobs
+				# per unit area while the bright-pixel coverage
+				# barely moves (measured 1.09 under the UV NC -
+				# coverage alone cannot convict it). A direction
+				# field keeps its stars separate everywhere, so
+				# the count density stays even centre to ring.
+				var zblobs: Array = _grad_sky_blobs(up, 1.0)
+				var zc: int = 0
+				var zr: int = 0
+				for zb: Variant in zblobs:
+					var zd: Dictionary = zb
+					var zrr: float = Vector2(float(zd["x"]) - cx, float(zd["y"]) - cy).length() / rmax
+					if zrr < 0.25:
+						zc += 1
+					elif zrr > 0.55 and zrr < 0.75:
+						zr += 1
+				var zratio: float = (float(zc) / 0.0625) / maxf(float(zr) / 0.26, 0.001)
+				print("GRAD SKY: zenith star counts - centre %d blobs, ring %d blobs, count-density ratio %.2f" % [zc, zr, zratio])
+				_grad_expect(zratio > 0.5 and zratio < 2.0,
+					"sky zenith: the star COUNT stays even at the pole - no pinch-merge (count-density centre/ring %.2f)" % zratio)
 				# Pinpoint: the NEAR layer's median blob size.
 				# A pinpoint star is a couple of pixels across
 				# even pooled; the old UV field's soft discs
