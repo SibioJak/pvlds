@@ -1790,7 +1790,14 @@ func _rebuild_wall() -> void:
 		_panel_labels.append(nodes.get("label") as Label3D)
 		_seat_card(idx, nodes)
 	# The bookends, one column past each end of the shelf.
-	if not _visible_games.is_empty():
+	# The Tournament view stands WITHOUT them (GRADFIX3,
+	# the user's order: "nuke the orange pillars framing
+	# tournie tables") - its shelf is a handful of
+	# challenges, and the fins framed it like a stadium it
+	# is not. The library keeps its fins (DOME3
+	# field-passed; the DOME4 window gating below is
+	# untouched and null-safe).
+	if not _visible_games.is_empty() and not _tournament:
 		_fin_start = _make_bookend(-1, true)
 		_wall.add_child(_fin_start)
 		_fin_end = _make_bookend(_columns, false)
