@@ -4050,52 +4050,51 @@ func _grad_sky_blobs(img: Image) -> Array:
 	return blobs
 
 
-## The registered x-displacement between two grabs'
-## blob fields: every pair difference (largest blobs of
-## each) votes in a 6 px histogram, and the true shift is
-## the peak bin's median - nearest-neighbour matching
-## aliases hopelessly here, because the field's own
-## translation (tens to hundreds of px) dwarfs the ~30 px
-## star spacing, but the constellation's shared shift
-## outvotes every accidental pairing. Returns (shift,
-## votes, reference count); shift -9999.0 when no peak
-## gathers a quarter of the reference blobs.
-func _grad_sky_register(a: Array, b: Array) -> Vector3:
-	var ra: Array = a.duplicate()
-	var rb: Array = b.duplicate()
-	ra.sort_custom(func(p: Dictionary, q: Dictionary) -> bool: return float(p["size"]) > float(q["size"]))
-	rb.sort_custom(func(p: Dictionary, q: Dictionary) -> bool: return float(p["size"]) > float(q["size"]))
-	ra = ra.slice(0, mini(48, ra.size()))
-	rb = rb.slice(0, mini(96, rb.size()))
-	var hist: Dictionary = {}
-	var dxs: Dictionary = {}
-	for av: Variant in ra:
+## Warp-match two grabs' blob fields under a KNOWN
+## world-space Y-rotation of theta degrees: each blob of
+## `a` is carried to where a rotation of the field by
+## theta puts it on screen (the perspective warp - a
+## Y-rotation's screen displacement grows toward the
+## frame's edges, so no single translation can register
+## the pair), then matched to the nearest blob of `b`
+## within 40 px. Returns (median x-residual, match
+## fraction). A correct warp in the correct direction
+## lands the whole constellation on itself (residual ~0,
+## most blobs matched); the opposite direction - the
+## control - lands it nowhere. This is the direction
+## proof in its sharpest form: not "the field moved
+## left", but "the field moved by exactly this rotation,
+## this way".
+func _grad_sky_warp_match(a: Array, b: Array, theta_deg: float, img_w: float, img_h: float, fov_deg: float) -> Vector2:
+	var aspect: float = img_w / img_h
+	var hfov: float = 2.0 * atan(tan(deg_to_rad(fov_deg * 0.5)) * aspect)
+	var f: float = (img_w * 0.5) / tan(hfov * 0.5)
+	var cx: float = img_w * 0.5
+	var th: float = deg_to_rad(theta_deg)
+	var residuals: Array[float] = []
+	var matched: int = 0
+	for av: Variant in a:
 		var ad: Dictionary = av
-		for bv: Variant in rb:
+		var ax: float = float(ad["x"])
+		var ay: float = float(ad["y"])
+		var wx: float = cx + f * tan(atan((ax - cx) / f) - th)
+		var best_d: float = 1600.0
+		var best_dx: float = 0.0
+		for bv: Variant in b:
 			var bd: Dictionary = bv
-			var dx: float = float(bd["x"]) - float(ad["x"])
-			var dy: float = float(bd["y"]) - float(ad["y"])
-			if absf(dy) > 9.0 or absf(dx) > 250.0:
-				continue
-			var bin: int = int(round(dx / 6.0))
-			hist[bin] = int(hist.get(bin, 0)) + 1
-			if not dxs.has(bin):
-				dxs[bin] = []
-			(dxs[bin] as Array).append(dx)
-	var peak_bin: int = 0
-	var peak_n: int = 0
-	for k: Variant in hist.keys():
-		if int(hist[k]) > peak_n:
-			peak_n = int(hist[k])
-			peak_bin = int(k)
-	if peak_n < ra.size() / 4 or peak_n == 0:
-		return Vector3(-9999.0, float(peak_n), float(ra.size()))
-	var pool: Array = []
-	for b2: int in [peak_bin - 1, peak_bin, peak_bin + 1]:
-		if dxs.has(b2):
-			pool.append_array(dxs[b2])
-	pool.sort()
-	return Vector3(float(pool[pool.size() / 2]), float(peak_n), float(ra.size()))
+			var dx: float = float(bd["x"]) - wx
+			var dy: float = float(bd["y"]) - ay
+			var d2: float = dx * dx + dy * dy
+			if d2 < best_d:
+				best_d = d2
+				best_dx = dx
+		if best_d < 1600.0:
+			matched += 1
+			residuals.append(best_dx)
+	if a.is_empty() or matched < a.size() / 4:
+		return Vector2(-9999.0, float(matched) / float(maxi(a.size(), 1)))
+	residuals.sort()
+	return Vector2(residuals[residuals.size() / 2], float(matched) / float(a.size()))
 
 
 ## The sky pass proofs (GRADFIX4 item 5, phase 13): the
@@ -4170,16 +4169,20 @@ func _grad_sky_step() -> void:
 				var nblobs1: Array = _grad_sky_blobs(_grad_sky_img["near1"])
 				var fblobs0: Array = _grad_sky_blobs(_grad_sky_img["far0"])
 				var fblobs1: Array = _grad_sky_blobs(_grad_sky_img["far1"])
-				var nreg: Vector3 = _grad_sky_register(nblobs0, nblobs1)
-				var freg: Vector3 = _grad_sky_register(fblobs0, fblobs1)
-				var nshift: float = nreg.x
-				var fshift: float = freg.x
-				print("GRAD SKY: rendered drift - near registered shift %.1f px (%d votes of %d reference blobs), far %.1f px (%d votes of %d)"
-					% [nshift, int(nreg.y), int(nreg.z), fshift, int(freg.y), int(freg.z)])
+				var iw: float = float((_grad_sky_img["near0"] as Image).get_width())
+				var ih: float = float((_grad_sky_img["near0"] as Image).get_height())
+				var nwarp: Vector2 = _grad_sky_warp_match(nblobs0, nblobs1, near_adv, iw, ih, cam.fov)
+				var fwarp: Vector2 = _grad_sky_warp_match(fblobs0, fblobs1, far_adv, iw, ih, cam.fov)
+				var nctrl: Vector2 = _grad_sky_warp_match(nblobs0, nblobs1, -near_adv, iw, ih, cam.fov)
+				print("GRAD SKY: rendered drift - near warp by +%.2f deg: %.0f%% matched, residual %.1f px; far warp by +%.2f deg: %.0f%%, %.1f px; near opposite-warp control: %.0f%%"
+					% [near_adv, nwarp.y * 100.0, nwarp.x, far_adv, fwarp.y * 100.0, fwarp.x, nctrl.y * 100.0])
 				_grad_expect(nblobs0.size() > 30 and fblobs0.size() > 30,
 					"sky parallax: both layers carry measurable stars (near %d blobs, far %d blobs)" % [nblobs0.size(), fblobs0.size()])
-				_grad_expect(nshift < -20.0 and fshift < -5.0 and absf(nshift) > absf(fshift) * 1.4,
-					"sky parallax: rendered pairs displace leftward under the drift, the near layer more than the far (near %.1f px, far %.1f px)" % [nshift, fshift])
+				_grad_expect(nwarp.y > 0.5 and absf(nwarp.x) <= 5.0 and fwarp.y > 0.5 and absf(fwarp.x) <= 5.0,
+					"sky parallax: each rendered layer moved by exactly its own world rotation, near faster than far (near +%.2f deg: %.0f%% matched, residual %.1f px; far +%.2f deg: %.0f%%, %.1f px)"
+						% [near_adv, nwarp.y * 100.0, nwarp.x, far_adv, fwarp.y * 100.0, fwarp.x])
+				_grad_expect(nctrl.y < nwarp.y * 0.5,
+					"sky parallax: the opposite warp lands nowhere - the drift's direction is the world's, not the view's (control %.0f%% against %.0f%%)" % [nctrl.y * 100.0, nwarp.y * 100.0])
 				_grad_sky_img["near_blobs"] = nblobs0
 				_room.set_starfield_mode("flat")
 				_grad_sky_stage = 5
@@ -4193,16 +4196,18 @@ func _grad_sky_step() -> void:
 		6:
 			if _grad_wait > 6:
 				_grad_sky_img["yaw1"] = get_viewport().get_texture().get_image()
-				var yreg: Vector3 = _grad_sky_register(
-					_grad_sky_blobs(_grad_sky_img["yaw0"]), _grad_sky_blobs(_grad_sky_img["yaw1"]))
-				var img_w: float = float((_grad_sky_img["yaw0"] as Image).get_width())
-				var aspect: float = img_w / float((_grad_sky_img["yaw0"] as Image).get_height())
-				var hfov: float = rad_to_deg(2.0 * atan(tan(deg_to_rad(cam.fov * 0.5)) * aspect))
-				var expected: float = 14.0 / hfov * img_w
-				print("GRAD SKY: yaw pair - registered shift %.1f px (%d votes of %d) against an expected %.1f px for a 14 deg turn"
-					% [yreg.x, int(yreg.y), int(yreg.z), expected])
-				_grad_expect(yreg.x < -0.45 * expected and yreg.x > -1.6 * expected,
-					"sky yaw: a right head turn sweeps the static field LEFT, opposite the turn, by the turned amount (%.1f px of %.1f expected)" % [yreg.x, expected])
+				var yblobs0: Array = _grad_sky_blobs(_grad_sky_img["yaw0"])
+				var yblobs1: Array = _grad_sky_blobs(_grad_sky_img["yaw1"])
+				var yw: float = float((_grad_sky_img["yaw0"] as Image).get_width())
+				var yh: float = float((_grad_sky_img["yaw0"] as Image).get_height())
+				var ywarp: Vector2 = _grad_sky_warp_match(yblobs0, yblobs1, 14.0, yw, yh, cam.fov)
+				var yctrl: Vector2 = _grad_sky_warp_match(yblobs0, yblobs1, -14.0, yw, yh, cam.fov)
+				print("GRAD SKY: yaw pair - warp by the turn (+14 deg): %.0f%% matched, residual %.1f px; opposite warp: %.0f%%"
+					% [ywarp.y * 100.0, ywarp.x, yctrl.y * 100.0])
+				_grad_expect(ywarp.y > 0.5 and absf(ywarp.x) <= 5.0,
+					"sky yaw: a right head turn sweeps the static field opposite the turn by exactly the turned amount (%.0f%% matched under the turn's own warp, residual %.1f px)" % [ywarp.y * 100.0, ywarp.x])
+				_grad_expect(yctrl.y < ywarp.y * 0.5,
+					"sky yaw: the opposite warp lands nowhere - the field is world-fixed, not view-fixed (control %.0f%% against %.0f%%)" % [yctrl.y * 100.0, ywarp.y * 100.0])
 				_room._desk_rig.rotation.y = 0.0
 				_room.set_starfield_mode("layered")
 				far_shell.visible = true
