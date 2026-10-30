@@ -13,15 +13,19 @@ extends Control
 ##            deadline line, then stacked board rows - score
 ##            rows (his carries the accent ground), a divider
 ##            row where the cutoff line falls, and note rows.
-##            TR3: a score row is three columns (position /
-##            name / score): the name ellipsizes, the score
-##            sits in a fixed right-aligned column whose full
-##            text always fits - a row whose score outgrows
-##            the column at its base font scales the whole
-##            row down until the number fits. An owned board
-##            reserves a footer band at the face's bottom
-##            (spec "footer_px") for the room's Launch button:
-##            a plinth the text never flows into.
+##            GRADFIX3 (the Standing Book): the face is a
+##            book page - a gradient darkening toward a
+##            spine ridge on the RIGHT, and EVERY line is
+##            centred: band, title, deadline, and each score
+##            row as a centred block (position / name / score
+##            at natural widths, the name ellipsizing in the
+##            space the other two leave). A score never
+##            clips: a row whose block outgrows the page
+##            scales its font down until the number fits
+##            whole. An owned board reserves a footer band at
+##            the face's bottom (spec "footer_px") for the
+##            room's Launch button: a plinth the text never
+##            flows into.
 ## Specs are plain dictionaries built by callers; reads are defensive.
 ## A spec may cap a text slot's lines ("title_max_lines" and friends);
 ## a capped label ellipsizes its overrun instead of wrapping without
@@ -55,14 +59,19 @@ const ART_STRIP_HEIGHT_PX: int = 92
 ## third) at wall distance.
 const FAVORITE_STAR_COLOR: Color = Color(1.0, 0.78, 0.25)
 
-## Board score rows (TR3): the score column's width cap, in
-## face pixels. A board's column is as wide as its widest
-## score needs at base font, up to this cap; a score that
-## needs more scales its whole row down to fit the cap
-## instead of ever clipping a digit.
+## Board score rows: TR3's fixed right-aligned score
+## column is superseded by the Standing Book (GRADFIX3) -
+## a row is a centred block (position / name / score at
+## natural widths) and a row whose block would squeeze
+## the name under its floor scales down whole instead of
+## ever clipping a digit. The old cap constant stays only
+## as the record of the TR3 law.
 const BOARD_SCORE_COL_MAX_PX: float = 330.0
 
 var _bg: ColorRect
+var _page_rect: TextureRect ## board kind: the Standing Book's page gradient (light at the left, darkening toward the spine at the right)
+var _spine_line: ColorRect ## board kind: the spine ridge's highlight hairline, near the face's right edge
+var _spine_shade: ColorRect ## board kind: the dark fall past the spine hairline, to the face's right edge
 var _margin: MarginContainer
 var _vbox: VBoxContainer
 var _band_panel: PanelContainer
@@ -87,6 +96,38 @@ func _init() -> void:
 	_bg.color = Color(0.05, 0.05, 0.09)
 	_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(_bg)
+
+	# The Standing Book's page (GRADFIX3): a board face is a
+	# page stood open - lit at its left, shading down toward
+	# the spine on its RIGHT (the user's flipped mock). The
+	# gradient and the spine furniture draw over the ground
+	# and under every line of type; they stand only for the
+	# board kind, asserted per spec like everything else on
+	# this shared face.
+	_page_rect = TextureRect.new()
+	var page_grad: Gradient = Gradient.new()
+	page_grad.set_color(0, Color(0.115, 0.145, 0.225))
+	page_grad.set_color(1, Color(0.035, 0.045, 0.09))
+	var page_tex: GradientTexture2D = GradientTexture2D.new()
+	page_tex.gradient = page_grad
+	page_tex.fill_from = Vector2(0.0, 0.5)
+	page_tex.fill_to = Vector2(1.0, 0.5)
+	page_tex.width = 256
+	page_tex.height = 8
+	_page_rect.texture = page_tex
+	_page_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_page_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_page_rect.stretch_mode = TextureRect.STRETCH_SCALE
+	_page_rect.visible = false
+	add_child(_page_rect)
+	_spine_line = ColorRect.new()
+	_spine_line.color = Color(0.48, 0.55, 0.70, 0.85)
+	_spine_line.visible = false
+	add_child(_spine_line)
+	_spine_shade = ColorRect.new()
+	_spine_shade.color = Color(0.008, 0.012, 0.028, 0.6)
+	_spine_shade.visible = false
+	add_child(_spine_shade)
 
 	_art_rect = TextureRect.new()
 	_art_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -241,6 +282,18 @@ func apply_spec(spec: Dictionary) -> void:
 	var bg: Color = _color_of(spec, "bg", Color(0.05, 0.05, 0.09))
 	var band: Color = _color_of(spec, "band", Color(0.25, 0.25, 0.38))
 	_bg.color = bg
+	# The Standing Book's page furniture stands for board
+	# faces only (GRADFIX3); the spine ridge hugs the face's
+	# RIGHT edge - the gradient darkens toward it and the
+	# hairline + fall sit just inside the edge.
+	_page_rect.visible = kind == "board"
+	_spine_line.visible = kind == "board"
+	_spine_shade.visible = kind == "board"
+	if kind == "board" and size.x > 0.0:
+		_spine_line.position = Vector2(size.x - 34.0, 0.0)
+		_spine_line.size = Vector2(3.0, size.y)
+		_spine_shade.position = Vector2(size.x - 31.0, 0.0)
+		_spine_shade.size = Vector2(31.0, size.y)
 	_art_rect.visible = kind == "art"
 	# The name strip rides art faces by default; a spec may
 	# suppress it ("strip": false) when the surface carries
@@ -259,6 +312,11 @@ func apply_spec(spec: Dictionary) -> void:
 
 	_restore_labels()
 	_band_panel.visible = kind == "panel" or kind == "info" or kind == "board"
+	# The Standing Book centres everything (GRADFIX3, the
+	# user's direction): a board's band text sits centred on
+	# its band like its title, rows and notes below it. Other
+	# kinds keep their left-set band.
+	_band_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if kind == "board" else HORIZONTAL_ALIGNMENT_LEFT
 	if _band_panel.visible:
 		_band_panel.add_theme_stylebox_override("panel", _box(band, 6))
 		_band_label.text = str(spec.get("band_text", ""))
@@ -285,10 +343,11 @@ func apply_spec(spec: Dictionary) -> void:
 				band_px = maxi(18, int(floor(float(band_px) * avail / need)))
 		_band_label.add_theme_font_size_override("font_size", band_px)
 
-	var centered: bool = kind == "button" or kind == "banner"
+	var centered: bool = kind == "button" or kind == "banner" or kind == "board"
 	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
 	_sub_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
 	_body_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
+	_chips_row.alignment = BoxContainer.ALIGNMENT_CENTER if kind == "board" else BoxContainer.ALIGNMENT_BEGIN
 	_title_label.text = str(spec.get("title", ""))
 	var title_px: int = int(spec.get("title_size", 58))
 	if kind == "board" and size.x > 0.0 and _title_label.text != "" \
@@ -384,19 +443,24 @@ func apply_spec(spec: Dictionary) -> void:
 		0 if footer_px > 0 else FACE_MARGIN_BOTTOM_PX)
 
 
-## The board's column geometry for one spec: the position
-## column fits the widest position on the board, the score
-## column fits the widest score (capped - BOARD_SCORE_COL_MAX_PX),
-## and any row whose score still would not fit gets its font
-## scaled down until the number fits whole. Measured with
-## the labels' own font, so the numbers are the renderer's
-## numbers, not estimates.
+## The board's row geometry for one spec (GRADFIX3, the
+## Standing Book's centred page): every score row is a
+## CENTRED BLOCK - position, name and score at their natural
+## widths, the block centred on the page (the user's
+## direction: "Text needs to be centered"). The name takes
+## what the position and the score leave of the face's inner
+## width and ellipsizes inside it; a row whose position +
+## score would squeeze the name under its floor scales the
+## whole row's font down until the block fits - a score
+## never clips, the law the old fixed column lived by, kept
+## under the new shape. Measured with the labels' own font,
+## so the numbers are the renderer's numbers.
 func _board_layout(entries: Array) -> Dictionary:
 	var font: Font = _measure_font()
-	var pos_w: float = 0.0
-	var score_w: float = 0.0
-	var needs: Dictionary = {}
-	var fonts: Dictionary = {}
+	var inner: float = size.x - 52.0 - 28.0 - 20.0 ## face margins + the row box's content margins + the row's two separations
+	if inner <= 0.0:
+		inner = float(RoomSpecs.BOARD_FACE_PX.x) - 100.0
+	var per: Dictionary = {}
 	for i: int in range(entries.size()):
 		if not (entries[i] is Dictionary):
 			continue
@@ -404,20 +468,16 @@ func _board_layout(entries: Array) -> Dictionary:
 		if str(e.get("kind", "")) != "score":
 			continue
 		var base: int = int(e.get("size", 40))
-		pos_w = maxf(pos_w, _text_w(font, str(e.get("pos_text", "")), base))
-		var need: float = _text_w(font, str(e.get("score_text", "")), base) + 16.0
-		needs[i] = need
-		fonts[i] = base
-		score_w = maxf(score_w, need)
-	score_w = minf(score_w, BOARD_SCORE_COL_MAX_PX)
-	for i: int in range(entries.size()):
-		if not needs.has(i):
-			continue
-		var need2: float = float(needs[i])
-		if need2 > score_w:
-			var base2: int = int(fonts[i])
-			fonts[i] = maxi(18, int(floor(float(base2) * score_w / need2)))
-	return {"pos_w": pos_w + 6.0, "score_w": score_w, "fonts": fonts}
+		var font_px: int = base
+		var pos_need: float = _text_w(font, str(e.get("pos_text", "")), font_px)
+		var score_need: float = _text_w(font, str(e.get("score_text", "")), font_px)
+		if pos_need + score_need + 60.0 > inner:
+			font_px = maxi(18, int(floor(float(base) * (inner - 60.0) / maxf(1.0, pos_need + score_need))))
+			pos_need = _text_w(font, str(e.get("pos_text", "")), font_px)
+			score_need = _text_w(font, str(e.get("score_text", "")), font_px)
+		per[i] = {"font": font_px, "pos_w": pos_need, "score_w": score_need,
+			"name_w": maxf(24.0, inner - pos_need - score_need)}
+	return {"rows": per}
 
 
 func _measure_font() -> Font:
@@ -498,20 +558,24 @@ func _make_board_row(entry: Dictionary, layout: Dictionary, idx: int) -> Control
 			sp.set_meta("score_label", sl0)
 			sp.set_meta("need_text", text)
 			return sp
-		var fonts: Dictionary = layout.get("fonts", {})
-		var font_px: int = int(fonts.get(idx, int(entry.get("size", 40))))
+		# The centred block (GRADFIX3): the row's three
+		# parts at their natural widths, centred on the
+		# page as one unit; the name holds the allotment
+		# the layout measured for it and ellipsizes there.
+		var per: Dictionary = (layout.get("rows", {}) as Dictionary).get(idx, {}) as Dictionary
+		var font_px: int = int(per.get("font", int(entry.get("size", 40))))
 		var h: HBoxContainer = HBoxContainer.new()
+		h.alignment = BoxContainer.ALIGNMENT_CENTER
 		h.add_theme_constant_override("separation", 10)
 		var pl: Label = Label.new()
 		pl.text = str(entry.get("pos_text", ""))
-		pl.custom_minimum_size = Vector2(float(layout.get("pos_w", 60.0)), 0.0)
 		pl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		pl.add_theme_font_size_override("font_size", font_px)
 		pl.add_theme_color_override("font_color", ink2)
 		h.add_child(pl)
 		var nl2: Label = Label.new()
 		nl2.text = str(entry.get("name_text", ""))
-		nl2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nl2.custom_minimum_size = Vector2(float(per.get("name_w", 200.0)), 0.0)
 		nl2.autowrap_mode = TextServer.AUTOWRAP_OFF
 		nl2.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		nl2.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -520,24 +584,22 @@ func _make_board_row(entry: Dictionary, layout: Dictionary, idx: int) -> Control
 		h.add_child(nl2)
 		var sl: Label = Label.new()
 		sl.text = str(entry.get("score_text", ""))
-		sl.custom_minimum_size = Vector2(float(layout.get("score_w", 200.0)), 0.0)
-		sl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		sl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		sl.add_theme_font_size_override("font_size", font_px)
 		sl.add_theme_color_override("font_color", ink2)
 		h.add_child(sl)
 		if bool(entry.get("pending", false)):
 			# A pending score carries its state as a quiet
-			# second line inside its own row - right-aligned,
-			# small, dim amber - instead of stretching the
-			# score line (TR1) or spending a whole note row
-			# (the first TR3 cut).
+			# second line inside its own row - centred
+			# under its block on the book page, small, dim
+			# amber - instead of stretching the score line
+			# (TR1) or spending a whole note row (TR3).
 			var vb: VBoxContainer = VBoxContainer.new()
 			vb.add_theme_constant_override("separation", 0)
 			vb.add_child(h)
 			var pend: Label = Label.new()
 			pend.text = "awaiting validation"
-			pend.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+			pend.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			pend.add_theme_font_size_override("font_size", 22)
 			pend.add_theme_color_override("font_color", Color(0.88, 0.74, 0.45))
 			vb.add_child(pend)

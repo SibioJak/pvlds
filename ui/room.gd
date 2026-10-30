@@ -190,8 +190,8 @@ const BG_STAR_RADIUS: float = 30.0 ## the starfield shell's radius around the ey
 const BG_WIRE_RADIUS: float = 14.0 ## the lat/long wireframe shell's radius
 const BG_RING_RADIUS: float = 9.0 ## the one tilted orbit ring's radius
 const HAZE_FLOOR: float = 0.45 ## the far window columns' dim floor (see _haze_for)
-const WING_SIZE: Vector2 = Vector2(0.44, 0.72) ## the focused card's wing, inside its borrowed slot (see _wing_size) - GRADFIX2: GRAD FIX's wing was 0.54 x 0.58, a 540x580 px canvas the board face's layout could not stand whole in (the band ran off its right edge - see CardFace's band fit); the wing now renders at 440x720 px, where the face's reflow keeps every row and the fitted band on the canvas (the layout suite's wing-board probe verifies exactly this render). The size itself was walked on the census's angular budget - at the 13.5 deg column pitch the wing's half-angle plus its clearance shift plus the card two columns over's half-angle must stay under the pitch, or the wing's screen strip covers that card (0.54 wide + 0.12 shift: 70 wing-over-card violations, worst 2623 px; 0.48 + 0.08: 35, worst 341 px; settled at 0.44 + WING_CLEAR 0.06)
-const WING_Y: float = 0.14 ## the wing's centre in its borrowed slot, card-local: spans -0.22..+0.50 of the slot's +-0.54 (the top edge keeps the GRAD FIX seat's clearance under the card above; the taller wing grows downward)
+const WING_SIZE: Vector2 = Vector2(0.62, 1.00) ## the focused card's wing, inside its borrowed slot (see _wing_size). GRADFIX3 (the Standing Book): the wing IS the book now - the card's width and a breath under its height (see RoomSpecs.BOARD_PANEL_SIZE for the seam arithmetic), where GRADFIX2's 0.44 x 0.72 panel (a 440x720 px canvas the board face's layout could not stand whole in - the band ran off its right edge, see CardFace's band fit) was walked down on the old census's angular budget. The book separates by DEPTH, not by shrinking: it floats BOOK-proud in front of the popped centre card and tilts on its spine (see _make_book), so the angular budget that shrunk the old panel no longer binds it.
+const WING_Y: float = -0.02 ## the book's centre in its slot, card-local: a breath low, so its top edge stays under the seam with the card above the slot (GRADFIX2's wing seated at 0.14, the smaller panel's span)
 ## The wing's seat discipline (the GRAD FIX round): the wing
 ## stands IN the left neighbour's slot, shrunk inside the
 ## slot's own bounds (0.62 x 1.08) with margin on every side,
@@ -202,7 +202,23 @@ const WING_Y: float = 0.14 ## the wing's centre in its borrowed slot, card-local
 ## PVLDS_GRAD_NC=wing restores that size and seat, unborrowed.
 const WING_SIZE_NC: Vector2 = Vector2(0.66, 0.634)
 const WING_Y_NC: float = 0.225
-const WING_PROUD: float = 0.08 ## how far in front of the neighbour card the wing floats at full pop
+const WING_PROUD: float = 0.30 ## how far in front of the neighbour card the wing floats at full pop. GRADFIX3: the Standing Book separates by depth - at 0.30 the book stands a full pop (0.15) in front of the popped centre card, so no viewpoint in the room puts the card's silhouette over the book's page; GRADFIX2's 0.08 floated it inside the pop's own reach, which is how the shipped build's wing lost its right quarter behind the focused card in the field while the census (judging a nearer, timider eye ring) acquitted it.
+## The Standing Book's tilt (GRADFIX3): the book pivots on
+## its RIGHT edge - the spine side - by this many degrees,
+## its left edge swung toward the viewer (the user's
+## flipped mock: spine + shading on the right, the page
+## opening toward the tables on its left). The tilt does
+## the mock's separation work in the room: the spine edge
+## (nearest the centred card) turns AWAY from the card
+## while the page's lit left edge comes forward. Five
+## degrees, not the mock's thirteen: the census walked it
+## down - at nine the swung left edge's projection
+## scissored into the neighbouring cards' edges and the
+## wide labels among them (the grad census's wing legs
+## carry the numbers); at five the slabs, the shadow and
+## the proud float do the separating and the swing is a
+## finishing angle, not a reach.
+const BOOK_TILT_DEG: float = 5.0
 ## The companion clearance (GRADFIX2 item 2): a standing
 ## companion (the wing, the Tournament board) also shifts
 ## this far along the drum AWAY from the centred card, on
@@ -216,17 +232,23 @@ const WING_PROUD: float = 0.08 ## how far in front of the neighbour card the win
 ## PVLDS_GRADFIX_NC=oldwing restores the pre-fix wing
 ## (0.54 x 0.58 at 0.21, no shift).
 const COMPANION_CLEAR: float = 0.12
-## The wing's own clearance shift is SMALLER than the
-## board's: the wing borrows a slot with a standing card
-## two columns over, and the angular budget (see
-## WING_SIZE) splits the slack between clearing the
-## popped centre card's silhouette and never covering
-## that far card. The board stands in free slots and
-## spends the whole COMPANION_CLEAR.
-const WING_CLEAR: float = 0.06
+## The wing's own clearance shift is ZERO since the
+## Standing Book (GRADFIX3): GRADFIX2 shifted the wing
+## away from the centred card because the popped card
+## (0.15 out) floated in FRONT of the old wing (0.08) and
+## covered its inner strip. The book floats 0.30 - a full
+## pop in front of the popped card - so the shift's job
+## is done by depth, and the shift itself only bought
+## centre clearance at the price of the far neighbours:
+## the census measured the shifted, tilted book's left
+## edge crossing the wide labels of the column beyond
+## its slot. The book now seats exactly in its borrowed
+## slot, like the card it replaces. The board stands in
+## free slots and still spends the whole COMPANION_CLEAR.
+const WING_CLEAR: float = 0.0
 const WING_SIZE_GF1: Vector2 = Vector2(0.54, 0.58) ## the GRAD FIX round's wing size (the oldwing NC's restore)
 const WING_Y_GF1: float = 0.21 ## the GRAD FIX round's wing seat height (the oldwing NC's restore)
-const TBOARD_PROUD: float = 0.06 ## how far in front of its borrowed slot the Tournament board floats at full pop
+const TBOARD_PROUD: float = 0.30 ## how far in front of its slot the Tournament board floats at full pop (GRADFIX3: the Standing Book's depth law, the wing's own - see WING_PROUD; the pre-book board floated 0.06)
 const BG_STAR_SHADER: String = """
 shader_type spatial;
 render_mode unshaded, cull_front, depth_draw_opaque;
@@ -413,6 +435,7 @@ var _bg_wireframe: MeshInstance3D = null
 var _bg_ring: MeshInstance3D = null
 var _wing: Node3D = null ## the focused card's wing holder (a DRUM child: it must ride the swing glued to the centred card - it is a card companion, not a background layer)
 var _wing_quad: MeshInstance3D = null
+var _wing_tilt: Node3D = null ## the wing-book's tilt pivot (see _make_book)
 var _wing_mat: StandardMaterial3D = null
 var _wing_key: String = "" ## the content key the wing's standing texture was rendered for
 var _wing_game_id: String = "" ## the game the wing currently serves ("" = no wing content)
@@ -426,6 +449,7 @@ var _wing_borrowed_idx: int = -1 ## the panel whose slot the wing stands in, hid
 ## never the layout.
 var _tboard: Node3D = null
 var _tboard_quad: MeshInstance3D = null
+var _tboard_tilt: Node3D = null ## the board-book's tilt pivot (see _make_book)
 var _tboard_mat: StandardMaterial3D = null
 var _tboard_launch: ClickableQuad = null
 var _tboard_slot: Transform3D = Transform3D() ## the board's seated slot transform on the drum
@@ -435,6 +459,7 @@ var _tboard_owned: bool = false
 var _tboard_borrowed_idx: int = -1 ## the panel whose slot the board stands in (-1 = none; the GRADFIX2 seating borrows none - the field survives for the oldseat NC)
 var _tboard_seat: Vector2i = Vector2i(-1, -1) ## the board's standing seat coord (see _tboard_seat_coord; the smoke's pairing legs read it)
 var _wing_slot: Transform3D = Transform3D() ## the wing's seated slot transform on the drum (its pop offset applies per frame)
+var _wing_seat: Vector2i = Vector2i(-1, -1) ## the wing's standing seat coord (the grad census's baseline reads it)
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
@@ -2933,12 +2958,81 @@ func _refresh_wing() -> void:
 	_render_wing_content(game, ch, key)
 
 
+## One flat material for the book's furniture.
+func _book_mat(color: Color) -> StandardMaterial3D:
+	var m: StandardMaterial3D = StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.albedo_color = color
+	if color.a < 1.0:
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return m
+
+
+## The Standing Book (GRADFIX3, the user's pick from the
+## panel mocks, flipped at his instruction): the dressing
+## both info panels wear - the library wing and the
+## Tournament board are ONE treatment. A book stood open
+## toward the viewer at card size: a hard cast shadow
+## thrown down-left behind it, a page block of stepped
+## slabs, a spine ridge standing on its RIGHT edge, and
+## the whole book tilted on that spine edge - the left
+## (lit) edge swung toward the viewer, the spine edge
+## turned away from the art it stands beside. The depth
+## is physical: slabs and shadow separate the book from
+## its neighbours at every viewpoint, not just the
+## census's. Returns the tilt pivot and the face holder:
+## the caller parents its face quad (and any furniture,
+## like a Launch button) to "inner", whose local frame
+## is the book's face frame.
+func _make_book(root: Node3D, size: Vector2, prefix: String) -> Dictionary:
+	var tilt: Node3D = Node3D.new()
+	tilt.name = prefix + "BookTilt"
+	tilt.position = Vector3(size.x * 0.5, 0.0, 0.0)
+	tilt.rotation.y = deg_to_rad(BOOK_TILT_DEG)
+	root.add_child(tilt)
+	var inner: Node3D = Node3D.new()
+	inner.name = prefix + "BookFace"
+	inner.position = Vector3(-size.x * 0.5, 0.0, 0.0)
+	tilt.add_child(inner)
+	# The cast shadow: a dark slab behind the book, thrown
+	# down and to the LEFT - the flipped mock's shadow
+	# falls away from its right-hand spine.
+	var shadow: MeshInstance3D = _make_card_quad(inner,
+		size + Vector2(0.07, 0.07), Vector3(-0.04, -0.05, -0.085),
+		_book_mat(Color(0.0, 0.0, 0.0, 0.5)))
+	shadow.name = prefix + "BookShadow"
+	# The page block: three slabs stepping back and
+	# growing - the book's thickness, made of page edges.
+	var edge_cols: Array[Color] = [Color(0.13, 0.15, 0.22), Color(0.09, 0.105, 0.16), Color(0.055, 0.065, 0.105)]
+	for i: int in range(3):
+		var slab: MeshInstance3D = _make_card_quad(inner,
+			size + Vector2(0.016, 0.016) * float(i + 1),
+			Vector3(0.0, 0.0, -0.02 * float(i + 1)),
+			_book_mat(edge_cols[i]))
+		slab.name = prefix + "BookPage" + str(i + 1)
+	# The spine ridge: a dark bar down the RIGHT edge,
+	# standing slightly proud of the page block behind
+	# the face - the book's hinge, and the side its
+	# shading deepens toward (see CardFace's page).
+	var spine: MeshInstance3D = _make_card_quad(inner,
+		Vector2(0.05, size.y + 0.035), Vector3(size.x * 0.5 - 0.01, 0.0, -0.03),
+		_book_mat(Color(0.03, 0.035, 0.06)))
+	spine.name = prefix + "BookSpine"
+	return {"tilt": tilt, "inner": inner}
+
+
 func _build_wing() -> void:
 	if _wall == null:
 		return
 	_wing = Node3D.new()
 	_wing.name = "FocusWing"
 	_wing.visible = false
+	# The Standing Book (GRADFIX3): the wing wears the
+	# book's dressing - shadow, page block, spine, tilt -
+	# and its face quad lives in the book's face frame.
+	var book: Dictionary = _make_book(_wing, _wing_size(), "Wing")
+	_wing_tilt = book["tilt"] as Node3D
 	_wing_quad = MeshInstance3D.new()
 	var qm: QuadMesh = QuadMesh.new()
 	qm.size = _wing_size()
@@ -2947,11 +3041,7 @@ func _build_wing() -> void:
 	_wing_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_wing_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_wing_quad.material_override = _wing_mat
-	_wing.add_child(_wing_quad)
-	# A dark backing a hair behind, the cards' own frame
-	# language, so the wing reads as furniture, not a sticker.
-	var backing: MeshInstance3D = _make_card_quad(_wing, _wing_size() + Vector2(0.02, 0.02), Vector3(0.0, 0.0, -0.006), _frame_mat(false))
-	backing.name = "WingBacking"
+	(book["inner"] as Node3D).add_child(_wing_quad)
 	_wall.add_child(_wing)
 
 
@@ -2984,7 +3074,12 @@ func _update_wing_frame() -> void:
 	_wing.visible = live and amt > 0.02
 	if not _wing.visible:
 		return
-	var proud: float = WING_PROUD * amt
+	# The oldwing NC restores the GRAD FIX wing's float
+	# (0.08) along with its size and seat: under the book's
+	# 0.30 the restored wing would ride the depth law the
+	# GRAD FIX wing never had, and the wing-whole NC would
+	# judge a geometry that never shipped.
+	var proud: float = (0.08 if OS.get_environment("PVLDS_GRADFIX_NC") == "oldwing" else WING_PROUD) * amt
 	_wing.transform = Transform3D(_wing_slot.basis,
 		_wing_slot.origin + _wing_slot.basis.z * proud)
 	var s: float = lerpf(0.92, 1.0, amt)
@@ -3005,6 +3100,13 @@ func _build_tboard() -> void:
 	_tboard = Node3D.new()
 	_tboard.name = "TournamentBoard"
 	_tboard.visible = false
+	# The Standing Book (GRADFIX3): the Tournament board
+	# wears the wing's book dressing - one treatment for
+	# both info panels. Its Launch button lives in the
+	# book's face frame, over the face's footer plinth.
+	var book: Dictionary = _make_book(_tboard, RoomSpecs.board_panel_size(), "Board")
+	_tboard_tilt = book["tilt"] as Node3D
+	var tinner: Node3D = book["inner"] as Node3D
 	_tboard_quad = MeshInstance3D.new()
 	var qm: QuadMesh = QuadMesh.new()
 	qm.size = RoomSpecs.board_panel_size()
@@ -3013,15 +3115,13 @@ func _build_tboard() -> void:
 	_tboard_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_tboard_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_tboard_quad.material_override = _tboard_mat
-	_tboard.add_child(_tboard_quad)
-	var backing: MeshInstance3D = _make_card_quad(_tboard, RoomSpecs.board_panel_size() + Vector2(0.02, 0.02), Vector3(0.0, 0.0, -0.006), _frame_mat(false))
-	backing.name = "BoardBacking"
+	tinner.add_child(_tboard_quad)
 	_tboard_launch = ClickableQuad.new()
 	_tboard_launch.setup("panel_launch", "", _placeholder_tex, PANEL_LAUNCH_SIZE)
 	_tboard_launch.position = Vector3(0.0, RoomSpecs.board_launch_y(), 0.020)
 	_tboard_launch.visible = false
 	_tboard_launch.pick_enabled = false
-	_tboard.add_child(_tboard_launch)
+	tinner.add_child(_tboard_launch)
 	_wall.add_child(_tboard)
 
 
@@ -3116,6 +3216,10 @@ func _refresh_tboard() -> void:
 		_release_tboard_borrow()
 	_tboard_seat = seat
 	_tboard_slot = _card_transform_at(seat.x, seat.y)
+	# The book seats a breath low in its slot, the wing's
+	# own seat law (WING_Y): its top edge stays under the
+	# seam with the card above the slot.
+	_tboard_slot.origin += _tboard_slot.basis.y * WING_Y
 	if not _tournament_legacy():
 		# The companion clearance (GRADFIX2 item 2): the
 		# board shifts along the drum away from the centred
@@ -3185,7 +3289,11 @@ func tournament_board_state() -> Dictionary:
 		"challenge_id": _tboard_challenge_id,
 		"has_board_texture": _tboard_mat != null and _tboard_mat.albedo_texture != null,
 		"texture": _tboard_mat.albedo_texture if _tboard_mat != null else null,
-		"transform": _tboard.global_transform,
+		# GRADFIX3: the judged surface is the book's FACE -
+		# the tilted quad inside the book frame - not the
+		# seat holder; its global transform is the page the
+		# player reads.
+		"transform": _tboard_quad.global_transform if _tboard_quad != null else _tboard.global_transform,
 		"size": RoomSpecs.board_panel_size(),
 		"owned": _tboard_owned,
 		"borrowed_idx": _tboard_borrowed_idx,
@@ -4864,8 +4972,14 @@ func wing_state() -> Dictionary:
 		"visible": _wing.visible,
 		"game_id": _wing_game_id,
 		"has_board_texture": _wing_mat != null and _wing_mat.albedo_texture != null,
-		"transform": _wing.global_transform,
+		# GRADFIX3: the judged surface is the book's FACE -
+		# the tilted quad inside the book frame - not the
+		# seat holder; its global transform is the page the
+		# player reads.
+		"transform": _wing_quad.global_transform if _wing_quad != null else _wing.global_transform,
+		"holder_transform": _wing.global_transform,
 		"size": _wing_size(),
+		"seat": _wing_seat,
 		"enabled": _wing_enabled,
 		"borrowed_idx": _wing_borrowed_idx,
 	}

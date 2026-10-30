@@ -37,13 +37,26 @@ const BUTTON_BG_ACCENT: Color = Color(0.36, 0.25, 0.06)
 ## can fail against it by name.
 ## The board's size since the GRAD FIX round's Tournament
 ## redesign: the board stands as furniture in the slot beside
-## the centred challenge's art card (0.62 wide), a touch
-## narrower and notably taller than the old grid boards -
-## the rows gain air, the score column keeps its law (the
-## layout legs prove the worst case at this size).
-const BOARD_PANEL_SIZE: Vector2 = Vector2(0.60, 0.80)
-const BOARD_FACE_PX: Vector2i = Vector2i(600, 800)
-const BOARD_FOOTER_PX: int = 128 ## the owned board face's bottom band: the Launch button's home
+## the centred challenge's art card, a touch narrower and
+## notably taller than the old grid boards - the rows gain
+## air, the score column keeps its law (the layout legs
+## prove the worst case at this size). GRADFIX3 (the
+## Standing Book, the user's pick from the panel mocks):
+## the book stands at the card's WIDTH and a breath under
+## its height - 1.00 m against the card's 1.08. The inch
+## is geometry, not timidity: the bands pitch 20 degrees
+## apart, and a full-height book floated proud spans
+## wider than the pitch, painting over the nameplate of
+## the card above its slot and the art of the card below
+## (the grad census measured it: ~1,400 px of cover
+## against the borrowed card's own ~90). At 1.00, seated
+## a breath low (RoomView.WING_Y), the book's silhouette
+## stays inside its own slot from every eye the census
+## judges - and beside a card it still reads as the
+## card's neighbour, not the old small panel.
+const BOARD_PANEL_SIZE: Vector2 = Vector2(0.62, 1.00)
+const BOARD_FACE_PX: Vector2i = Vector2i(620, 1000)
+const BOARD_FOOTER_PX: int = 140 ## the owned board face's bottom band: the Launch button's home
 const LEGACY_BOARD_PANEL_SIZE: Vector2 = Vector2(0.54, 0.64) ## == RoomView.PANEL_SIZE at the TR1/TR2 rounds
 const LEGACY_BOARD_FACE_PX: Vector2i = Vector2i(512, 640)
 const LEGACY_BOARD_LAUNCH_Y: float = -0.155 ## == RoomView.PANEL_LAUNCH_Y
