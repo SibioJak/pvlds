@@ -176,7 +176,7 @@ const LABEL_STRIP_Y: float = -0.30 ## the nameplate strip's centre, card-local m
 const LABEL_STRIP_SIZE: Vector2 = Vector2(0.62, 0.135) ## the nameplate's dark plate behind the title
 const LABEL_PIXEL_SIZE: float = 0.0024 ## the title Label3D's world scale (the prototype's)
 const LABEL_FONT_SIZE: int = 30
-const LABEL_WIDTH_PX: float = 255.0 ## wrapped-title width: a long name takes up to four lines inside the plate's column
+const LABEL_WIDTH_PX: float = 246.0 ## wrapped-title width: a long name takes up to four lines inside the plate's column (246px = 0.590 m of ink on the 0.62 m card - the block stands inside its own card with margin; was 255 = 0.612 m, its right edge flush with the silhouette - GRADFIX2 item 1)
 ## The swing: the drum eases to the focused column on a cubic
 ## ease-out; the duration grows with the travel (a letter
 ## jump's full-alphabet swing caps at 0.72 s) and input is
@@ -475,6 +475,7 @@ var _swing_journey: bool = false ## a retarget arrived mid-travel in the travel'
 var _swing_active: bool = false
 var _drum_yaw: float = 0.0 ## the drum's current yaw, radians (== _swing_to at rest)
 var _panel_pool: Dictionary = {} ## game_id -> {root, launch, frame, plate, label, mode, plate_done}: card nodes built once per library adoption and re-seated per view (a rebuild that freed and rebuilt 300+ cards would tax every letter pick - the pick-latency law)
+var _plates_pending: bool = false ## a rebuild stood new cards: their nameplates re-derive from the labels' live AABBs until every one settles (see _refresh_card_plate)
 var _panel_face_key: Dictionary = {} ## game_id -> the face key its standing texture was filled for ("" = never filled)
 var _panel_window_lo: int = -1 ## the drawn window's first COLUMN (visibility + face fill range), -1 = none yet
 var _panel_window_hi: int = -1 ## the drawn window's last COLUMN
@@ -1403,19 +1404,88 @@ func _seat_card(idx: int, nodes: Dictionary) -> void:
 	_panel_pop_dir[idx] = t.basis.z.normalized()
 	if str(nodes.get("mode", "")) == "card" and not bool(nodes.get("plate_done", false)):
 		nodes["plate_done"] = true
-		var label: Label3D = nodes["label"] as Label3D
-		var plate: MeshInstance3D = nodes["plate"] as MeshInstance3D
-		var aabb: AABB = label.get_aabb()
-		var block_h: float = maxf(LABEL_STRIP_SIZE.y, aabb.size.y + 0.034)
-		var block_cy: float = LABEL_STRIP_Y + aabb.position.y + aabb.size.y * 0.5
-		var pq: QuadMesh = plate.mesh as QuadMesh
-		if pq != null:
-			pq.size = Vector2(LABEL_STRIP_SIZE.x, block_h)
-		plate.position = Vector3(0.0, block_cy, 0.005)
-		var plate_bottom: float = block_cy - block_h * 0.5
-		if plate_bottom < -0.40:
-			var lq: ClickableQuad = nodes["launch"] as ClickableQuad
-			lq.position = Vector3(0.0, PANEL_LAUNCH_Y_TOP, 0.020)
+		# The seat-time derivation: the label has not shaped
+		# its text yet at this point in the seat (its AABB
+		# still reads empty - measured over the whole fixture
+		# library, GRADFIX2), so what this applies is the
+		# strip's floor plate with the Launch at the low seat.
+		# The standing derivation below re-derives both from
+		# the label's REAL AABB once the text stands shaped;
+		# this pass only guarantees a plate exists from the
+		# first frame.
+		var label0: Label3D = nodes["label"] as Label3D
+		nodes["plate_basis_h"] = -1.0
+		_apply_card_plate(nodes, label0.get_aabb())
+
+
+## Derive a card's nameplate and Launch seat from a title
+## block: the plate grows to the block's measured height
+## (the strip's floor size for a one-line name), and the
+## Launch button moves to the card's top when the grown
+## plate's bottom would reach its low seat - the plate
+## never shares ground with the button, by construction.
+func _apply_card_plate(nodes: Dictionary, aabb: AABB) -> void:
+	var plate: MeshInstance3D = nodes["plate"] as MeshInstance3D
+	var block_h: float = maxf(LABEL_STRIP_SIZE.y, aabb.size.y + 0.034)
+	var block_cy: float = LABEL_STRIP_Y + aabb.position.y + aabb.size.y * 0.5
+	var pq: QuadMesh = plate.mesh as QuadMesh
+	if pq != null:
+		pq.size = Vector2(LABEL_STRIP_SIZE.x, block_h)
+	plate.position = Vector3(0.0, block_cy, 0.005)
+	var lq: ClickableQuad = nodes["launch"] as ClickableQuad
+	var plate_bottom: float = block_cy - block_h * 0.5
+	lq.position = Vector3(0.0, PANEL_LAUNCH_Y_TOP if plate_bottom < -0.40 else PANEL_LAUNCH_Y, 0.020)
+
+
+## The GRADFIX2 item 1 fix: the nameplate derivation runs
+## again from the label's LIVE AABB. At seat time the
+## label's geometry does not exist yet (the AABB reads
+## empty for every card - the probe over the fixture
+## library: 103 of 103), so the shipped derivation sized
+## every plate at the one-line floor and never moved a
+## Launch: multi-line names overflowed the plate and their
+## last line fell under the low Launch plinth - No Fear's
+## third line, Capt. Fantastic's, Indiana Jones's, and The
+## Addams Family's first line standing off its plate
+## (item 5: the label was whole; the plate was one line
+## tall). The refresh re-derives plate and Launch seat
+## from the shaped block, per card, until the AABB it
+## applied matches the label's standing AABB. The NC seam
+## PVLDS_GRADFIX_NC=staleplate restores the shipped
+## seat-time-only behaviour so the census's plinth legs
+## fail against it by name.
+func _refresh_card_plate(nodes: Dictionary) -> bool:
+	if OS.get_environment("PVLDS_GRADFIX_NC") == "staleplate":
+		return true
+	if str(nodes.get("mode", "")) != "card":
+		return true
+	var label: Label3D = nodes["label"] as Label3D
+	if label == null:
+		return true
+	var aabb: AABB = label.get_aabb()
+	if aabb.size.y <= 0.0:
+		return false ## not shaped yet - a later sweep retries
+	if absf(aabb.size.y - float(nodes.get("plate_basis_h", -1.0))) < 0.001:
+		return true ## the standing derivation already wears this block
+	nodes["plate_basis_h"] = aabb.size.y
+	_apply_card_plate(nodes, aabb)
+	return true
+
+
+## One sweep of the standing wall's plate refresh; true
+## when every standing card's plate wears its label's
+## standing AABB. Driven from _process while a rebuild's
+## plates are pending (a label shapes within a frame or
+## two of standing; the sweep retires itself).
+func _refresh_all_card_plates() -> bool:
+	var settled: bool = true
+	for idx: int in range(_panels.size()):
+		if idx >= _visible_games.size():
+			break
+		var nodes: Dictionary = _panel_pool.get(_visible_games[idx].game_id, {}) as Dictionary
+		if not nodes.is_empty() and not _refresh_card_plate(nodes):
+			settled = false
+	return settled
 
 
 ## The shelf's bookend fins (DOME3): a dark slab with an amber
@@ -1611,6 +1681,7 @@ func _rebuild_wall() -> void:
 	# here at all - they defer to the panel's close (see
 	# adopt_library) - but the confinement law is general.
 	var panel_focus: ClickableQuad = _focused if _setup_panel_up else null
+	_plates_pending = true ## the new wall's nameplates re-derive once their labels shape (see _refresh_card_plate)
 	_gen += 1
 	var gen: int = _gen
 	wall_ready = false
@@ -4807,6 +4878,12 @@ func _process(delta: float) -> void:
 	# The loading marquee animates on this same per-frame beat.
 	if _marquee_up:
 		_update_marquee(delta)
+	if _plates_pending:
+		# Nameplates re-derive from the labels' live AABBs
+		# until every standing card's plate wears its shaped
+		# block (the seat-time AABB reads empty - see
+		# _refresh_card_plate).
+		_plates_pending = not _refresh_all_card_plates()
 	if _setup_render_pending and not _setup_render_in_flight and _setup_panel_up:
 		# A throttled progress render whose state stopped
 		# changing inside its window: run it now (the clock
