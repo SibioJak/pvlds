@@ -190,7 +190,7 @@ const BG_STAR_RADIUS: float = 30.0 ## the starfield shell's radius around the ey
 const BG_WIRE_RADIUS: float = 14.0 ## the lat/long wireframe shell's radius
 const BG_RING_RADIUS: float = 9.0 ## the one tilted orbit ring's radius
 const HAZE_FLOOR: float = 0.45 ## the far window columns' dim floor (see _haze_for)
-const WING_SIZE: Vector2 = Vector2(0.54, 0.72) ## the focused card's wing, inside its borrowed slot (see _wing_size) - GRADFIX2: the board's own aspect (0.75), so the wing renders the board spec at the proportions it was laid out for instead of squashing it toward square (was 0.54 x 0.58)
+const WING_SIZE: Vector2 = Vector2(0.44, 0.72) ## the focused card's wing, inside its borrowed slot (see _wing_size) - GRADFIX2: the board's own aspect (0.75), so the wing renders the board spec at the proportions it was laid out for instead of squashing it toward square (GRAD FIX was 0.54 x 0.58); the width was then walked DOWN on the census's angular budget - at the 13.5 deg column pitch the wing's half-angle plus its clearance shift plus the card two columns over's half-angle must stay under the pitch, or the wing's screen strip covers that card (0.54 wide + 0.12 shift: 70 wing-over-card violations, worst 2623 px; 0.48 + 0.08: 35, worst 341 px; settled at 0.44 + WING_CLEAR 0.06)
 const WING_Y: float = 0.14 ## the wing's centre in its borrowed slot, card-local: spans -0.22..+0.50 of the slot's +-0.54 (the top edge keeps the GRAD FIX seat's clearance under the card above; the taller wing grows downward)
 ## The wing's seat discipline (the GRAD FIX round): the wing
 ## stands IN the left neighbour's slot, shrunk inside the
@@ -216,6 +216,14 @@ const WING_PROUD: float = 0.08 ## how far in front of the neighbour card the win
 ## PVLDS_GRADFIX_NC=oldwing restores the pre-fix wing
 ## (0.54 x 0.58 at 0.21, no shift).
 const COMPANION_CLEAR: float = 0.12
+## The wing's own clearance shift is SMALLER than the
+## board's: the wing borrows a slot with a standing card
+## two columns over, and the angular budget (see
+## WING_SIZE) splits the slack between clearing the
+## popped centre card's silhouette and never covering
+## that far card. The board stands in free slots and
+## spends the whole COMPANION_CLEAR.
+const WING_CLEAR: float = 0.06
 const WING_SIZE_GF1: Vector2 = Vector2(0.54, 0.58) ## the GRAD FIX round's wing size (the oldwing NC's restore)
 const WING_Y_GF1: float = 0.21 ## the GRAD FIX round's wing seat height (the oldwing NC's restore)
 const TBOARD_PROUD: float = 0.06 ## how far in front of its borrowed slot the Tournament board floats at full pop
@@ -2901,7 +2909,7 @@ func _refresh_wing() -> void:
 		# card, so the popped card's silhouette never
 		# covers the wing's text from a real viewpoint.
 		var centre_origin: Vector3 = _card_transform_at(coord.x, coord.y).origin
-		_wing_slot.origin += _companion_away(centre_origin, _wing_slot.origin) * COMPANION_CLEAR
+		_wing_slot.origin += _companion_away(centre_origin, _wing_slot.origin) * WING_CLEAR
 	if nc_wing:
 		# NC seam (graduation smoke): the wing shoved onto
 		# the focused card and down over its label - the
