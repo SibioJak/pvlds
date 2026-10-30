@@ -1291,10 +1291,29 @@ func _sort_visible() -> void:
 ## leg can fail against it by name.
 const BAND_COUNT: int = 3 ## the shelf's bands per column (== ROW_ELEVATIONS.size())
 
+## The Tournament wall's block (GRADFIX4 item 3): with the
+## bookend fins nuked (GRADFIX3), the challenge grid leaned
+## on them and collapsed into a single skinny column with
+## dead space around it. The challenges now compose a proper
+## shelf section of their own on the drum grid: a TWO-BAND
+## block (the middle and bottom bands - the pair straddling
+## the eye line) starting TOURN_BLOCK_COL0 columns in, so the
+## block stands composed mid-window with intentional ends
+## instead of hugging the shelf's start. The seat map stays
+## a bijection (the pad-walk and focus legs depend on it);
+## the NC seam (rowmajor) restores the library map over the
+## block too, and the layout legs fail by name.
+const TOURN_BLOCK_COL0: int = 4
+const TOURN_BAND0: int = 1
+const TOURN_BAND_COUNT: int = 2
+
 
 func _grid_coord(index: int) -> Vector2i:
 	if debug_grid_nc == "rowmajor":
 		return Vector2i(index % _columns, index / _columns)
+	if _tournament:
+		return Vector2i(TOURN_BLOCK_COL0 + index / TOURN_BAND_COUNT,
+			TOURN_BAND0 + index % TOURN_BAND_COUNT)
 	return Vector2i(index / BAND_COUNT, index % BAND_COUNT)
 
 
@@ -1304,6 +1323,8 @@ func _grid_coord(index: int) -> Vector2i:
 func _raw_index(col: int, row: int) -> int:
 	if debug_grid_nc == "rowmajor":
 		return row * _columns + col
+	if _tournament:
+		return (col - TOURN_BLOCK_COL0) * TOURN_BAND_COUNT + (row - TOURN_BAND0)
 	return col * BAND_COUNT + row
 
 
@@ -1805,7 +1826,12 @@ func _rebuild_wall() -> void:
 	_placeholder_tex = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
 	_panel_size = CARD_SIZE
 	_panel_face_px = CARD_FACE_PX
-	_columns = maxi(1, int(ceil(float(maxi(1, _visible_games.size())) / 3.0)))
+	if _tournament:
+		# The block's own extent: pad columns + the two-band
+		# block (GRADFIX4 item 3 - see TOURN_BLOCK_COL0).
+		_columns = TOURN_BLOCK_COL0 + maxi(1, int(ceil(float(maxi(1, _visible_games.size())) / float(TOURN_BAND_COUNT))))
+	else:
+		_columns = maxi(1, int(ceil(float(maxi(1, _visible_games.size())) / 3.0)))
 	if _status_label == null:
 		_build_status_line()
 	# Panels for the whole standing view, seated on the drum.
@@ -3193,17 +3219,42 @@ func _tournament_legacy() -> bool:
 func _tboard_seat_coord(coord: Vector2i) -> Vector2i:
 	if _tournament_legacy():
 		return Vector2i(coord.x + 1, coord.y)
+	if _tournament and debug_grid_nc != "rowmajor":
+		# GRADFIX4 (item 3): inside the block, the book's
+		# first home is the OTHER BAND of the focused
+		# challenge's own column - the pair composes as one
+		# object and the grid never collapses around it. Then
+		# rightward, either band, first unoccupied slot wins;
+		# past the block's end it floats, as before.
+		var other_band: int = TOURN_BAND0 + (1 - (coord.y - TOURN_BAND0))
+		var home: Vector2i = Vector2i(coord.x, other_band)
+		if not _slot_occupied_by_card(home):
+			return home
+		var sx: int = coord.x
+		while sx < _columns:
+			sx += 1
+			for by: int in [coord.y, other_band]:
+				var cand: Vector2i = Vector2i(sx, by)
+				if not _slot_occupied_by_card(cand):
+					return cand
+		return Vector2i(_columns, coord.y)
 	var seat: Vector2i = Vector2i(coord.x + 1, coord.y)
 	while seat.x < _columns:
-		var occupied: bool = false
-		for idx: int in range(_visible_games.size()):
-			if idx != _centre_index and _grid_coord(idx) == seat:
-				occupied = true
-				break
-		if not occupied:
+		if not _slot_occupied_by_card(seat):
 			break
 		seat.x += 1
 	return seat
+
+
+## A drum slot is occupied when some card other than the
+## centred one stands there (the GRADFIX2 no-borrow law in
+## slot terms: a companion stands only where no card stands -
+## or past the shelf's end entirely).
+func _slot_occupied_by_card(seat: Vector2i) -> bool:
+	for idx: int in range(_visible_games.size()):
+		if idx != _centre_index and _grid_coord(idx) == seat:
+			return true
+	return false
 
 
 func _borrow_tboard_slot(coord: Vector2i) -> void:
