@@ -424,7 +424,8 @@ var _tboard_slot: Transform3D = Transform3D() ## the board's seated slot transfo
 var _tboard_key: String = "" ## the standing board content's key (challenge + fetch stamp + player + owned)
 var _tboard_challenge_id: String = ""
 var _tboard_owned: bool = false
-var _tboard_borrowed_idx: int = -1 ## the panel whose slot the board stands in (-1 = none)
+var _tboard_borrowed_idx: int = -1 ## the panel whose slot the board stands in (-1 = none; the GRADFIX2 seating borrows none - the field survives for the oldseat NC)
+var _tboard_seat: Vector2i = Vector2i(-1, -1) ## the board's standing seat coord (see _tboard_seat_coord; the smoke's pairing legs read it)
 var _wing_slot: Transform3D = Transform3D() ## the wing's seated slot transform on the drum (its pop offset applies per frame)
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
@@ -2986,9 +2987,10 @@ func _update_wing_frame() -> void:
 
 ## The standing board beside the centred challenge (the
 ## GRAD FIX round's Tournament redesign): furniture on the
-## wing's pattern - built once, seated per centre at the
-## right neighbour's slot with that slot's card borrowed
-## away, content re-rendered when the pairing changes.
+## wing's pattern - built once, seated per centre in the
+## first free slot to the centred challenge's right (see
+## _tboard_seat_coord - it borrows no card's slot since
+## GRADFIX2), content re-rendered when the pairing changes.
 func _build_tboard() -> void:
 	if _wall == null:
 		return
@@ -3013,6 +3015,45 @@ func _build_tboard() -> void:
 	_tboard_launch.pick_enabled = false
 	_tboard.add_child(_tboard_launch)
 	_wall.add_child(_tboard)
+
+
+## The pre-GRADFIX2 Tournament behaviour, behind the NC
+## seam PVLDS_TOURN_NC=oldseat: the board borrowed the slot
+## right of the centred challenge (hiding its card) and the
+## focus walk in the Tournament Room used projection scoring
+## instead of the drum's grid step. The tournament layout
+## and selection legs fail against it by name.
+func _tournament_legacy() -> bool:
+	return OS.get_environment("PVLDS_TOURN_NC") == "oldseat"
+
+
+## The standing board's seat (GRADFIX2 items 3+4): the
+## first slot to the RIGHT of the centred challenge that no
+## panel stands in, stepping past occupied slots up to one
+## past the shelf's end - the end fin's column, where the
+## board floats in front of the fin, never behind it, and
+## never behind a card. The board borrows NO challenge's
+## slot: the shipped borrow hid whichever challenge stood
+## right of the centre, and with The Walking Dead standing
+## right of The Addams Family, centring Addams vanished
+## Walking Dead's card from the wall - "cant select walking
+## dead on tournie screen" (the user's words). Every
+## challenge card now stands, visible and pickable, at
+## every centre; the pairing follows the centre as before.
+func _tboard_seat_coord(coord: Vector2i) -> Vector2i:
+	if _tournament_legacy():
+		return Vector2i(coord.x + 1, coord.y)
+	var seat: Vector2i = Vector2i(coord.x + 1, coord.y)
+	while seat.x < _columns:
+		var occupied: bool = false
+		for idx: int in range(_visible_games.size()):
+			if idx != _centre_index and _grid_coord(idx) == seat:
+				occupied = true
+				break
+		if not occupied:
+			break
+		seat.x += 1
+	return seat
 
 
 func _borrow_tboard_slot(coord: Vector2i) -> void:
@@ -3060,8 +3101,20 @@ func _refresh_tboard() -> void:
 	var ch: WovpChallenge = row["challenge"] as WovpChallenge
 	var game: GameEntry = _visible_games[_centre_index]
 	var coord: Vector2i = _grid_coord(_centre_index)
-	_borrow_tboard_slot(coord)
-	_tboard_slot = _card_transform_at(coord.x + 1, coord.y)
+	var seat: Vector2i = _tboard_seat_coord(coord)
+	if _tournament_legacy():
+		_borrow_tboard_slot(coord)
+	else:
+		_release_tboard_borrow()
+	_tboard_seat = seat
+	_tboard_slot = _card_transform_at(seat.x, seat.y)
+	if not _tournament_legacy():
+		# The companion clearance (GRADFIX2 item 2): the
+		# board shifts along the drum away from the centred
+		# card, so the popped card's silhouette never
+		# covers the board's text from a real viewpoint.
+		var centre_origin: Vector3 = _card_transform_at(coord.x, coord.y).origin
+		_tboard_slot.origin += _companion_away(centre_origin, _tboard_slot.origin) * COMPANION_CLEAR
 	_tboard.transform = _tboard_slot
 	var owned: bool = bool(row.get("owned", false))
 	_tboard_owned = owned
@@ -3128,6 +3181,7 @@ func tournament_board_state() -> Dictionary:
 		"size": RoomSpecs.board_panel_size(),
 		"owned": _tboard_owned,
 		"borrowed_idx": _tboard_borrowed_idx,
+		"seat": _tboard_seat,
 	}
 
 
@@ -5129,7 +5183,7 @@ func _move_focus(dir: Vector2) -> void:
 	# follows focus (see _update_pop), so the drum swings
 	# under every step.
 	var pidx: int = _panels.find(_focused)
-	if pidx >= 0 and _mode == "wall" and not _tournament:
+	if pidx >= 0 and _mode == "wall" and (not _tournament or not _tournament_legacy()):
 		var coord: Vector2i = _grid_coord(pidx)
 		if absf(dir.x) > 0.5:
 			var ncol: int = clampi(coord.x + (1 if dir.x > 0.0 else -1), 0, _columns - 1)
