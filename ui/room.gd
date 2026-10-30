@@ -209,13 +209,14 @@ const WING_PROUD: float = 0.30 ## how far in front of the neighbour card the win
 ## so the art page and the text page read as one object
 ## opened toward the viewer. The hinge, the shared frame
 ## and the cover do the separating now; GRADFIX3's slabs and
-## cast shadow are gone (see _make_book). Five degrees: the
-## census walked the earlier swing down to this (at nine the
-## swung edge's projection scissored into the neighbouring
-## cards' edges), and the hinge pivot points the swing the
-## other way - the free edge turns AWAY from the neighbours
-## behind the page instead of reaching over them.
-const BOOK_TILT_DEG: float = 5.0
+## cast shadow are gone (see _make_book). Three degrees:
+## GRADFIX3's census walked the old swing to five when it
+## charged the bare page; GRADFIX4's book-cover leg charges
+## the WHOLE book (frame, knuckle, page) and walked the
+## hinge to three - at five the dressed silhouette's swing
+## excess over its untilted twin measured 319 px against
+## the leg's 256 bound.
+const BOOK_TILT_DEG: float = 3.0
 ## The book's cover stock: the spine knuckle's tone, in the
 ## card frame's own family (the frame material itself is
 ## _frame_mat - one stock, two cuts).
