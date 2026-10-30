@@ -266,7 +266,8 @@ func apply_spec(spec: Dictionary) -> void:
 		# boards run theirs smaller. Re-asserted on every
 		# spec, stock 30 as the default.
 		var band_px: int = int(spec.get("band_size", 30))
-		if kind == "board" and size.x > 0.0 and _band_label.text != "":
+		if kind == "board" and size.x > 0.0 and _band_label.text != "" \
+				and OS.get_environment("PVLDS_GRADFIX_NC") != "oldband":
 			# A board's band never clips (GRADFIX2 item 2):
 			# the label carries no overrun discipline, so on
 			# a render narrower than the board's own face -
@@ -289,7 +290,23 @@ func apply_spec(spec: Dictionary) -> void:
 	_sub_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
 	_body_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
 	_title_label.text = str(spec.get("title", ""))
-	_title_label.add_theme_font_size_override("font_size", int(spec.get("title_size", 58)))
+	var title_px: int = int(spec.get("title_size", 58))
+	if kind == "board" and size.x > 0.0 and _title_label.text != "" \
+			and OS.get_environment("PVLDS_GRADFIX_NC") != "oldband":
+		# A board's title never ellipsizes (GRADFIX2 item
+		# 2, the band fit's sibling): the board spec caps
+		# the title at one line, so at the wing's width a
+		# long title ("Medieval Madness" at 440 px) was
+		# cut to "Medieval Madn..." while its band and
+		# scores stood whole. The title font scales down
+		# until the whole line fits the face's inner
+		# width - the same never-clip law. At the board's
+		# own width only the very longest titles move.
+		var t_avail: float = size.x - 52.0
+		var t_need: float = _text_w(_measure_font(), _title_label.text, title_px)
+		if t_need > t_avail and t_need > 0.0:
+			title_px = maxi(20, int(floor(float(title_px) * t_avail / t_need)))
+	_title_label.add_theme_font_size_override("font_size", title_px)
 	# A spec may dim its own title ("title_color") - the letter
 	# strip's greyed slots render through it. Re-asserted on
 	# every spec (one CardFace serves all renders), with the
