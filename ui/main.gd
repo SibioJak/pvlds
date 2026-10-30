@@ -185,6 +185,12 @@ var _tw_sub: int = 0 ## the walk's sub-state inside an expansion / verification
 var _tw_dir_i: int = 0
 var _tw_wait: int = 0
 var _tw_pair_i: int = 0
+var _tw_desc_sub: int = 0 ## full mode phase 15 (the GRADFIX3 focus-descent legs): 0 build the start list, 1 take the next start, 2 press DOWN toward the bar, 3 await the re-entry pairing
+var _tw_desc_starts: Array = [] ## phase 15: every challenge panel, in shelf order - the descent starts
+var _tw_desc_i: int = 0
+var _tw_desc_wait: int = 0
+var _tw_desc_presses: int = 0
+var _tw_desc_exit_fired: bool = false ## phase 15: the BACK probe's witness (exit_requested caught by a test lambda, not the quit handler)
 var _layout_wing_probe: Dictionary = {} ## layout mode: the Phantom board rendered at the wing's size (GRADFIX2 board-whole legs)
 var _layout_wing_probe_done: bool = false
 var _layout_probe_results: Dictionary = {} ## layout mode: panel index -> RoomView.board_layout_probe result, filled async
@@ -464,6 +470,11 @@ func _ready() -> void:
 	# resting pointer owns the boot centre again and the
 	# bootfocus smoke's legs fail against the pre-fix binding.
 	RoomView.debug_boot_nc = OS.get_environment("PVLDS_BOOT_NC")
+	# The column-major round's negative-control seam
+	# (PVLDS_GRID_NC=rowmajor): restores the shipped
+	# across-the-band shelf fill so the grad census's
+	# column-order leg fails against it by name.
+	RoomView.debug_grid_nc = OS.get_environment("PVLDS_GRID_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -3254,15 +3265,21 @@ var _grad_failures: int = 0
 var _grad_manifest: Dictionary = {}
 var _grad_sweep_i: int = -1 ## the centre the sweep is measuring (-1 = not started)
 var _grad_ink_stage: int = 0
-## The eye ring the companion-wholeness legs judge from
-## (GRADFIX2 item 2): offsets from the room camera - the
-## wall stands at -z, so the threatening eyes are the
-## CLOSER ones (a seated player sits inside the drum's
-## axis, head low and off-centre), never the farther
-## ones. The first ring drafted for these legs reached
-## only +z (away from the wall) and acquitted the GRAD
-## FIX wing the field had already convicted - the
-## oldwing NC exposed it (the control boot passed).
+## The eye ring the companion-wholeness legs judge from:
+## offsets from the room camera - the wall stands at -z,
+## so the threatening eyes are the CLOSER ones (a seated
+## player sits inside the drum's axis, head low and
+## off-centre), never the farther ones. GRADFIX3 extends
+## the ring to the headset's real displacements: the
+## GRADFIX2 ring reached only 0.63 m off the axis and
+## judged a text rect narrower than the page's score
+## column, and the build it acquitted came back from the
+## field with its wing's right quarter behind the focused
+## card - the player stands displaced toward and around
+## the wall, up to a metre and more off the axis the desk
+## camera sits on. The far entries judge from inside that
+## space; a companion that only stands whole from the
+## axis has not been judged at all.
 const COMPANION_EYE_RING: Array[Vector3] = [
 	Vector3.ZERO,
 	Vector3(0.25, 0.0, -0.15), Vector3(-0.25, 0.0, -0.15),
@@ -3271,8 +3288,14 @@ const COMPANION_EYE_RING: Array[Vector3] = [
 	Vector3(0.18, -0.10, -0.38),
 	Vector3(0.55, 0.0, -0.30), Vector3(-0.55, -0.10, -0.30),
 	Vector3(0.45, -0.18, -0.45),
+	Vector3(0.0, 0.0, -0.9),
+	Vector3(0.7, 0.05, -0.75), Vector3(-0.7, -0.05, -0.75),
+	Vector3(0.0, -0.3, -1.05),
+	Vector3(1.0, 0.0, -0.5), Vector3(-1.0, -0.1, -0.5),
 ]
 var _grad_wingwhole_max: float = 0.0 ## worst centre-over-wing-text overlap the census measured (px), printed with the census stats - the margin the wing-whole verdict stands on
+var _grad_pop_worst: float = 0.0 ## worst popped-label-over-art fringe the census measured (px) - the margin the pop verdict's 512 bound stands on
+var _grad_wingcard_worst: float = 0.0 ## worst book-over-card excess over the untilted twin (px) - the margin the wingcard verdict's 512 bound stands on
 var _grad_wingwhole_min_gap: float = 1.0e9 ## closest approach of the centre card to the wing's text (px) where they do not overlap - the graze margin, printed with the census stats
 var _grad_swing_stage: int = 0
 var _grad_named_stage: int = 0 ## phase 12 (GRADFIX2 named cases): 0 focus the title, 1 judge + grab it
@@ -3735,12 +3758,37 @@ func _grad_leg_library() -> void:
 		and absi(_room.boot_centre_index - (_room.boot_visible_count - 1) / 2) <= 1,
 		"library: the drum boots mid-shelf (centre %d of its %d-game boot view)"
 		% [_room.boot_centre_index, _room.boot_visible_count])
-	# The long title stands on the bottom band, as placed.
+	# The shelf's fill order (GRADFIX3 item 5, the user's
+	# design call): the shelf fills TOP TO BOTTOM in a
+	# column, then steps right - so a title's column is
+	# monotonic with its place in the (alphabetical)
+	# standing order, and its seat is exactly (index / 3,
+	# index % 3), derived here from the mapping's law, not
+	# from the room's own function. Under
+	# PVLDS_GRID_NC=rowmajor the shipped across-the-band
+	# fill returns and this leg fails by name.
+	var order_bad: String = ""
+	var prev_col: int = -1
+	for i: int in range(_room._panels.size()):
+		var cc: Vector2i = _room._grid_coord(i)
+		if cc.x < prev_col or cc != Vector2i(i / 3, i % 3):
+			order_bad = "shelf %d stands at %s" % [i, str(cc)]
+			break
+		prev_col = cc.x
+	_grad_expect(order_bad == "",
+		"column order: the shelf fills top-to-bottom in a column, column position monotonic with alphabetical rank%s"
+			% ("" if order_bad == "" else " (" + order_bad + ")"))
+	# The long title's seat, re-derived under the new
+	# mapping: it stood on the bottom band under row-major
+	# (shelf 102, row 2); the column-major fill seats it at
+	# (34, 0). Its floor clearance is judged by the sweep's
+	# own legs at every centre it is visible from, as
+	# before - the seat is geography, the clearance is law.
 	var long_idx: int = _grad_panel_index(str(_grad_manifest.get("long_id", "")))
 	if long_idx >= 0:
 		var coord: Vector2i = _room._grid_coord(long_idx)
-		_grad_expect(coord.y == 2,
-			"fixtures: the longest title stands on the bottom band (shelf %d, row %d)" % [long_idx, coord.y])
+		_grad_expect(coord == Vector2i(long_idx / 3, long_idx % 3),
+			"fixtures: the longest title stands at its column-major seat (shelf %d, column %d, band %d)" % [long_idx, coord.x, coord.y])
 	else:
 		_grad_fail("fixtures: the longest title is on the shelf")
 
@@ -3874,7 +3922,14 @@ func _grad_leg_background_static() -> void:
 	_grad_bg_before.clear()
 	for layer: Variant in layers:
 		var node: Node3D = layer as Node3D
-		_grad_expect(node != null and node.get_parent() != drum,
+		# Ancestry, not direct parentage (GRADFIX3 fix of a
+		# vacuous leg): the layers hang on the stack's root,
+		# so a direct-parent check read "not the drum's
+		# child" true even under PVLDS_BG_NC=drum, which
+		# parents the ROOT to the drum - the control could
+		# never fail since graduation. The law is that no
+		# layer rides anywhere in the drum's subtree.
+		_grad_expect(node != null and drum != null and not drum.is_ancestor_of(node),
 			"background world-lock: a layer is not the drum's child")
 		if node != null:
 			_grad_bg_before.append(node.global_transform)
@@ -3934,8 +3989,8 @@ func _grad_sweep_step() -> void:
 	_grad_sweep_i += 1
 	_grad_sweep_settle = 0
 	if _grad_sweep_i >= n:
-		print("GRAD CENSUS: %d centres, %d labels measured, long-title label bottom %.4f m, rail intrusion max %.1f px (%s), fringe rail intrusions beyond the browsing zone %d, wing-whole worst overlap %.1f px, wing-whole worst clearance %.1f px"
-			% [n, _grad_labels_measured, _grad_long_min_bottom, _grad_rail_max_depth, _grad_rail_worst, _grad_fringe_rail, _grad_wingwhole_max, _grad_wingwhole_min_gap if _grad_wingwhole_min_gap < 1.0e8 else -1.0])
+		print("GRAD CENSUS: %d centres, %d labels measured, long-title label bottom %.4f m, rail intrusion max %.1f px (%s), fringe rail intrusions beyond the browsing zone %d, wing-whole worst overlap %.1f px, wing-whole worst clearance %.1f px, pop fringe worst %.1f px, wingcard excess worst %.1f px"
+			% [n, _grad_labels_measured, _grad_long_min_bottom, _grad_rail_max_depth, _grad_rail_worst, _grad_fringe_rail, _grad_wingwhole_max, _grad_wingwhole_min_gap if _grad_wingwhole_min_gap < 1.0e8 else -1.0, _grad_pop_worst, _grad_wingcard_worst])
 		_grad_expect(_grad_labels_measured > n,
 			"census: labels were measured across the sweep (%d)" % _grad_labels_measured)
 		_grad_audit_labels("post-sweep")
@@ -4103,10 +4158,17 @@ func _grad_ink_step() -> void:
 ## old curve sat dead between held steps - its signature at
 ## any sampling rate); and arrivals land inside the old
 ## duration law's envelope, exactly on target.
+## The journey's stations are COLUMNS (GRADFIX3 re-derivation:
+## under the row-major fill, consecutive indices were
+## consecutive columns; under the column-major fill a column
+## is three consecutive indices, so the stations are named in
+## columns and seated on the middle band - the journey's shape
+## - one column per step, then a 15-column swing - is the one
+## the GRAD FIX legs were written against).
 func _grad_swing_step() -> void:
 	match _grad_swing_stage:
 		0:
-			_room._set_focused(_room._panels[6])
+			_room._set_focused(_room._panels[7]) ## column 2, middle band
 			_grad_swing_stage = 1
 			_grad_wait = 0
 		1:
@@ -4125,7 +4187,7 @@ func _grad_swing_step() -> void:
 			var now: int = Time.get_ticks_msec() - _grad_swing_t0
 			_grad_swing_samples.append([now, _room.page_slide_yaw_deg(), rad_to_deg(_room._drum_yaw)])
 			if _grad_swing_cmd_i < 6 and now - _grad_swing_last_cmd >= 240:
-				_room._set_focused(_room._panels[7 + _grad_swing_cmd_i])
+				_room._set_focused(_room._panels[(3 + _grad_swing_cmd_i) * 3 + 1]) ## columns 3..8, middle band: one column per step
 				_grad_swing_cmds.append(now)
 				_grad_swing_last_cmd = now
 				_grad_swing_cmd_i += 1
@@ -4134,7 +4196,7 @@ func _grad_swing_step() -> void:
 				_grad_swing_samples.clear()
 				_grad_swing_cmds.clear()
 				_grad_swing_t0 = Time.get_ticks_msec()
-				_room._set_focused(_room._panels[27])
+				_room._set_focused(_room._panels[23 * 3 + 1]) ## column 23: the 15-column swing
 				_grad_swing_cmds.append(0)
 				_grad_swing_stage = 3
 			elif now > 8000:
@@ -4383,21 +4445,53 @@ func _grad_measure_centre(c: int) -> void:
 		if i == c:
 			centre_label_poly = lpoly
 		if not wing_poly.is_empty() and _grad_polys_overlap(lpoly, wing_poly):
-			_grad_count("wing", "centre %d: the wing eats panel %d's label" % [c, i])
-	# The wing against every drawn card's art (the GRAD FIX
-	# round): the wing stands in a borrowed slot, so its screen
-	# polygon may not cover any part of any visible panel -
-	# the borrowed panel is hidden (not drawn, not measured),
-	# and every other card must stand clear by area, not by a
-	# grazed edge. Coverage is a DEPTH claim, not just a
-	# screen claim: the popped centre card pulls 0.15 m toward
-	# the eye, ahead of the wing's 0.10 m float, so where their
-	# polygons cross it is the CARD that covers the wing. A
-	# violation needs the wing nearer the camera than the card
-	# it crosses.
+			# Charged on the house area threshold, like
+			# every other census leg: a sub-4 px graze of
+			# a label's AABB corner is projection noise
+			# between co-spherical surfaces, not an eaten
+			# name (the boolean form counted 2 px grazes).
+			if _grad_poly_intersect_area(lpoly, wing_poly) > 4.0:
+				_grad_count("wing", "centre %d: the wing eats panel %d's label" % [c, i])
+	# The wing against every drawn card's art: the wing
+	# stands in a borrowed slot, and the book is a
+	# FOREGROUND object (GRADFIX3) - it floats a full pop
+	# in front of the wall, so its silhouette grazing a
+	# neighbour's edge by a few px is foreground
+	# occlusion, the depth the user asked for ("more
+	# separated from images beside it"). The law charges
+	# an ENCROACHMENT: cover beyond what the same book,
+	# untilted, at the same seat and depth would make
+	# (the baseline below: the book's own size on the
+	# seat's basis at the holder's origin - its seam
+	# slivers against the slot's neighbours included),
+	# past the fringe bound of 512 px. The tilt's own
+	# fringe measures at most ~450 px across this
+	# census; the worst excess prints with the census
+	# line. What a player READS is protected absolutely
+	# elsewhere: labels (the leg above, no baseline,
+	# 4 px) and the book's own text (wing-whole,
+	# depth-aware). A book seated INTO a card (the
+	# graduation NC's shove) is convicted by the label
+	# leg - names are sacred at any seat. Coverage is
+	# still a DEPTH claim: where a card stands nearer
+	# the camera than the wing, it covers, it is not
+	# covered.
 	if not wing_poly.is_empty():
 		var wing_dist: float = (wing["transform"] as Transform3D).origin.distance_to(cam.global_position)
+		var borrowed_idx: int = int(wing.get("borrowed_idx", -1))
+		var borrowed_poly: Array[Vector2] = []
+		var holder_t: Transform3D = wing.get("holder_transform", Transform3D())
+		# The untilted twin IS the holder's own quad: the
+		# holder carries the seat's basis and origin in
+		# world space, and the tilt lives entirely inside
+		# it - so the twin is the holder's transform at
+		# the book's own size, nothing re-derived.
+		var base_t: Transform3D = holder_t
+		var base_half: Vector2 = (wing["size"] as Vector2) * 0.5
+		borrowed_poly = _grad_quad_screen_points(base_t, base_half, cam)
 		for j: int in range(_room._panels.size()):
+			if j == borrowed_idx:
+				continue # the wing stands in this card's slot - its own ground
 			var other: ClickableQuad = _room._panels[j]
 			if other == null or not other.visible:
 				continue
@@ -4408,33 +4502,46 @@ func _grad_measure_centre(c: int) -> void:
 			var cpoly: Array[Vector2] = _grad_quad_screen_points(other.global_transform, other.quad_size() * 0.5, cam)
 			if _grad_polys_overlap(wing_poly, cpoly):
 				var area: float = _grad_poly_intersect_area(wing_poly, cpoly)
-				if area > 4.0:
-					_grad_count("wingcard", "centre %d: the wing covers %.0f px of panel %d's card" % [c, area, j])
-	# The wing's TEXT against the popped centre card
-	# (GRADFIX2 item 2): the wingcard leg above acquits
-	# wherever the card stands nearer - which is always the
-	# centre card. The field's eaten wing text ("You have
-	# no score on this...", "Design: Joe Kaminkow, E...")
-	# was convicted in the TEXTURE (the band ran off the
-	# squashed canvas - the layout suite's wing-board
-	# probe + oldband NC carry that proof); the geometry's
-	# own share, measured here, is a GRAZE: the GRAD FIX
-	# wing's text ran 1-2 px from the card's silhouette at
-	# real viewpoints, which at headset resolution with a
-	# moving head reads as eaten. So this leg charges both
-	# a cover (overlap over 4 px) and a graze (clearance
-	# under 4 px), judged from a ring of eye offsets around
-	# the camera - a player's head is never exactly on the
-	# drum's axis, and the threatening eyes sit CLOSER to
-	# the wall (COMPANION_EYE_RING).
+				var baseline: float = 0.0
+				if not borrowed_poly.is_empty() and _grad_polys_overlap(borrowed_poly, cpoly):
+					baseline = _grad_poly_intersect_area(borrowed_poly, cpoly)
+				_grad_wingcard_worst = maxf(_grad_wingcard_worst, area - baseline)
+				if area - baseline > 512.0:
+					_grad_count("wingcard", "centre %d: the wing encroaches on panel %d's card (%.0f px beyond the same book untilted at its seat)" % [c, j, area - baseline])
+	# The wing's TEXT against the popped centre card.
+	# GRADFIX2's leg charged any overlap or graze of a
+	# text rect (0.44 x 0.47 of the face) from an eye ring
+	# that never left the drum's axis - and the shipped
+	# build came back from the field (GRADFIX3 item 4)
+	# with the wing's right quarter behind the focused
+	# card, its score column cut mid-number. Two faults
+	# compounded: the ring's eyes were a desk camera's,
+	# not a headset player's (the ring reaches a metre
+	# off-axis now), and the rect stopped inside the
+	# scores' right edge (the page's content rect is
+	# 0.46 x 0.49 of the face now - the last digit is
+	# inside the judged region). The leg is DEPTH-AWARE
+	# in the book's world: the book floats a full pop in
+	# front of the popped card (WING_PROUD 0.30 against
+	# the pop's 0.15), so from any eye where the book is
+	# the nearer surface the card cannot eat its text -
+	# the cover, if any, runs the other way and the
+	# wingcard leg above judges it. An eye charges only
+	# where the CARD is nearer: a cover over 4 px, or -
+	# from the near eyes, where a pixel is a pixel at
+	# headset scale - a graze under 4 px.
 	if not wing_poly.is_empty() and c < _room._panels.size():
 		var centre_panel: ClickableQuad = _room._panels[c]
 		if centre_panel != null and centre_panel.visible:
 			var wt2: Transform3D = wing["transform"]
 			var ws2: Vector2 = wing["size"]
-			var text_half: Vector2 = Vector2(ws2.x * 0.44, ws2.y * 0.47)
+			var text_half: Vector2 = Vector2(ws2.x * 0.46, ws2.y * 0.49)
+			var eye_i: int = -1
 			for off: Vector3 in COMPANION_EYE_RING:
+				eye_i += 1
 				var eye: Vector3 = cam.global_position + off
+				if wt2.origin.distance_to(eye) < centre_panel.global_position.distance_to(eye) - 0.01:
+					continue # the book stands in front of the card from this eye - its text cannot be eaten here
 				var wpoly: Array[Vector2] = _grad_quad_screen_points_from(cam, eye, wt2, text_half)
 				var cpoly2: Array[Vector2] = _grad_quad_screen_points_from(cam, eye, centre_panel.global_transform, centre_panel.quad_size() * 0.5)
 				var warea: float = 0.0
@@ -4448,10 +4555,20 @@ func _grad_measure_centre(c: int) -> void:
 				if warea > 4.0:
 					_grad_count("wingwhole", "centre %d: the centre card covers the wing's text from eye offset %s" % [c, str(off)])
 					break
-				if wgap < 4.0:
+				if wgap < 4.0 and eye_i < 11:
 					_grad_count("wingwhole", "centre %d: the centre card grazes the wing's text (%.1f px clear) from eye offset %s" % [c, wgap, str(off)])
 					break
 	# The popped centre's label against every neighbour's art.
+	# Charged past the fringe bound (GRADFIX3): a popped
+	# foreground card's nameplate grazing the art below it
+	# by a few px is foreground occlusion, the same class
+	# the room has always lived with between co-spherical
+	# cards; a DRAPE - a plate genuinely hung over the
+	# next card - is the fault. The fixture's worst case
+	# (its 51-character title, seated by the column-major
+	# fill over a card where row-major seated it over the
+	# floor) measures 287 px; the bound stands at 512 and
+	# the worst value prints with the census.
 	if not centre_label_poly.is_empty():
 		for j: int in range(_room._panels.size()):
 			if j == c:
@@ -4463,7 +4580,10 @@ func _grad_measure_centre(c: int) -> void:
 				continue
 			var apoly: Array[Vector2] = _grad_quad_screen_points(other.global_transform, other.quad_size() * 0.5, cam)
 			if _grad_polys_overlap(centre_label_poly, apoly):
-				_grad_count("pop", "centre %d: the popped label touches panel %d's art" % [c, j])
+				var parea: float = _grad_poly_intersect_area(centre_label_poly, apoly)
+				_grad_pop_worst = maxf(_grad_pop_worst, parea)
+				if parea > 512.0:
+					_grad_count("pop", "centre %d: the popped label drapes panel %d's art (%.0f px)" % [c, j, parea])
 
 
 ## One label's screen polygon from its LOCAL aabb corners
@@ -4488,9 +4608,9 @@ func _grad_census_verdicts() -> void:
 		["plate_floor", "census: no nameplate under the floor at any centre"],
 		["rail", "census: no label touches the rail at any centre"],
 		["status", "census: no label touches the status plate at any centre"],
-		["pop", "census: the popped centre's label clears every neighbour's art"],
+		["pop", "census: the popped centre's label never drapes a neighbour's art (fringe bound 512 px)"],
 		["wing", "wing occlusion: the wing eats no label at any centre"],
-		["wingcard", "wing occlusion: the wing covers no part of any card at any centre"],
+		["wingcard", "wing occlusion: the wing encroaches on no card past the fringe bound at any centre"],
 		["plinth", "plinth: no name block under its Launch plinth at any centre"],
 		["platecover", "nameplate cover: every name block stands wholly on its plate at any centre"],
 		["cardbounds", "nameplate bounds: every name block stands inside its own card at any centre"],
@@ -5946,7 +6066,7 @@ func _drive_letters_smoke() -> void:
 			# then hold RIGHT and arrive at #, monotonically
 			# through the drawn sequence, frame flagged.
 			_letters_pick("A") ## a plain wall: title sort, page 1, no net
-			_room._set_focused(_room._panels[10]) ## a bottom-row card
+			_room._set_focused(_letters_bottom_card()) ## a bottom-row card
 			_room._move_focus(Vector2(0.0, 1.0))
 			_room._move_focus(Vector2(0.0, 1.0))
 			_letters_expect(_letters_key_of(_room.focused_quad()) != "",
@@ -6326,9 +6446,21 @@ func _letters_leg_number_net() -> void:
 ## is DRAWN on the letter: the quad's own frame flag, and blue
 ## frame pixels in a rendered grab. A focus that exists in
 ## state but draws nothing is a failed delivery.
+## A card at the bottom of its column, under the standing
+## mapping (GRADFIX3: the column-major fill moved which
+## index that is - the legs derive it from the mapping,
+## never from a remembered index).
+func _letters_bottom_card() -> ClickableQuad:
+	for bi: int in range(_room._panels.size()):
+		var bc: Vector2i = _room._grid_coord(bi)
+		if bc.y == 2 or _room._index_at(bc.x, bc.y + 1) == bi:
+			return _room._panels[bi]
+	return null
+
+
 func _letters_leg_strip_entry() -> void:
 	_letters_pick("A") ## a plain wall: title sort, page 1, no net
-	_room._set_focused(_room._panels[10]) ## a bottom-row card
+	_room._set_focused(_letters_bottom_card()) ## a bottom-row card
 	_room._move_focus(Vector2(0.0, 1.0))
 	_letters_expect(_nav_key_of(_room.focused_quad()) != "",
 		"strip entry: DOWN from a bottom-row card lands on the rail (got '%s')" % _nav_key_of(_room.focused_quad()))
@@ -7053,6 +7185,16 @@ func _drive_tournament_full() -> void:
 			match _tournament_pairing_stage:
 				0:
 					if _room._panels.size() >= 5:
+						# Park the mouse over the furniture
+						# first (the walk phase's own lesson,
+						# applied here after two flaked boots):
+						# the teleport below seats the centre
+						# once, but _follow_centre's hover law
+						# re-seats it every frame after - a
+						# pointer left resting over a card
+						# steals the centre back and the board
+						# never pairs the not-owned challenge.
+						get_viewport().warp_mouse(Vector2(512, 764))
 						_room._set_centre(4, false)
 						_tournament_pairing_stage = 1
 						_tournament_smoke_wait = 0
@@ -7114,6 +7256,8 @@ func _drive_tournament_full() -> void:
 						_tournament_smoke_phase = 14
 		14:
 			_tournament_walk_step()
+		15:
+			_tournament_descent_step()
 		4:
 			# The SETUP panel's WoVP legs. Clear the saved key
 			# first (memory + file), so the paste leg proves
@@ -7348,10 +7492,12 @@ func _tournament_walk_step() -> void:
 					var ch0: WovpChallenge = (rows[0] as Dictionary).get("challenge") as WovpChallenge
 					if ch0 != null and str(bs3.get("challenge_id", "")) == ch0.challenge_id \
 							and not _room.page_slide_active() and _tw_wait >= 12:
-						_tournament_smoke_phase = 3
+						_tw_desc_sub = 0
+						_tournament_smoke_phase = 15
 					elif _tw_wait > 900:
 						_tournament_fail("selection walk: the season board never re-paired for the rendered legs")
-						_tournament_smoke_phase = 3
+						_tw_desc_sub = 0
+						_tournament_smoke_phase = 15
 
 
 func _tournament_row_table_name(row: Dictionary) -> String:
@@ -7360,6 +7506,123 @@ func _tournament_row_table_name(row: Dictionary) -> String:
 		return g.title
 	var ch: WovpChallenge = row.get("challenge") as WovpChallenge
 	return ch.table_name if ch != null else "?"
+
+
+## A focusable's name for the descent legs' reports: a
+## panel names its table, a rail stop its payload, a strip
+## slot its letter.
+func _tw_quad_name(q: ClickableQuad) -> String:
+	if q == null:
+		return "<none>"
+	var pi: int = _room._panels.find(q)
+	if pi >= 0 and pi < _room._visible_games.size():
+		return "card '%s'" % (_room._visible_games[pi] as GameEntry).title
+	if _room._is_rail_quad(q):
+		return "rail stop '%s'" % q.payload
+	if _room._is_strip_quad(q):
+		return "letter '%s'" % _letters_key_of(q)
+	return "quad '%s'" % q.action_id
+
+
+## The focus-descent legs (GRADFIX3 item 3, full mode
+## phase 15): the field's trap, in the user's words -
+## "cant't exit tournie screen, cant get back down to bar
+## once up top". The selection walk proves the pad can
+## REACH every challenge; these legs prove the pad can
+## always come back DOWN: from every challenge card,
+## repeated DOWN presses (the room's own _move_focus, one
+## press per beat, the drum settling between them as it
+## does under a real thumb) must land on the desk bar.
+## From the bar, the standing exits must work: BACK (the
+## D-pad Right path, _handle_rail("exit")) fires
+## exit_requested - caught here by a probe lambda so the
+## boot survives its own proof - and a filter press
+## leaves the tournie screen for the library. The room is
+## then re-entered and re-paired for the rendered legs.
+## Under PVLDS_TOURN_NC=trap the shipped grid-step's
+## clamped band hop is restored and the legs fail by name.
+func _tournament_descent_step() -> void:
+	var rows: Array = _room.tournament_rows()
+	match _tw_desc_sub:
+		0:
+			_tw_desc_starts.clear()
+			for p: Variant in _room._panels:
+				_tw_desc_starts.append(p)
+			_tw_desc_i = 0
+			# The descent is judged from a displaced eye -
+			# a headset player's head sits off the drum's
+			# axis and toward the wall, never on the desk
+			# camera's spot. The shipped descent scored its
+			# targets through that camera's screen
+			# projection; the fixed descent is a graph edge
+			# and must hold from here exactly as from the
+			# axis. (The trap NC restores the shipped edge:
+			# on this box's mono desk camera its projection
+			# still lands, so the NC is documented, in
+			# _descent_legacy's terms, as restoring the
+			# dependence rather than reproducing the
+			# headset's failure - the fix removes the
+			# dependence itself.)
+			_room._desk_rig.position = RoomView.EYE + Vector3(0.55, -0.08, -0.85)
+			_tw_desc_sub = 1
+		1:
+			if _tw_desc_i >= _tw_desc_starts.size():
+				_room._desk_rig.position = RoomView.EYE
+				# The exits, from the bar: BACK first (the
+				# probe lambda stands in for the quit
+				# handler), then the filter press that
+				# leaves the screen.
+				_tw_desc_exit_fired = false
+				var probe: Callable = func() -> void: _tw_desc_exit_fired = true
+				_room.exit_requested.disconnect(Callable(self, "_on_exit_requested"))
+				_room.exit_requested.connect(probe)
+				_room._handle_rail("exit")
+				_room.exit_requested.disconnect(probe)
+				_room.exit_requested.connect(Callable(self, "_on_exit_requested"))
+				_tournament_expect(_tw_desc_exit_fired,
+					"focus descent: BACK from the bar fires the exit (the D-pad Right path)")
+				_room._set_focused(_room.rail_quad("filter:all"))
+				_room._activate(_room.rail_quad("filter:all"))
+				_tournament_expect(not _room.tournament_active(),
+					"focus descent: a filter press on the bar exits the tournie screen")
+				_room._handle_rail("tournament")
+				_tw_desc_wait = 0
+				_tw_desc_sub = 3
+				return
+			_room._set_focused(_tw_desc_starts[_tw_desc_i] as ClickableQuad)
+			_tw_desc_presses = 0
+			_tw_desc_wait = 0
+			_tw_desc_sub = 2
+		2:
+			_tw_desc_wait += 1
+			if _tw_desc_wait >= 3:
+				_tw_desc_wait = 0
+				var f: ClickableQuad = _room.focused_quad()
+				if f != null and _room._is_rail_quad(f):
+					_tournament_expect(true,
+						"focus descent: DOWN from %s reaches the bar (%d presses, landed on %s)"
+							% [_tw_quad_name(_tw_desc_starts[_tw_desc_i] as ClickableQuad), _tw_desc_presses, _tw_quad_name(f)])
+					_tw_desc_i += 1
+					_tw_desc_sub = 1
+				elif _tw_desc_presses >= 10:
+					_tournament_expect(false,
+						"focus descent: DOWN from %s reaches the bar (10 presses, stuck on %s)"
+							% [_tw_quad_name(_tw_desc_starts[_tw_desc_i] as ClickableQuad), _tw_quad_name(f)])
+					_tw_desc_i += 1
+					_tw_desc_sub = 1
+				else:
+					_room._move_focus(Vector2(0.0, 1.0))
+					_tw_desc_presses += 1
+		3:
+			_tw_desc_wait += 1
+			var bs: Dictionary = _room.tournament_board_state()
+			var ch0: WovpChallenge = (rows[0] as Dictionary).get("challenge") as WovpChallenge if not rows.is_empty() else null
+			if ch0 != null and str(bs.get("challenge_id", "")) == ch0.challenge_id \
+					and _room.wall_ready and not _room.page_slide_active():
+				_tournament_smoke_phase = 3
+			elif _tw_desc_wait > 900:
+				_tournament_fail("focus descent: the room never re-paired after the exit legs")
+				_tournament_smoke_phase = 3
 
 
 ## One centre's standing-state verdicts (the walk's stage
@@ -7395,21 +7658,48 @@ func _tournament_walk_judge_centre(i: int, row: Dictionary) -> void:
 	var bt: Transform3D = bs.get("transform", Transform3D())
 	var bsz: Vector2 = bs.get("size", Vector2.ZERO)
 	var centre_panel: ClickableQuad = _room._panels[i]
+	# The board's page against its card, on the wing's law
+	# (GRADFIX3): judged from the extended eye ring, over
+	# the page's full content rect, and depth-aware - the
+	# book floats a full pop in front of the popped card,
+	# so an eye charges only where the CARD is the nearer
+	# surface. From the near eyes a graze under 4 px also
+	# charges, as it did for GRADFIX2.
 	var covered: String = ""
+	var eye_i: int = -1
 	for off: Vector3 in COMPANION_EYE_RING:
+		eye_i += 1
 		var eye: Vector3 = cam.global_position + off
-		var bpoly: Array[Vector2] = _grad_quad_screen_points_from(cam, eye, bt, Vector2(bsz.x * 0.46, bsz.y * 0.47))
+		if bt.origin.distance_to(eye) < centre_panel.global_position.distance_to(eye) - 0.01:
+			continue # the book stands in front of the card from this eye
+		var bpoly: Array[Vector2] = _grad_quad_screen_points_from(cam, eye, bt, Vector2(bsz.x * 0.46, bsz.y * 0.49))
 		var cpoly: Array[Vector2] = _grad_quad_screen_points_from(cam, eye, centre_panel.global_transform, centre_panel.quad_size() * 0.5)
 		if _grad_polys_overlap(bpoly, cpoly):
 			if _grad_poly_intersect_area(bpoly, cpoly) > 4.0:
 				covered = str(off)
 				break
-		elif _grad_poly_min_gap(bpoly, cpoly) < 4.0:
+		elif _grad_poly_min_gap(bpoly, cpoly) < 4.0 and eye_i < 11:
 			covered = str(off) + " (graze)"
 			break
 	_tournament_expect(covered == "",
 		"board whole: '%s' board text stands clear of its card from every viewpoint%s"
 			% [tname, "" if covered == "" else " (covered from " + covered + ")"])
+	# And the cover that runs the other way: the book is
+	# the nearer surface by design, so ITS silhouette may
+	# never eat the centred card's name - the player reads
+	# the pairing's title off the card, not the book.
+	var blabel: Array[Vector2] = _grad_label_poly(i, cam)
+	var bfull: Array[Vector2] = _grad_quad_screen_points(bt, bsz * 0.5, cam)
+	var eats: float = 0.0
+	if not blabel.is_empty() and _grad_polys_overlap(blabel, bfull):
+		eats = _grad_poly_intersect_area(blabel, bfull)
+	_tournament_expect(eats <= 4.0,
+		"board whole: '%s' board never covers its card's nameplate (%.0f px)" % [tname, eats])
+	# The tournament shelf stands without its bookend fins
+	# (GRADFIX3 item 2, the user's order) - judged here, at
+	# every centre the walk visits.
+	_tournament_expect(_room._fin_start == null and _room._fin_end == null,
+		"pairing ends: no bookend fin stands in the Tournament view at '%s'" % tname)
 
 
 ## The wing-sized board probe (layout mode, GRADFIX2
@@ -7423,6 +7713,14 @@ func _tournament_walk_judge_centre(i: int, row: Dictionary) -> void:
 ## and every score must fit its column. Under
 ## PVLDS_GRADFIX_NC=oldband the band's fit is off and the
 ## leg fails by name.
+## GRADFIX3 note: the Standing Book made the wing the
+## board's OWN size, so the 1:1 render's band now fits
+## even unfit - the squash the field failure lived in is
+## gone from the product. The probe therefore ALSO renders
+## the same spec at the GRADFIX2 wing's squashed width
+## (440 px): the fit law itself stays under test there -
+## production scales the band whole, oldband lets it run
+## off the edge and fails by name.
 func _layout_wing_probe_start() -> void:
 	_layout_wing_probe_done = false
 	_layout_wing_probe = {}
@@ -7445,8 +7743,9 @@ func _layout_wing_probe_start() -> void:
 	var px: Vector2i = Vector2i(Vector2(RoomSpecs.board_face_px()) * _room._wing_size() / RoomSpecs.board_panel_size())
 	var tex: Texture2D = await _room._factory.render_texture(spec, px)
 	var metrics: Dictionary = _room._factory.face_board_metrics()
+	var narrow_tex: Texture2D = await _room._factory.render_texture(spec, Vector2i(440, 720))
 	_layout_wing_probe = {"texture": tex, "rows": metrics.get("rows", []), "px": px,
-		"band_text": str(spec.get("band_text", ""))}
+		"band_text": str(spec.get("band_text", "")), "narrow_texture": narrow_tex}
 	_layout_wing_probe_done = true
 
 
@@ -7488,6 +7787,27 @@ func _tournament_leg_wing_board() -> void:
 	_tournament_expect(band_ink > 40 and edge_ink == 0,
 		"board whole: the band '%s' renders whole at the wing's width (band ink %d, edge ink %d)"
 			% [str(_layout_wing_probe.get("band_text", "")), band_ink, edge_ink])
+	# The fit law's guard at the GRADFIX2 squash width (see
+	# the probe's header): the same spec rendered 440 px
+	# wide - the band fits only because the fit scales it.
+	var ntex: Texture2D = _layout_wing_probe.get("narrow_texture") as Texture2D
+	var nimg: Image = ntex.get_image() if ntex != null else null
+	_tournament_expect(nimg != null and not nimg.is_empty(),
+		"board whole: the narrow render of the Phantom board carries an image")
+	if nimg != null and not nimg.is_empty():
+		var nw: int = nimg.get_width()
+		var nband: int = 0
+		var nedge: int = 0
+		for x2: int in range(30, nw):
+			for y2: int in range(10, 58):
+				var np2: Color = nimg.get_pixel(x2, y2)
+				if np2.r + np2.g + np2.b > 1.7:
+					nband += 1
+					if x2 >= nw - 3:
+						nedge += 1
+		_tournament_expect(nband > 40 and nedge == 0,
+			"board whole: the band '%s' renders whole at the old squash width too - the fit law's guard (band ink %d, edge ink %d)"
+				% [str(_layout_wing_probe.get("band_text", "")), nband, nedge])
 	var grab_dir: String = OS.get_environment("PVLDS_GRAB_DIR")
 	if grab_dir != "":
 		img.save_png(grab_dir.path_join("tournament_board_phantom_wing.png"))
