@@ -188,7 +188,8 @@ const SWING_MAX_SEC: float = 0.72
 ## _build_background) and the focused card's wing.
 const BG_STAR_RADIUS: float = 30.0 ## the starfield shell's radius around the eye
 const BG_WIRE_RADIUS: float = 14.0 ## the lat/long wireframe shell's radius
-const BG_RING_RADIUS: float = 9.0 ## the one tilted orbit ring's radius
+## (The orbit ring's radius const went with the ring -
+## GRADFIX4 item 5e removed it; see _build_background.)
 const HAZE_FLOOR: float = 0.45 ## the far window columns' dim floor (see _haze_for)
 const WING_SIZE: Vector2 = Vector2(0.62, 1.00) ## the focused card's wing, inside its borrowed slot (see _wing_size). GRADFIX3 (the Standing Book): the wing IS the book now - the card's width and a breath under its height (see RoomSpecs.BOARD_PANEL_SIZE for the seam arithmetic), where GRADFIX2's 0.44 x 0.72 panel (a 440x720 px canvas the board face's layout could not stand whole in - the band ran off its right edge, see CardFace's band fit) was walked down on the old census's angular budget. The book separates by DEPTH, not by shrinking: it floats BOOK-proud in front of the popped centre card and tilts on its spine (see _make_book), so the angular budget that shrunk the old panel no longer binds it.
 const WING_Y: float = -0.02 ## the book's centre in its slot, card-local: a breath low, so its top edge stays under the seam with the card above the slot (GRADFIX2's wing seated at 0.14, the smaller panel's span)
@@ -305,8 +306,8 @@ void fragment() {
 ## through between its nearer, brighter, sparser pinpoints -
 ## the two shells at 30 m and 12 m are the starfield's depth:
 ## under any head motion the layers parallax against each
-## other and against the wireframe shell (14 m) and the ring
-## (9 m) between them, and under the LAYERED dial both shells
+## other and against the wireframe shell (14 m), and under
+## the LAYERED dial both shells
 ## DRIFT on their own world-space rotations (see
 ## _update_background) - near faster than far, so a head turn
 ## sweeps both across the view opposite the turn, the near
@@ -553,7 +554,7 @@ var _bg_starfield: MeshInstance3D = null
 var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD FIX round's depth layer)
 var _starfield_mode: String = "layered" ## the SETUP dial: "layered" | "flat" | "off" (see set_starfield_mode)
 var _bg_wireframe: MeshInstance3D = null
-var _bg_ring: MeshInstance3D = null
+var _bg_ring: MeshInstance3D = null ## always null since GRADFIX4 removed the orbit ring (item 5e); background_layers() skips it
 var _wing: Node3D = null ## the focused card's wing holder (a DRUM child: it must ride the swing glued to the centred card - it is a card companion, not a background layer)
 var _wing_quad: MeshInstance3D = null
 var _wing_tilt: Node3D = null ## the wing-book's tilt pivot (see _make_book)
@@ -1070,31 +1071,17 @@ func _build_background() -> void:
 	wire.position = EYE
 	_bg_root.add_child(wire)
 	_bg_wireframe = wire
-	# ONE orbit ring, tilted: a thin torus standing off the
-	# room's axis - the stack's only flourish.
-	var ring: MeshInstance3D = MeshInstance3D.new()
-	ring.name = "OrbitRing"
-	var torus: TorusMesh = TorusMesh.new()
-	torus.inner_radius = BG_RING_RADIUS - 0.20
-	torus.outer_radius = BG_RING_RADIUS
-	torus.rings = 96
-	torus.ring_segments = 6
-	ring.mesh = torus
-	var rm: StandardMaterial3D = StandardMaterial3D.new()
-	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	rm.albedo_color = Color(1.0, 0.66, 0.16, 0.26)
-	ring.material_override = rm
-	ring.position = EYE
-	# GRADFIX4 (item 5e): the old 63/17 tilt put the ring's
-	# plane near edge-on to the working eye angles, and from
-	# below it read as a straight scratch line across the sky
-	# (his capture). The gentler 32/7 tilt keeps the ring's
-	# ellipse open from level and below angles alike; the
-	# tube is a touch thicker so the band reads as a band.
-	ring.rotation_degrees = Vector3(32.0, 0.0, 7.0)
-	_bg_root.add_child(ring)
-	_bg_ring = ring
+	# GRADFIX4 (item 5e): the orbit ring is REMOVED. The old
+	# 63/17 tilt read as a straight scratch line across the
+	# sky from below (his capture), and the reworked 32/7
+	# tilt with a thicker tube still read as a band, not a
+	# ring, in the level and below grabs - a 9 m great circle
+	# only ever shows a gently curved arc inside a headset's
+	# field of view, never a closed ring. The task's fork
+	# named the outcome: rework until it reads as a ring, or
+	# remove it. The drifting pinpoint layers are the sky
+	# now; _bg_ring stays null and background_layers() omits
+	# it.
 	_apply_starfield_mode()
 
 

@@ -3932,11 +3932,10 @@ func _grad_audit_labels(tag: String) -> void:
 
 func _grad_leg_background_static() -> void:
 	var layers: Array = _room.background_layers()
-	# Four layers since the GRAD FIX round: the near star
-	# shell joined the stack (starfield far, starfield near,
-	# wireframe, ring).
-	_grad_expect(layers.size() == 4,
-		"background world-lock: the stack stands (starfield, starfield near, wireframe, ring - %d layers)" % layers.size())
+	# Three layers since GRADFIX4 removed the orbit ring
+	# (item 5e): starfield far, starfield near, wireframe.
+	_grad_expect(layers.size() == 3,
+		"background world-lock: the stack stands (starfield, starfield near, wireframe - %d layers)" % layers.size())
 	var drum: Node3D = _room.drum_node()
 	_grad_bg_before.clear()
 	for layer: Variant in layers:
@@ -3955,7 +3954,7 @@ func _grad_leg_background_static() -> void:
 	# The starfield dial (the GRAD FIX round): layered stands
 	# both shells, flat the far one alone, off neither - and
 	# the drum's parentage never moves under any setting.
-	if layers.size() == 4:
+	if layers.size() == 3:
 		var far_shell: Node3D = layers[0] as Node3D
 		var near_shell: Node3D = layers[1] as Node3D
 		_room.set_starfield_mode("flat")
@@ -4135,12 +4134,14 @@ func _grad_sky_warp_match(a: Array, b: Array, theta_deg: float, img_w: float, im
 ## a right turn by the turned amount), the zenith's even
 ## density (no pole pinch), and the pinpoint profile. Grabs:
 ## gradfix4_sky_up.png (straight up), gradfix4_sky_level.png
-## and gradfix4_sky_below.png (the ring from level and from
-## below). Under PVLDS_BG_NC=uv the pre-fix UV field stands
+## and gradfix4_sky_below.png (the sky itself from level and
+## from below - the item 5e ring judgement stood on these
+## two grabs, and the ring was removed on their evidence).
+## Under PVLDS_BG_NC=uv the pre-fix UV field stands
 ## and the zenith + pinpoint legs fail by name.
 func _grad_sky_step() -> void:
 	var layers: Array = _room.background_layers()
-	if layers.size() != 4:
+	if layers.size() != 3:
 		_grad_fail("sky: the background stack is missing")
 		_grad_phase = 3
 		_grad_wait = 0
@@ -4148,14 +4149,12 @@ func _grad_sky_step() -> void:
 	var far_shell: Node3D = layers[0] as Node3D
 	var near_shell: Node3D = layers[1] as Node3D
 	var wire: Node3D = layers[2] as Node3D
-	var ring: Node3D = layers[3] as Node3D
 	var cam: Camera3D = _room._active_camera()
 	_grad_wait += 1
 	match _grad_sky_stage:
 		0:
 			_room.drum_node().visible = false
 			wire.visible = false
-			ring.visible = false
 			_room.set_starfield_mode("layered")
 			far_shell.visible = false
 			near_shell.visible = true
@@ -4299,7 +4298,6 @@ func _grad_sky_step() -> void:
 				_grad_wait = 0
 		9:
 			if _grad_wait > 4:
-				ring.visible = true
 				_grad_sky_stage = 10
 				_grad_wait = 0
 		10:
