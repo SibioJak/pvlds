@@ -227,6 +227,71 @@ const VISIBLE_HALF_COLUMNS: int = 10 ## drawn columns either side of the focused
 const CARD_SIZE: Vector2 = Vector2(0.62, 1.08) ## the card face, metres - the author screenshot's portrait shape
 const CARD_FRAME_SIZE: Vector2 = Vector2(0.68, 1.10) ## the frame quad behind the face (DOME5's trimmed height)
 const CARD_FACE_PX: Vector2i = Vector2i(496, 864) ## card faces render at the card's own aspect (0.574)
+## GRADFIX8 (item 4): the tournie border - a live-challenge
+## card's animated ring, standing OUTSIDE the card's own
+## frame (0.68 x 1.10) with a small air gap, inside the
+## shelf's pitches (13.5 deg columns = 0.80 m of arc and
+## 20 deg bands = 1.19 m at WALL_RADIUS, against the
+## border's 0.75 x 1.16). One ring quad per card, parented
+## to the card's flip pivot (see _make_card_nodes), drawn
+## by the shared shader below: the ring is the type colour
+## (RoomSpecs.challenge_type_color of the SOONEST-CLOSING
+## live challenge on that game - see tourney_border_map),
+## and two sheen heads travel its perimeter off the
+## engine's TIME, so the motion costs zero per-frame CPU
+## per card and never gates input. Everything else about
+## the card is untouched (the scenery-quiet / headline-loud
+## law: the border IS the headline).
+const TOURNEY_BORDER_OUTER: Vector2 = Vector2(0.75, 1.16) ## the ring quad's size, metres
+const TOURNEY_BORDER_INNER: Vector2 = Vector2(0.69, 1.11) ## the ring's inner cut, metres (stroke 0.030 sides / 0.025 top-bottom)
+const TOURNEY_BORDER_SHADER: String = """
+shader_type spatial;
+render_mode unshaded, cull_disabled, depth_prepass_alpha;
+uniform vec3 border_color : source_color = vec3(0.15, 0.30, 0.55);
+uniform float global_alpha = 1.0;
+uniform vec2 outer_size = vec2(0.75, 1.16);
+uniform vec2 inner_size = vec2(0.69, 1.11);
+void fragment() {
+	vec2 v = (UV - 0.5) * outer_size;
+	vec2 hv = outer_size * 0.5;
+	vec2 hi = inner_size * 0.5;
+	if (abs(v.x) < hi.x && abs(v.y) < hi.y) {
+		discard;
+	}
+	float W = outer_size.x;
+	float H = outer_size.y;
+	float P = 2.0 * (W + H);
+	float nx = abs(v.x) / hv.x;
+	float ny = abs(v.y) / hv.y;
+	float d;
+	if (nx > ny) {
+		if (v.x > 0.0) {
+			d = W + (v.y + hv.y);
+		} else {
+			d = 2.0 * W + H + (hv.y - v.y);
+		}
+	} else {
+		if (v.y < 0.0) {
+			d = v.x + hv.x;
+		} else {
+			d = W + H + (hv.x - v.x);
+		}
+	}
+	float head = mod(TIME * 0.45, P);
+	float cd = abs(d - head);
+	cd = min(cd, P - cd);
+	float head2 = mod(head + P * 0.5, P);
+	float cd2 = abs(d - head2);
+	cd2 = min(cd2, P - cd2);
+	float sheen = smoothstep(0.17, 0.0, cd) + 0.75 * smoothstep(0.17, 0.0, cd2);
+	float breathe = 0.94 + 0.06 * sin(TIME * 1.7);
+	vec3 col = border_color * breathe;
+	col = mix(col, vec3(1.0), clamp(sheen, 0.0, 1.0) * 0.8);
+	col += vec3(sheen * 0.12);
+	ALBEDO = col;
+	ALPHA = global_alpha;
+}
+"""
 const LABEL_STRIP_Y: float = -0.30 ## the nameplate strip's centre, card-local metres (DOME5: raised from -0.47)
 const LABEL_STRIP_SIZE: Vector2 = Vector2(0.62, 0.135) ## the nameplate's dark plate behind the title
 const LABEL_PIXEL_SIZE: float = 0.0024 ## the title Label3D's world scale (the prototype's)
@@ -571,6 +636,14 @@ static var debug_b_nc: String = ""
 ## board's render on the flipped card. Empty in every
 ## real run.
 static var debug_gf4_nc: String = ""
+## Negative-control seam for the tournie border (the
+## harness env PVLDS_GRADFIX8_NC, set by Main before any
+## room exists): "noborder" never applies a border, so
+## the grad census's tourney-border legs fail by name.
+## Empty in every real run.
+static var debug_gf8_nc: String = ""
+var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
+var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
 var _bg_starfield: MeshInstance3D = null
 var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD FIX round's depth layer)
@@ -1306,6 +1379,11 @@ func set_wovp_data(d: Dictionary) -> void:
 		if _flip_idx >= 0:
 			_flip_key = _card_back_key(_flip_idx)
 			_refresh_card_back()
+	# Fresh WoVP data re-derives the tournie borders
+	# (GRADFIX8 item 4): a challenge that appeared gains
+	# its ring, one that ended loses it - on the standing
+	# wall, without waiting for a rebuild.
+	_apply_tourney_borders()
 
 
 func tournament_active() -> bool:
@@ -1425,6 +1503,115 @@ func _challenge_build_owned(game: GameEntry, ch: WovpChallenge) -> bool:
 		if b.table_file_id == ch.version_external_id:
 			return true
 	return false
+
+
+## GRADFIX8 (item 4): the tournie border's data, derived
+## from the SAME cached WoVP challenges the Tournament
+## Room renders (_wovp_challenges, pushed by Main via
+## set_wovp_data - no network at room time, and a cache
+## refresh re-derives this whole map, so a challenge that
+## ends loses its border on the next push/rebuild).
+## game_id -> {type_code, color, challenge_id, end_unix}
+## for every library game holding at least one live
+## challenge. A game with several wears its SOONEST-
+## CLOSING challenge's colour (smallest end_unix; an
+## end-less challenge sorts last; an exact end tie breaks
+## on the smaller challenge_id, so the pick is stable
+## across refreshes of the same data).
+func tourney_border_map() -> Dictionary:
+	var out: Dictionary = {}
+	if debug_gf8_nc == "noborder":
+		return out
+	for cv: Variant in _wovp_challenges:
+		var ch: WovpChallenge = cv as WovpChallenge
+		if ch == null:
+			continue
+		var g: GameEntry = _match_challenge(ch)
+		if g == null:
+			continue
+		var end_key: int = ch.end_unix if ch.end_unix > 0 else 2000000000
+		var cur: Dictionary = out.get(g.game_id, {}) as Dictionary
+		var take: bool = cur.is_empty() or end_key < int(cur.get("end_key", 0)) \
+			or (end_key == int(cur.get("end_key", 0)) and ch.challenge_id < str(cur.get("challenge_id", "")))
+		if take:
+			out[g.game_id] = {
+				"type_code": ch.type_code,
+				"color": RoomSpecs.challenge_type_color(ch.type_code),
+				"challenge_id": ch.challenge_id,
+				"end_unix": ch.end_unix,
+				"end_key": end_key,
+			}
+	return out
+
+
+## The border's shared material for one challenge type:
+## minted once per type (four types exist), shared by
+## every bordered card of that type. The animation runs
+## off the shader's TIME - no per-frame CPU anywhere.
+func _tourney_border_mat(type_code: String, color: Color) -> ShaderMaterial:
+	var existing: ShaderMaterial = _border_mats.get(type_code) as ShaderMaterial
+	if existing != null:
+		return existing
+	if _border_shader == null:
+		_border_shader = Shader.new()
+		_border_shader.code = TOURNEY_BORDER_SHADER
+	var m: ShaderMaterial = ShaderMaterial.new()
+	m.shader = _border_shader
+	m.render_priority = -5 ## the ring draws before the face (-3) and its furniture; its interior is discarded, so nothing is covered
+	m.set_shader_parameter("border_color", color)
+	m.set_shader_parameter("global_alpha", clampf(_wall_alpha_applied, 0.0, 1.0))
+	_border_mats[type_code] = m
+	return m
+
+
+## Seat (or clear) every pooled card's tournie border
+## from the standing WoVP data. Runs over the whole pool
+## - not just the standing window - so a card pooled by
+## an earlier view can never carry a stale border into
+## this one, and a refresh that ends a challenge clears
+## its card wherever it stands. The border shows only
+## in the LIBRARY (Table Select): in the Tournament
+## Room every card is a challenge card and the boards
+## beside them are the headline there.
+func _apply_tourney_borders() -> void:
+	var map: Dictionary = tourney_border_map()
+	var in_library: bool = not _tournament
+	for gid: Variant in _panel_pool.keys():
+		var nodes: Dictionary = _panel_pool[gid] as Dictionary
+		if str(nodes.get("mode", "")) != "card":
+			continue
+		var border: MeshInstance3D = nodes.get("border") as MeshInstance3D
+		if border == null:
+			continue
+		var info: Dictionary = map.get(str(gid), {}) as Dictionary
+		var on: bool = in_library and not info.is_empty()
+		border.visible = on
+		nodes["border_on"] = on
+		if on:
+			var type_code: String = str(info.get("type_code", ""))
+			var color: Color = info.get("color", Color.WHITE)
+			border.material_override = _tourney_border_mat(type_code, color)
+			nodes["border_type"] = type_code
+			nodes["border_color"] = color
+		else:
+			nodes["border_type"] = ""
+			nodes["border_color"] = Color(0.0, 0.0, 0.0, 0.0)
+
+
+## One game's standing border state (the grad census's
+## read): whether its ring stands, and the colour/type
+## it was applied with.
+func tourney_border_state(game_id: String) -> Dictionary:
+	var nodes: Dictionary = _panel_pool.get(game_id, {}) as Dictionary
+	if nodes.is_empty():
+		return {"on": false, "type_code": "", "color": Color(0.0, 0.0, 0.0, 0.0), "has_node": false}
+	var border: MeshInstance3D = nodes.get("border") as MeshInstance3D
+	return {
+		"on": bool(nodes.get("border_on", false)) and border != null and border.visible,
+		"type_code": str(nodes.get("border_type", "")),
+		"color": nodes.get("border_color", Color(0.0, 0.0, 0.0, 0.0)),
+		"has_node": border != null,
+	}
 
 
 ## Enter the Tournament Room: the wall becomes the boards
@@ -1757,6 +1944,26 @@ func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 	var pivot: Node3D = q.flip_pivot()
 	if mode == "card":
 		nodes["frame"] = _make_card_quad(pivot, CARD_FRAME_SIZE, Vector3(0.0, 0.0, -0.007), _frame_mat(false))
+		# The tournie border (GRADFIX8 item 4): a ring quad
+		# on the SAME pivot, behind the frame - it rides the
+		# drum, the pop and the flip exactly as the card
+		# does, with no transform of its own to shear or
+		# lag. Hidden until _apply_tourney_borders seats a
+		# live challenge's colour on it; its material is
+		# the shared per-type ShaderMaterial (assigned
+		# there, never minted per card).
+		var border: MeshInstance3D = MeshInstance3D.new()
+		border.name = "TourneyBorder"
+		var tbqm: QuadMesh = QuadMesh.new()
+		tbqm.size = TOURNEY_BORDER_OUTER
+		border.mesh = tbqm
+		border.position = Vector3(0.0, 0.0, -0.010)
+		border.visible = false
+		pivot.add_child(border)
+		nodes["border"] = border
+		nodes["border_on"] = false
+		nodes["border_type"] = ""
+		nodes["border_color"] = Color(0.0, 0.0, 0.0, 0.0)
 		nodes["label"] = _make_card_label(pivot, game.title)
 		# The plate starts at the strip's floor size; _seat_card
 		# grows it to the title block's measured height once the
@@ -2238,6 +2445,11 @@ func _rebuild_wall() -> void:
 		_panel_plates.append(nodes.get("plate") as MeshInstance3D)
 		_panel_labels.append(nodes.get("label") as Label3D)
 		_seat_card(idx, nodes)
+	# The new wall's tournie borders (GRADFIX8 item 4):
+	# pooled cards are re-seated above, so their rings
+	# are re-derived from the standing WoVP data here -
+	# a rebuild never inherits a stale or missing border.
+	_apply_tourney_borders()
 	# The Tournament Room's standing boards (GRADFIX7 item 2):
 	# one beside every challenge card, in its pair's outer
 	# slot. Seated here with placeholder faces; the textures
@@ -5451,6 +5663,12 @@ func _apply_wall_alpha(a: float) -> void:
 		_status_label.modulate = Color(0.92, 0.95, 1.0, a)
 		_status_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * a)
 	_plate_mat().albedo_color = Color(0.0, 0.0, 0.0, 0.66 * a)
+	# The tournie borders fade with the wall too (GRADFIX8
+	# item 4): their materials are shared per type, so the
+	# global alpha is set once per type here - the same
+	# shared-material terms the nameplates already ride.
+	for bk: Variant in _border_mats.keys():
+		(_border_mats[bk] as ShaderMaterial).set_shader_parameter("global_alpha", clampf(a, 0.0, 1.0))
 	for idx: int in range(_panels.size()):
 		if idx < _panel_labels.size() and _panel_labels[idx] != null:
 			var la: float = a * _haze_for(idx)

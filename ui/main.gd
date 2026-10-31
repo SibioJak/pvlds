@@ -516,6 +516,11 @@ func _ready() -> void:
 	# per-game veto - so the grad smoke's board-pairing legs
 	# fail by name.
 	RoomSpecs.pairing_nc_old = OS.get_environment("PVLDS_GRADFIX8_NC") == "oldpair"
+	# GRADFIX8's tournie-border negative-control seam
+	# (PVLDS_GRADFIX8_NC=noborder): borders are never
+	# applied, so the census's tourney-border legs fail
+	# by name. Set here, before any room exists.
+	RoomView.debug_gf8_nc = OS.get_environment("PVLDS_GRADFIX8_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -3421,6 +3426,9 @@ var _grad_gf7_wait: int = 0
 var _grad_gf7_census_i: int = -1 ## the census centre cursor (-1 = not started)
 var _grad_gf7_census_settle: int = 0
 var _grad_gf7_census_wait: int = 0 ## ticks spent at the current census centre (the settle timeout's clock)
+var _grad_gf8_stage: int = 0 ## phase 15 (GRADFIX8 item 4, the tournie border): 0 census leg + centre the bordered card, 1 settle then grab A, 2 wait 400+ ms then grab B (the motion pair)
+var _grad_gf8_since: int = 0 ## msec the current gf8 stage began
+var _grad_gf8_frames: int = 0 ## driver frames counted in the current gf8 stage (the frame-sample print)
 var _grad_gf7_seen: Dictionary = {} ## panel idx -> true, every panel the census judged
 var _grad_gf7_art_ok: int = 0 ## visible-panel observations standing as art where art was expected
 var _grad_gf7_fallback_ok: int = 0 ## visible-panel observations standing styled where fallback was expected
@@ -4205,7 +4213,8 @@ func _grad_gf9_step() -> void:
 				_grad_gf8_wait = 0
 		1:
 			_grad_gf8_legs()
-			_grad_phase = 4
+			_grad_phase = 15
+			_grad_gf8_stage = 0
 			_grad_power_stage = 0
 			_grad_wait = 0
 
@@ -4597,6 +4606,8 @@ func _drive_grad_smoke() -> void:
 			_grad_wait = 0
 		9:
 			_grad_gf9_step()
+		15:
+			_grad_gf8_border_step()
 		4:
 			_grad_tournament_step()
 		5:
@@ -6042,6 +6053,114 @@ func _grad_named_step() -> void:
 				_grad_fail("named case: the drum never settled at '%s'" % title)
 				_grad_named_i += 1
 				_grad_named_stage = 0
+
+
+## GRADFIX8 (item 4): the tournie border census. The
+## expected set is re-derived HERE from the standing WoVP
+## data (the harness fixture cache's challenges, matched
+## to the library by VPS game id, soonest-closing per
+## game, colour from RoomSpecs.challenge_type_color) -
+## never read out of the room's own border bookkeeping -
+## and the actual set is what the standing wall's cards
+## were APPLIED with (RoomView.tourney_border_state).
+## The leg is non-vacuous by construction: it first
+## requires the manifest's tournament game to be in the
+## expected set. Under PVLDS_GRADFIX8_NC=noborder no
+## border is ever applied, the actual set is empty, and
+## these legs fail by name ("tourney border:").
+func _grad_leg_tourney_border() -> void:
+	var expected: Dictionary = {}
+	if _room != null and _room._scanner != null:
+		for cv: Variant in _room._wovp_challenges:
+			var ch: WovpChallenge = cv as WovpChallenge
+			if ch == null or ch.table_external_id == "":
+				continue
+			var g: GameEntry = _room._scanner.game_by_id(ch.table_external_id)
+			if g == null:
+				continue
+			var end_key: int = ch.end_unix if ch.end_unix > 0 else 2000000000
+			var cur: Dictionary = expected.get(g.game_id, {}) as Dictionary
+			var take: bool = cur.is_empty() or end_key < int(cur.get("end_key", 0)) \
+				or (end_key == int(cur.get("end_key", 0)) and ch.challenge_id < str(cur.get("challenge_id", "")))
+			if take:
+				expected[g.game_id] = {
+					"type_code": ch.type_code,
+					"color": RoomSpecs.challenge_type_color(ch.type_code),
+					"challenge_id": ch.challenge_id,
+					"end_key": end_key,
+				}
+	var tid: String = str(_grad_manifest.get("tournament_id", ""))
+	_grad_expect(expected.has(tid),
+		"tourney border: the fixture challenge set stands live (the tournament game is among %d expected bordered games)" % expected.size())
+	var actual: Dictionary = {}
+	if _room != null:
+		for i: int in range(_room._panels.size()):
+			var gid: String = _room._panels[i].payload
+			var st: Dictionary = _room.tourney_border_state(gid)
+			if bool(st.get("on", false)):
+				actual[gid] = st
+	var exp_keys: Array = expected.keys()
+	exp_keys.sort()
+	var act_keys: Array = actual.keys()
+	act_keys.sort()
+	_grad_expect(exp_keys == act_keys,
+		"tourney border: the bordered set equals the live challenge game set (expected %s, applied %s)" % [str(exp_keys), str(act_keys)])
+	var colour_bad: String = ""
+	for gid2: Variant in expected.keys():
+		if not actual.has(gid2):
+			continue
+		var ec: Color = (expected[gid2] as Dictionary).get("color", Color.WHITE)
+		var ac: Color = (actual[gid2] as Dictionary).get("color", Color.BLACK)
+		if ec != ac:
+			colour_bad = "game %s wears %s, its soonest-closing challenge's type colour is %s" % [str(gid2), str(ac), str(ec)]
+			break
+	_grad_expect(colour_bad == "",
+		"tourney border: each border's colour is its soonest-closing challenge's type colour%s" % ("" if colour_bad == "" else " (" + colour_bad + ")"))
+
+
+## GRADFIX8 (item 4), phase 15: the border census, then
+## the motion pair - the bordered (tournament) card is
+## centred, the drum settles, grab A lands, and grab B
+## lands 400+ ms of wall clock later with the same card
+## standing in the same place, so the only thing that
+## can differ along the ring is the shader's phase. The
+## stage's frame span prints as the run's frame sample.
+func _grad_gf8_border_step() -> void:
+	var tid: String = str(_grad_manifest.get("tournament_id", ""))
+	var idx: int = _grad_panel_index(tid)
+	match _grad_gf8_stage:
+		0:
+			_grad_leg_tourney_border()
+			if idx < 0:
+				_grad_fail("tourney border: the bordered card is on the shelf for the motion grabs")
+				_grad_phase = 4
+				_grad_power_stage = 0
+				return
+			_room._set_focused(_room._panels[idx])
+			_grad_gf8_stage = 1
+			_grad_gf8_since = Time.get_ticks_msec()
+			_grad_gf8_frames = 0
+		1:
+			_grad_gf8_frames += 1
+			if not _room.page_slide_active() and _grad_gf8_frames >= 12:
+				_grad_save_grab("gradfix8_border_a.png")
+				_grad_gf8_stage = 2
+				_grad_gf8_since = Time.get_ticks_msec()
+				_grad_gf8_frames = 0
+			elif Time.get_ticks_msec() - _grad_gf8_since > 20000:
+				_grad_fail("tourney border: the drum never settled for the motion grabs")
+				_grad_phase = 4
+				_grad_power_stage = 0
+		2:
+			_grad_gf8_frames += 1
+			var elapsed: int = Time.get_ticks_msec() - _grad_gf8_since
+			if elapsed >= 400:
+				_grad_save_grab("gradfix8_border_b.png")
+				print("  info - grad smoke: GF8 frame sample at the bordered centre: %d frames over %d ms (avg %.2f ms/frame)" % [_grad_gf8_frames, elapsed, float(elapsed) / maxf(1.0, float(_grad_gf8_frames))])
+				_grad_expect(true,
+					"tourney border: motion grabs taken %d ms apart at the bordered card (gradfix8_border_a.png / gradfix8_border_b.png)" % elapsed)
+				_grad_phase = 4
+				_grad_power_stage = 0
 
 
 ## GRADFIX6 (item 1): the flip, proven on the tournament
