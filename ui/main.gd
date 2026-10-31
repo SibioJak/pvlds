@@ -3388,8 +3388,8 @@ var _grad_visit_settle: int = 0
 ## run BEFORE the fallback visits of phase 7 - the visits pay
 ## face_path() and would mask the at-rest fault these legs
 ## convict).
-var _grad_gf7_stage: int = 0 ## 0 await warmer+fetcher drain, 1 settle + named chain legs, 2 the at-rest census sweep, 3 the heal-honesty rescan
-var _grad_gf7_heal_stage: int = 0 ## stage 3's sub-state: 0 plant the clone + rescan, 1 await adoption + sample the styled stamp, 2 await the warmer, then judge
+var _grad_gf7_stage: int = 0 ## phase 8's sub-state: 0 await warmer+fetcher drain, 1 settle + named chain legs, 2 the at-rest census sweep (the heal-honesty rescan runs last, as phase 14, so its extra library member cannot shift the indices the other phases judge)
+var _grad_gf7_heal_stage: int = 0 ## phase 14's sub-state: 0 plant the clone + rescan, 1 await adoption + sample the styled stamp, 2 await the warmer, then judge
 var _grad_gf7_heal_game: GameEntry = null ## the heal-check clone of Taxi (fresh stamp, same 31 MB .directb2s)
 var _grad_gf7_heal_before: String = "" ## the clone's stamped face key before the warmer lands (styled)
 var _grad_gf7_since: int = 0 ## msec the current gf7 stage began
@@ -3642,8 +3642,6 @@ func _grad_gf7_step() -> void:
 				_grad_gf7_focused = false
 		2:
 			_grad_gf7_census_step()
-		3:
-			_grad_gf7_heal_step()
 
 
 ## One census centre's assertions (GRADFIX7 item 1): every
@@ -3783,13 +3781,15 @@ func _grad_gf7_census_step() -> void:
 				_grad_expect(true, lt)
 			else:
 				_grad_expect(false, "%s (%d violations; first: %s)" % [lt, cnt, str(_grad_gf7_viol_first.get(kk, ""))])
-		_grad_gf7_stage = 3
-		_grad_gf7_heal_stage = 0
+		_grad_phase = 7
+		_grad_visit_i = -1
 	else:
 		_room._set_focused(_room._panels[_grad_gf7_census_i])
 
 
-## The heal-honesty leg (GRADFIX7 item 1), stage 3: Taxi's
+## The heal-honesty leg (GRADFIX7 item 1), phase 14 - the
+## grad run's last, so the clone it plants cannot shift the
+## shelf indices the other phases judge. Taxi's
 ## stamped key must gain its art segment when the warmer
 ## lands, with no paying call. Taxi itself can never show
 ## the transition in this boot - the warmer and the room
@@ -3819,8 +3819,7 @@ func _grad_gf7_heal_step() -> void:
 			_grad_expect(stem != "" and folder != "",
 				"heal honesty: Taxi's fixture files are locatable for the clone")
 			if stem == "" or folder == "":
-				_grad_phase = 7
-				_grad_visit_i = -1
+				_grad_phase = 6
 				return
 			var new_stem: String = "Taxi Healcheck (Williams 1988)"
 			var ok_copy: bool = true
@@ -3835,8 +3834,7 @@ func _grad_gf7_heal_step() -> void:
 			_grad_expect(ok_copy, "heal honesty: the Taxi clone is planted")
 			if not ok_copy or not start_scan():
 				_grad_fail("heal honesty: the rescan never started")
-				_grad_phase = 7
-				_grad_visit_i = -1
+				_grad_phase = 6
 				return
 			_grad_gf7_heal_stage = 1
 			_grad_gf7_wait = 0
@@ -3852,8 +3850,7 @@ func _grad_gf7_heal_step() -> void:
 				if _grad_gf7_heal_game == null:
 					if _grad_gf7_wait > 3600:
 						_grad_fail("heal honesty: the clone never joined the library")
-						_grad_phase = 7
-						_grad_visit_i = -1
+						_grad_phase = 6
 					return
 				var pidx: int = _grad_panel_index(_grad_gf7_heal_game.game_id)
 				if pidx >= 0:
@@ -3863,30 +3860,39 @@ func _grad_gf7_heal_step() -> void:
 			if k != "":
 				_grad_gf7_heal_before = k
 				_grad_gf7_heal_stage = 2
+				_grad_gf7_wait = 0
 			elif _grad_gf7_wait > 3600:
 				_grad_fail("heal honesty: the clone's face never stamped")
-				_grad_phase = 7
-				_grad_visit_i = -1
+				_grad_phase = 6
 		2:
 			if _art_warmer != null and not _art_warmer.is_idle():
 				return
+			# The warmer has landed; the heal + refill take
+			# their own frames (the heal's throttle, then the
+			# worker's render). Poll for the upgrade itself -
+			# the stamped key's art segment AND the standing
+			# from_art - and judge only when it stands or the
+			# wait runs out.
 			var g: GameEntry = _grad_gf7_heal_game
 			var after: String = str(_room._panel_face_key.get(g.game_id, ""))
-			var bparts: PackedStringArray = _grad_gf7_heal_before.split("|")
 			var aparts: PackedStringArray = after.split("|")
-			_grad_expect(bparts.size() > 1 and bparts[1] == "",
-				"heal honesty: the Taxi clone's stamped key starts styled ('%s')" % _grad_gf7_heal_before)
-			_grad_expect(aparts.size() > 1 and aparts[1] != "" and g.art_path == "",
-				"heal honesty: Taxi's stamped key gains its art segment when the warmer lands, with no paying call")
 			var from_art: bool = false
 			for st: Variant in _room.face_state():
 				if str((st as Dictionary).get("game_id", "")) == g.game_id:
 					from_art = bool((st as Dictionary).get("from_art", false))
 					break
+			var upgraded: bool = aparts.size() > 1 and aparts[1] != "" and from_art
+			_grad_gf7_wait += 1
+			if not upgraded and _grad_gf7_wait < 3600:
+				return
+			var bparts: PackedStringArray = _grad_gf7_heal_before.split("|")
+			_grad_expect(bparts.size() > 1 and bparts[1] == "",
+				"heal honesty: the Taxi clone's stamped key starts styled ('%s')" % _grad_gf7_heal_before)
+			_grad_expect(aparts.size() > 1 and aparts[1] != "" and g.art_path == "",
+				"heal honesty: Taxi's stamped key gains its art segment when the warmer lands, with no paying call")
 			_grad_expect(from_art,
 				"heal honesty: the Taxi clone stands wearing its extracted backglass after the heal")
-			_grad_phase = 7
-			_grad_visit_i = -1
+			_grad_phase = 6
 
 
 func _grad_leg_fallback_visit(e: Dictionary, g: GameEntry) -> void:
@@ -4174,6 +4180,8 @@ func _drive_grad_smoke() -> void:
 			_grad_visit_step()
 		8:
 			_grad_gf7_step()
+		14:
+			_grad_gf7_heal_step()
 		2:
 			_grad_sweep_step()
 		3:
@@ -5725,7 +5733,7 @@ func _grad_power_step() -> void:
 		0: # warm visit: centre the pair table so its faces fill
 			if pair_idx < 0:
 				_grad_fail("power: the pair table is on the shelf")
-				_grad_phase = 6
+				_grad_phase = 14
 				return
 			_room._set_focused(_room._panels[pair_idx])
 			_grad_power_stage = 1
@@ -5738,7 +5746,7 @@ func _grad_power_step() -> void:
 			var g: GameEntry = _grad_game(str(_grad_manifest.get("pair_id", "")))
 			if elapsed > 30000:
 				_grad_fail("power: the pair table's pair never became claimable")
-				_grad_phase = 6
+				_grad_phase = 14
 			elif g != null and g.pair_on_art() != "" and not _room.page_slide_active() and elapsed > 500:
 				_room._set_focused(_room._panels[mini(pair_idx + 1, _room._panels.size() - 1)])
 				_grad_power_stage = 2
@@ -5746,7 +5754,7 @@ func _grad_power_step() -> void:
 		2: # focus it again: the measured performance
 			if elapsed > 20000:
 				_grad_fail("power: the warm visit never ended")
-				_grad_phase = 6
+				_grad_phase = 14
 			elif _room.power_panel() == null and not _room.page_slide_active() and elapsed > 500:
 				_room._set_focused(_room._panels[pair_idx])
 				_grad_power_stage = 3
@@ -5754,7 +5762,7 @@ func _grad_power_step() -> void:
 		3: # its performance starts, mode 3, pair crossfade
 			if elapsed > 30000:
 				_grad_fail("power: the pair table's performance never started")
-				_grad_phase = 6
+				_grad_phase = 14
 			elif _room.power_panel() == _room._panels[pair_idx]:
 				_grad_expect(_room.power_mode() == 3 and _room.power_is_pair(),
 					"power: the pair table performs its Off/On crossfade (mode %d)" % _room.power_mode())
@@ -5768,7 +5776,7 @@ func _grad_power_step() -> void:
 			# focus loss then restores the card outright.
 			if elapsed > 60000:
 				_grad_fail("power: the pair performance never settled")
-				_grad_phase = 6
+				_grad_phase = 14
 			elif _room.power_phase() == 2 and elapsed > 1000:
 				# The standing face's own key names the art
 				# it was rendered from: the shot's cache
@@ -5784,7 +5792,7 @@ func _grad_power_step() -> void:
 		10: # focus loss restored the performer
 			if elapsed > 20000:
 				_grad_fail("power: focus loss never restored the pair table")
-				_grad_phase = 6
+				_grad_phase = 14
 			elif _room.power_panel() == null:
 				_grad_expect(true, "power: focus loss restores the shot-faced card")
 				_grad_power_stage = 5
@@ -5792,7 +5800,7 @@ func _grad_power_step() -> void:
 		5: # warm visit: a no-shot table, backglass filled
 			if taxi_idx < 0:
 				_grad_fail("power: the backglass-fallback table is on the shelf")
-				_grad_phase = 6
+				_grad_phase = 14
 				return
 			_room._set_focused(_room._panels[taxi_idx])
 			_grad_power_stage = 6
@@ -5801,7 +5809,7 @@ func _grad_power_step() -> void:
 			var tg: GameEntry = _grad_game(str(b2s_ids[0])) if b2s_ids.size() > 0 else null
 			if elapsed > 30000:
 				_grad_fail("power: the fallback table's backglass never filled")
-				_grad_phase = 6
+				_grad_phase = 14
 			elif tg != null and tg.backglass_face_path() != "" and not _room.page_slide_active() and elapsed > 500:
 				_room._set_focused(_room._panels[mini(taxi_idx + 1, _room._panels.size() - 1)])
 				_grad_power_stage = 7
@@ -5809,7 +5817,7 @@ func _grad_power_step() -> void:
 		7:
 			if elapsed > 20000:
 				_grad_fail("power: the fallback warm visit never ended")
-				_grad_phase = 6
+				_grad_phase = 14
 			elif _room.power_panel() == null and not _room.page_slide_active() and elapsed > 500:
 				_room._set_focused(_room._panels[taxi_idx])
 				_grad_power_stage = 8
@@ -5817,14 +5825,14 @@ func _grad_power_step() -> void:
 		8:
 			if elapsed > 30000:
 				_grad_fail("power: the fallback table's performance never started")
-				_grad_phase = 6
+				_grad_phase = 14
 			elif _room.power_panel() == _room._panels[taxi_idx]:
 				_grad_expect(_room.power_mode() == 2 and not _room.power_is_pair(),
 					"power: the fallback table performs the mimic grade on its backglass (mode %d)" % _room.power_mode())
 				if _room.power_time() > 0.25:
 					_grad_save_grab("grad_fallback_power.png")
 					_grad_power_stage = 9
-					_grad_phase = 6
+					_grad_phase = 14
 
 
 func _finish_grad_smoke() -> void:
