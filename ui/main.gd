@@ -5268,22 +5268,29 @@ func _grad_census_verdicts() -> void:
 	_grad_expect(_grad_flush_proj_samples >= 20 and _grad_flush_proj_err <= 0.02,
 		"book flush: the rendered page stands the card's full height (worst projected height-ratio error %.3f, signed %.3f, over %d settled centres; tolerance 0.02)"
 			% [_grad_flush_proj_err, _grad_flush_worst_signed, _grad_flush_proj_samples])
-	# GRADFIX5 (item 3): the Console verdicts - the bar's
-	# span, read off the laid-out quads, against the
-	# pre-Console 4.225 m; nothing dropped. Under
+	# GRADFIX5 (item 3) + GRADFIX6 (item 4, Console pass
+	# 2): the Console verdicts - the bar's span, read off
+	# the laid-out quads, against the pre-Console 4.225 m
+	# and pass 1's 2.964 m; nothing dropped. Pass 2's span
+	# is 2.687 m (79.3 degrees total at the rail's z -1.62);
+	# the bound 2.75 sits between it and pass 1's number,
+	# so pass-1 geometry fails here too. Under
 	# PVLDS_GRADFIX5_NC=widebar these fail by name.
 	var bar: Dictionary = _room.bar_state()
 	var rail_span: float = float(bar.get("rail_span", 0.0))
 	var strip_span: float = float(bar.get("strip_span", 0.0))
 	var status_sz: Vector2 = bar.get("status_size", Vector2.ZERO)
-	print("GRAD CONSOLE: rail span %.3f m (pre-Console 4.225), strip span %.3f m, %d rail stops, %d strip slots, status plate %s"
-		% [rail_span, strip_span, int(bar.get("rail_stops", 0)), int(bar.get("strip_slots", 0)), str(status_sz)])
-	_grad_expect(rail_span > 0.0 and rail_span <= 3.05 and int(bar.get("rail_stops", 0)) == 12 and status_sz.x <= 2.0,
-		"console bar: the rail is tightened to the Console span and loses no stop (span %.3f m of the pre-Console 4.225 - %.0f%% - %d stops, status plate %.2f m wide)"
+	print("GRAD CONSOLE: rail span %.3f m (pre-Console 4.225, pass 1 2.964), strip span %.3f m, %d rail stops, %d strip slots, status plate %s, tile height %.3f m, rail/strip gap %.3f m"
+		% [rail_span, strip_span, int(bar.get("rail_stops", 0)), int(bar.get("strip_slots", 0)), str(status_sz), float(bar.get("rail_tile_h", 0.0)), float(bar.get("rail_strip_gap", 0.0))])
+	_grad_expect(rail_span > 0.0 and rail_span <= 2.75 and int(bar.get("rail_stops", 0)) == 12 and status_sz.x <= 2.0,
+		"console bar: the rail is tightened to the pass-2 Console span and loses no stop (span %.3f m of the pre-Console 4.225 - %.0f%% - %d stops, status plate %.2f m wide)"
 			% [rail_span, rail_span / 4.225 * 100.0, int(bar.get("rail_stops", 0)), status_sz.x])
 	_grad_expect(strip_span > 0.0 and strip_span <= rail_span and int(bar.get("strip_slots", 0)) >= 27,
 		"console bar: the strip condenses inside the bar's span and keeps every slot (strip %.3f m within rail %.3f m, %d slots)"
 			% [strip_span, rail_span, int(bar.get("strip_slots", 0))])
+	_grad_expect(float(bar.get("rail_strip_gap", 0.0)) >= 0.050 and float(bar.get("rail_tile_h", 0.0)) > 0.0 and float(bar.get("rail_tile_h", 0.0)) <= 0.120,
+		"console bar: pass 2 gives the rows their air and slims the tiles (rail/strip gap %.3f m against pass 1's 0.025 - at least doubled - tile height %.3f m against pass 1's 0.135)"
+			% [float(bar.get("rail_strip_gap", 0.0)), float(bar.get("rail_tile_h", 0.0))])
 	# GRADFIX5 (item 4): the wall verdict - the pushed-back
 	# wall keeps its columns and the centre card reads
 	# smaller. On the old 3.05 radius the card measure reads

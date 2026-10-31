@@ -148,7 +148,7 @@ const PAIR_MIX_T0: float = 0.40 ## cascade second where a pair card's crossfade 
 ## the net at that letter. The strip is its own focus country
 ## beside the rail's: sideways travel walks the strip's own
 ## order, and the two rows trade places only vertically.
-const STRIP_Y: float = 0.0825 ## the strip row's height (the rail rides at 0.225 above it - the graduation stack)
+const STRIP_Y: float = 0.045 ## the strip row's height (the rail rides at 0.225 above it). GRADFIX6 (Console pass 2): lowered from 0.0825 for vertical air - see the Console block below for the gap arithmetic and the status-plate sight-line check.
 const STRIP_Z: float = -1.62 ## the rail's depth: the strip is rail furniture
 ## The Console bar (GRADFIX5 item 3, the user's pick - variant
 ## A of the bar mocks: "the current bar, disciplined - pulled
@@ -168,13 +168,42 @@ const STRIP_Z: float = -1.62 ## the rail's depth: the strip is rail furniture
 ## bar stands behind the harness's negative-control seam
 ## (PVLDS_GRADFIX5_NC=widebar) so the census's console leg
 ## can fail against it by name.
-const STRIP_LETTER_SIZE: Vector2 = Vector2(0.080, 0.100)
-const STRIP_THE_SIZE: Vector2 = Vector2(0.175, 0.100)
+##
+## Console pass 2 (GRADFIX6 item 4, the GRADFIX5 field
+## verdict: "in the headset the bar is almost, not quite,
+## all in view" + more air between the rows + slimmer
+## tiles): the rail tightens once more, widths x0.90 on the
+## GRADFIX5 defs - span 2.964 -> 2.687 m. At the rail's
+## depth (z -1.62 from the eye) that span's total angular
+## width is 2*atan(1.3435/1.62) = 79.3 degrees, against
+## 84.9 degrees for GRADFIX5's 2.964 and 105.0 for the
+## pre-Console 4.225 - the ends pull ~2.8 degrees a side
+## toward the centre of the view. Tiles slim too:
+## RAIL_TILE_H 0.135 -> 0.115, strip pads 0.100 -> 0.085
+## tall and a hair narrower (letters 0.080 -> 0.078, THE
+## 0.175 -> 0.170), so the strip's span (2.546 m with "#"
+## laid out) still sits inside the rail's. The strip row
+## moves DOWN for air (STRIP_Y 0.0825 -> 0.045; the rail
+## cannot move up - its top edge is census-bound against
+## the bottom-band labels): rail bottom 0.1675 (centre
+## 0.225, tile 0.115) minus strip top 0.0875 (centre
+## 0.045, pad 0.085) leaves a 0.080 m gap, 3.2x the
+## GRADFIX5 rows' 0.025. The status plate does NOT move:
+## at its seat (y 0.09, z -1.30) its top edge rides at
+## 40.6 degrees of depression from the eye, while the
+## lowered strip's bottom edge rides at 37.6 - a 3.0
+## degree sight-line clearance, and the two never share
+## ground. The widebar NC still restores the PRE-Console
+## bar wholesale (4.225 m), so it still convicts pass 2
+## by name. Nothing dropped: 12 rail stops, 28 strip
+## slots (A-Z, THE, #) - bar_state counts them.
+const STRIP_LETTER_SIZE: Vector2 = Vector2(0.078, 0.085)
+const STRIP_THE_SIZE: Vector2 = Vector2(0.170, 0.085)
 const STRIP_GAP: float = 0.010
 const STRIP_LETTER_SIZE_WIDE: Vector2 = Vector2(0.095, 0.13) ## the pre-Console strip (the widebar NC's restore)
 const STRIP_THE_SIZE_WIDE: Vector2 = Vector2(0.21, 0.13)
 const STRIP_GAP_WIDE: float = 0.014
-const RAIL_TILE_H: float = 0.135 ## the Console rail's tile height (pre-Console 0.15)
+const RAIL_TILE_H: float = 0.115 ## the Console rail's tile height, pass 2 (GRADFIX5 0.135, pre-Console 0.15)
 const RAIL_GAP: float = 0.018 ## the Console rail's inter-tile gap (pre-Console 0.035)
 
 ## ------------------------------------------------------------ the drum
@@ -2211,7 +2240,8 @@ func _build_rail(placeholder: Texture2D) -> void:
 	# remaining rows sit at the prototype panel's distance:
 	# rail centre 0.225 (top 0.30 - at the widest in-zone stop
 	# its top edge holds ~25.6 degrees of depression against
-	# the labels' ~24.5), strip at 0.0825, both at z -1.62.
+	# the labels' ~24.5), strip below it (STRIP_Y - 0.045
+	# since Console pass 2, GRADFIX6), both at z -1.62.
 	# Beyond the browsing zone the flat rail's far ends still
 	# graze fringe labels in the desk projection; the census
 	# counts and prints those, it does not convict them.
@@ -2220,7 +2250,11 @@ func _build_rail(placeholder: Texture2D) -> void:
 	# The Console (GRADFIX5 item 3): the same twelve stops at
 	# x0.72 widths, gaps closed to RAIL_GAP, tiles RAIL_TILE_H
 	# tall - total span 2.96 m against the old 4.225 (70%).
-	# The widebar NC restores the pre-Console row wholesale.
+	# Console pass 2 (GRADFIX6 item 4): widths x0.90 again -
+	# span 2.687 m, total angular width 79.3 degrees at the
+	# rail's z -1.62 (see the constants block for the full
+	# arithmetic). The widebar NC restores the pre-Console
+	# row wholesale.
 	var defs: Array = []
 	if _console_wide():
 		defs = [
@@ -2230,9 +2264,9 @@ func _build_rail(placeholder: Texture2D) -> void:
 		]
 	else:
 		defs = [
-			["filter:all", 0.216], ["filter:vr", 0.173], ["filter:favorites", 0.317], ["filter:recents", 0.288],
-			["sort", 0.331], ["tournament", 0.317], ["page_prev", 0.130], ["page_label", 0.202], ["page_next", 0.130],
-			["wovp_refresh", 0.230], ["desk", 0.230], ["exit", 0.202],
+			["filter:all", 0.194], ["filter:vr", 0.156], ["filter:favorites", 0.285], ["filter:recents", 0.259],
+			["sort", 0.298], ["tournament", 0.285], ["page_prev", 0.117], ["page_label", 0.182], ["page_next", 0.117],
+			["wovp_refresh", 0.207], ["desk", 0.207], ["exit", 0.182],
 		]
 	var gap: float = 0.035 if _console_wide() else RAIL_GAP
 	var tile_h: float = 0.15 if _console_wide() else RAIL_TILE_H
@@ -2625,7 +2659,7 @@ func _fill_wall_textures(gen: int) -> void:
 		if _strip_tex_cache.has(sck):
 			squad.set_texture(_strip_tex_cache[sck] as Texture2D)
 			continue
-		var spx: Vector2i = Vector2i(438, 250) if skey == "THE" else Vector2i(200, 250) ## the Console pads' own aspect (0.175/0.10 and 0.080/0.10), so the condensed glyphs are not stretched (GRADFIX5)
+		var spx: Vector2i = Vector2i(500, 250) if skey == "THE" else Vector2i(229, 250) ## the Console pads' own aspect (pass 2: 0.170/0.085 and 0.078/0.085), so the glyphs are not stretched (GRADFIX5's rule, GRADFIX6's numbers)
 		bench_renders += 1
 		var stex: Texture2D = await _factory.render_texture(RoomSpecs.letter_spec(str(ls[0]), str(ls[1])), spx)
 		if gen != _gen:
@@ -5466,6 +5500,8 @@ func wing_state() -> Dictionary:
 func bar_state() -> Dictionary:
 	var rail_lo: float = 1.0e9
 	var rail_hi: float = -1.0e9
+	var rail_bottom: float = 1.0e9
+	var rail_tile_h: float = 0.0
 	for k: Variant in _rail_quads.keys():
 		var q: ClickableQuad = _rail_quads[k] as ClickableQuad
 		if q == null:
@@ -5473,8 +5509,11 @@ func bar_state() -> Dictionary:
 		var half: float = q.quad_size().x * 0.5
 		rail_lo = minf(rail_lo, q.position.x - half)
 		rail_hi = maxf(rail_hi, q.position.x + half)
+		rail_bottom = minf(rail_bottom, q.position.y - q.quad_size().y * 0.5)
+		rail_tile_h = maxf(rail_tile_h, q.quad_size().y)
 	var strip_lo: float = 1.0e9
 	var strip_hi: float = -1.0e9
+	var strip_top: float = -1.0e9
 	var strip_count: int = 0
 	for k2: Variant in _strip_quads.keys():
 		var sq: ClickableQuad = _strip_quads[k2] as ClickableQuad
@@ -5484,11 +5523,19 @@ func bar_state() -> Dictionary:
 		var shalf: float = sq.quad_size().x * 0.5
 		strip_lo = minf(strip_lo, sq.position.x - shalf)
 		strip_hi = maxf(strip_hi, sq.position.x + shalf)
+		strip_top = maxf(strip_top, sq.position.y + sq.quad_size().y * 0.5)
 	return {
 		"rail_span": rail_hi - rail_lo if rail_hi > rail_lo else 0.0,
 		"strip_span": strip_hi - strip_lo if strip_hi > strip_lo else 0.0,
 		"rail_stops": _rail_quads.size(),
 		"strip_slots": strip_count,
+		# Console pass 2 (GRADFIX6 item 4): the tile height
+		# and the vertical air between the rows, read off the
+		# laid-out quads like the spans - the grad legs bind
+		# both (gap >= 0.050 against GRADFIX5's 0.025, tile
+		# height <= 0.120 against GRADFIX5's 0.135).
+		"rail_tile_h": rail_tile_h,
+		"rail_strip_gap": rail_bottom - strip_top if rail_bottom < 1.0e8 and strip_top > -1.0e8 else 0.0,
 		"status_size": (_status_plate.mesh as QuadMesh).size if _status_plate != null and _status_plate.mesh is QuadMesh else Vector2.ZERO,
 	}
 

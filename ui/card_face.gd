@@ -324,6 +324,27 @@ func apply_spec(spec: Dictionary) -> void:
 		# rows plus its footer band budget the whole face.
 		top_margin_px = 14
 	_margin.add_theme_constant_override("margin_top", top_margin_px)
+	# Vertical centring (GRADFIX6 item 4c, the Console pass-2
+	# field note "words ride high in their tiles"): button
+	# and banner faces centre their content BLOCK vertically.
+	# The layout was top-anchored end to end - the vbox sat
+	# at the top margin with BEGIN alignment and "centered"
+	# below set only the labels' HORIZONTAL alignment - so a
+	# button's glyph block occupied the top of its canvas
+	# and the rest was empty ground (measured on the proof
+	# renders: a rail tile's ink centre rode 25 px above its
+	# canvas centre at 512x150, Launch 32 px at 512x164, a
+	# strip letter 18.5 px at 200x250). Centring the vbox
+	# fixes every button-kind surface at once - rail tiles,
+	# strip letters, Launch, the SETUP panel's buttons, the
+	# detail view's buttons - and the banner faces (placard,
+	# SETUP panel face) centre their block the same way.
+	# Panel / info / board / row kinds stay top-anchored:
+	# their content is a stack that starts at the band.
+	# Re-asserted on every spec, like the margins above -
+	# one CardFace serves all renders, so the centring can
+	# never leak into a top-anchored kind (or out of one).
+	_vbox.alignment = BoxContainer.ALIGNMENT_CENTER if kind == "button" or kind == "banner" else BoxContainer.ALIGNMENT_BEGIN
 	var bg: Color = _color_of(spec, "bg", Color(0.05, 0.05, 0.09))
 	var band: Color = _color_of(spec, "band", Color(0.25, 0.25, 0.38))
 	_bg.color = bg
