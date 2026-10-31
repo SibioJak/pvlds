@@ -2955,6 +2955,14 @@ func refresh_shot_faces(game: GameEntry) -> void:
 ##     render, bounded per face key (BOARD_TEX_MAX_RETRIES)
 ##     so a persistently failing capture settles on the
 ##     styled card instead of spinning.
+## The heal NEVER renders itself: the factory is a serial
+## resource driven by the window-fill worker, and a second
+## concurrent fill source can starve the worker's pass (the
+## first grad run of this round wedged exactly there -
+## three faces never filled). The heal only clears the
+## bookkeeping that stands in the worker's way and asks
+## for a pass; the worker's key checks make the pass cheap
+## for every honest face.
 func _heal_panel_faces() -> void:
 	if _panel_window_lo < 0 or _panels.is_empty():
 		return
@@ -2962,6 +2970,7 @@ func _heal_panel_faces() -> void:
 	if now - _face_heal_msec < BOARD_TEX_RETRY_MS:
 		return
 	_face_heal_msec = now
+	var needs_pass: bool = false
 	for idx: int in range(_panels.size()):
 		if idx >= _visible_games.size():
 			continue
@@ -2980,20 +2989,22 @@ func _heal_panel_faces() -> void:
 		var pup: bool = game.is_pup_tagged()
 		var want_key: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
 		if stamped != want_key:
-			_fill_one_face(idx, _gen) # an upgrade is ready (or the face never landed) - the fill's own key check does the rest; never budget-charged
+			needs_pass = true # an upgrade is ready (or the face never landed); never budget-charged
 		elif tex == null or tex == _placeholder_tex or not _tex_is_real(tex):
 			# Stamped as this face, yet not honestly standing
 			# (a rebuild re-dressed the pooled panel, a race):
-			# restamp and refill, bounded per face key.
+			# clear the stamp so the worker re-renders it,
+			# bounded per face key.
 			var rkey: String = game.game_id + "|" + want_key
 			var spent: int = int(_face_heal_retries.get(rkey, 0))
 			if spent < BOARD_TEX_MAX_RETRIES:
 				_face_heal_retries[rkey] = spent + 1
 				_panel_face_key.erase(game.game_id)
-				_fill_one_face(idx, _gen)
+				needs_pass = true
 		elif art_file != "" and _panel_art_aspect[idx] <= 0.0:
 			# The styled card stands over ready art: its art
-			# render captured empty at fill time. Retry it,
+			# render captured empty at fill time. Evict the
+			# cached styled face and retry the art render,
 			# bounded; then the styled card stands for good.
 			var rkey: String = game.game_id + "|" + art_file
 			var spent: int = int(_face_heal_retries.get(rkey, 0))
@@ -3001,7 +3012,9 @@ func _heal_panel_faces() -> void:
 				_face_heal_retries[rkey] = spent + 1
 				_face_cache_evict(stamped)
 				_panel_face_key.erase(game.game_id)
-				_fill_one_face(idx, _gen)
+				needs_pass = true
+	if needs_pass:
+		_request_window_fill()
 
 
 ## Per-panel face state for the smokes (the sweep driver's
