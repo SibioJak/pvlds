@@ -465,6 +465,14 @@ func _ready() -> void:
 	# page (0.62 x 1.00, seated a breath low) so the census's
 	# book-flush legs fail against it by name.
 	RoomSpecs.board_short_page = OS.get_environment("PVLDS_GRADFIX5_NC") == "shortpage"
+	# GRADFIX5 (item 4) NC seam: oldwall restores the shipped
+	# wall wholesale (radius 3.05, no lift, marquee start at
+	# the old wall) so the wall-reach leg fails on its own
+	# numbers.
+	if OS.get_environment("PVLDS_GRADFIX5_NC") == "oldwall":
+		RoomView.WALL_RADIUS = 3.05
+		RoomView.WALL_LIFT = 0.0
+		RoomView.MARQUEE_START_Z = -3.05
 	# The pick-latency bench seam (PVLDS_BENCH): the room's
 	# fills print their phase timings + render counts.
 	RoomView.debug_bench = OS.has_environment("PVLDS_BENCH")
@@ -3337,6 +3345,7 @@ var _grad_bookcover_worst: float = 0.0 ## worst whole-book excess over its until
 var _grad_flush_size_err: float = 0.0 ## GRADFIX5 item 1: worst |page size - card size| over the sweep (m)
 var _grad_flush_seat_err: float = 0.0 ## GRADFIX5 item 1: worst |seat offset| over the sweep (m)
 var _grad_flush_proj_err: float = 0.0 ## GRADFIX5 item 1: worst rendered height-ratio error (page vs card, depth divided out)
+var _grad_flush_worst_signed: float = 1.0 ## GRADFIX5 item 1: the signed ratio at that worst centre (which way it errs)
 var _grad_flush_proj_samples: int = 0 ## GRADFIX5 item 1: settled centres the rendered flush measure ran at
 var _grad_wall_full_cols: int = -1 ## GRADFIX5 item 4: fully visible columns at the mid-library centre (-1 = unmeasured)
 var _grad_wall_card_deg: float = 0.0 ## GRADFIX5 item 4: the centre card's angular width there (deg)
@@ -4839,6 +4848,8 @@ func _grad_measure_centre(c: int) -> void:
 					var card_h: float = c_hi - c_lo
 					if page_h > 1.0 and card_h > 1.0 and pd2 > 0.0 and cd3 > 0.0:
 						var ratio2: float = (page_h * pd2) / (card_h * cd3 / RoomView.POP_OUT_SCALE)
+						if absf(ratio2 - 1.0) > _grad_flush_proj_err:
+							_grad_flush_worst_signed = ratio2
 						_grad_flush_proj_err = maxf(_grad_flush_proj_err, absf(ratio2 - 1.0))
 						_grad_flush_proj_samples += 1
 	# GRADFIX5 (item 4): the wall measure, once, at the
@@ -4852,6 +4863,7 @@ func _grad_measure_centre(c: int) -> void:
 		var vp: Vector2 = get_viewport().get_visible_rect().size
 		var col_full: Dictionary = {}
 		var col_seen: Dictionary = {}
+		var col_out: Dictionary = {}
 		for i2: int in range(_room._panels.size()):
 			var p2: ClickableQuad = _room._panels[i2]
 			if p2 == null or not p2.visible:
@@ -4862,13 +4874,23 @@ func _grad_measure_centre(c: int) -> void:
 			col_seen[col2] = true
 			var poly2: Array[Vector2] = _grad_quad_screen_points(p2.global_transform, p2.quad_size() * 0.5, cam)
 			var inside: bool = poly2.size() == 4
+			var worst_out: float = -1.0e9
 			for pt: Vector2 in poly2:
-				if pt.x < -2.0 or pt.y < -2.0 or pt.x > vp.x + 2.0 or pt.y > vp.y + 2.0:
+				var ov: float = maxf(maxf(-pt.x, -pt.y), maxf(pt.x - vp.x, pt.y - vp.y))
+				worst_out = maxf(worst_out, ov)
+				if ov > 2.0:
 					inside = false
+			col_out[col2] = maxf(float(col_out.get(col2, -1.0e9)), worst_out)
 			if not inside:
 				col_full[col2] = false
 			elif not col_full.has(col2):
 				col_full[col2] = true
+		var out_line: String = ""
+		var sorted_cols: Array = col_out.keys()
+		sorted_cols.sort()
+		for k4: Variant in sorted_cols:
+			out_line += " col %d: %+.0f px" % [int(k4), float(col_out[k4])]
+		print("GRAD WALL columns (worst corner overflow, px; negative is inside margin):%s" % out_line)
 		var full_n: int = 0
 		for k3: Variant in col_full.keys():
 			if bool(col_full[k3]):
@@ -5227,8 +5249,8 @@ func _grad_census_verdicts() -> void:
 		"book flush: the text page is the card's exact size and seats flush at every centre (worst size error %.4f m, worst seat offset %.4f m; tolerance 0.001)"
 			% [_grad_flush_size_err, _grad_flush_seat_err])
 	_grad_expect(_grad_flush_proj_samples >= 20 and _grad_flush_proj_err <= 0.02,
-		"book flush: the rendered page stands the card's full height (worst projected height-ratio error %.3f over %d settled centres; tolerance 0.02)"
-			% [_grad_flush_proj_err, _grad_flush_proj_samples])
+		"book flush: the rendered page stands the card's full height (worst projected height-ratio error %.3f, signed %.3f, over %d settled centres; tolerance 0.02)"
+			% [_grad_flush_proj_err, _grad_flush_worst_signed, _grad_flush_proj_samples])
 	# GRADFIX5 (item 3): the Console verdicts - the bar's
 	# span, read off the laid-out quads, against the
 	# pre-Console 4.225 m; nothing dropped. Under
