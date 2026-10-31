@@ -30,7 +30,7 @@ signal display_settings_changed ## a SETUP display dial turned (wing / starfield
 const PAGE_COLS: int = 4
 const PAGE_ROWS: int = 3
 const PAGE_SIZE: int = PAGE_COLS * PAGE_ROWS
-const WALL_RADIUS: float = 3.05
+const WALL_RADIUS: float = 3.40 ## GRADFIX5 (item 4): the wall pushed back a step from the dome's 3.05 (the user's ask: "push back a bit, fit a few more cards into your central vision"). +0.35 m (+11%): a card's angular width falls 11.6 -> 10.4 degrees and the air between columns grows ~1.2 degrees, while the column CENTRES stay pitch-fixed at 13.5 degrees - the step buys size and air, not new columns (the census's wall leg prints the measured counts). The step is also item 1's headroom: the flush book floats 0.30 proud of a 3.40 wall - 3.10 from the eye, the old wall's own distance - so the full-height page spans inside its band pitch. Cards keep their physical size; everything seated on the wall (book, fins, tournament block, pop) derives from this one constant and re-seats with it.
 const EYE: Vector3 = Vector3(0.0, 1.25, 0.0)
 const FILTERS: Array[String] = ["all", "vr", "favorites", "recents"]
 const FILTER_LABELS: Dictionary = {"all": "ALL", "vr": "VR", "favorites": "FAVORITES", "recents": "RECENTS"}
@@ -49,7 +49,7 @@ const SORT_LABELS: Dictionary = {"name": "NAME", "year": "YEAR", "manufacturer":
 const MARQUEE_FADE_SEC: float = 0.6 ## wall fade-down duration
 const MARQUEE_WALL_ALPHA: float = 0.16 ## the wall's alpha while the marquee stands
 const MARQUEE_FLY_IN_SEC: float = 1.4 ## the letters' travel time, wall -> settle
-const MARQUEE_START_Z: float = -3.05 ## fly-in start depth (at the wall)
+const MARQUEE_START_Z: float = -WALL_RADIUS ## fly-in start depth (at the wall - tracks WALL_RADIUS)
 const MARQUEE_SETTLE_POS: Vector3 = Vector3(0.0, 1.42, -2.30) ## reading distance, on the view axis (retuned 2026-10-22: first pass sat too close)
 const MARQUEE_PIXEL_SIZE: float = 0.005 ## Label3D world scale
 const MARQUEE_YEAR_FONT_SIZE: int = 110 ## retuned 2026-10-22: 170 read too big in the headset

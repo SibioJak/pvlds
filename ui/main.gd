@@ -5750,7 +5750,7 @@ func _nav_leg_clearance(popped_only: bool) -> void:
 		# The bottom band vs the rail (graduation amendment):
 		# on the flat wall the whole panel had to clear the
 		# rail. On the drum the rail is NEAR furniture (z
-		# -1.70) in front of far cards (r 3.05) - a card's ART
+		# -1.70) in front of far cards (r 3.40) - a card's ART
 		# passing behind the bar in projection is depth
 		# separation, not occlusion, and the pointer ray to
 		# the card passes over the bar (see the rail's seat).
