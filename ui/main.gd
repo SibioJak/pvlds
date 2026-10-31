@@ -6700,8 +6700,26 @@ func _drive_letters_smoke() -> void:
 			_letters_smoke_phase = 3
 		3:
 			_letters_smoke_wait += 1
+			if _letters_smoke_wait == 1:
+				# GRADFIX5: the strip sits at the desk
+				# frame's bottom edge, and the Console
+				# round's smaller slots (THE 0.21 x 0.13 ->
+				# 0.175 x 0.100, the seat unchanged) starved
+				# this grab's ring sampler - 2 frame-blue
+				# samples against the old bar's marginal 8,
+				# threshold 6. The grab now pitches the desk
+				# camera down so the judged surface is
+				# actually in frame (the threshold stands);
+				# the level view restores before the pager
+				# legs run.
+				var lcam: Camera3D = _room._active_camera()
+				if lcam != null:
+					lcam.rotation_degrees = Vector3(-18.0, 0.0, 0.0)
 			if _letters_smoke_wait >= 6:
 				_letters_leg_strip_grab()
+				var lcam2: Camera3D = _room._active_camera()
+				if lcam2 != null:
+					lcam2.rotation_degrees = Vector3.ZERO
 				_letters_step = 0
 				_letters_smoke_wait = 0
 				_letters_smoke_phase = 4
