@@ -41,35 +41,54 @@ const BUTTON_BG_ACCENT: Color = Color(0.36, 0.25, 0.06)
 ## notably taller than the old grid boards - the rows gain
 ## air, the score column keeps its law (the layout legs
 ## prove the worst case at this size). GRADFIX3 (the
-## Standing Book, the user's pick from the panel mocks):
-## the book stands at the card's WIDTH and a breath under
-## its height - 1.00 m against the card's 1.08. The inch
-## is geometry, not timidity: the bands pitch 20 degrees
-## apart, and a full-height book floated proud spans
-## wider than the pitch, painting over the nameplate of
-## the card above its slot and the art of the card below
-## (the grad census measured it: ~1,400 px of cover
-## against the borrowed card's own ~90). At 1.00, seated
-## a breath low (RoomView.WING_Y), the book's silhouette
-## stays inside its own slot from every eye the census
-## judges - and beside a card it still reads as the
-## card's neighbour, not the old small panel.
-const BOARD_PANEL_SIZE: Vector2 = Vector2(0.62, 1.00)
-const BOARD_FACE_PX: Vector2i = Vector2i(620, 1000)
+## Standing Book) stood it at the card's WIDTH and a breath
+## under its height - 1.00 m against the card's 1.08: the
+## bands pitch 20 degrees apart, and a full-height book
+## floated proud at the old wall radius spanned wider than
+## the pitch, painting over the nameplate of the card above
+## its slot and the art of the card below (the grad census
+## measured it: ~1,400 px of cover against the borrowed
+## card's own ~90).
+## GRADFIX5 (the user's field verdict on GRADFIX4: "info
+## panel is still a little smaller than art panel so they
+## don't look hinged"): the page is now the card's EXACT
+## size - 0.62 x 1.08, seated flush (RoomView.WING_Y = 0) -
+## so art page and text page share top and bottom edges and
+## the hinge reads. The headroom the GRADFIX3 inch was
+## buying comes from the wall's move back instead
+## (RoomView.WALL_RADIUS 3.40): the book floats its proud
+## 0.30 in front of a 3.40 wall - 3.10 from the eye - where
+## a 1.08 page spans 19.8 degrees against the bands' 20
+## degree pitch, INSIDE its slot, where the old 1.00 page
+## at the old radius (2.75 from the eye) spanned 20.6. The
+## census's flush leg measures the equality (page vs card
+## extents, 1 mm tolerance); the pre-fix short page stands
+## behind the harness's negative-control seam
+## (PVLDS_GRADFIX5_NC=shortpage, read by Main before any
+## room exists) so the leg can fail against it by name.
+const BOARD_PANEL_SIZE: Vector2 = Vector2(0.62, 1.08)
+const BOARD_FACE_PX: Vector2i = Vector2i(620, 1080)
+const SHORT_BOARD_PANEL_SIZE: Vector2 = Vector2(0.62, 1.00) ## the GRADFIX3/4 page (the shortpage NC's restore)
+const SHORT_BOARD_FACE_PX: Vector2i = Vector2i(620, 1000)
 const BOARD_FOOTER_PX: int = 140 ## the owned board face's bottom band: the Launch button's home
 const LEGACY_BOARD_PANEL_SIZE: Vector2 = Vector2(0.54, 0.64) ## == RoomView.PANEL_SIZE at the TR1/TR2 rounds
 const LEGACY_BOARD_FACE_PX: Vector2i = Vector2i(512, 640)
 const LEGACY_BOARD_LAUNCH_Y: float = -0.155 ## == RoomView.PANEL_LAUNCH_Y
 
 static var board_nc_old: bool = false ## Main sets this from PVLDS_BOARD_NC before any room exists
+static var board_short_page: bool = false ## Main sets this from PVLDS_GRADFIX5_NC=shortpage before any room exists
 
 
 static func board_panel_size() -> Vector2:
-	return LEGACY_BOARD_PANEL_SIZE if board_nc_old else BOARD_PANEL_SIZE
+	if board_nc_old:
+		return LEGACY_BOARD_PANEL_SIZE
+	return SHORT_BOARD_PANEL_SIZE if board_short_page else BOARD_PANEL_SIZE
 
 
 static func board_face_px() -> Vector2i:
-	return LEGACY_BOARD_FACE_PX if board_nc_old else BOARD_FACE_PX
+	if board_nc_old:
+		return LEGACY_BOARD_FACE_PX
+	return SHORT_BOARD_FACE_PX if board_short_page else BOARD_FACE_PX
 
 
 ## The board Launch button's centre height on its panel: the
@@ -79,8 +98,8 @@ static func board_face_px() -> Vector2i:
 static func board_launch_y() -> float:
 	if board_nc_old:
 		return LEGACY_BOARD_LAUNCH_Y
-	var p: Vector2 = BOARD_PANEL_SIZE
-	return -p.y * 0.5 + (float(BOARD_FOOTER_PX) / float(BOARD_FACE_PX.y) * p.y) * 0.5
+	var p: Vector2 = board_panel_size()
+	return -p.y * 0.5 + (float(BOARD_FOOTER_PX) / float(board_face_px().y) * p.y) * 0.5
 
 
 ## A challenge type's identity colour - the board's band.
@@ -428,8 +447,8 @@ static func tournament_state_spec(lines: Array) -> Dictionary:
 ## the clock) with the table's metadata appended beneath it
 ## as note rows; a table with no board gets the metadata
 ## alone under a TABLE DATA band. One render, one quad: the
-## wing's height budget (RoomView.WING_Y) leaves no room for
-## a second surface hanging beneath the board.
+## page is exactly the card's height (GRADFIX5), so there is
+## no room for a second surface hanging beneath the board.
 static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_unix: int) -> Dictionary:
 	var meta: Array = []
 	var maker_line: String = game.manufacturer

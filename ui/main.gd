@@ -460,6 +460,11 @@ func _ready() -> void:
 	# oldlayout): restores the pre-TR3 board presentation so
 	# the tournament smoke's layout legs fail against it.
 	RoomSpecs.board_nc_old = OS.get_environment("PVLDS_BOARD_NC") == "oldlayout"
+	# The GRADFIX5 flush negative-control seam (PVLDS_
+	# GRADFIX5_NC=shortpage): restores the GRADFIX3/4 short
+	# page (0.62 x 1.00, seated a breath low) so the census's
+	# book-flush legs fail against it by name.
+	RoomSpecs.board_short_page = OS.get_environment("PVLDS_GRADFIX5_NC") == "shortpage"
 	# The pick-latency bench seam (PVLDS_BENCH): the room's
 	# fills print their phase timings + render counts.
 	RoomView.debug_bench = OS.has_environment("PVLDS_BENCH")

@@ -191,8 +191,8 @@ const BG_WIRE_RADIUS: float = 14.0 ## the lat/long wireframe shell's radius
 ## (The orbit ring's radius const went with the ring -
 ## GRADFIX4 item 5e removed it; see _build_background.)
 const HAZE_FLOOR: float = 0.45 ## the far window columns' dim floor (see _haze_for)
-const WING_SIZE: Vector2 = Vector2(0.62, 1.00) ## the focused card's wing, inside its borrowed slot (see _wing_size). GRADFIX3 (the Standing Book): the wing IS the book now - the card's width and a breath under its height (see RoomSpecs.BOARD_PANEL_SIZE for the seam arithmetic), where GRADFIX2's 0.44 x 0.72 panel (a 440x720 px canvas the board face's layout could not stand whole in - the band ran off its right edge, see CardFace's band fit) was walked down on the old census's angular budget. The book separates by DEPTH, not by shrinking: it floats BOOK-proud in front of the popped centre card and tilts on its spine (see _make_book), so the angular budget that shrunk the old panel no longer binds it.
-const WING_Y: float = -0.02 ## the book's centre in its slot, card-local: a breath low, so its top edge stays under the seam with the card above the slot (GRADFIX2's wing seated at 0.14, the smaller panel's span)
+const WING_SIZE: Vector2 = Vector2(0.62, 1.08) ## the focused card's wing, inside its borrowed slot (see _wing_size). GRADFIX3 (the Standing Book): the wing IS the book now - where GRADFIX2's 0.44 x 0.72 panel (a 440x720 px canvas the board face's layout could not stand whole in - the band ran off its right edge, see CardFace's band fit) was walked down on the old census's angular budget. The book separates by DEPTH, not by shrinking: it floats BOOK-proud in front of the popped centre card and tilts on its spine (see _make_book), so the angular budget that shrunk the old panel no longer binds it. GRADFIX5: the page is the card's EXACT size (0.62 x 1.08, was a breath under at 1.00 through GRADFIX3/4) - see RoomSpecs.BOARD_PANEL_SIZE for the headroom arithmetic the wall's move back bought.
+const WING_Y: float = 0.0 ## the book's centre in its slot, card-local: FLUSH with the slot's own card (GRADFIX5) - the two pages share top and bottom edges, so the hinge reads. GRADFIX3/4 seated it a breath low (-0.02) under the short page's seam arithmetic.
 ## The wing's seat discipline (the GRAD FIX round): the wing
 ## stands IN the left neighbour's slot, shrunk inside the
 ## slot's own bounds (0.62 x 1.08) with margin on every side,
@@ -3073,14 +3073,15 @@ func _update_pop(delta: float) -> void:
 ## stands in the left neighbour's slot on the drum (so it
 ## rides the swing glued to the centred card), floated
 ## WING_PROUD in front of the slot plane. The GRAD FIX
-## round's discipline: the wing is SMALLER than its slot on
-## every side (WING_SIZE inside the 0.62 x 1.08 slot, centred
-## at WING_Y), and the slot's own card is borrowed away -
-## hidden and unpickable - for as long as the wing stands
-## there, so no part of any card is ever under it. At the
-## shelf's first column there is no card to borrow: the wing
-## overhangs the start fin's ground instead (the fin is
-## furniture, not a card).
+## round's discipline - the wing SMALLER than its slot on
+## every side - held through GRADFIX4; GRADFIX5 retires it:
+## the page is the slot's exact size, centred flush at
+## WING_Y = 0 (see WING_SIZE), and the slot's own card is
+## borrowed away - hidden and unpickable - for as long as
+## the wing stands there, so no part of any card is ever
+## under it. At the shelf's first column there is no card
+## to borrow: the wing overhangs the start fin's ground
+## instead (the fin is furniture, not a card).
 ## The wing's live size and seat height (the NC seams serve
 ## the pre-fix values: PVLDS_GRAD_NC=wing the graduation
 ## round's oversize wing, PVLDS_GRADFIX_NC=oldwing the
@@ -3088,12 +3089,16 @@ func _update_pop(delta: float) -> void:
 func _wing_size() -> Vector2:
 	if OS.get_environment("PVLDS_GRADFIX_NC") == "oldwing":
 		return WING_SIZE_GF1
+	if OS.get_environment("PVLDS_GRADFIX5_NC") == "shortpage":
+		return Vector2(0.62, 1.00) ## the GRADFIX3/4 page (the flush leg's NC restore)
 	return WING_SIZE_NC if OS.get_environment("PVLDS_GRAD_NC") == "wing" else WING_SIZE
 
 
 func _wing_y() -> float:
 	if OS.get_environment("PVLDS_GRADFIX_NC") == "oldwing":
 		return WING_Y_GF1
+	if OS.get_environment("PVLDS_GRADFIX5_NC") == "shortpage":
+		return -0.02 ## the GRADFIX3/4 seat (the flush leg's NC restore)
 	return WING_Y
 
 
@@ -3556,10 +3561,9 @@ func _refresh_tboard() -> void:
 		_release_tboard_borrow()
 	_tboard_seat = seat
 	_tboard_slot = _card_transform_at(seat.x, seat.y)
-	# The book seats a breath low in its slot, the wing's
-	# own seat law (WING_Y): its top edge stays under the
-	# seam with the card above the slot.
-	_tboard_slot.origin += _tboard_slot.basis.y * WING_Y
+	# The book seats FLUSH in its slot, the wing's own seat
+	# law (_wing_y - GRADFIX5: 0, the pages share edges).
+	_tboard_slot.origin += _tboard_slot.basis.y * _wing_y()
 	if not _tournament_legacy():
 		# The companion clearance (GRADFIX2 item 2): the
 		# board shifts along the drum away from the centred
@@ -3665,6 +3669,9 @@ func tournament_board_state() -> Dictionary:
 		# player reads.
 		"transform": _tboard_quad.global_transform if _tboard_quad != null else _tboard.global_transform,
 		"size": RoomSpecs.board_panel_size(),
+		# GRADFIX5: the flush leg's measures (see wing_state).
+		"seat_y": _wing_y(),
+		"card_size": CARD_SIZE,
 		"owned": _tboard_owned,
 		"borrowed_idx": _tboard_borrowed_idx,
 		"seat": _tboard_seat,
@@ -5349,6 +5356,11 @@ func wing_state() -> Dictionary:
 		"transform": _wing_quad.global_transform if _wing_quad != null else _wing.global_transform,
 		"holder_transform": _wing.global_transform,
 		"size": _wing_size(),
+		# GRADFIX5: the flush leg's measures - the seat's
+		# vertical offset from its slot (0 is flush) and the
+		# card size the page must equal.
+		"seat_y": _wing_y(),
+		"card_size": CARD_SIZE,
 		# GRADFIX4: the book's full silhouette size - the
 		# face plus its shared frame (the census's
 		# book-cover leg judges the whole book, dressing
