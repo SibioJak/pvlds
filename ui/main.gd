@@ -7640,10 +7640,15 @@ func _drive_letters_smoke() -> void:
 				_letters_smoke_fail("strip visual: the grab never came due")
 				_finish_letters_smoke()
 		4:
-			# The pager legs: focus an arrow, press A (the real
-			# pad route), and focus must still be on the arrow
-			# when the slide settles - both directions, and at
-			# both clamped ends.
+			# The pager legs (GRADFIX8 item 6 restated them:
+			# the < > arrow stops are gone on Chris's order,
+			# so the law they guarded - a page turn never
+			# drops or steals the player's focus - is driven
+			# through _handle_rail's page route directly, the
+			# call the arrows' own press took, with focus
+			# parked on a surviving rail stop: the turn must
+			# leave it exactly there - both directions, and
+			# at both clamped ends.
 			if _letters_leg_pager_step():
 				_letters_step = 0
 				_letters_smoke_wait = 0
@@ -8232,8 +8237,8 @@ func _letters_leg_pager_step() -> bool:
 	match _letters_step:
 		0:
 			_letters_pick("A") ## page 1 of 2, title sort, no net
-			_room._set_focused(_room.rail_quad("page_next"))
-			_room._a_press()
+			_room._set_focused(_room.rail_quad("sort"))
+			_room._handle_rail("page_next")
 			_letters_step = 1
 			_letters_smoke_wait = 0
 		1:
@@ -8241,9 +8246,9 @@ func _letters_leg_pager_step() -> bool:
 			if not _room.page_slide_active() and _letters_smoke_wait >= 8:
 				_letters_expect(_room._page == 1,
 					"pager: NEXT turns to the second page (got %d)" % _room._page)
-				_letters_expect(_room.focused_quad() == _room.rail_quad("page_next"),
-					"pager: focus stays on the NEXT arrow across a page turn")
-				_room._a_press() ## clamped: page 2 of 2 is the last
+				_letters_expect(_room.focused_quad() == _room.rail_quad("sort"),
+					"pager: focus survives a NEXT page turn (no drop, no steal)")
+				_room._handle_rail("page_next") ## clamped: page 2 of 2 is the last
 				_letters_step = 2
 				_letters_smoke_wait = 0
 			elif _letters_smoke_wait > 3600:
@@ -8254,10 +8259,9 @@ func _letters_leg_pager_step() -> bool:
 			if _letters_smoke_wait >= 12:
 				_letters_expect(_room._page == 1,
 					"pager: a clamped NEXT stays on the last page (got %d)" % _room._page)
-				_letters_expect(_room.focused_quad() == _room.rail_quad("page_next"),
-					"pager: a clamped NEXT at the last page keeps focus on the arrow")
-				_room._set_focused(_room.rail_quad("page_prev"))
-				_room._a_press()
+				_letters_expect(_room.focused_quad() == _room.rail_quad("sort"),
+					"pager: a clamped NEXT at the last page keeps the player's focus")
+				_room._handle_rail("page_prev")
 				_letters_step = 3
 				_letters_smoke_wait = 0
 		3:
@@ -8265,9 +8269,9 @@ func _letters_leg_pager_step() -> bool:
 			if not _room.page_slide_active() and _letters_smoke_wait >= 8:
 				_letters_expect(_room._page == 0,
 					"pager: PREV turns back to the first page (got %d)" % _room._page)
-				_letters_expect(_room.focused_quad() == _room.rail_quad("page_prev"),
-					"pager: focus stays on the PREV arrow across a page turn")
-				_room._a_press() ## clamped at the first page
+				_letters_expect(_room.focused_quad() == _room.rail_quad("sort"),
+					"pager: focus survives a PREV page turn (no drop, no steal)")
+				_room._handle_rail("page_prev") ## clamped at the first page
 				_letters_step = 4
 				_letters_smoke_wait = 0
 			elif _letters_smoke_wait > 3600:
@@ -8278,8 +8282,8 @@ func _letters_leg_pager_step() -> bool:
 			if _letters_smoke_wait >= 12:
 				_letters_expect(_room._page == 0,
 					"pager: a clamped PREV stays on the first page (got %d)" % _room._page)
-				_letters_expect(_room.focused_quad() == _room.rail_quad("page_prev"),
-					"pager: a clamped PREV at the first page keeps focus on the arrow")
+				_letters_expect(_room.focused_quad() == _room.rail_quad("sort"),
+					"pager: a clamped PREV at the first page keeps the player's focus")
 				return true
 	return false
 
@@ -8392,8 +8396,9 @@ func _jumpbench_press_a() -> void:
 
 func _jumpbench_press_next() -> void:
 	var before: int = _room._page
-	_room._set_focused(_room.rail_quad("page_next"))
-	_room._a_press()
+	# GRADFIX8 item 6: the page_next arrow quad is gone;
+	# the bench takes the direct route the press took.
+	_room._handle_rail("page_next")
 	if _room._page == before and not _room.page_slide_active():
 		_jumpbench_fail("page turn NEXT never started its slide")
 
