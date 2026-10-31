@@ -1741,6 +1741,17 @@ func _pool_card(game: GameEntry) -> Dictionary:
 ## plate grows down over the low seat).
 func _seat_card(idx: int, nodes: Dictionary) -> void:
 	var q: ClickableQuad = nodes["root"] as ClickableQuad
+	if str(nodes.get("mode", "")) == "board":
+		# A board-mode panel is the Tournament state row: it
+		# carries no Launch, ever - hide its Launch quad from
+		# the first frame, not whenever the async state fill
+		# lands (the fill re-asserts the same law; GRADFIX6's
+		# fill reorder - window faces before state faces, so
+		# entry never waits - exposed the seat-time gap).
+		var slq: ClickableQuad = nodes.get("launch") as ClickableQuad
+		if slq != null:
+			slq.visible = false
+			slq.pick_enabled = false
 	var coord: Vector2i = _grid_coord(idx)
 	var t: Transform3D = _card_transform_at(coord.x, coord.y)
 	if q.get_parent() != _wall:
