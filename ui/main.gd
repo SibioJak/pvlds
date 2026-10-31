@@ -6751,6 +6751,16 @@ func _drive_letters_smoke() -> void:
 			# rendered proof.
 			if _letters_step == 0:
 				_letters_pick("W")
+				# GRADFIX6: console pass 2 lowered the strip
+				# (centre 0.0825 -> 0.045, slot height 0.100
+				# -> 0.085) clear out of the level desk frame,
+				# so every strip grab from here on pitches the
+				# desk camera down to the strip it judges -
+				# the phase-3 pattern, threshold unchanged -
+				# and the level view restores after each grab.
+				var pcam_w: Camera3D = _room._active_camera()
+				if pcam_w != null:
+					pcam_w.rotation_degrees = Vector3(-18.0, 0.0, 0.0)
 				_letters_step = 1
 				_letters_smoke_wait = 0
 			else:
@@ -6759,6 +6769,9 @@ func _drive_letters_smoke() -> void:
 					_letters_expect(_letters_key_of(_room.focused_quad()) == "W",
 						"focus law: focus is still on W after its pick's wall settled (got '%s')" % _letters_key_of(_room.focused_quad()))
 					var blue_w: int = _letters_grab_ring("W", "pick_focus_w.png")
+					var rcam_w: Camera3D = _room._active_camera()
+					if rcam_w != null:
+						rcam_w.rotation_degrees = Vector3.ZERO
 					_letters_expect(blue_w >= 6,
 						"focus law: the rendered frame shows the focus frame around 'W' after its pick (%d frame-blue band samples)" % blue_w)
 					for i: int in range(30):
@@ -6777,8 +6790,15 @@ func _drive_letters_smoke() -> void:
 					_finish_letters_smoke()
 		6:
 			_letters_smoke_wait += 1
+			if _letters_smoke_wait == 1:
+				var pcam_h: Camera3D = _room._active_camera()
+				if pcam_h != null:
+					pcam_h.rotation_degrees = Vector3(-18.0, 0.0, 0.0)
 			if _letters_smoke_wait >= 6:
 				var blue_h: int = _letters_grab_ring("#", "walk_focus_hash.png")
+				var rcam_h: Camera3D = _room._active_camera()
+				if rcam_h != null:
+					rcam_h.rotation_degrees = Vector3.ZERO
 				_letters_expect(blue_h >= 6,
 					"focus law: the rendered frame shows the focus frame around '#' after the walk (%d frame-blue band samples)" % blue_h)
 				_letters_smoke_wait = 0
@@ -6817,8 +6837,15 @@ func _drive_letters_smoke() -> void:
 			_letters_smoke_phase = 8
 		8:
 			_letters_smoke_wait += 1
+			if _letters_smoke_wait == 1:
+				var pcam_r: Camera3D = _room._active_camera()
+				if pcam_r != null:
+					pcam_r.rotation_degrees = Vector3(-18.0, 0.0, 0.0)
 			if _letters_smoke_wait >= 6:
 				var blue_r: int = _letters_grab_ring("#", "route_focus_hash.png")
+				var rcam_r: Camera3D = _room._active_camera()
+				if rcam_r != null:
+					rcam_r.rotation_degrees = Vector3.ZERO
 				_letters_expect(blue_r >= 6,
 					"user route: the rendered frame shows the focus frame around '#' reached by holding RIGHT (%d frame-blue band samples)" % blue_r)
 				_finish_letters_smoke()
