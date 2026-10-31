@@ -175,8 +175,8 @@ var _tournament_smoke_failures: int = 0
 var _tournament_smoke_deadline_msec: int = 0
 var _tournament_validate_count_seen: int = 0 ## the stub's validate count when the panel length legs begin (their no-send witness)
 var _tournament_smoke_mode: String = "full" ## PVLDS_WOVP_SMOKE_MODE: full | nokey | failfetch | errbody | errempty | cache | layout - which harness boot this is
-var _tournament_pairing_stage: int = 0 ## full mode phase 13 (the flip-pairing proof): step out, flip, verify, step back, flip, verify
-var _tournament_rendered_flip: int = 0 ## full mode phase 3: 0 seat + flip the season card, 1 waiting for its back, 2 judged
+var _tournament_pairing_stage: int = 0 ## full mode phase 13 (the standing-pair proof): step out, verify, step back, verify
+var _tournament_rendered_flip: int = 0 ## full mode phase 3: 0 seat the season card, 1 centre + Y-inert judge, 2 judged on its standing board
 var _tournament_entry_msec: int = 0 ## GRADFIX6 item 3: first-entry stamps - when the rail press landed
 var _tournament_entry_last_msec: int = 0 ## the driver's previous frame stamp inside the entry window
 var _tournament_entry_gap_max: int = 0 ## the worst inter-frame gap inside the entry window (the freeze, measured)
@@ -8154,6 +8154,97 @@ func _tournament_leg_sky_nadir() -> void:
 		(layers[2] as Node3D).visible = true
 
 
+## GRADFIX7 item 2 helpers: the standing boards' state for
+## one row, the side the layout law assigns it, the side
+## assertion every centre judge makes, and an ink measure
+## for a board texture (luminance stdev over a coarse grid -
+## a real rendered board has text ink; the factory's
+## fallback solid, and the solidboard NC's counterfeit,
+## have none).
+func _tournament_board_entry(idx: int) -> Dictionary:
+	var bs: Array = _room.board_state()
+	if idx < 0 or idx >= bs.size():
+		return {}
+	return bs[idx] as Dictionary
+
+
+func _tournament_expected_board_left(i: int, n: int) -> bool:
+	var g: int = i / 2
+	var groups: int = maxi(1, int(ceil(float(maxi(1, n)) / 2.0)))
+	var gc: float = float(groups - 1) / 2.0
+	return float(g) < gc
+
+
+func _tournament_expect_board_side(i: int, row: Dictionary) -> void:
+	var rows: Array = _room.tournament_rows()
+	var entry: Dictionary = _tournament_board_entry(i)
+	var tname: String = _tournament_row_table_name(row)
+	if entry.is_empty():
+		_tournament_expect(false, "standing board side: '%s' has a standing board" % tname)
+		return
+	var card: Vector2i = entry.get("card_coord", Vector2i(-1, -1)) as Vector2i
+	var board: Vector2i = entry.get("board_coord", Vector2i(-1, -1)) as Vector2i
+	var actual_left: bool = board.x < card.x
+	var expected_left: bool = _tournament_expected_board_left(i, rows.size())
+	var label: String = "standing board side: '%s' board stands %s of its card (board col %d, card col %d)" % [
+		tname, "LEFT" if actual_left else "RIGHT", board.x, card.x]
+	if actual_left != expected_left or board.y != card.y:
+		label += " - expected %s, on its card's band" % ("LEFT" if expected_left else "RIGHT")
+	_tournament_expect(actual_left == expected_left and board.y == card.y, label)
+
+
+func _tournament_tex_ink_stdev(tex: Texture2D) -> float:
+	if tex == null:
+		return -1.0
+	var img: Image = tex.get_image()
+	if img == null or img.is_empty():
+		return -1.0
+	var mean: float = 0.0
+	var cnt: int = 0
+	for yy: int in range(0, img.get_height(), 16):
+		for xx: int in range(0, img.get_width(), 16):
+			mean += img.get_pixel(xx, yy).get_luminance()
+			cnt += 1
+	mean /= float(maxi(cnt, 1))
+	var varr: float = 0.0
+	for yy2: int in range(0, img.get_height(), 16):
+		for xx2: int in range(0, img.get_width(), 16):
+			var d: float = img.get_pixel(xx2, yy2).get_luminance() - mean
+			varr += d * d
+	return sqrt(varr / float(maxi(cnt, 1)))
+
+
+func _tournament_boards_all_real() -> bool:
+	var bs: Array = _room.board_state()
+	if bs.is_empty():
+		return false
+	for e: Variant in bs:
+		var ed: Dictionary = e as Dictionary
+		if str(ed.get("challenge_id", "")) == "":
+			continue
+		if not bool(ed.get("texture_real", false)):
+			return false
+	return true
+
+
+## The standing judge (GRADFIX7 item 2): at rest, with no Y
+## ever pressed, every challenge's board stands visible
+## beside its card - real texture at the board's face size,
+## with real ink on it.
+func _tournament_leg_standing_boards() -> void:
+	var rows: Array = _room.tournament_rows()
+	for i: int in range(rows.size()):
+		var entry: Dictionary = _tournament_board_entry(i)
+		var tname: String = _tournament_row_table_name(rows[i] as Dictionary)
+		var tex: Texture2D = entry.get("texture") as Texture2D
+		var ink: float = _tournament_tex_ink_stdev(tex)
+		_tournament_expect(bool(entry.get("board_visible", false)) and tex != null
+				and tex.get_width() == 620 and tex.get_height() == 1080
+				and bool(entry.get("texture_real", false)) and ink > 0.02,
+			"standing board: '%s' board stands open at rest - visible, 620x1080, real, inked (size %s, real %s, ink stdev %.3f)"
+				% [tname, str(tex.get_size()) if tex != null else "none", str(bool(entry.get("texture_real", false))), ink])
+
+
 func _tournament_leg_layout_boards() -> void:
 	var rows: Array = _room.tournament_rows()
 	_tournament_expect(rows.size() == 2, "layout: the two seeded worst-case challenges stand (got %d)" % rows.size())
@@ -8171,18 +8262,23 @@ func _tournament_leg_layout_boards() -> void:
 		var psz: Vector2 = _room._panels[0].quad_size()
 		_tournament_expect(psz == Vector2(0.62, 1.08),
 			"layout size: tournament challenges stand as full art cards (%s), not board panels" % str(psz))
-	# GRADFIX6 (item 1): there is no standing board to size
-	# any more - the board lives on the challenge card's
-	# BACK, at the card's own size by construction. What
-	# this leg can still convict: a card standing turned at
-	# rest (nothing may), and the pairing itself - which
-	# the full mode's flip-pairing phase proves per centre.
-	_tournament_expect(not bool(_room.flip_state().get("active", true)),
-		"layout flip: no card stands turned at rest - the boards live on the cards' backs")
+	# GRADFIX7 (item 2): the board stands OPEN beside its
+	# card at the board's own size - this leg convicts a
+	# standing board at any other size, and the side
+	# assertion below convicts one on the inward slot.
+	var bs_all: Array = _room.board_state()
+	var size_ok: bool = bs_all.size() == rows.size()
+	for e: Variant in bs_all:
+		if ((e as Dictionary).get("board_size", Vector2.ZERO) as Vector2) != Vector2(0.62, 1.08):
+			size_ok = false
+	_tournament_expect(size_ok,
+		"layout standing: every standing board's quad is the board size 0.62x1.08")
+	for li: int in range(rows.size()):
+		_tournament_expect_board_side(li, rows[li] as Dictionary)
 	if rows.size() >= 1:
 		var ch0: WovpChallenge = (rows[0] as Dictionary).get("challenge") as WovpChallenge
 		_tournament_expect(ch0 != null and _room.centre_index() >= 0,
-			"layout pairing: the centred challenge's card carries its board on its back (flip it with Y)")
+			"layout pairing: the centred challenge's card stands beside its board")
 
 
 func _layout_start_probes() -> void:
@@ -8307,29 +8403,48 @@ func _tournament_leg_block() -> void:
 	var rows: Array = _room.tournament_rows()
 	_tournament_expect(rows.size() >= 4,
 		"tourn layout: the seeded challenges stand to compose the block (got %d)" % rows.size())
+	var n: int = rows.size()
+	var groups: int = maxi(1, int(ceil(float(maxi(1, n)) / 2.0)))
 	var seen: Dictionary = {}
 	var min_col: int = 1 << 30
 	var max_col: int = -1
 	var bad: String = ""
-	for i: int in range(rows.size()):
-		var cc: Vector2i = _room._grid_coord(i)
-		if cc.x < RoomView.TOURN_BLOCK_COL0 or cc.y < RoomView.TOURN_BAND0 or cc.y >= RoomView.TOURN_BAND0 + RoomView.TOURN_BAND_COUNT:
-			bad = "challenge %d stands at %s, outside the block" % [i, str(cc)]
+	for i: int in range(n):
+		var entry: Dictionary = _tournament_board_entry(i)
+		if entry.is_empty():
+			bad = "challenge %d has no standing board state" % i
 			break
-		if seen.has(str(cc)):
-			bad = "two challenges share seat %s" % str(cc)
+		var card: Vector2i = entry.get("card_coord", Vector2i(-1, -1)) as Vector2i
+		var board: Vector2i = entry.get("board_coord", Vector2i(-1, -1)) as Vector2i
+		for seat: Vector2i in [card, board]:
+			if seat.x < RoomView.TOURN_BLOCK_COL0 or seat.x >= RoomView.TOURN_BLOCK_COL0 + 2 * groups \
+					or seat.y < RoomView.TOURN_BAND0 or seat.y >= RoomView.TOURN_BAND0 + RoomView.TOURN_BAND_COUNT:
+				bad = "challenge %d stands at %s, outside the pair block" % [i, str(seat)]
+				break
+			if seen.has(str(seat)):
+				bad = "two seats share %s" % str(seat)
+				break
+			seen[str(seat)] = true
+			min_col = mini(min_col, seat.x)
+			max_col = maxi(max_col, seat.x)
+		if bad != "":
 			break
-		seen[str(cc)] = true
-		min_col = mini(min_col, cc.x)
-		max_col = maxi(max_col, cc.x)
+		var expected_left: bool = _tournament_expected_board_left(i, n)
+		var actual_left: bool = board.x < card.x
+		if actual_left != expected_left or board.y != card.y:
+			bad = "standing board side: '%s' board stands %s of its card (board col %d, card col %d)" % [
+				_tournament_row_table_name(rows[i] as Dictionary),
+				"LEFT" if actual_left else "RIGHT", board.x, card.x]
+			break
 	if bad == "":
-		var want_cols: int = int(ceil(float(rows.size()) / float(RoomView.TOURN_BAND_COUNT)))
+		var want_cols: int = 2 * groups
 		if min_col != RoomView.TOURN_BLOCK_COL0 or max_col - min_col + 1 != want_cols:
-			bad = "the block spans columns %d..%d, want %d columns from %d" % [min_col, max_col, want_cols, RoomView.TOURN_BLOCK_COL0]
-	_tournament_expect(bad == "",
-		"tourn layout: the challenges compose the two-band block (pad %d, bands %d-%d, one seat each, intentional ends)%s"
-			% [RoomView.TOURN_BLOCK_COL0, RoomView.TOURN_BAND0, RoomView.TOURN_BAND0 + RoomView.TOURN_BAND_COUNT - 1,
-				"" if bad == "" else " - " + bad])
+			bad = "the pair block spans columns %d..%d, want %d columns from %d" % [min_col, max_col, want_cols, RoomView.TOURN_BLOCK_COL0]
+	var label: String = bad if bad.begins_with("standing board side:") else \
+		"tourn layout: the challenges compose the two-band pair block (pad %d, bands %d-%d, card+board seats distinct, block width 2*ceil(n/2))%s" % [
+			RoomView.TOURN_BLOCK_COL0, RoomView.TOURN_BAND0, RoomView.TOURN_BAND0 + RoomView.TOURN_BAND_COUNT - 1,
+			"" if bad == "" else " - " + bad]
+	_tournament_expect(bad == "", label)
 
 
 func _drive_tournament_full() -> void:
@@ -8391,9 +8506,10 @@ func _drive_tournament_full() -> void:
 				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 45000
 				_tournament_smoke_phase = 1
 		1:
-			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy():
+			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _tournament_boards_all_real():
 				_tournament_leg_boards()
 				_tournament_leg_block()
+				_tournament_leg_standing_boards()
 				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 20000
 				_tournament_smoke_phase = 2
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
@@ -8411,9 +8527,10 @@ func _drive_tournament_full() -> void:
 				_finish_tournament_smoke()
 		3:
 			# The rendered legs read the season board off the
-			# season card's BACK (GRADFIX6): seat the card,
-			# flip it, and judge only once the board stands
-			# rendered on the back.
+			# board STANDING beside the season card (GRADFIX7
+			# item 2): centre the card, prove Y is inert here,
+			# and judge only once the standing board's texture
+			# is really rendered.
 			_tournament_smoke_wait += 1
 			match _tournament_rendered_flip:
 				0:
@@ -8423,39 +8540,49 @@ func _drive_tournament_full() -> void:
 						_tournament_smoke_wait = 0
 				1:
 					if _room.centre_index() == 0 and not _room.page_slide_active() and _tournament_smoke_wait >= 6:
+						# The Y-inert judge (GRADFIX7 item 2): a Y
+						# press on a focused tournie card turns
+						# nothing, and every board still stands.
 						_room._info_focused_card()
+						var yfs: Dictionary = _room.flip_state()
+						_tournament_expect(not bool(yfs.get("active", true)) and absf(float(yfs.get("angle_deg", 1.0))) <= 0.5,
+							"Y inert: Y on a focused tournie card flips nothing (no turn stands, every angle 0)")
+						var ybs: Array = _room.board_state()
+						var y_standing: bool = ybs.size() == _room.tournament_rows().size()
+						for ye: Variant in ybs:
+							if not bool((ye as Dictionary).get("board_visible", false)):
+								y_standing = false
+						_tournament_expect(y_standing,
+							"Y inert: every standing board still stands after the Y press")
 						_tournament_rendered_flip = 2
 						_tournament_smoke_wait = 0
 					elif _tournament_smoke_wait > 900:
 						_tournament_fail("rendered: the season card never centred")
 						_finish_tournament_smoke()
 				2:
-					var rfs: Dictionary = _room.flip_state()
+					var rentry: Dictionary = _tournament_board_entry(0)
 					var rrows: Array = _room.tournament_rows()
 					var rseason: WovpChallenge = (rrows[0] as Dictionary).get("challenge") as WovpChallenge if rrows.size() >= 1 else null
-					if rseason != null and bool(rfs.get("open", false)) and int(rfs.get("idx", -1)) == 0 \
-							and str(rfs.get("standing_key", "")).contains(rseason.challenge_id) \
-							and bool(rfs.get("texture_real", false)) and float(rfs.get("t", 0.0)) >= 1.0:
+					if rseason != null and str(rentry.get("challenge_id", "")) == rseason.challenge_id \
+							and bool(rentry.get("texture_real", false)):
 						_tournament_leg_rendered()
 						_tournament_smoke_wait = 0
 						_tournament_smoke_phase = 4
 					elif _tournament_smoke_wait > 900:
-						_tournament_fail("rendered: the season card never turned its board up")
+						_tournament_fail("rendered: the season board never stood rendered beside its card")
 						_finish_tournament_smoke()
 		13:
-			# The flip-pairing (GRADFIX6 - the redesign's core
-			# law, restated for the card's back): each card
-			# carries its OWN board. Flipping the not-owned
-			# challenge's card shows its board with no Launch
-			# on the back; stepping away turns it home on its
-			# own (the centre-move law); flipping the first
-			# challenge's card shows its board with its Launch.
-			# The phase ends with the room front-up, so the
+			# The standing pair (GRADFIX7 item 2 - the
+			# redesign's core law, restated for open boards):
+			# each card stands beside its OWN board, on the
+			# outward side. Centring the not-owned challenge
+			# shows its board with no Launch anywhere on it
+			# (and none on its card's front either); centring
+			# the first challenge shows its board beside a
+			# card whose front carries the pair's one Launch.
+			# The phase ends front-up and board-open, so the
 			# selection walk starts clean.
 			var rows13: Array = _room.tournament_rows()
-			var ch4: WovpChallenge = (rows13[4] as Dictionary).get("challenge") as WovpChallenge if rows13.size() >= 5 else null
-			var ch0: WovpChallenge = (rows13[0] as Dictionary).get("challenge") as WovpChallenge if rows13.size() >= 1 else null
-			var fs13: Dictionary = _room.flip_state()
 			match _tournament_pairing_stage:
 				0:
 					if _room._panels.size() >= 5:
@@ -8471,7 +8598,6 @@ func _drive_tournament_full() -> void:
 				1:
 					_tournament_smoke_wait += 1
 					if _room.centre_index() == 4 and not _room.page_slide_active() and _tournament_smoke_wait >= 6:
-						_room._info_focused_card()
 						_tournament_pairing_stage = 5
 						_tournament_smoke_wait = 0
 					elif _tournament_smoke_wait > 900:
@@ -8479,20 +8605,20 @@ func _drive_tournament_full() -> void:
 						_finish_tournament_smoke()
 				5:
 					_tournament_smoke_wait += 1
-					if ch4 != null and bool(fs13.get("open", false)) and int(fs13.get("idx", -1)) == 4 \
-							and str(fs13.get("standing_key", "")).contains(ch4.challenge_id) \
-							and bool(fs13.get("texture_real", false)) and float(fs13.get("t", 0.0)) >= 1.0:
-						_tournament_expect(not bool(fs13.get("back_launch_pickable", true)),
-							"pairing: the not-owned challenge's back shows its board - and no Launch")
+					var p4: Dictionary = _tournament_board_entry(4)
+					if bool(p4.get("texture_real", false)) and _tournament_smoke_wait >= 6:
+						_tournament_expect_board_side(4, rows13[4] as Dictionary)
+						_tournament_expect(not _room._panel_launches[4].visible and not _room._panel_launches[4].pick_enabled,
+							"pairing: the not-owned challenge stands with no Launch - none on its card's front, and its board carries none")
 						_tournament_pairing_stage = 3
 						_tournament_smoke_wait = 0
 					elif _tournament_smoke_wait > 900:
-						_tournament_fail("pairing: the not-owned challenge's card never turned its board up")
+						_tournament_fail("pairing: the not-owned challenge's board never stood rendered")
 						_finish_tournament_smoke()
 				3:
-					# Let the turned card PRESENT before the
-					# grab - a grab on the condition's own tick
-					# reads the previous frame.
+					# Let the pair PRESENT before the grab - a
+					# grab on the condition's own tick reads the
+					# previous frame.
 					_tournament_smoke_wait += 1
 					if _tournament_smoke_wait >= 12 and not _room.page_slide_active():
 						_grad_save_grab("tournament_pairing_unowned.png")
@@ -8502,35 +8628,30 @@ func _drive_tournament_full() -> void:
 						_tournament_pairing_stage = 2
 						_tournament_smoke_wait = 0
 				2:
-					# The centre move turns the flipped card
-					# home on its own; once the front is up,
-					# flip the first challenge's card.
 					_tournament_smoke_wait += 1
-					if _room.centre_index() == 0 and not bool(fs13.get("active", true)) and not _room.page_slide_active():
-						_room._info_focused_card()
+					if _room.centre_index() == 0 and not _room.page_slide_active() and _tournament_smoke_wait >= 6:
 						_tournament_pairing_stage = 6
 						_tournament_smoke_wait = 0
 					elif _tournament_smoke_wait > 900:
-						_tournament_fail("pairing: the flipped card never turned home when the centre moved")
+						_tournament_fail("pairing: the first challenge never re-centred")
 						_finish_tournament_smoke()
 				6:
 					_tournament_smoke_wait += 1
-					if ch0 != null and bool(fs13.get("open", false)) and int(fs13.get("idx", -1)) == 0 \
-							and str(fs13.get("standing_key", "")).contains(ch0.challenge_id) \
-							and bool(fs13.get("texture_real", false)) and float(fs13.get("t", 0.0)) >= 1.0:
-						_tournament_expect(bool(fs13.get("back_launch_pickable", false)),
-							"pairing: the first challenge's back shows its board - with its Launch")
+					var p0e: Dictionary = _tournament_board_entry(0)
+					if bool(p0e.get("texture_real", false)) and _tournament_smoke_wait >= 6:
+						_tournament_expect_board_side(0, rows13[0] as Dictionary)
+						_tournament_expect(_room._panel_launches[0].visible and _room._panel_launches[0].pick_enabled,
+							"pairing: the first challenge's pair carries exactly one Launch - its card's front")
 						_tournament_pairing_stage = 4
 						_tournament_smoke_wait = 0
 					elif _tournament_smoke_wait > 900:
-						_tournament_fail("pairing: the first challenge's card never turned its board up")
+						_tournament_fail("pairing: the first challenge's board never stood rendered")
 						_finish_tournament_smoke()
 				4:
 					_tournament_smoke_wait += 1
 					if _tournament_smoke_wait >= 12 and not _room.page_slide_active():
 						_grad_save_grab("tournament_pairing_owned.png")
 						_grad_save_grab("tournament_block_start.png") ## GRADFIX4: the block's near end, composed
-						_room._info_focused_card() ## front-up for the walk
 						# On to the selection walk (phase
 						# 14): the walk must now prove the pad
 						# can REACH every challenge. Park the
@@ -8659,11 +8780,12 @@ func _drive_tournament_full() -> void:
 ## through the room's own _move_focus - the exact call the
 ## pad poll makes - and asserts every challenge panel is
 ## landed on by stick steps alone. Then, per challenge, it
-## selects the panel, FLIPS it (GRADFIX6: the board lives
-## on the card's back now), and judges the turned state:
-## the back is this challenge's own board, really rendered,
-## its Launch standing exactly when owned, and no
-## challenge hidden or borrowed at that centre. Under
+## selects the panel and judges the STANDING pair
+## (GRADFIX7: the board stands open beside its card): the
+## board is this challenge's own, really rendered, on the
+## outward side, the card's front Launch standing exactly
+## when owned, and no challenge hidden or borrowed at that
+## centre. Under
 ## PVLDS_TOURN_NC=oldseat the projection focus walk is
 ## restored (its board-borrow half died with the board)
 ## and the reach legs fail by name.
@@ -8723,47 +8845,19 @@ func _tournament_walk_step() -> void:
 					_tw_wait = 0
 					_tw_sub = 1
 				1:
-					# GRADFIX6: selection seats the centre;
-					# the board is judged TURNED UP - flip
-					# the card once the drum settles on it.
+					# GRADFIX7: selection seats the centre;
+					# the pair is judged STANDING - the board
+					# beside the card, once the drum settles
+					# and its texture is really rendered.
 					_tw_wait += 1
-					if _room.centre_index() == _tw_pair_i and not _room.page_slide_active() and _tw_wait >= 6:
-						_room._info_focused_card()
-						_tw_sub = 2
-						_tw_wait = 0
-					elif _tw_wait > 900:
-						_tournament_fail("selection walk: '%s' never centred when selected" % _tournament_row_table_name(row))
-						_tw_pair_i += 1
-						_tw_sub = 0
-				2:
-					# Judge only once the turn has COMPLETED
-					# (t >= 1.0): the back render can land
-					# before the card crosses its midpoint,
-					# and the back's pick state is applied AT
-					# the midpoint swap - judging earlier
-					# races the animation (the GRADFIX6
-					# battery's own finding; the same clause
-					# guards phases 3 and 13).
-					_tw_wait += 1
-					var fs: Dictionary = _room.flip_state()
-					if ch != null and bool(fs.get("open", false)) and int(fs.get("idx", -1)) == _tw_pair_i \
-							and str(fs.get("standing_key", "")).contains(ch.challenge_id) \
-							and bool(fs.get("texture_real", false)) and float(fs.get("t", 0.0)) >= 1.0:
+					var wentry: Dictionary = _tournament_board_entry(_tw_pair_i)
+					if _room.centre_index() == _tw_pair_i and not _room.page_slide_active() and _tw_wait >= 6 \
+							and bool(wentry.get("texture_real", false)):
 						_tournament_walk_judge_centre(_tw_pair_i, row)
-						_room._info_focused_card() ## turn it home for the next centre
-						_tw_sub = 3
-						_tw_wait = 0
-					elif _tw_wait > 900:
-						_tournament_fail("selection walk: '%s' never turned its board up when flipped" % _tournament_row_table_name(row))
-						_tw_pair_i += 1
-						_tw_sub = 0
-				3:
-					_tw_wait += 1
-					if not bool(_room.flip_state().get("active", true)):
 						_tw_pair_i += 1
 						_tw_sub = 0
 					elif _tw_wait > 900:
-						_tournament_fail("selection walk: the card never turned back")
+						_tournament_fail("selection walk: '%s' never centred with its board rendered when selected" % _tournament_row_table_name(row))
 						_tw_pair_i += 1
 						_tw_sub = 0
 		2:
@@ -8784,11 +8878,11 @@ func _tournament_walk_step() -> void:
 					_tw_wait = 0
 					_tw_sub = 1
 				1:
-					# The BR card, flipped for its grab: the
-					# board the player reads stands on its back.
+					# The BR pair, centred for its grab: the
+					# board the player reads stands beside
+					# its card.
 					_tw_wait += 1
 					if _room.centre_index() == br_idx and not _room.page_slide_active() and _tw_wait >= 6:
-						_room._info_focused_card()
 						_tw_sub = 2
 						_tw_wait = 0
 					elif _tw_wait > 900:
@@ -8798,25 +8892,23 @@ func _tournament_walk_step() -> void:
 						_tw_wait = 0
 				2:
 					_tw_wait += 1
-					var fs2: Dictionary = _room.flip_state()
+					var br_entry: Dictionary = _tournament_board_entry(br_idx)
 					var ch3: WovpChallenge = (rows[br_idx] as Dictionary).get("challenge") as WovpChallenge
-					if ch3 != null and bool(fs2.get("open", false)) and int(fs2.get("idx", -1)) == br_idx \
-							and str(fs2.get("standing_key", "")).contains(ch3.challenge_id) \
-							and bool(fs2.get("texture_real", false)) and float(fs2.get("t", 0.0)) >= 1.0 and _tw_wait >= 12:
+					if ch3 != null and str(br_entry.get("challenge_id", "")) == ch3.challenge_id \
+							and bool(br_entry.get("texture_real", false)) and _tw_wait >= 12:
 						_grad_save_grab("tournament_walk_br.png")
-						_room._info_focused_card()
 						_tw_stage = 3
 						_tw_sub = 0
 						_tw_wait = 0
 					elif _tw_wait > 900:
-						_tournament_fail("selection walk: the Battle Royale board never turned up for its grab")
+						_tournament_fail("selection walk: the Battle Royale board never stood rendered for its grab")
 						_tw_stage = 3
 						_tw_sub = 0
 						_tw_wait = 0
 		3:
 			# Hand the room back centred on the season
-			# table, fronts up - the rendered legs flip the
-			# card themselves when they need its back.
+			# table - the rendered legs read its standing
+			# board themselves.
 			match _tw_sub:
 				0:
 					_room._set_focused(_room._panels[0])
@@ -8824,8 +8916,7 @@ func _tournament_walk_step() -> void:
 					_tw_sub = 1
 				1:
 					_tw_wait += 1
-					if _room.centre_index() == 0 and not bool(_room.flip_state().get("active", true)) \
-							and not _room.page_slide_active() and _tw_wait >= 12:
+					if _room.centre_index() == 0 and not _room.page_slide_active() and _tw_wait >= 12:
 						_tw_desc_sub = 0
 						_tournament_smoke_phase = 15
 					elif _tw_wait > 900:
@@ -8951,7 +9042,7 @@ func _tournament_descent_step() -> void:
 			# Re-entered after the exit legs: the room is
 			# whole again when the Tournament view stands with
 			# its wall ready and settled (the rendered legs
-			# seat and flip the season card themselves).
+			# seat the season card and read its standing board).
 			_tw_desc_wait += 1
 			if _room.tournament_active() and _room.wall_ready \
 					and not _room.page_slide_active() and _tw_desc_wait >= 30:
@@ -8962,58 +9053,46 @@ func _tournament_descent_step() -> void:
 
 
 ## One centre's standing-state verdicts (the walk's stage
-## 1, judged with the card TURNED - GRADFIX6): the flipped
-## card is this centre's own, its back is a real rendered
-## board (never the factory's fallback solid standing
-## blank - under PVLDS_GRADFIX4_NC=solidboard every back
-## render lands the solid and counts it, and the
-## blank-board leg fails by name at every centre), its
-## back Launch stands exactly when the challenge is his,
-## no challenge is hidden or borrowed away by anything,
+## 1, judged with the pair STANDING - GRADFIX7): the board
+## beside the card is this centre's own, on the outward
+## side, and a real rendered board (never the factory's
+## fallback solid standing blank - under
+## PVLDS_GRADFIX4_NC=solidboard every standing-board render
+## lands the solid and counts it, and the blank-board leg
+## fails by name at every centre), its card's front Launch
+## stands exactly when the challenge is his, no challenge
+## (panel or board) is hidden or borrowed away by anything,
 ## and the tournament shelf stands without its bookend
-## fins (GRADFIX3 item 2, the user's order) at every
-## centre the walk visits. The cover/geometry legs the
-## book needed are gone with the book: a back cannot cover
-## its own card, and the flip's swept volume is censused
-## in the grad smoke.
+## fins (GRADFIX3 item 2, the user's order) at every centre
+## the walk visits.
 func _tournament_walk_judge_centre(i: int, row: Dictionary) -> void:
 	var tname: String = _tournament_row_table_name(row)
 	var ch: WovpChallenge = row.get("challenge") as WovpChallenge
 	var owned: bool = bool(row.get("owned", false))
-	var fs: Dictionary = _room.flip_state()
-	_tournament_expect(ch != null and int(fs.get("idx", -1)) == i
-			and str(fs.get("standing_key", "")).contains(ch.challenge_id),
-		"selection walk: '%s' turns its own board up when flipped" % tname)
+	var entry: Dictionary = _tournament_board_entry(i)
+	_tournament_expect(ch != null and str(entry.get("challenge_id", "")) == ch.challenge_id
+			and str(entry.get("standing_key", "")).contains(ch.challenge_id),
+		"selection walk: '%s' stands beside its own board" % tname)
+	_tournament_expect_board_side(i, row)
 	var hidden: Array = []
 	for j: int in range(_room._panels.size()):
 		var p: ClickableQuad = _room._panels[j]
 		if p == null or not p.visible or not p.pick_enabled:
 			hidden.append(j)
+	for j2: int in range(_room._board_nodes.size()):
+		var bn: MeshInstance3D = _room._board_nodes[j2] as MeshInstance3D
+		if bn == null or not bn.visible:
+			hidden.append("board %d" % j2)
 	_tournament_expect(hidden.is_empty(),
 		"selection walk: no challenge is hidden or borrowed at '%s' (hidden %s)" % [tname, str(hidden)])
-	var btex: Texture2D = fs.get("back_texture") as Texture2D
-	var bink: float = -1.0
-	if btex != null:
-		var bimg: Image = btex.get_image()
-		if bimg != null and not bimg.is_empty():
-			var mean: float = 0.0
-			var cnt: int = 0
-			for yy: int in range(0, bimg.get_height(), 16):
-				for xx: int in range(0, bimg.get_width(), 16):
-					mean += bimg.get_pixel(xx, yy).get_luminance()
-					cnt += 1
-			mean /= float(maxi(cnt, 1))
-			var varr: float = 0.0
-			for yy2: int in range(0, bimg.get_height(), 16):
-				for xx2: int in range(0, bimg.get_width(), 16):
-					var d: float = bimg.get_pixel(xx2, yy2).get_luminance() - mean
-					varr += d * d
-			bink = sqrt(varr / float(maxi(cnt, 1)))
+	var btex: Texture2D = entry.get("texture") as Texture2D
+	var bink: float = _tournament_tex_ink_stdev(btex)
 	_tournament_expect(btex != null and btex.get_width() == RoomSpecs.BOARD_FACE_PX.x
 			and btex.get_height() == RoomSpecs.BOARD_FACE_PX.y and bink > 0.02,
-		"blank board: '%s' back face is a real rendered board (size %s, ink stdev %.3f)" % [tname, str(btex.get_size()) if btex != null else "none", bink])
-	_tournament_expect(bool(fs.get("back_launch_pickable", false)) == owned,
-		"selection walk: '%s' back carries its Launch exactly when the challenge is his (owned %s)" % [tname, str(owned)])
+		"blank board: '%s' standing board face is a real rendered board (size %s, ink stdev %.3f)" % [tname, str(btex.get_size()) if btex != null else "none", bink])
+	var front_launch: bool = i < _room._panel_launches.size() and _room._panel_launches[i].visible and _room._panel_launches[i].pick_enabled
+	_tournament_expect(front_launch == owned,
+		"selection walk: '%s' card front carries the pair's one Launch exactly when the challenge is his (owned %s)" % [tname, str(owned)])
 	_tournament_expect(_room._fin_start == null and _room._fin_end == null,
 		"pairing ends: no bookend fin stands in the Tournament view at '%s'" % tname)
 
@@ -9183,24 +9262,24 @@ func _tournament_leg_boards() -> void:
 
 
 func _tournament_leg_rendered() -> void:
-	# His row, in the rendered pixels: the season card's
-	# BACK texture carries a full row on the accent ground
-	# (CardFace's board accent). The NC that renames his
-	# rows (the stub's baduser variant) leaves no accent row
-	# to find - this leg fails by name there. (Amended in
-	# GRADFIX6 with cause: the board's texture lives on the
-	# centred card's own back now - phase 3 flipped it up
-	# before this leg runs.)
+	# His row, in the rendered pixels: the season board
+	# STANDING beside the season card carries a full row on
+	# the accent ground (CardFace's board accent). The NC
+	# that renames his rows (the stub's baduser variant)
+	# leaves no accent row to find - this leg fails by name
+	# there. (Amended in GRADFIX7 with cause: the board's
+	# texture stands beside its card now - phase 3 centred
+	# the pair before this leg runs.)
 	if _room._panels.size() >= 5:
 		var rows: Array = _room.tournament_rows()
-		var bs: Dictionary = _room.flip_state()
+		var entry: Dictionary = _tournament_board_entry(0)
 		var season0: WovpChallenge = (rows[0] as Dictionary).get("challenge") as WovpChallenge if rows.size() >= 1 else null
-		_tournament_expect(season0 != null and int(bs.get("idx", -1)) == 0
-				and str(bs.get("standing_key", "")).contains(season0.challenge_id),
-			"pairing: the turned card is the centred challenge's (his season table)")
-		_tournament_expect(bool(bs.get("has_back_texture", false)) and bool(bs.get("texture_real", false)),
-			"pairing: the turned card carries its rendered board face on its back")
-		var tex: Texture2D = bs.get("back_texture") as Texture2D
+		_tournament_expect(season0 != null and str(entry.get("challenge_id", "")) == season0.challenge_id,
+			"pairing: the standing board beside the centred card is the centred challenge's (his season table)")
+		_tournament_expect_board_side(0, rows[0] as Dictionary)
+		_tournament_expect(bool(entry.get("texture_real", false)) and (entry.get("texture") as Texture2D) != null,
+			"pairing: the standing board carries its rendered board face")
+		var tex: Texture2D = entry.get("texture") as Texture2D
 		var accent_px: int = 0
 		if tex != null:
 			var img: Image = tex.get_image()
@@ -9223,10 +9302,24 @@ func _tournament_leg_rendered() -> void:
 							accent_px += 1
 		_tournament_expect(accent_px >= 60,
 			"his row: the rendered season board carries his row on the accent ground (%d accent samples)" % accent_px)
-		_tournament_expect(not _room._panel_launches[4].visible and not _room._panel_launches[4].pick_enabled,
-			"not-owned: the not-owned card carries no Launch button")
-		_tournament_expect(bool(bs.get("back_launch_pickable", false)) and _room._panel_launches[1].visible and _room._panel_launches[1].pick_enabled,
-			"boards: an owned card keeps its Launch - on the turned card's back, and on its neighbour's front")
+		# The Launch law (GRADFIX7 item 2): exactly one
+		# visible+pickable Launch per owned challenge - its
+		# card's FRONT - none for a not-owned challenge, and
+		# none on any board (a board is a plain mesh, not a
+		# quad: it has no Launch to carry).
+		var launch_bad: String = ""
+		for li: int in range(rows.size()):
+			var lowned: bool = bool((rows[li] as Dictionary).get("owned", false))
+			var lfront: bool = _room._panel_launches[li].visible and _room._panel_launches[li].pick_enabled
+			if lfront != lowned:
+				launch_bad = "challenge %d front Launch stands %s, owned %s" % [li, str(lfront), str(lowned)]
+				break
+			var lbn: Node = _room._board_nodes[li] as Node if li < _room._board_nodes.size() else null
+			if lbn != null and lbn is ClickableQuad:
+				launch_bad = "challenge %d's board is a pickable quad" % li
+				break
+		_tournament_expect(launch_bad == "",
+			"boards: exactly one Launch per owned challenge (its card's front), none for not-owned, none on any board%s" % ("" if launch_bad == "" else " - " + launch_bad))
 		# A on the not-owned card: nothing starts, nothing
 		# opens - the card is information, not a door.
 		_room._set_focused(_room._panels[4])
@@ -9234,9 +9327,7 @@ func _tournament_leg_rendered() -> void:
 		_tournament_expect(not _launch_pending and _room._mode == "wall" and _room.tournament_active(),
 			"not-owned: A on a not-owned card starts nothing and opens nothing")
 		# Focus is never stranded in the view: DOWN from a
-		# card walks to the rail by the room's own ladder
-		# (five cards stand two rows deep in this column:
-		# card, card, rail).
+		# card walks to the rail by the room's own ladder.
 		_room._set_focused(_room._panels[0])
 		var reached_rail: bool = false
 		for i: int in range(3):

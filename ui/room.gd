@@ -596,6 +596,26 @@ var _flip_render_key: String = "" ## the key a back render is in flight for ("" 
 var _flip_retry_key: String = ""
 var _flip_retries: int = 0
 var _flip_retry_msec: int = 0
+## GRADFIX7 item 2 (Tournament Room): the standing boards.
+## Every challenge card stands with its scoreboard BESIDE it
+## (no flip in the Tournament Room - Chris's correction:
+## "no flip on tournie screen, its not needs, plenty of room
+## to just display the works. Table art, tournie info.").
+## Boards are pooled nodes keyed by CHALLENGE_ID (never
+## game_id - the panel pool's mode-mismatch path would
+## free/re-mint them), never seated in _panels/_focusables,
+## never pickable, and take no pop. Their per-board
+## bookkeeping mirrors the flip's heal discipline: standing
+## key, applied texture's key, real-or-fallback are separate
+## facts per board (a single shared slot would starve all
+## but the last board).
+var _board_pool: Dictionary = {} ## challenge_id -> {root: MeshInstance3D, mat: StandardMaterial3D}
+var _board_book: Dictionary = {} ## challenge_id -> {key, tex_key, tex_real, render_key, retry_key, retries, retry_msec}
+var _board_nodes: Array = [] ## standing board node per _visible_games index (null for the state row / library)
+var _board_tex_cache: Dictionary = {} ## standing key -> Texture2D: real board captures, kept across rebuilds so a REFRESH does not re-render unchanged boards
+var _board_heal_msec: int = 0 ## the board heal's throttle stamp (one sweep per BOARD_TEX_RETRY_MS)
+var _board_fill_busy: bool = false ## a tournament board fill pass is running (request coalescing, like the window fill)
+var _board_fill_dirty: bool = false
 const BOARD_TEX_MAX_RETRIES: int = 5 ## the blank-face heal's bound per standing key
 const BOARD_TEX_RETRY_MS: int = 600 ## the heal's minimum interval between re-renders
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
@@ -779,6 +799,17 @@ func _free_panel_pool() -> void:
 			root.queue_free()
 	_panel_pool.clear()
 	_panel_face_key.clear()
+	for cid: Variant in _board_pool.keys():
+		var bnodes: Dictionary = _board_pool[cid] as Dictionary
+		var broot: MeshInstance3D = bnodes.get("root") as MeshInstance3D
+		if broot != null and is_instance_valid(broot):
+			if broot.get_parent() != null:
+				broot.get_parent().remove_child(broot)
+			broot.queue_free()
+	_board_pool.clear()
+	_board_book.clear()
+	_board_nodes.clear()
+	_board_tex_cache.clear()
 
 
 ## Take a fresh scanner as the room's library and rebuild
@@ -1509,12 +1540,59 @@ const TOURN_BAND0: int = 1
 const TOURN_BAND_COUNT: int = 2
 
 
+## GRADFIX7 item 2: the Tournament pair layout. Challenge i
+## (league order) belongs to pair-group g = i/2 and band
+## b = 1 + (i%2) (elevations +5/-15 deg). Group g owns grid
+## columns 4+2g (left slot) and 5+2g (right slot) of band b.
+## The board stands in the group's OUTER slot and the card in
+## the INNER slot: with G = ceil(n/2) groups and the
+## (fractional) centre gc = (G-1)/2, groups left of centre
+## put their board LEFT (g < gc), groups right of centre put
+## it RIGHT (g > gc), and the centre group itself (g == gc)
+## puts it RIGHT - the deterministic centre default. Side
+## rule in Chris's words: the left-column table's board is on
+## the LEFT of its card, the right-column table's on the
+## RIGHT - outward, always. The single state row seats
+## unpaired at (4, band 1), as it always has.
+func _tourn_innerside_nc() -> bool:
+	return OS.get_environment("PVLDS_GRADFIX7_NC") == "innerside"
+
+
+func _tourn_state_idx(idx: int) -> bool:
+	return _tournament and idx >= 0 and idx < _tournament_rows.size() \
+		and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state"
+
+
+func _tourn_pair_coords(idx: int) -> Dictionary:
+	var g: int = idx / 2
+	var band: int = TOURN_BAND0 + idx % TOURN_BAND_COUNT
+	var groups: int = maxi(1, int(ceil(float(maxi(1, _visible_games.size())) / 2.0)))
+	var gc: float = float(groups - 1) / 2.0
+	var board_left: bool = float(g) < gc
+	var left_col: int = TOURN_BLOCK_COL0 + 2 * g
+	var right_col: int = left_col + 1
+	var card_coord: Vector2i = Vector2i(right_col, band) if board_left else Vector2i(left_col, band)
+	var board_coord: Vector2i = Vector2i(left_col, band) if board_left else Vector2i(right_col, band)
+	if _tourn_innerside_nc():
+		var swap: Vector2i = card_coord
+		card_coord = board_coord
+		board_coord = swap
+	return {"card": card_coord, "board": board_coord, "side": "left" if board_coord.x < card_coord.x else "right"}
+
+
+func _board_coord(idx: int) -> Vector2i:
+	if not _tournament or _tourn_state_idx(idx):
+		return Vector2i(-1, -1)
+	return (_tourn_pair_coords(idx)["board"] as Vector2i)
+
+
 func _grid_coord(index: int) -> Vector2i:
 	if debug_grid_nc == "rowmajor":
 		return Vector2i(index % _columns, index / _columns)
 	if _tournament:
-		return Vector2i(TOURN_BLOCK_COL0 + index / TOURN_BAND_COUNT,
-			TOURN_BAND0 + index % TOURN_BAND_COUNT)
+		if _tourn_state_idx(index):
+			return Vector2i(TOURN_BLOCK_COL0, TOURN_BAND0)
+		return (_tourn_pair_coords(index)["card"] as Vector2i)
 	return Vector2i(index / BAND_COUNT, index % BAND_COUNT)
 
 
@@ -1524,7 +1602,13 @@ func _raw_index(col: int, row: int) -> int:
 	if debug_grid_nc == "rowmajor":
 		return row * _columns + col
 	if _tournament:
-		return (col - TOURN_BLOCK_COL0) * TOURN_BAND_COUNT + (row - TOURN_BAND0)
+		# Defined over CARD coords only (GRADFIX7 item 2):
+		# a board's column has no card in it and maps to -1.
+		var want: Vector2i = Vector2i(col, row)
+		for i: int in range(_visible_games.size()):
+			if _grid_coord(i) == want:
+				return i
+		return -1
 	return col * BAND_COUNT + row
 
 
@@ -2030,6 +2114,12 @@ func _refresh_window() -> void:
 			_panels[idx].pick_enabled = vis
 			if idx < _panel_launches.size():
 				_panel_launches[idx].pick_enabled = vis and not (_tournament and not _tournament_launchable(idx))
+	for bi: int in range(_board_nodes.size()):
+		var bnode2: MeshInstance3D = _board_nodes[bi] as MeshInstance3D
+		if bnode2 == null:
+			continue
+		var bc2: Vector2i = _board_coord(bi)
+		bnode2.visible = bc2.x >= _panel_window_lo and bc2.x <= _panel_window_hi
 	if _fin_start != null:
 		_fin_start.visible = fc <= VISIBLE_HALF_COLUMNS - 1
 	if _fin_end != null:
@@ -2090,6 +2180,11 @@ func _rebuild_wall() -> void:
 	for q: ClickableQuad in _panels:
 		if q != null and is_instance_valid(q) and q.get_parent() == _wall:
 			_wall.remove_child(q)
+	for bn: Variant in _board_nodes:
+		var bnode: MeshInstance3D = bn as MeshInstance3D
+		if bnode != null and is_instance_valid(bnode) and bnode.get_parent() == _wall:
+			_wall.remove_child(bnode)
+	_board_nodes.clear()
 	if _fin_start != null:
 		_fin_start.queue_free()
 		_fin_start = null
@@ -2118,7 +2213,7 @@ func _rebuild_wall() -> void:
 	if _tournament:
 		# The block's own extent: pad columns + the two-band
 		# block (GRADFIX4 item 3 - see TOURN_BLOCK_COL0).
-		_columns = TOURN_BLOCK_COL0 + maxi(1, int(ceil(float(maxi(1, _visible_games.size())) / float(TOURN_BAND_COUNT))))
+		_columns = TOURN_BLOCK_COL0 + 2 * maxi(1, int(ceil(float(maxi(1, _visible_games.size())) / float(TOURN_BAND_COUNT))))
 	else:
 		_columns = maxi(1, int(ceil(float(maxi(1, _visible_games.size())) / 3.0)))
 	if _status_label == null:
@@ -2139,6 +2234,14 @@ func _rebuild_wall() -> void:
 		_panel_plates.append(nodes.get("plate") as MeshInstance3D)
 		_panel_labels.append(nodes.get("label") as Label3D)
 		_seat_card(idx, nodes)
+	# The Tournament Room's standing boards (GRADFIX7 item 2):
+	# one beside every challenge card, in its pair's outer
+	# slot. Seated here with placeholder faces; the textures
+	# fill asynchronously at the rebuild's tail - never awaited
+	# on this path (an await here re-creates the first-entry
+	# freeze the phase-16 legs exist to convict).
+	if _tournament:
+		_seat_tournament_boards()
 	# The bookends, one column past each end of the shelf.
 	# The Tournament view stands WITHOUT them (GRADFIX3,
 	# the user's order: "nuke the orange pillars framing
@@ -2199,6 +2302,8 @@ func _rebuild_wall() -> void:
 	_refresh_window()
 	_refresh_card_frames()
 	_fill_wall_textures(gen)
+	if _tournament:
+		_request_tournament_board_fill()
 	if _placard_up:
 		# A rebuild while the placard stands (the launch-failure
 		# path) must not resurrect live controls behind it.
@@ -3192,6 +3297,294 @@ func board_layout_probe(spec: Dictionary) -> Dictionary:
 ## One face-space rect (pixels, origin top-left, +y down)
 ## in panel space (metres, origin centre, +y up, min-corner
 ## position) - the two spaces the layout legs compare in.
+
+## ------------------------------------------------------ standing boards (GRADFIX7 item 2)
+
+## A challenge's standing-board content key: the key the
+## retired tournie flip back used - content identity plus
+## the boards' fetch stamp and the player, so a boards
+## refresh re-renders the board under its new key.
+func _tournament_board_key(idx: int) -> String:
+	if idx < 0 or idx >= _tournament_rows.size():
+		return ""
+	var row: Dictionary = _tournament_rows[idx] as Dictionary
+	if str(row.get("kind", "")) != "challenge":
+		return ""
+	var ch: WovpChallenge = row["challenge"] as WovpChallenge
+	if ch == null:
+		return ""
+	return "board|" + ch.challenge_id + "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id \
+		+ "|" + ("owned" if bool(row.get("owned", false)) else "none")
+
+
+## Seat the standing boards for the standing Tournament
+## view: one pooled node per challenge, in its pair's outer
+## slot at the board's own size, flush (seat_y 0 - no tilt,
+## no radial offset, no companion shift), wearing the
+## placeholder until its texture lands asynchronously.
+func _seat_tournament_boards() -> void:
+	for idx: int in range(_visible_games.size()):
+		if _tourn_state_idx(idx):
+			_board_nodes.append(null)
+			continue
+		var row: Dictionary = _tournament_rows[idx] as Dictionary
+		var ch: WovpChallenge = row["challenge"] as WovpChallenge
+		if ch == null:
+			_board_nodes.append(null)
+			continue
+		var cid: String = ch.challenge_id
+		var entry: Dictionary = _board_pool.get(cid, {}) as Dictionary
+		var root: MeshInstance3D = entry.get("root") as MeshInstance3D
+		var mat: StandardMaterial3D = entry.get("mat") as StandardMaterial3D
+		if root == null or mat == null:
+			root = MeshInstance3D.new()
+			root.name = "TournBoard"
+			var qm: QuadMesh = QuadMesh.new()
+			qm.size = RoomSpecs.board_panel_size()
+			root.mesh = qm
+			mat = StandardMaterial3D.new()
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mat.albedo_texture = _placeholder_tex
+			root.material_override = mat
+			entry = {"root": root, "mat": mat}
+			_board_pool[cid] = entry
+		if root.get_parent() != _wall:
+			_wall.add_child(root)
+		var bc: Vector2i = _board_coord(idx)
+		root.transform = _card_transform_at(bc.x, bc.y)
+		root.visible = true
+		var key: String = _tournament_board_key(idx)
+		var book: Dictionary = _board_book.get(cid, {}) as Dictionary
+		if book.is_empty():
+			book = {"key": "", "tex_key": "", "tex_real": false, "render_key": "",
+				"retry_key": "", "retries": 0, "retry_msec": 0}
+			_board_book[cid] = book
+		if str(book.get("key", "")) != key:
+			book["key"] = key
+			book["render_key"] = ""
+			book["retry_key"] = ""
+			book["retries"] = 0
+			book["retry_msec"] = 0
+			if _board_tex_cache.has(key):
+				mat.albedo_texture = _board_tex_cache[key] as Texture2D
+				book["tex_key"] = key
+				book["tex_real"] = true
+			else:
+				mat.albedo_texture = _placeholder_tex
+				book["tex_key"] = ""
+				book["tex_real"] = false
+		elif bool(book.get("tex_real", false)) and _board_tex_cache.has(key):
+			mat.albedo_texture = _board_tex_cache[key] as Texture2D
+		_board_nodes.append(root)
+
+
+## Ask for a board fill pass (coalesced, like the window
+## fill): the pass renders each standing board whose texture
+## is not already honestly standing, through the serial
+## TextureFactory. Never awaited by the seat/rebuild path.
+func _request_tournament_board_fill() -> void:
+	if not _tournament:
+		return
+	if _board_fill_busy:
+		_board_fill_dirty = true
+		return
+	_run_tournament_board_fill()
+
+
+func _run_tournament_board_fill() -> void:
+	_board_fill_busy = true
+	_board_fill_dirty = false
+	var gen: int = _gen
+	for idx: int in range(_visible_games.size()):
+		if gen != _gen:
+			break
+		await _render_tournament_board(idx)
+	_board_fill_busy = false
+	if _board_fill_dirty and gen == _gen:
+		_run_tournament_board_fill()
+
+
+## Render ONE standing board (the standing-board render
+## function): its spec is RoomSpecs.tournament_board_spec,
+## rendered at RoomSpecs.board_face_px() - the seam-
+## respecting size, NOT the flip path's BOARD_FACE_PX
+## constant - with the spine side toward its card ("right"
+## for a board standing on the left, "left" for one on the
+## right; "" is NOT "no spine" - CardFace treats every
+## non-"left" spine as right, so the explicit value is the
+## law). The solidboard NC's bite lives HERE now (it lived
+## in _render_card_back, which no longer serves the
+## Tournament Room): a solidboard render lands the factory's
+## fallback solid and counts it as the board, so the
+## blank-board legs fail by name.
+func _render_tournament_board(idx: int) -> void:
+	if not _tournament or idx < 0 or idx >= _tournament_rows.size() or idx >= _board_nodes.size():
+		return
+	if _tourn_state_idx(idx):
+		return
+	var row: Dictionary = _tournament_rows[idx] as Dictionary
+	var ch: WovpChallenge = row["challenge"] as WovpChallenge
+	if ch == null:
+		return
+	var cid: String = ch.challenge_id
+	var key: String = _tournament_board_key(idx)
+	if key == "":
+		return
+	var book: Dictionary = _board_book.get(cid, {}) as Dictionary
+	if book.is_empty():
+		return
+	if str(book.get("tex_key", "")) == key and bool(book.get("tex_real", false)):
+		return
+	if str(book.get("render_key", "")) == key:
+		return
+	if _board_tex_cache.has(key):
+		var cached: Texture2D = _board_tex_cache[key] as Texture2D
+		var cnode: MeshInstance3D = _board_nodes[idx] as MeshInstance3D
+		if cnode != null:
+			var cmat: StandardMaterial3D = cnode.material_override as StandardMaterial3D
+			if cmat != null:
+				cmat.albedo_texture = cached
+		book["tex_key"] = key
+		book["tex_real"] = true
+		return
+	book["render_key"] = key
+	var spec: Dictionary = RoomSpecs.tournament_board_spec(
+		ch, bool(row.get("owned", false)), _wovp_user_id, int(Time.get_unix_time_from_system()))
+	var bc: Vector2i = _board_coord(idx)
+	var cc: Vector2i = _grid_coord(idx)
+	spec["spine_side"] = "right" if bc.x < cc.x else "left"
+	var tex: Texture2D = await _factory.render_texture(spec, RoomSpecs.board_face_px())
+	if str(book.get("render_key", "")) == key:
+		book["render_key"] = ""
+	if not _tournament or idx >= _tournament_rows.size() or idx >= _board_nodes.size() or _tourn_state_idx(idx):
+		return
+	var row2: Dictionary = _tournament_rows[idx] as Dictionary
+	var ch2: WovpChallenge = row2["challenge"] as WovpChallenge
+	if ch2 == null or ch2.challenge_id != cid or _tournament_board_key(idx) != key:
+		return
+	if tex == null:
+		return
+	var real: bool = _tex_is_real(tex)
+	if debug_gf4_nc == "solidboard" and real:
+		tex = TextureFactory.make_solid(Color(0.055, 0.055, 0.095))
+		real = true
+	if real:
+		_board_tex_cache[key] = tex
+	var node: MeshInstance3D = _board_nodes[idx] as MeshInstance3D
+	if node != null:
+		var mat: StandardMaterial3D = node.material_override as StandardMaterial3D
+		if mat != null:
+			mat.albedo_texture = tex
+	book["key"] = key
+	book["tex_key"] = key
+	book["tex_real"] = real
+
+
+## The standing-board heal (GRADFIX6 discipline, N slots):
+## once per BOARD_TEX_RETRY_MS, sweep the standing boards
+## and re-issue renders for any whose texture is missing or
+## unreal - bounded at BOARD_TEX_MAX_RETRIES per key, per
+## board. A key change under a standing board (set_wovp_data
+## landing while the Tournament Room stands) resets that
+## board to the placeholder and re-renders under the new key.
+func _heal_tournament_boards() -> void:
+	if not _tournament or _board_nodes.is_empty():
+		return
+	var now: int = Time.get_ticks_msec()
+	if now - _board_heal_msec < BOARD_TEX_RETRY_MS:
+		return
+	_board_heal_msec = now
+	var needs_pass: bool = false
+	for idx: int in range(_board_nodes.size()):
+		if idx >= _tournament_rows.size() or _tourn_state_idx(idx):
+			continue
+		var row: Dictionary = _tournament_rows[idx] as Dictionary
+		var ch: WovpChallenge = row["challenge"] as WovpChallenge
+		if ch == null:
+			continue
+		var book: Dictionary = _board_book.get(ch.challenge_id, {}) as Dictionary
+		if book.is_empty():
+			continue
+		var key: String = _tournament_board_key(idx)
+		if str(book.get("key", "")) != key:
+			book["key"] = key
+			book["tex_key"] = ""
+			book["tex_real"] = false
+			book["render_key"] = ""
+			book["retry_key"] = ""
+			book["retries"] = 0
+			book["retry_msec"] = 0
+			var hnode: MeshInstance3D = _board_nodes[idx] as MeshInstance3D
+			if hnode != null:
+				var hmat: StandardMaterial3D = hnode.material_override as StandardMaterial3D
+				if hmat != null:
+					hmat.albedo_texture = _placeholder_tex
+			needs_pass = true
+			continue
+		if str(book.get("tex_key", "")) == key and bool(book.get("tex_real", false)):
+			continue
+		if str(book.get("render_key", "")) != "":
+			continue
+		if str(book.get("retry_key", "")) != key:
+			book["retry_key"] = key
+			book["retries"] = 0
+		if int(book.get("retries", 0)) >= BOARD_TEX_MAX_RETRIES:
+			continue
+		if now - int(book.get("retry_msec", 0)) < BOARD_TEX_RETRY_MS:
+			continue
+		book["retry_msec"] = now
+		book["retries"] = int(book.get("retries", 0)) + 1
+		needs_pass = true
+	if needs_pass:
+		_request_tournament_board_fill()
+
+
+## Smoke support: the standing boards' state (flip_state()'s
+## analogue for GRADFIX7 item 2) - per row, its card's coord,
+## its board's coord and side, whether the board stands
+## visible, its size and seat, and its texture bookkeeping.
+func board_state() -> Array:
+	var out: Array = []
+	for idx: int in range(_visible_games.size()):
+		var cc: Vector2i = _grid_coord(idx)
+		if not _tournament or _tourn_state_idx(idx):
+			out.append({
+				"idx": idx, "challenge_id": "", "card_coord": cc,
+				"board_coord": Vector2i(-1, -1), "side": "",
+				"board_visible": false, "board_size": RoomSpecs.board_panel_size(),
+				"seat_y": 0.0, "texture": null, "texture_real": false,
+				"standing_key": "", "texture_key": "",
+			})
+			continue
+		var row: Dictionary = _tournament_rows[idx] as Dictionary
+		var ch: WovpChallenge = row["challenge"] as WovpChallenge
+		var cid: String = ch.challenge_id if ch != null else ""
+		var bc: Vector2i = _board_coord(idx)
+		var node: MeshInstance3D = _board_nodes[idx] as MeshInstance3D if idx < _board_nodes.size() else null
+		var standing_size: Vector2 = RoomSpecs.board_panel_size()
+		if node != null and node.mesh is QuadMesh:
+			standing_size = (node.mesh as QuadMesh).size
+		var tex: Texture2D = null
+		if node != null:
+			var mat: StandardMaterial3D = node.material_override as StandardMaterial3D
+			if mat != null:
+				tex = mat.albedo_texture
+		var book: Dictionary = _board_book.get(cid, {}) as Dictionary
+		out.append({
+			"idx": idx, "challenge_id": cid, "card_coord": cc,
+			"board_coord": bc, "side": "left" if bc.x < cc.x else "right",
+			"board_visible": node != null and node.visible,
+			"board_size": standing_size,
+			"seat_y": 0.0, "texture": tex,
+			"texture_real": bool(book.get("tex_real", false)),
+			"standing_key": str(book.get("key", "")),
+			"texture_key": str(book.get("tex_key", "")),
+		})
+	return out
+
+
 func _face_rect_to_panel(r: Rect2, face_size: Vector2, panel_size: Vector2) -> Rect2:
 	var sx: float = panel_size.x / face_size.x
 	var sy: float = panel_size.y / face_size.y
@@ -3422,6 +3815,7 @@ func _update_pop(delta: float) -> void:
 		q.scale = Vector3(s, s, s)
 	_update_flip(delta)
 	_heal_panel_faces()
+	_heal_tournament_boards()
 
 
 ## ------------------------------------------------------ the card flip
@@ -3432,8 +3826,9 @@ func _update_pop(delta: float) -> void:
 ## the info the wing and the book used to carry beside the
 ## card - in the library, RoomSpecs.wing_spec (the table's
 ## data, and the live board too when the table stands in a
-## challenge); in the Tournament Room, the challenge's full
-## TR3 scoreboard (RoomSpecs.tournament_board_spec). What
+## challenge). (The Tournament Room has NO flip since
+## GRADFIX7 item 2: its boards stand open beside their
+## cards - see the standing boards section.) What
 ## the flip replaces, it deletes: no companion panel, no
 ## borrowed slot, no hinge - the GRADFIX5 field verdict on
 ## the book was "still off-center, still butting into table
@@ -3476,6 +3871,8 @@ func _flip_disabled() -> bool:
 ## at a time, and the snap is instant so the new turn owns
 ## the stage.
 func _toggle_flip(idx: int) -> void:
+	if _tournament:
+		return ## belt and braces (GRADFIX7 item 2): no flip in the Tournament Room, from any caller
 	if idx < 0 or idx >= _panels.size():
 		return
 	var q: ClickableQuad = _panels[idx]
@@ -3533,13 +3930,6 @@ func _snap_flip_shut() -> void:
 ## refresh re-renders the back under its standing key.
 func _card_back_key(idx: int) -> String:
 	var game: GameEntry = _visible_games[idx]
-	if _tournament and idx < _tournament_rows.size():
-		var row: Dictionary = _tournament_rows[idx] as Dictionary
-		if str(row.get("kind", "")) == "challenge":
-			var ch: WovpChallenge = row["challenge"] as WovpChallenge
-			if ch != null:
-				return "board|" + ch.challenge_id + "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id \
-					+ "|" + ("owned" if bool(row.get("owned", false)) else "none")
 	var ch2: WovpChallenge = null
 	for cv: Variant in _wovp_challenges:
 		var cand: WovpChallenge = cv as WovpChallenge
@@ -3560,15 +3950,6 @@ func _card_back_key(idx: int) -> String:
 func _card_back_spec(idx: int) -> Dictionary:
 	var game: GameEntry = _visible_games[idx]
 	var now_unix: int = int(Time.get_unix_time_from_system())
-	if _tournament and idx < _tournament_rows.size():
-		var row: Dictionary = _tournament_rows[idx] as Dictionary
-		if str(row.get("kind", "")) == "challenge":
-			var ch: WovpChallenge = row["challenge"] as WovpChallenge
-			if ch != null:
-				var bspec: Dictionary = RoomSpecs.tournament_board_spec(
-					ch, bool(row.get("owned", false)), _wovp_user_id, now_unix)
-				bspec["spine_side"] = ""
-				return bspec
 	var ch2: WovpChallenge = null
 	for cv: Variant in _wovp_challenges:
 		var cand: WovpChallenge = cv as WovpChallenge
@@ -3971,6 +4352,8 @@ func _a_press() -> void:
 ## (the poll's deaf gate at the call site). Under the
 ## noflip NC the press is inert (the pre-flip world).
 func _info_focused_card() -> void:
+	if _tournament:
+		return ## GRADFIX7 item 2: Y is inert in the Tournament Room - its boards stand open beside their cards, nothing needs turning
 	if _mode != "wall" or _placard_up or _setup_panel_up or _focused == null:
 		return
 	if not _panels.has(_focused):
@@ -5037,6 +5420,12 @@ func _apply_wall_alpha(a: float) -> void:
 		_panels[i].set_content_alpha(a * _haze_for(i))
 	for i2: int in range(_panel_launches.size()):
 		_panel_launches[i2].set_content_alpha(a * _haze_for(i2))
+	for bi2: int in range(_board_nodes.size()):
+		var bnode3: MeshInstance3D = _board_nodes[bi2] as MeshInstance3D
+		if bnode3 != null and bi2 < _board_nodes.size():
+			var bmat3: StandardMaterial3D = bnode3.material_override as StandardMaterial3D
+			if bmat3 != null:
+				bmat3.albedo_color = Color(1.0, 1.0, 1.0, a * _haze_for(bi2))
 	for k: Variant in _rail_quads.keys():
 		var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
 		if rq != null:
@@ -5884,13 +6273,13 @@ func _descent_legacy() -> bool:
 ## The oldseat NC (PVLDS_TOURN_NC=oldseat): the pre-GRADFIX2
 ## Tournament behaviour's surviving half - the focus walk in
 ## the Tournament Room used projection scoring instead of
-## the drum's grid step. (Its other half - the standing
+## the drum's grid step. (Its other half - the old standing
 ## board borrowing the slot right of the centred challenge,
-## hiding its card - is DELETED with the board itself in
-## GRADFIX6: the flip has no slot to borrow, so no NC can
-## restore it; the tournament smoke's no-borrow legs now
-## pass on every build and guard the flip instead.) Empty
-## in every real run.
+## hiding its card - died with that board in GRADFIX6 and
+## stays dead: GRADFIX7's standing boards seat in their own
+## pair slots by the layout law, and the tournament smoke's
+## no-borrow legs guard those seats.) Empty in every real
+## run.
 func _tournament_legacy() -> bool:
 	return OS.get_environment("PVLDS_TOURN_NC") == "oldseat"
 
@@ -5925,6 +6314,38 @@ func _descend_to_bar() -> void:
 		_set_focused(best)
 
 
+## A sideways step in the Tournament Room (GRADFIX7 item
+## 2): land on the NEAREST CARD COLUMN in that direction -
+## board columns are skipped, the ends clamp (no card that
+## way = stay). Within the nearest card column, the same
+## band wins; an unpaired column's lone card takes the step
+## from either band.
+func _tourn_side_step(pidx: int, step: int) -> int:
+	var cur: Vector2i = _grid_coord(pidx)
+	var best_col: int = -1
+	for i: int in range(_visible_games.size()):
+		var c: Vector2i = _grid_coord(i)
+		if step > 0 and c.x <= cur.x:
+			continue
+		if step < 0 and c.x >= cur.x:
+			continue
+		if best_col < 0 or absi(c.x - cur.x) < absi(best_col - cur.x):
+			best_col = c.x
+	if best_col < 0:
+		return pidx
+	var best: int = pidx
+	var best_band_dist: int = 1 << 30
+	for i2: int in range(_visible_games.size()):
+		var c2: Vector2i = _grid_coord(i2)
+		if c2.x != best_col:
+			continue
+		var bd: int = absi(c2.y - cur.y)
+		if bd < best_band_dist:
+			best_band_dist = bd
+			best = i2
+	return best
+
+
 func _move_focus(dir: Vector2) -> void:
 	if _focusables.is_empty():
 		return
@@ -5951,6 +6372,33 @@ func _move_focus(dir: Vector2) -> void:
 	var pidx: int = _panels.find(_focused)
 	if pidx >= 0 and _mode == "wall" and (not _tournament or not _tournament_legacy()):
 		var coord: Vector2i = _grid_coord(pidx)
+		if _tournament:
+			# GRADFIX7 item 2: the pair grid's own stepping -
+			# sideways lands on the nearest CARD column (board
+			# columns skipped, ends clamp); vertical steps run
+			# within the card's own column, and DOWN off a
+			# column's bottom card is the descent to the bar,
+			# exactly as in the library.
+			if absf(dir.x) > 0.5:
+				var tnidx: int = _tourn_side_step(pidx, 1 if dir.x > 0.0 else -1)
+				if tnidx != pidx and tnidx < _panels.size():
+					_set_focused(_panels[tnidx])
+				return
+			if absf(dir.y) > 0.5 and dir.y < 0.0:
+				if coord.y > TOURN_BAND0:
+					var up_idx: int = _raw_index(coord.x, coord.y - 1)
+					if up_idx >= 0 and up_idx < _panels.size():
+						_set_focused(_panels[up_idx])
+				return
+			if absf(dir.y) > 0.5 and dir.y > 0.0:
+				if coord.y < TOURN_BAND0 + TOURN_BAND_COUNT - 1:
+					var dn_idx: int = _raw_index(coord.x, coord.y + 1)
+					if dn_idx >= 0 and dn_idx < _panels.size():
+						_set_focused(_panels[dn_idx])
+						return
+				if not _descent_legacy():
+					_descend_to_bar()
+				return
 		if absf(dir.x) > 0.5:
 			var ncol: int = clampi(coord.x + (1 if dir.x > 0.0 else -1), 0, _columns - 1)
 			var nidx: int = _index_at(ncol, coord.y)
