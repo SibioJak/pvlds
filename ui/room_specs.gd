@@ -66,8 +66,29 @@ const BUTTON_BG_ACCENT: Color = Color(0.36, 0.25, 0.06)
 ## behind the harness's negative-control seam
 ## (PVLDS_GRADFIX5_NC=shortpage, read by Main before any
 ## room exists) so the leg can fail against it by name.
-const BOARD_PANEL_SIZE: Vector2 = Vector2(0.62, 1.08)
-const BOARD_FACE_PX: Vector2i = Vector2i(620, 1080)
+## GRADFIX8 (item 1): the board widens a little - 0.62 ->
+## 0.72 m wide, height unchanged - so its lines breathe and
+## the deadline line fits (with CardFace's scale-to-fit as
+## the guarantee). The width is absorbed INSIDE the pair
+## block's own span: boards stand in grid columns 4-9, one
+## per column slot, and a column slot at WALL_RADIUS 3.40
+## on the 13.5-degree pitch is 2*pi*3.40*13.5/360 = 0.801 m
+## of arc wide. A 0.72 board's half (0.36) stays inside its
+## slot's half (0.400) with 0.040 m to spare, so no board
+## crosses its slot's edge - not the wall's edge at the
+## block's ends, not its neighbour's slot - and the gap to
+## the neighbouring card (half 0.31) along the arc is
+## 0.801 - 0.36 - 0.31 = 0.131 m, against 0.179 before. The
+## face keeps the family's 1000 px per metre: 720 x 1080.
+const BOARD_PANEL_SIZE: Vector2 = Vector2(0.72, 1.08)
+const BOARD_FACE_PX: Vector2i = Vector2i(720, 1080)
+## The library flip back's render size: the CARD's aspect
+## (0.62 x 1.08 at 1000 px/m), NOT the standing board's -
+## the back wears the card's own quad, so when GRADFIX8
+## widened the standing board the back's size decoupled
+## into this constant (RoomView._render_card_back reads
+## it; the standing-board paths read board_face_px()).
+const BACK_FACE_PX: Vector2i = Vector2i(620, 1080)
 const SHORT_BOARD_PANEL_SIZE: Vector2 = Vector2(0.62, 1.00) ## the GRADFIX3/4 page (the shortpage NC's restore)
 const SHORT_BOARD_FACE_PX: Vector2i = Vector2i(620, 1000)
 const BOARD_FOOTER_PX: int = 140 ## the owned board face's bottom band: the Launch button's home

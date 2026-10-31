@@ -3428,6 +3428,18 @@ var _grad_gf7_seat_viol: int = 0 ## Launch-seat law violations across the census
 var _grad_gf7_viol: Dictionary = {}
 var _grad_gf7_viol_first: Dictionary = {}
 var _grad_gf8_done: bool = false ## GRADFIX8 (item 3): the board-pairing legs run once, on the grad run's last phase (phase 6, before the verdict)
+## GRADFIX8 (items 1/5/6) phase-9 state: the centring
+## probes render through the room's factory in one unawaited
+## pass (the layout probes' pattern), then the legs judge.
+var _grad_gf8_stage: int = 0
+## (_grad_gf8_wait is declared once above, with the item-2
+## state - both phase steps use it as a phase-local counter
+## and reset it on entry.)
+var _grad_gf8_probes_started: bool = false
+var _grad_gf8_probes_done: bool = false
+var _grad_gf8_board_m: Dictionary = {}
+var _grad_gf8_board_spec: Dictionary = {}
+var _grad_gf8_back_m: Dictionary = {}
 ## Census violation counters (the sweep counts; the named
 ## verdicts print once, with the first example of each kind).
 var _grad_viol: Dictionary = {}
@@ -4168,6 +4180,102 @@ func _grad_gf8_pairing_legs() -> void:
 		and not _nav_spec_has_chip(spec_none, "DIFFERENT BUILD IN YOUR LIBRARY"),
 		"board pairing: a game he does not own at all keeps the blanket NOT IN YOUR LIBRARY chip, and only that case does")
 	_wipe_tree(ProjectSettings.globalize_path(root_user))
+## GRADFIX8 phase 9 (items 1/5/6, the room-furniture round):
+## the centring probes render first (one unawaited pass over
+## the room's factory, the layout probes' pattern), then the
+## named legs judge: the standing board's content block and
+## the library flip back's, centred on their canvases; the
+## widened board carrying its longest deadline whole; the
+## shelf-end fins gone. Under PVLDS_GRADFIX8_NC=offcentre
+## CardFace restores the top-loaded composition and the two
+## centring legs fail by name.
+func _grad_gf9_step() -> void:
+	match _grad_gf8_stage:
+		0:
+			if not _grad_gf8_probes_started:
+				_grad_gf8_probes_started = true
+				_grad_gf8_run_probes()
+			_grad_gf8_wait += 1
+			if _grad_gf8_probes_done:
+				_grad_gf8_stage = 1
+				_grad_gf8_wait = 0
+			elif _grad_gf8_wait > 3600:
+				_grad_fail("board centred: the GRADFIX8 probes never landed")
+				_grad_gf8_stage = 1
+				_grad_gf8_wait = 0
+		1:
+			_grad_gf8_legs()
+			_grad_phase = 4
+			_grad_power_stage = 0
+			_grad_wait = 0
+
+
+func _grad_gf8_run_probes() -> void:
+	var now_unix: int = int(Time.get_unix_time_from_system())
+	# The board: the layout fixture's season challenge with
+	# its deadline re-seated 3h14m out - the field shape
+	# whose sub line ("Ends ... - 3h 14m left - CLOSES
+	# SOON") ellipsized on the old 0.62 m board.
+	var text: String = FileAccess.get_file_as_string("res://data/wovp/challenges_search_layout.json")
+	var parsed: Dictionary = WovpClient.parse_challenges(text)
+	var ch: WovpChallenge = null
+	if bool(parsed.get("ok", false)):
+		for cv: Variant in (parsed.get("challenges", []) as Array):
+			var cand: WovpChallenge = cv as WovpChallenge
+			if cand != null and cand.type_code == WovpChallenge.TYPE_SEASON:
+				ch = cand
+				break
+	if ch != null:
+		ch.end_unix = now_unix + 3 * 3600 + 14 * 60
+		_grad_gf8_board_spec = RoomSpecs.tournament_board_spec(ch, true, "fixture-user-long", now_unix)
+		await _room._factory.render_texture(_grad_gf8_board_spec, RoomSpecs.board_face_px())
+		_grad_gf8_board_m = _room._factory.face_board_metrics()
+	# The back: the fixture library's longest title, through
+	# the library's own back spec at the back's own size.
+	var g: GameEntry = _grad_game(str(_grad_manifest.get("long_id", "")))
+	if g != null:
+		var wspec: Dictionary = RoomSpecs.wing_spec(g, null, "", now_unix)
+		await _room._factory.render_texture(wspec, RoomSpecs.BACK_FACE_PX)
+		_grad_gf8_back_m = _room._factory.face_board_metrics()
+	_grad_gf8_probes_done = true
+
+
+func _grad_gf8_legs() -> void:
+	# Item 1a: the standing board's content block, centred
+	# in the area it owns (the canvas above the footer's
+	# plinth - the plinth keeps the bottom edge by law).
+	var bm: Dictionary = _grad_gf8_board_m
+	var bface: Vector2 = bm.get("face_size", Vector2.ZERO)
+	var bcr: Rect2 = bm.get("content_rect", Rect2())
+	var bfooter: float = float(int(_grad_gf8_board_spec.get("footer_px", 0)))
+	var bcen: Vector2 = bcr.get_center()
+	var btgt: Vector2 = Vector2(bface.x * 0.5, (bface.y - bfooter) * 0.5)
+	print("GRADFIX8 BOARD: content centroid (%.1f, %.1f), above-footer centre (%.1f, %.1f), delta (%.1f, %.1f) px on a %s face"
+		% [bcen.x, bcen.y, btgt.x, btgt.y, bcen.x - btgt.x, bcen.y - btgt.y, str(bface)])
+	_grad_expect(not bm.is_empty() and bcr.size.y > 0.0 and absf(bcen.x - btgt.x) <= 12.0 and absf(bcen.y - btgt.y) <= 12.0,
+		"board centred: the standing board's content block centres on its canvas (centroid (%.0f, %.0f) vs above-footer centre (%.0f, %.0f), delta (%.0f, %.0f) px; the pre-fix block rode 248 px high)"
+			% [bcen.x, bcen.y, btgt.x, btgt.y, bcen.x - btgt.x, bcen.y - btgt.y])
+	# Item 1a, the width: the longest deadline form renders
+	# WHOLE on the widened board - its measured need fits
+	# its allotment at the rendered font.
+	var bneed: float = float(bm.get("sub_need_px", 0.0))
+	var ballot: float = float(bm.get("sub_allot_px", 0.0))
+	_grad_expect(bneed > 0.0 and bneed <= ballot + 0.5,
+		"board width: the widened board (%.2f m) carries the full deadline whole - '%s' needs %.0f px of its %.0f px (the 0.62 m board allotted 568 and the line ellipsized)"
+			% [RoomSpecs.board_panel_size().x, str(bm.get("sub_text", "")), bneed, ballot])
+	# Item 1b: the library flip back's whole composition -
+	# TABLE DATA band, title, data rows - centred on the
+	# card canvas.
+	var wm: Dictionary = _grad_gf8_back_m
+	var wface: Vector2 = wm.get("face_size", Vector2.ZERO)
+	var wcr: Rect2 = wm.get("content_rect", Rect2())
+	var wcen: Vector2 = wcr.get_center()
+	var wtgt: Vector2 = wface * 0.5
+	print("GRADFIX8 BACK: content centroid (%.1f, %.1f), canvas centre (%.1f, %.1f), delta (%.1f, %.1f) px on a %s face"
+		% [wcen.x, wcen.y, wtgt.x, wtgt.y, wcen.x - wtgt.x, wcen.y - wtgt.y, str(wface)])
+	_grad_expect(not wm.is_empty() and wcr.size.y > 0.0 and absf(wcen.x - wtgt.x) <= 12.0 and absf(wcen.y - wtgt.y) <= 12.0,
+		"back centred: the flip back's TABLE DATA composition centres on its canvas (centroid (%.0f, %.0f) vs centre (%.0f, %.0f), delta (%.0f, %.0f) px; the pre-fix block rode 431 px high)"
+			% [wcen.x, wcen.y, wtgt.x, wtgt.y, wcen.x - wtgt.x, wcen.y - wtgt.y])
 
 
 func _grad_leg_fallback_visit(e: Dictionary, g: GameEntry) -> void:
@@ -4461,9 +4569,10 @@ func _drive_grad_smoke() -> void:
 			_grad_sweep_step()
 		3:
 			_grad_leg_background_lock()
-			_grad_phase = 4
+			_grad_phase = 9
 			_grad_wait = 0
-			_grad_power_stage = 0
+		9:
+			_grad_gf9_step()
 		4:
 			_grad_tournament_step()
 		5:
@@ -8517,10 +8626,10 @@ func _tournament_leg_standing_boards() -> void:
 		var tex: Texture2D = entry.get("texture") as Texture2D
 		var ink: float = _tournament_tex_ink_stdev(tex)
 		_tournament_expect(bool(entry.get("board_visible", false)) and tex != null
-				and tex.get_width() == 620 and tex.get_height() == 1080
+				and tex.get_width() == RoomSpecs.BOARD_FACE_PX.x and tex.get_height() == RoomSpecs.BOARD_FACE_PX.y
 				and bool(entry.get("texture_real", false)) and ink > 0.02,
-			"standing board: '%s' board stands open at rest - visible, 620x1080, real, inked (size %s, real %s, ink stdev %.3f)"
-				% [tname, str(tex.get_size()) if tex != null else "none", str(bool(entry.get("texture_real", false))), ink])
+			"standing board: '%s' board stands open at rest - visible, %dx%d, real, inked (size %s, real %s, ink stdev %.3f)"
+				% [tname, RoomSpecs.BOARD_FACE_PX.x, RoomSpecs.BOARD_FACE_PX.y, str(tex.get_size()) if tex != null else "none", str(bool(entry.get("texture_real", false))), ink])
 
 
 func _tournament_leg_layout_boards() -> void:
@@ -8547,10 +8656,10 @@ func _tournament_leg_layout_boards() -> void:
 	var bs_all: Array = _room.board_state()
 	var size_ok: bool = bs_all.size() == rows.size()
 	for e: Variant in bs_all:
-		if ((e as Dictionary).get("board_size", Vector2.ZERO) as Vector2) != Vector2(0.62, 1.08):
+		if ((e as Dictionary).get("board_size", Vector2.ZERO) as Vector2) != RoomSpecs.board_panel_size():
 			size_ok = false
 	_tournament_expect(size_ok,
-		"layout standing: every standing board's quad is the board size 0.62x1.08")
+		"layout standing: every standing board's quad is the board size %s (GRADFIX8: widened 0.62 -> 0.72)" % str(RoomSpecs.board_panel_size()))
 	for li: int in range(rows.size()):
 		_tournament_expect_board_side(li, rows[li] as Dictionary)
 	if rows.size() >= 1:
@@ -9414,9 +9523,12 @@ func _layout_wing_probe_start() -> void:
 	var spec: Dictionary = RoomSpecs.tournament_board_spec(phantom, true, _wovp_user_id, now_unix)
 	# GRADFIX6: the board's home is the card's back, at the
 	# card's own face size - the probe renders at exactly
-	# board_face_px (the old wing-size derivation died with
+	# that size (the old wing-size derivation died with
 	# the wing; since GRADFIX3 the two were the same number).
-	var px: Vector2i = RoomSpecs.board_face_px()
+	# GRADFIX8: the standing board widened (0.72 m) and the
+	# back's size decoupled into BACK_FACE_PX - the probe
+	# judges the BACK's width, so it reads that constant.
+	var px: Vector2i = RoomSpecs.BACK_FACE_PX
 	var tex: Texture2D = await _room._factory.render_texture(spec, px)
 	var metrics: Dictionary = _room._factory.face_board_metrics()
 	var narrow_tex: Texture2D = await _room._factory.render_texture(spec, Vector2i(440, 720))

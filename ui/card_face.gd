@@ -94,6 +94,7 @@ var _sub_label: Label
 var _body_label: Label
 var _chips_row: HBoxContainer
 var _rows_box: VBoxContainer ## the board kind's stacked rows (score / divider / note)
+var _top_spacer: Control ## board kind (GRADFIX8): the centring spacer above the band - shares the face's spare height with _footer_spacer so the content block centres (see apply_spec)
 var _footer_spacer: Control ## board kind: pushes the footer band to the face's bottom edge
 var _footer_panel: PanelContainer ## board kind: the Launch button's plinth (spec "footer_px")
 var _art_rect: TextureRect
@@ -222,6 +223,11 @@ func _init() -> void:
 	_vbox = VBoxContainer.new()
 	_vbox.add_theme_constant_override("separation", 12)
 	_margin.add_child(_vbox)
+
+	_top_spacer = Control.new()
+	_top_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_top_spacer.visible = false
+	_vbox.add_child(_top_spacer)
 
 	_band_panel = PanelContainer.new()
 	_band_label = Label.new()
@@ -453,7 +459,29 @@ func apply_spec(spec: Dictionary) -> void:
 		_color_of(spec, "title_color", Color(0.96, 0.96, 0.98)))
 	_sub_label.text = str(spec.get("sub", ""))
 	_sub_label.visible = _sub_label.text != ""
-	_sub_label.add_theme_font_size_override("font_size", int(spec.get("sub_size", 32)))
+	var sub_px: int = int(spec.get("sub_size", 32))
+	if kind == "board" and size.x > 0.0 and _sub_label.text != "" \
+			and OS.get_environment("PVLDS_GRADFIX_NC") != "oldband":
+		# A board's deadline never ellipsizes (GRADFIX8 item
+		# 1, the band/title fit's sibling): Chris's field
+		# line - "Ends Sat Oct 31, 7:00 PM CDT - 3h 14m left
+		# - CLO..." - was the sub label's ellipsis eating
+		# CLOSES SOON. The board widened (0.62 -> 0.72 m)
+		# and still the longest form (deadline + remaining
+		# + CLOSES SOON, 723 px at 26 px on the 620 face)
+		# outgrows the page, so the font scales down until
+		# the whole line fits, floor 18 like the score law.
+		var s_avail: float = size.x - 52.0
+		var s_need: float = _text_w(_measure_font(), _sub_label.text, sub_px)
+		if s_need > s_avail and s_need > 0.0:
+			sub_px = maxi(18, int(floor(float(sub_px) * s_avail / s_need)))
+			# The proportional step can land a pixel wide
+			# (the renderer's string measure rounds up at
+			# some sizes): walk down until the line truly
+			# fits, never below the 18 px floor.
+			while sub_px > 18 and _text_w(_measure_font(), _sub_label.text, sub_px) > s_avail:
+				sub_px -= 1
+	_sub_label.add_theme_font_size_override("font_size", sub_px)
 	# A spec may warm its own sub line ("sub_color") - the
 	# board's deadline does, as its end nears. Re-asserted on
 	# every spec (one CardFace serves all renders), with the
@@ -504,7 +532,28 @@ func apply_spec(spec: Dictionary) -> void:
 	# board without a button uses its full height and no
 	# other kind ever sees the furniture.
 	var footer_px: int = int(spec.get("footer_px", 0)) if kind == "board" else 0
-	_footer_spacer.visible = footer_px > 0
+	# Vertical centring (GRADFIX8 item 1, Chris's field
+	# verdict on GRADFIX7: the board's info "sits off-centre"
+	# - top-loaded, dead space below the rows; the library
+	# flip back's TABLE DATA composition the same). A board's
+	# content block now CENTRES on its canvas: two expanding
+	# spacers share the spare height - one above the band,
+	# one below the rows - so the block's centroid lands on
+	# the centre of the area it owns. An owned board's
+	# footer plinth keeps the face's bottom edge (the Launch
+	# seat derives from it, RoomSpecs.board_launch_y): the
+	# spacers centre the block in the area ABOVE the plinth,
+	# and the plinth never moves. Measured before the fix on
+	# the harness proof: board content centroid 318 px above
+	# canvas centre (248 above the above-footer centre),
+	# back 431 px above. The NC seam PVLDS_GRADFIX8_NC=
+	# offcentre hides both spacers and restores the shipped
+	# top-loaded composition, so the centring legs fail by
+	# name against it.
+	var centre_board: bool = kind == "board" \
+		and OS.get_environment("PVLDS_GRADFIX8_NC") != "offcentre"
+	_top_spacer.visible = centre_board
+	_footer_spacer.visible = footer_px > 0 or centre_board
 	_footer_panel.visible = footer_px > 0
 	if footer_px > 0:
 		_footer_panel.custom_minimum_size = Vector2(0.0, float(footer_px))
@@ -724,6 +773,31 @@ func board_metrics() -> Dictionary:
 	var out: Dictionary = {"rows": rows, "face_size": size}
 	if _footer_panel.visible:
 		out["footer"] = _footer_panel.get_global_rect()
+	# GRADFIX8 (item 1): the content block's union rect - band,
+	# title, sub, chips and rows, WITHOUT the footer plinth or
+	# the centring spacers - plus the sub (deadline) line's fit.
+	# The centring legs and the harness pixel proof read the
+	# block's centroid against the canvas centre from here.
+	var block: Rect2 = Rect2()
+	var have_block: bool = false
+	var parts: Array[Control] = [_band_panel, _title_label, _sub_label, _body_label]
+	if _chips_row.get_child_count() > 0:
+		parts.append(_chips_row)
+	if _rows_box.visible and _rows_box.get_child_count() > 0:
+		parts.append(_rows_box)
+	for part: Control in parts:
+		if part == null or not part.visible:
+			continue
+		var r: Rect2 = part.get_global_rect()
+		if r.size.x <= 0.0 or r.size.y <= 0.0:
+			continue
+		block = r if not have_block else block.merge(r)
+		have_block = true
+	if have_block:
+		out["content_rect"] = block
+	out["sub_text"] = _sub_label.text
+	out["sub_need_px"] = _text_w(_measure_font(), _sub_label.text, _sub_label.get_theme_font_size("font_size"))
+	out["sub_allot_px"] = _sub_label.get_global_rect().size.x
 	return out
 
 

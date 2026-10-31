@@ -4042,10 +4042,12 @@ func _render_card_back(idx: int, key: String) -> void:
 		return
 	var spec: Dictionary = _card_back_spec(idx)
 	# The back is a CARD face: it renders at the card's own
-	# face size (the BOARD_FACE_PX constant), never through
-	# the state-panel seams (oldlayout/shortpage resize the
-	# board-mode state panels, not a card).
-	var tex: Texture2D = await _factory.render_texture(spec, RoomSpecs.BOARD_FACE_PX)
+	# face size (the BACK_FACE_PX constant - the card's
+	# aspect, decoupled from the standing board's size by
+	# GRADFIX8's widening), never through the state-panel
+	# seams (oldlayout/shortpage resize the board-mode
+	# state panels, not a card).
+	var tex: Texture2D = await _factory.render_texture(spec, RoomSpecs.BACK_FACE_PX)
 	if tex == null or idx != _flip_idx or key != _flip_key:
 		if _flip_render_key == key:
 			_flip_render_key = ""
