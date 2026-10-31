@@ -3384,6 +3384,26 @@ var _grad_swing_grabbed: bool = false
 var _grad_boot_centre: int = -1 ## the centre the boot itself chose, read before any driver input
 var _grad_visit_i: int = -1 ## the fallback-visit cursor (-1 = not started)
 var _grad_visit_settle: int = 0
+## GRADFIX7 (item 1) at-rest chain legs + census state (phase 8,
+## run BEFORE the fallback visits of phase 7 - the visits pay
+## face_path() and would mask the at-rest fault these legs
+## convict).
+var _grad_gf7_stage: int = 0 ## 0 await warmer+fetcher drain, 1 settle + named chain legs, 2 the at-rest census sweep
+var _grad_gf7_since: int = 0 ## msec the current gf7 stage began
+var _grad_gf7_taxi_key_before: String = "" ## Taxi's stamped face key, sampled in phase 1 (before the warmer drained)
+var _grad_gf7_taxi_sampled: bool = false
+var _grad_gf7_ti: int = 0 ## the chain-leg target cursor
+var _grad_gf7_focused: bool = false ## the current chain target has been centred
+var _grad_gf7_wait: int = 0
+var _grad_gf7_census_i: int = -1 ## the census centre cursor (-1 = not started)
+var _grad_gf7_census_settle: int = 0
+var _grad_gf7_census_wait: int = 0 ## ticks spent at the current census centre (the settle timeout's clock)
+var _grad_gf7_seen: Dictionary = {} ## panel idx -> true, every panel the census judged
+var _grad_gf7_art_ok: int = 0 ## visible-panel observations standing as art where art was expected
+var _grad_gf7_fallback_ok: int = 0 ## visible-panel observations standing styled where fallback was expected
+var _grad_gf7_seat_viol: int = 0 ## Launch-seat law violations across the census
+var _grad_gf7_viol: Dictionary = {}
+var _grad_gf7_viol_first: Dictionary = {}
 ## Census violation counters (the sweep counts; the named
 ## verdicts print once, with the first example of each kind).
 var _grad_viol: Dictionary = {}
@@ -3507,6 +3527,270 @@ func _grad_focus_visit(e: Dictionary) -> void:
 	var idx: int = _grad_panel_index(g.game_id)
 	if idx >= 0:
 		_room._set_focused(_room._panels[idx])
+
+
+## GRADFIX7 (item 1): a manifest game by kind + display name.
+func _grad_gf7_find(kind: String, gname: String) -> GameEntry:
+	for entry: Variant in _grad_manifest_games():
+		if not (entry is Dictionary):
+			continue
+		var e: Dictionary = entry
+		if str(e.get("kind", "")) == kind and str(e.get("name", "")) == gname:
+			return _grad_visit_game(e)
+	return null
+
+
+## GRADFIX7 (item 1): the at-rest truth for one game, computed
+## INDEPENDENTLY of the room (the census must not grade the
+## room with the room's own probe): an author shot sitting in
+## the shot cache, a side image on disk, or the extraction
+## chain's cache - walked in source order, a stamped negative
+## falling through, the first untried source answering "no
+## art yet" (post-drain, untried means the warmer finished
+## and still owes nothing it can pay).
+func _grad_gf7_chain_says_art(g: GameEntry) -> bool:
+	if g.shot_url != "" and ArtProvider.shot_is_cached(g.shot_url):
+		return true
+	if g.art_path != "":
+		return true
+	for src: String in g.art_sources():
+		if ArtProvider.is_cache_current(src):
+			return true
+		if ArtProvider.is_negative_outcome(ArtProvider.outcome_for_source(src)):
+			continue
+		return false
+	return false
+
+
+func _grad_gf7_count(kind: String, example: String) -> void:
+	_grad_gf7_viol[kind] = int(_grad_gf7_viol.get(kind, 0)) + 1
+	if not _grad_gf7_viol_first.has(kind):
+		_grad_gf7_viol_first[kind] = example
+
+
+## GRADFIX7 (item 1) phase 8: the at-rest legs. Stage 0 waits
+## for the warmer to idle and the shot fetcher to drain; stage
+## 1 settles 2 s, judges the heal-honesty leg from the phase-1
+## sample, then centres each chain-only fixture and reads its
+## STANDING panel state (face_state) - no paying call is made
+## for any of them in this phase; stage 2 is the at-rest
+## census sweep over the whole library.
+func _grad_gf7_step() -> void:
+	match _grad_gf7_stage:
+		0:
+			var warm_idle: bool = _art_warmer == null or _art_warmer.is_idle()
+			var shots_done: bool = _shot_fetcher == null or not _shot_fetcher.is_fetching()
+			if warm_idle and shots_done:
+				_grad_gf7_stage = 1
+				_grad_gf7_since = Time.get_ticks_msec()
+				_grad_gf7_ti = 0
+				_grad_gf7_focused = false
+				_grad_gf7_wait = 0
+		1:
+			if Time.get_ticks_msec() - _grad_gf7_since < 2000:
+				return
+			if _grad_gf7_ti == 0 and not _grad_gf7_focused:
+				# The heal-honesty leg, judged once, before any
+				# chain target is centred: Taxi's stamped key
+				# sampled in phase 1 (styled, empty art segment)
+				# against its key now (post-drain), with the
+				# no-paying-call witness - nothing in this boot
+				# has called face_path()/ensure_art() for Taxi
+				# yet (the paying visits run in phase 7, after
+				# this phase), so a landed art segment could
+				# only have arrived through the heal.
+				var tg: GameEntry = _grad_gf7_find("b2s", "Taxi")
+				_grad_expect(tg != null, "heal honesty: Taxi is in the library")
+				if tg != null:
+					var after: String = str(_room._panel_face_key.get(tg.game_id, ""))
+					var bparts: PackedStringArray = _grad_gf7_taxi_key_before.split("|")
+					var aparts: PackedStringArray = after.split("|")
+					_grad_expect(_grad_gf7_taxi_sampled and bparts.size() > 1 and bparts[1] == "",
+						"heal honesty: Taxi's stamped key starts styled (sampled before the warmer landed: '%s')" % _grad_gf7_taxi_key_before)
+					_grad_expect(aparts.size() > 1 and aparts[1] != "" and tg.art_path == "",
+						"heal honesty: Taxi's stamped key gains its art segment when the warmer lands, with no paying call")
+			var targets: Array = [
+				["b2s", "Taxi", "chain upgrade: 'Taxi' wears its extracted backglass at rest"],
+				["b2s", "The Goonies Never Say Die Pinball", "chain upgrade: 'Goonies' wears its extracted backglass at rest"],
+				["vpxonly", "Zulu Vpx Chain", "chain upgrade: the vpx-only game wears its embedded art at rest"],
+				["bigb2s", "Big Chain Glass", "chain upgrade: 'BigB2S' wears its extracted backglass at rest"],
+			]
+			if _grad_gf7_ti >= targets.size():
+				_grad_gf7_stage = 2
+				_grad_gf7_census_i = -1
+				_grad_gf7_census_settle = 0
+				return
+			var t: Array = targets[_grad_gf7_ti]
+			var g: GameEntry = _grad_gf7_find(str(t[0]), str(t[1]))
+			if g == null:
+				_grad_fail(str(t[2]) + " (fixture game not in the library)")
+				_grad_gf7_ti += 1
+				_grad_gf7_focused = false
+				return
+			var pidx: int = _grad_panel_index(g.game_id)
+			if not _grad_gf7_focused:
+				if pidx >= 0:
+					_room._set_focused(_room._panels[pidx])
+				_grad_gf7_focused = true
+				_grad_gf7_wait = 0
+				return
+			_grad_gf7_wait += 1
+			if _room.page_slide_active():
+				_grad_gf7_wait = 0
+				return
+			var standing: Dictionary = {}
+			for st: Variant in _room.face_state():
+				if str((st as Dictionary).get("game_id", "")) == g.game_id:
+					standing = st
+					break
+			if not standing.is_empty() and bool(standing.get("key_stamped", false)) \
+					and not bool(standing.get("is_placeholder", true)) and _grad_gf7_wait > 5:
+				_grad_expect(bool(standing.get("from_art", false)), str(t[2]))
+				_grad_gf7_ti += 1
+				_grad_gf7_focused = false
+			elif _grad_gf7_wait > 1500:
+				_grad_fail(str(t[2]) + " (its face never settled at rest)")
+				_grad_gf7_ti += 1
+				_grad_gf7_focused = false
+		2:
+			_grad_gf7_census_step()
+
+
+## One census centre's assertions (GRADFIX7 item 1): every
+## visible panel judged by game name against the independent
+## truth table - expected-art stands as art with its plate and
+## label up and a real texture; deliberate fallback stands
+## styled and ONLY those games do; exactly one Launch visible
+## per card; no flip standing; every pivot at 0; no back
+## visible; and the Launch seat law - styled faces at
+## PANEL_LAUNCH_Y, art faces at the bottom their standing
+## plate's bottom earns (-0.47, or +0.44 when the grown plate
+## reaches past -0.40).
+func _grad_gf7_census_centre(c: int) -> void:
+	var fs: Dictionary = _room.flip_state()
+	if bool(fs.get("active", false)):
+		_grad_gf7_count("flip", "centre %d: a flip stands (idx %s)" % [c, str(fs.get("idx", "?"))])
+	var kind_by_title: Dictionary = {}
+	for entry: Variant in _grad_manifest_games():
+		if entry is Dictionary:
+			kind_by_title[str((entry as Dictionary).get("name", ""))] = str((entry as Dictionary).get("kind", ""))
+	for st: Variant in _room.face_state():
+		var sd: Dictionary = st
+		var idx: int = int(sd.get("idx", -1))
+		if idx < 0 or idx >= _room._visible_games.size():
+			continue
+		_grad_gf7_seen[idx] = true
+		var g: GameEntry = _room._visible_games[idx]
+		var kind: String = str(kind_by_title.get(g.title, ""))
+		var expected_art: bool = ["shot", "pair", "long", "b2s", "side", "vpxonly", "bigb2s"].has(kind) \
+			or _grad_gf7_chain_says_art(g)
+		var from_art: bool = bool(sd.get("from_art", false))
+		if expected_art:
+			if from_art:
+				_grad_gf7_art_ok += 1
+			else:
+				_grad_gf7_count("art", "centre %d: '%s' (kind %s) should stand as art but wears its styled card" % [c, g.title, kind])
+			var plate: MeshInstance3D = _room._panel_plates[idx] if idx < _room._panel_plates.size() else null
+			var label: Label3D = _room._panel_labels[idx] if idx < _room._panel_labels.size() else null
+			if from_art and (plate == null or not plate.visible or label == null or not label.visible):
+				_grad_gf7_count("plate", "centre %d: '%s' stands as art without its plate+label up" % [c, g.title])
+			if bool(sd.get("is_unreal", true)) or bool(sd.get("is_placeholder", true)):
+				_grad_gf7_count("tex", "centre %d: '%s' wears an unreal or placeholder texture" % [c, g.title])
+		else:
+			if from_art:
+				_grad_gf7_count("fallback", "centre %d: '%s' (kind %s) should stand styled but wears art" % [c, g.title, kind])
+			else:
+				_grad_gf7_fallback_ok += 1
+		var front: ClickableQuad = _room._panel_launches[idx] if idx < _room._panel_launches.size() else null
+		var back: ClickableQuad = _room._panel_back_launches[idx] if idx < _room._panel_back_launches.size() else null
+		var vis_count: int = (1 if front != null and front.visible else 0) + (1 if back != null and back.visible else 0)
+		if vis_count != 1:
+			_grad_gf7_count("launchcount", "centre %d: '%s' shows %d visible Launch buttons" % [c, g.title, vis_count])
+		if back != null and back.get_parent() != null and (back.get_parent() as Node3D).visible:
+			_grad_gf7_count("backvis", "centre %d: '%s' shows its back at rest" % [c, g.title])
+		if idx < _room._panels.size() and absf(_room._panels[idx].flip_angle()) > 0.01:
+			_grad_gf7_count("pivot", "centre %d: '%s' pivot stands at %.3f rad" % [c, g.title, _room._panels[idx].flip_angle()])
+		if front != null:
+			var want_y: float = RoomView.PANEL_LAUNCH_Y
+			if from_art:
+				var plate2: MeshInstance3D = _room._panel_plates[idx] if idx < _room._panel_plates.size() else null
+				if plate2 != null and plate2.mesh is QuadMesh:
+					var pb: float = plate2.position.y - (plate2.mesh as QuadMesh).size.y * 0.5
+					want_y = RoomView.PANEL_LAUNCH_Y_TOP if pb < -0.40 else RoomView.PANEL_LAUNCH_Y
+			if absf(front.position.y - want_y) > 0.001:
+				_grad_gf7_seat_viol += 1
+				_grad_gf7_count("seat", "centre %d: '%s' Launch seats at %.3f (law: %.3f, from_art %s)" % [c, g.title, front.position.y, want_y, str(from_art)])
+
+
+## The census sweep (GRADFIX7 item 1): every panel becomes
+## the centre in turn; a centre is judged once the slide has
+## rested and every visible face honestly stands (stamped,
+## no placeholder). Desk-camera grabs at the first, middle
+## and last centres are the eyeball record.
+func _grad_gf7_census_step() -> void:
+	var n: int = _room._panels.size()
+	if _grad_gf7_census_i < 0:
+		_grad_gf7_census_i = 0
+		_room._set_focused(_room._panels[0])
+		_grad_gf7_census_settle = 0
+		_grad_gf7_census_wait = 0
+		return
+	_grad_gf7_census_wait += 1
+	if _room.page_slide_active():
+		_grad_gf7_census_settle = 0
+		return
+	var ready: bool = true
+	for st: Variant in _room.face_state():
+		if not bool((st as Dictionary).get("key_stamped", false)) or bool((st as Dictionary).get("is_placeholder", true)):
+			ready = false
+			break
+	_grad_gf7_census_settle = _grad_gf7_census_settle + 1 if ready else 0
+	if _grad_gf7_census_settle < 3:
+		if _grad_gf7_census_wait > 1500:
+			_grad_gf7_count("settle", "centre %d: a visible face never settled" % _grad_gf7_census_i)
+			_grad_gf7_census_settle = 3 ## judge this centre as it stands and move on
+		else:
+			return
+	if _room.centre_index() == _grad_gf7_census_i:
+		_grad_gf7_census_centre(_grad_gf7_census_i)
+		if _grad_gf7_census_i == 0:
+			_grad_save_grab("gradfix7_census_start.png")
+		elif _grad_gf7_census_i == n / 2:
+			_grad_save_grab("gradfix7_census_mid.png")
+		elif _grad_gf7_census_i == n - 1:
+			_grad_save_grab("gradfix7_census_end.png")
+	_grad_gf7_census_i += 1
+	_grad_gf7_census_settle = 0
+	_grad_gf7_census_wait = 0
+	if _grad_gf7_census_i >= n:
+		print("GRADFIX7 CENSUS: %d panels swept, %d art-standing observations, %d fallback-standing observations, %d Launch-seat violations"
+			% [_grad_gf7_seen.size(), _grad_gf7_art_ok, _grad_gf7_fallback_ok, _grad_gf7_seat_viol])
+		_grad_expect(_grad_gf7_seen.size() == n,
+			"at-rest census: every panel was swept (%d of %d)" % [_grad_gf7_seen.size(), n])
+		var kinds: Array = [
+			["art", "at-rest census: every expected-art panel stands as art"],
+			["fallback", "at-rest census: styled faces stand only where fallback is deliberate"],
+			["plate", "at-rest census: every art face stands with its plate+label up"],
+			["tex", "at-rest census: every visible texture is real, none the placeholder"],
+			["launchcount", "at-rest census: exactly one visible Launch per card"],
+			["backvis", "at-rest census: no back visible at rest"],
+			["pivot", "at-rest census: every pivot angle is 0 at rest"],
+			["flip", "at-rest census: no flip stands at rest"],
+			["settle", "at-rest census: every visible face settled at its centre"],
+			["seat", "at-rest census: the Launch seat law holds (styled at -0.47; art at its plate's seat)"],
+		]
+		for pair: Variant in kinds:
+			var kk: String = str((pair as Array)[0])
+			var lt: String = str((pair as Array)[1])
+			var cnt: int = int(_grad_gf7_viol.get(kk, 0))
+			if cnt == 0:
+				_grad_expect(true, lt)
+			else:
+				_grad_expect(false, "%s (%d violations; first: %s)" % [lt, cnt, str(_grad_gf7_viol_first.get(kk, ""))])
+		_grad_phase = 7
+		_grad_visit_i = -1
+	else:
+		_room._set_focused(_room._panels[_grad_gf7_census_i])
 
 
 func _grad_leg_fallback_visit(e: Dictionary, g: GameEntry) -> void:
@@ -3745,6 +4029,17 @@ func _drive_grad_smoke() -> void:
 						_grad_manifest = parsed
 				_grad_expect(not _grad_manifest.is_empty(),
 					"fixtures: the graduation manifest loads")
+				# GRADFIX7 (item 1): centre Taxi NOW, while the
+				# warmer is still walking the library - its face
+				# stamps from the ready probe at this moment
+				# (styled: the extraction has not landed), and
+				# phase 1 samples that stamp as the heal-honesty
+				# leg's "before" (see _grad_gf7_step).
+				var taxi0: GameEntry = _grad_gf7_find("b2s", "Taxi")
+				if taxi0 != null:
+					var ti0: int = _grad_panel_index(taxi0.game_id)
+					if ti0 >= 0:
+						_room._set_focused(_room._panels[ti0])
 				_grad_phase = 1
 				_grad_wait = 0
 			else:
@@ -3763,6 +4058,17 @@ func _drive_grad_smoke() -> void:
 			# outwaited the run: the faces legs below are
 			# where unclaimed shots are named, per game.)
 			_grad_wait += 1
+			# GRADFIX7 (item 1): sample Taxi's stamped face key
+			# the first tick it exists - the heal-honesty leg's
+			# "before" (the warmer is still walking; Taxi's
+			# extraction lands later in the queue).
+			if not _grad_gf7_taxi_sampled:
+				var tg1: GameEntry = _grad_gf7_find("b2s", "Taxi")
+				if tg1 != null:
+					var k1: String = str(_room._panel_face_key.get(tg1.game_id, ""))
+					if k1 != "":
+						_grad_gf7_taxi_key_before = k1
+						_grad_gf7_taxi_sampled = true
 			var drained: bool = _shot_fetcher != null and not _shot_fetcher.is_fetching()
 			if _grad_wait > 3600 and not drained:
 				_grad_fail("shots: the fetch queue never drained")
@@ -3770,7 +4076,8 @@ func _drive_grad_smoke() -> void:
 				_grad_leg_faces()
 				_grad_leg_nameplate_sample()
 				_grad_leg_background_static()
-				_grad_phase = 7
+				_grad_phase = 8
+				_grad_gf7_stage = 0
 				_grad_wait = 0
 			elif drained and _grad_wait > 240:
 				_grad_leg_library()
@@ -3779,10 +4086,13 @@ func _drive_grad_smoke() -> void:
 				_grad_audit_labels("drained")
 				_grad_leg_background_static()
 				_grad_save_grab("grad_boot.png")
-				_grad_phase = 7
+				_grad_phase = 8
+				_grad_gf7_stage = 0
 				_grad_wait = 0
 		7:
 			_grad_visit_step()
+		8:
+			_grad_gf7_step()
 		2:
 			_grad_sweep_step()
 		3:
