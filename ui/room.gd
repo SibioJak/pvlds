@@ -2941,15 +2941,14 @@ func refresh_shot_faces(game: GameEntry) -> void:
 ## BOARD_TEX_RETRY_MS, walk the standing window's panels
 ## and re-issue the fill for any face that is not honestly
 ## standing:
+##   - the face key the ready probe computes differs from
+##     the stamped key (the warmer landed the extraction,
+##     or the shot arrived without a refresh hook) - refill
+##     (an upgrade, never charged against the retry budget);
 ##   - the standing texture is unreal (the placeholder, or
 ##     a fallback solid that got applied before the reality
-##     gate existed in a render race) - restamp and refill;
-##   - the card wears its styled title card while READY art
-##     now exists for it (the warmer landed the extraction,
-##     or the shot arrived without a refresh hook) - the
-##     face key the ready probe computes differs from the
-##     stamped key, so refill (an upgrade, never charged
-##     against the retry budget);
+##     gate existed in a render race) - restamp and refill,
+##     bounded per face key;
 ##   - the card wears its styled card over art that was
 ##     ready all along but whose RENDER captured empty -
 ##     evict the cached styled face and retry the art
@@ -2980,11 +2979,18 @@ func _heal_panel_faces() -> void:
 		var fav: bool = _store != null and _store.is_favorite(game.game_id)
 		var pup: bool = game.is_pup_tagged()
 		var want_key: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
-		if tex == null or tex == _placeholder_tex or not _tex_is_real(tex):
-			_panel_face_key.erase(game.game_id)
-			_fill_one_face(idx, _gen)
-		elif stamped != want_key:
-			_fill_one_face(idx, _gen) # an upgrade is ready - the fill's own key check does the rest
+		if stamped != want_key:
+			_fill_one_face(idx, _gen) # an upgrade is ready (or the face never landed) - the fill's own key check does the rest; never budget-charged
+		elif tex == null or tex == _placeholder_tex or not _tex_is_real(tex):
+			# Stamped as this face, yet not honestly standing
+			# (a rebuild re-dressed the pooled panel, a race):
+			# restamp and refill, bounded per face key.
+			var rkey: String = game.game_id + "|" + want_key
+			var spent: int = int(_face_heal_retries.get(rkey, 0))
+			if spent < BOARD_TEX_MAX_RETRIES:
+				_face_heal_retries[rkey] = spent + 1
+				_panel_face_key.erase(game.game_id)
+				_fill_one_face(idx, _gen)
 		elif art_file != "" and _panel_art_aspect[idx] <= 0.0:
 			# The styled card stands over ready art: its art
 			# render captured empty at fill time. Retry it,
