@@ -3390,6 +3390,7 @@ var _grad_visit_settle: int = 0
 ## convict).
 var _grad_gf7_stage: int = 0 ## 0 await warmer+fetcher drain, 1 settle + named chain legs, 2 the at-rest census sweep
 var _grad_gf7_since: int = 0 ## msec the current gf7 stage began
+var _grad_gf7_boot_pressed: bool = false ## phase 0's early filter press + Taxi centring (GRADFIX7: taken on the first tick the room exists, so Taxi's face stamps while its extraction is still queued behind the field-scale BigB2S extraction)
 var _grad_gf7_taxi_key_before: String = "" ## Taxi's stamped face key, sampled in phase 1 (before the warmer drained)
 var _grad_gf7_taxi_sampled: bool = false
 var _grad_gf7_ti: int = 0 ## the chain-leg target cursor
@@ -3703,10 +3704,16 @@ func _grad_gf7_census_centre(c: int) -> void:
 				_grad_gf7_fallback_ok += 1
 		var front: ClickableQuad = _room._panel_launches[idx] if idx < _room._panel_launches.size() else null
 		var back: ClickableQuad = _room._panel_back_launches[idx] if idx < _room._panel_back_launches.size() else null
-		var vis_count: int = (1 if front != null and front.visible else 0) + (1 if back != null and back.visible else 0)
+		# Exactly one visible Launch, counted the standing
+		# way: the front button's own flag plus the back
+		# HOLDER's (the back button's own flag rides its
+		# holder's turn - a hidden holder's button is not a
+		# visible Launch however its flag stands).
+		var back_holder: Node3D = back.get_parent() as Node3D if back != null else null
+		var vis_count: int = (1 if front != null and front.visible else 0) + (1 if back_holder != null and back_holder.visible else 0)
 		if vis_count != 1:
 			_grad_gf7_count("launchcount", "centre %d: '%s' shows %d visible Launch buttons" % [c, g.title, vis_count])
-		if back != null and back.get_parent() != null and (back.get_parent() as Node3D).visible:
+		if back_holder != null and back_holder.visible:
 			_grad_gf7_count("backvis", "centre %d: '%s' shows its back at rest" % [c, g.title])
 		if idx < _room._panels.size() and absf(_room._panels[idx].flip_angle()) > 0.01:
 			_grad_gf7_count("pivot", "centre %d: '%s' pivot stands at %.3f rad" % [c, g.title, _room._panels[idx].flip_angle()])
@@ -4017,9 +4024,17 @@ func _grad_poly_intersect_area(a: Array[Vector2], b: Array[Vector2]) -> float:
 func _drive_grad_smoke() -> void:
 	match _grad_phase:
 		0:
-			if _room != null and _room.visible and _room.wall_ready:
-				Input.warp_mouse(Vector2(512.0, 764.0)) ## parked: hover would drive the centre (see the nav driver)
-				_grad_boot_centre = _room.centre_index() ## before the filter press re-centres the drum
+			# GRADFIX7 (item 1): the filter press, the manifest
+			# and the Taxi centring happen on the FIRST tick
+			# the room exists - not after the boot view's wall
+			# lands. Taxi's face must stamp from the ready
+			# probe while its extraction is still queued (the
+			# warmer reaches it only after the field-scale
+			# BigB2S extraction ahead of it in scan order), so
+			# phase 1 can sample the styled stamp as the
+			# heal-honesty leg's "before" (see _grad_gf7_step).
+			if not _grad_gf7_boot_pressed and _room != null and not _room._panels.is_empty():
+				_grad_gf7_boot_pressed = true
 				_room._handle_rail("filter:all")
 				var mpath: String = OS.get_environment("PVLDS_GRAD_MANIFEST")
 				var f: FileAccess = FileAccess.open(mpath, FileAccess.READ)
@@ -4029,17 +4044,22 @@ func _drive_grad_smoke() -> void:
 						_grad_manifest = parsed
 				_grad_expect(not _grad_manifest.is_empty(),
 					"fixtures: the graduation manifest loads")
-				# GRADFIX7 (item 1): centre Taxi NOW, while the
-				# warmer is still walking the library - its face
-				# stamps from the ready probe at this moment
-				# (styled: the extraction has not landed), and
-				# phase 1 samples that stamp as the heal-honesty
-				# leg's "before" (see _grad_gf7_step).
 				var taxi0: GameEntry = _grad_gf7_find("b2s", "Taxi")
 				if taxi0 != null:
 					var ti0: int = _grad_panel_index(taxi0.game_id)
 					if ti0 >= 0:
 						_room._set_focused(_room._panels[ti0])
+			if _grad_gf7_boot_pressed and not _grad_gf7_taxi_sampled and _room != null:
+				var tg0: GameEntry = _grad_gf7_find("b2s", "Taxi")
+				if tg0 != null:
+					var k0: String = str(_room._panel_face_key.get(tg0.game_id, ""))
+					if k0 != "":
+						_grad_gf7_taxi_key_before = k0
+						_grad_gf7_taxi_sampled = true
+						print("GRADFIX7: Taxi before-key sampled in phase 0: '", k0, "'")
+			if _room != null and _room.visible and _room.wall_ready and _grad_gf7_boot_pressed:
+				Input.warp_mouse(Vector2(512.0, 764.0)) ## parked: hover would drive the centre (see the nav driver)
+				_grad_boot_centre = _room.centre_index() ## the centre the boot's own seating left (the gf7 Taxi centring above is driver input, after the fact)
 				_grad_phase = 1
 				_grad_wait = 0
 			else:
@@ -4179,11 +4199,10 @@ func _grad_leg_faces() -> void:
 		var kind: String = str(e.get("kind", ""))
 		var gid: String = str(e.get("id", ""))
 		var g: GameEntry = _grad_game(gid) if gid != "" else null
-		if kind == "orphan":
-			for cand: GameEntry in _room._scanner.games:
-				if not cand.builds.is_empty() and str(cand.builds[0].file_name).begins_with(str(e.get("stem", ""))):
-					g = cand
-					break
+		if g == null and gid == "":
+			# Id-less fixtures (the orphan and the GRADFIX7
+			# chain cast) resolve by their file stem.
+			g = _grad_visit_game(e)
 		if g == null:
 			_grad_fail("faces: fixture game '%s' is in the library" % str(e.get("name", "?")))
 			continue
