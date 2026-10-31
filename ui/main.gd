@@ -3334,6 +3334,13 @@ var _grad_labels_measured: int = 0
 var _grad_long_min_bottom: float = INF
 var _grad_bg_before: Array = []
 var _grad_bookcover_worst: float = 0.0 ## worst whole-book excess over its untilted twin (px) - GRADFIX4 item 2's margin
+var _grad_flush_size_err: float = 0.0 ## GRADFIX5 item 1: worst |page size - card size| over the sweep (m)
+var _grad_flush_seat_err: float = 0.0 ## GRADFIX5 item 1: worst |seat offset| over the sweep (m)
+var _grad_flush_proj_err: float = 0.0 ## GRADFIX5 item 1: worst rendered height-ratio error (page vs card, depth divided out)
+var _grad_flush_proj_samples: int = 0 ## GRADFIX5 item 1: settled centres the rendered flush measure ran at
+var _grad_wall_full_cols: int = -1 ## GRADFIX5 item 4: fully visible columns at the mid-library centre (-1 = unmeasured)
+var _grad_wall_card_deg: float = 0.0 ## GRADFIX5 item 4: the centre card's angular width there (deg)
+var _grad_wall_drawn_cols: int = 0 ## GRADFIX5 item 4: drawn columns at that centre
 var _grad_sky_stage: int = 0 ## the sky-pass proof's stage (phase 13)
 var _grad_sky_since: int = 0 ## the sky stage's start stamp (msec)
 var _grad_sky_far_yaw0: float = 0.0
@@ -4131,6 +4138,52 @@ func _grad_sky_warp_match(a: Array, b: Array, theta_deg: float, img_w: float, im
 	return Vector3(residuals[residuals.size() / 2], frac, tfrac)
 
 
+## One sky grab's density truth, in the zenith leg's own
+## measures: [bright-coverage centre/ring ratio, star-count
+## density centre/ring ratio], sampled on the zenith leg's
+## rings (centre disc r < 0.25, ring 0.55 < r < 0.75 of the
+## half-frame, ink = luminance > 0.30). The zenith leg
+## (GRADFIX4) keeps its inline original; this twin serves
+## the nadir legs (GRADFIX5) so both poles - and the
+## Tournament Room's down view - answer the same questions
+## with the same arithmetic.
+func _grad_sky_density(img: Image) -> Vector2:
+	var uw: int = img.get_width()
+	var uh: int = img.get_height()
+	var cx: float = float(uw) * 0.5
+	var cy: float = float(uh) * 0.5
+	var rmax: float = float(mini(uw, uh))
+	var c_in: int = 0
+	var c_tot: int = 0
+	var r_in: int = 0
+	var r_tot: int = 0
+	for yy: int in range(0, uh, 3):
+		for xx: int in range(0, uw, 3):
+			var rr: float = Vector2(float(xx) - cx, float(yy) - cy).length() / rmax
+			var ink: bool = img.get_pixel(xx, yy).get_luminance() > 0.30
+			if rr < 0.25:
+				c_tot += 1
+				if ink:
+					c_in += 1
+			elif rr > 0.55 and rr < 0.75:
+				r_tot += 1
+				if ink:
+					r_in += 1
+	var cov: float = (float(c_in) / float(maxi(c_tot, 1))) / maxf(float(r_in) / float(maxi(r_tot, 1)), 0.0001)
+	var blobs: Array = _grad_sky_blobs(img, 1.0)
+	var zc: int = 0
+	var zr: int = 0
+	for zb: Variant in blobs:
+		var zd: Dictionary = zb
+		var zrr: float = Vector2(float(zd["x"]) - cx, float(zd["y"]) - cy).length() / rmax
+		if zrr < 0.25:
+			zc += 1
+		elif zrr > 0.55 and zrr < 0.75:
+			zr += 1
+	var cnt: float = (float(zc) / 0.0625) / maxf(float(zr) / 0.26, 0.001)
+	return Vector2(cov, cnt)
+
+
 ## The sky pass proofs (GRADFIX4 item 5, phase 13): the
 ## drift's world-space truth read off the room's own state,
 ## the parallax read off RENDERED pairs (each layer isolated,
@@ -4329,6 +4382,31 @@ func _grad_sky_step() -> void:
 				print("GRAD SKY: pinpoint median near-star blob %.1f px^2 over %d blobs" % [med_size, sizes.size()])
 				_grad_expect(med_size > 0.0 and med_size < 27.0,
 					"sky pinpoint: the stars are hard points, not soft blobs (median blob %.1f px^2)" % med_size)
+				cam.rotation_degrees = Vector3(-90.0, 0.0, 0.0) ## straight down - the GRADFIX5 nadir leg
+				_grad_sky_stage = 12
+				_grad_wait = 0
+		12:
+			if _grad_wait > 6:
+				# GRADFIX5 (item 2): the nadir - the field
+				# fault's home ground. Pre-fix, the room's
+				# opaque floor slab filled this frame entire
+				# (coverage ~0); the retired slab stands
+				# behind PVLDS_GRADFIX5_NC=floor so this leg
+				# fails against it by name.
+				_grad_save_grab("gradfix5_sky_nadir.png")
+				var down: Image = get_viewport().get_texture().get_image()
+				var dd: Vector2 = _grad_sky_density(down)
+				print("GRAD SKY: nadir densities - coverage ratio %.2f, count-density ratio %.2f" % [dd.x, dd.y])
+				_grad_expect(dd.x > 0.45 and dd.x < 2.2,
+					"sky nadir: looking straight down, the stars are still there - density even, no bare lower half (coverage centre/ring %.2f)" % dd.x)
+				_grad_expect(dd.y > 0.35 and dd.y < 4.0,
+					"sky nadir: the star count stays even at the nadir (count-density centre/ring %.2f)" % dd.y)
+				cam.rotation_degrees = Vector3(-35.0, 0.0, 0.0) ## down-forward: the desk view's sky
+				_grad_sky_stage = 13
+				_grad_wait = 0
+		13:
+			if _grad_wait > 6:
+				_grad_save_grab("gradfix5_sky_down.png")
 				cam.rotation_degrees = Vector3.ZERO
 				_grad_sky_stage = 9
 				_grad_wait = 0
@@ -4725,6 +4803,89 @@ func _grad_measure_centre(c: int) -> void:
 		var ws: Vector2 = wing["size"]
 		wing_poly = _grad_quad_screen_points(wt, ws * 0.5, cam)
 	var centre_label_poly: Array[Vector2] = []
+	# GRADFIX5 (item 1): the flush measure - the text page
+	# against its own card, at every centre where the book
+	# stands. Two state reads (the page's size against the
+	# card's; the seat's offset from the slot) and one
+	# RENDERED read: each quad's projected height divided by
+	# its distance (the page's proud depth divided out, the
+	# centre's pop scale divided out), so what remains is
+	# the heights' own ratio. The rendered read runs only at
+	# settled centres (pop complete), where neither arrival
+	# scale is mid-flight.
+	if bool(wing.get("visible", false)) and wing.get("size") is Vector2 and wing.get("card_size") is Vector2:
+		var psz2: Vector2 = wing["size"]
+		var csz2: Vector2 = wing["card_size"]
+		_grad_flush_size_err = maxf(_grad_flush_size_err, maxf(absf(psz2.x - csz2.x), absf(psz2.y - csz2.y)))
+		_grad_flush_seat_err = maxf(_grad_flush_seat_err, absf(float(wing.get("seat_y", 0.0))))
+		if c < _room._panels.size() and c < _room._panel_pop.size() and _room._panel_pop[c] > 0.999 and not wing_poly.is_empty():
+			var cp3: ClickableQuad = _room._panels[c]
+			if cp3 != null and cp3.visible:
+				var cpoly5: Array[Vector2] = _grad_quad_screen_points(cp3.global_transform, cp3.quad_size() * 0.5, cam)
+				if cpoly5.size() == 4:
+					var p_hi: float = -1.0e9
+					var p_lo: float = 1.0e9
+					for pt2: Vector2 in wing_poly:
+						p_hi = maxf(p_hi, pt2.y)
+						p_lo = minf(p_lo, pt2.y)
+					var c_hi: float = -1.0e9
+					var c_lo: float = 1.0e9
+					for pt3: Vector2 in cpoly5:
+						c_hi = maxf(c_hi, pt3.y)
+						c_lo = minf(c_lo, pt3.y)
+					var pd2: float = (wing["transform"] as Transform3D).origin.distance_to(cam.global_position)
+					var cd3: float = cp3.global_position.distance_to(cam.global_position)
+					var page_h: float = p_hi - p_lo
+					var card_h: float = c_hi - c_lo
+					if page_h > 1.0 and card_h > 1.0 and pd2 > 0.0 and cd3 > 0.0:
+						var ratio2: float = (page_h * pd2) / (card_h * cd3 / RoomView.POP_OUT_SCALE)
+						_grad_flush_proj_err = maxf(_grad_flush_proj_err, absf(ratio2 - 1.0))
+						_grad_flush_proj_samples += 1
+	# GRADFIX5 (item 4): the wall measure, once, at the
+	# mid-library centre: how many drawn columns stand FULLY
+	# inside the frame (2 px of grace - the top band's top
+	# edge rides within a pixel of the frame's top at either
+	# radius), and the centre card's angular width with the
+	# pop scale divided out (the at-rest width the player
+	# reads).
+	if c == _room._panels.size() / 2 and _grad_wall_full_cols < 0:
+		var vp: Vector2 = get_viewport().get_visible_rect().size
+		var col_full: Dictionary = {}
+		var col_seen: Dictionary = {}
+		for i2: int in range(_room._panels.size()):
+			var p2: ClickableQuad = _room._panels[i2]
+			if p2 == null or not p2.visible:
+				continue
+			if not _nav_on_screen(p2.global_position, cam):
+				continue
+			var col2: int = _room._grid_coord(i2).x
+			col_seen[col2] = true
+			var poly2: Array[Vector2] = _grad_quad_screen_points(p2.global_transform, p2.quad_size() * 0.5, cam)
+			var inside: bool = poly2.size() == 4
+			for pt: Vector2 in poly2:
+				if pt.x < -2.0 or pt.y < -2.0 or pt.x > vp.x + 2.0 or pt.y > vp.y + 2.0:
+					inside = false
+			if not inside:
+				col_full[col2] = false
+			elif not col_full.has(col2):
+				col_full[col2] = true
+		var full_n: int = 0
+		for k3: Variant in col_full.keys():
+			if bool(col_full[k3]):
+				full_n += 1
+		_grad_wall_full_cols = full_n
+		_grad_wall_drawn_cols = col_seen.size()
+		var cp2: ClickableQuad = _room._panels[c]
+		if cp2 != null:
+			var gt2: Transform3D = cp2.global_transform
+			var hs2: Vector2 = cp2.quad_size() * 0.5
+			var d1: Vector3 = ((gt2 * Vector3(-hs2.x, hs2.y, 0.0)) - cam.global_position).normalized()
+			var d2v: Vector3 = ((gt2 * Vector3(hs2.x, hs2.y, 0.0)) - cam.global_position).normalized()
+			var amt2: float = _room._panel_pop[c] if c < _room._panel_pop.size() else 1.0
+			var sc2: float = lerpf(1.0, RoomView.POP_OUT_SCALE, clampf(amt2, 0.0, 1.0))
+			_grad_wall_card_deg = rad_to_deg(d1.angle_to(d2v)) / sc2
+		print("GRAD WALL: radius %.2f m - %d of %d drawn columns fully in frame at the mid centre; centre card %.2f deg across at rest"
+			% [RoomView.WALL_RADIUS, _grad_wall_full_cols, _grad_wall_drawn_cols, _grad_wall_card_deg])
 	var long_id: String = str(_grad_manifest.get("long_id", ""))
 	for i: int in range(_room._panels.size()):
 		var panel: ClickableQuad = _room._panels[i]
@@ -5057,6 +5218,40 @@ func _grad_census_verdicts() -> void:
 		else:
 			_grad_expect(false, "%s (%d violations; first: %s)"
 				% [label_text, count, str(_grad_viol_first.get(kind, ""))])
+	# GRADFIX5 (item 1): the flush verdicts - the page is the
+	# card's exact size, seated flush, and stands the card's
+	# full height in the render. Under PVLDS_GRADFIX5_NC=
+	# shortpage (the GRADFIX3/4 page: 0.62 x 1.00 at -0.02)
+	# every one of these fails by name.
+	_grad_expect(_grad_flush_size_err <= 0.001 and _grad_flush_seat_err <= 0.001,
+		"book flush: the text page is the card's exact size and seats flush at every centre (worst size error %.4f m, worst seat offset %.4f m; tolerance 0.001)"
+			% [_grad_flush_size_err, _grad_flush_seat_err])
+	_grad_expect(_grad_flush_proj_samples >= 20 and _grad_flush_proj_err <= 0.02,
+		"book flush: the rendered page stands the card's full height (worst projected height-ratio error %.3f over %d settled centres; tolerance 0.02)"
+			% [_grad_flush_proj_err, _grad_flush_proj_samples])
+	# GRADFIX5 (item 3): the Console verdicts - the bar's
+	# span, read off the laid-out quads, against the
+	# pre-Console 4.225 m; nothing dropped. Under
+	# PVLDS_GRADFIX5_NC=widebar these fail by name.
+	var bar: Dictionary = _room.bar_state()
+	var rail_span: float = float(bar.get("rail_span", 0.0))
+	var strip_span: float = float(bar.get("strip_span", 0.0))
+	var status_sz: Vector2 = bar.get("status_size", Vector2.ZERO)
+	print("GRAD CONSOLE: rail span %.3f m (pre-Console 4.225), strip span %.3f m, %d rail stops, %d strip slots, status plate %s"
+		% [rail_span, strip_span, int(bar.get("rail_stops", 0)), int(bar.get("strip_slots", 0)), str(status_sz)])
+	_grad_expect(rail_span > 0.0 and rail_span <= 3.05 and int(bar.get("rail_stops", 0)) == 12 and status_sz.x <= 2.0,
+		"console bar: the rail is tightened to the Console span and loses no stop (span %.3f m of the pre-Console 4.225 - %.0f%% - %d stops, status plate %.2f m wide)"
+			% [rail_span, rail_span / 4.225 * 100.0, int(bar.get("rail_stops", 0)), status_sz.x])
+	_grad_expect(strip_span > 0.0 and strip_span <= rail_span and int(bar.get("strip_slots", 0)) >= 27,
+		"console bar: the strip condenses inside the bar's span and keeps every slot (strip %.3f m within rail %.3f m, %d slots)"
+			% [strip_span, rail_span, int(bar.get("strip_slots", 0))])
+	# GRADFIX5 (item 4): the wall verdict - the pushed-back
+	# wall keeps its columns and the centre card reads
+	# smaller. On the old 3.05 radius the card measure reads
+	# 11.6 degrees and this leg fails on the number.
+	_grad_expect(_grad_wall_full_cols >= 7 and _grad_wall_card_deg > 9.5 and _grad_wall_card_deg < 11.0,
+		"wall reach: the pushed-back wall (r %.2f) keeps %d columns fully in frame and the centre card reads %.2f deg across (the 3.05 wall read 11.60)"
+			% [RoomView.WALL_RADIUS, _grad_wall_full_cols, _grad_wall_card_deg])
 
 
 ## One panel's name verdicts in panel-local space (the
@@ -7456,10 +7651,63 @@ func _drive_tournament_layout() -> void:
 			if not _layout_probes_in_flight and _layout_probe_results.size() >= 2 and _layout_wing_probe_done:
 				_tournament_leg_layout()
 				_tournament_leg_wing_board()
-				_finish_tournament_smoke()
+				_tournament_sky_begin()
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
 				_tournament_fail("layout: the board layout probes never landed")
 				_finish_tournament_smoke()
+		3:
+			_tournament_smoke_wait += 1
+			if _tournament_smoke_wait > 10:
+				_tournament_leg_sky_nadir()
+				_finish_tournament_smoke()
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("layout sky: the nadir frame never settled")
+				_finish_tournament_smoke()
+
+
+## The GRADFIX5 sky-nadir stage's setup (layout phase 3):
+## the drum and the wireframe shell step out, the camera
+## pitches to the nadir - the Tournament Room's down view,
+## judged on the same density measures as the library's.
+func _tournament_sky_begin() -> void:
+	var cam: Camera3D = _room._active_camera()
+	if cam != null:
+		cam.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+	if _room.drum_node() != null:
+		_room.drum_node().visible = false
+	var layers: Array = _room.background_layers()
+	if layers.size() >= 3:
+		(layers[2] as Node3D).visible = false
+	_tournament_smoke_wait = 0
+	_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 30000
+	_tournament_smoke_phase = 3
+
+
+func _tournament_leg_sky_nadir() -> void:
+	# GRADFIX5 (item 2): the Tournament Room shares the
+	# library's sky and shared its fault - the retired floor
+	# slab ate the lower half here too (his verdict named
+	# both rooms). Straight down with the drum hidden: the
+	# grad smoke's nadir questions, asked in this view.
+	# Under PVLDS_GRADFIX5_NC=floor (the slab restored)
+	# this leg fails by name.
+	var img: Image = get_viewport().get_texture().get_image()
+	var grab_dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if grab_dir != "" and img != null and not img.is_empty():
+		img.save_png(grab_dir.path_join("tournament_sky_nadir.png"))
+	var dd: Vector2 = _grad_sky_density(img)
+	_tournament_expect(dd.x > 0.45 and dd.x < 2.2,
+		"layout sky: looking straight down in the Tournament Room, the stars are still there - no bare lower half (coverage centre/ring %.2f)" % dd.x)
+	_tournament_expect(dd.y > 0.35 and dd.y < 4.0,
+		"layout sky: the Tournament Room's nadir star count stays even (count-density centre/ring %.2f)" % dd.y)
+	var cam: Camera3D = _room._active_camera()
+	if cam != null:
+		cam.rotation_degrees = Vector3.ZERO
+	if _room.drum_node() != null:
+		_room.drum_node().visible = true
+	var layers: Array = _room.background_layers()
+	if layers.size() >= 3:
+		(layers[2] as Node3D).visible = true
 
 
 func _tournament_leg_layout_boards() -> void:
@@ -7482,6 +7730,16 @@ func _tournament_leg_layout_boards() -> void:
 	var bs: Dictionary = _room.tournament_board_state()
 	_tournament_expect(bool(bs.get("exists", false)) and (bs.get("size") as Vector2) == RoomSpecs.board_panel_size(),
 		"layout size: one board stands at its own window (%s) beside the centred card" % str(bs.get("size", Vector2.ZERO)))
+	# GRADFIX5 (item 1): the board is a page of the centred
+	# challenge's book - the challenge card's EXACT size,
+	# seated flush, so the hinge reads here as in the
+	# library. Under PVLDS_GRADFIX5_NC=shortpage (the
+	# GRADFIX3/4 short page at -0.02) this leg fails by name.
+	var bsz: Vector2 = bs.get("size", Vector2.ZERO)
+	var bcard: Vector2 = bs.get("card_size", Vector2.ZERO)
+	_tournament_expect(bsz == bcard and absf(float(bs.get("seat_y", 0.0))) <= 0.001,
+		"layout flush: the standing board is the challenge card's exact size, seated flush (board %s vs card %s, seat offset %.4f)"
+			% [str(bsz), str(bcard), float(bs.get("seat_y", 0.0))])
 	if rows.size() >= 1:
 		var ch0: WovpChallenge = (rows[0] as Dictionary).get("challenge") as WovpChallenge
 		_tournament_expect(ch0 != null and str(bs.get("challenge_id", "")) == ch0.challenge_id,

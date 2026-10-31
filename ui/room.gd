@@ -940,6 +940,20 @@ func _build_environment() -> void:
 	# sky. The census's floor LINE survives as a datum (no
 	# label may sink below y = -0.0215); it was always a
 	# placement rule, never this mesh.
+	# The harness's negative control (PVLDS_GRADFIX5_NC=
+	# floor) restores the slab so the sky-nadir legs can
+	# fail against the convicted occluder by name.
+	if OS.get_environment("PVLDS_GRADFIX5_NC") == "floor":
+		var floor_inst: MeshInstance3D = MeshInstance3D.new()
+		var plane: PlaneMesh = PlaneMesh.new()
+		plane.size = Vector2(14.0, 14.0)
+		floor_inst.mesh = plane
+		floor_inst.position = Vector3(0.0, -0.02, 0.0)
+		var fm: StandardMaterial3D = StandardMaterial3D.new()
+		fm.albedo_color = Color(0.045, 0.045, 0.065)
+		fm.roughness = 0.95
+		floor_inst.material_override = fm
+		add_child(floor_inst)
 
 	# The flat room's backdrop cylinder stood here (r 4.4,
 	# a dark enclosure around the wall). The graduation
