@@ -3388,11 +3388,12 @@ var _grad_visit_settle: int = 0
 ## run BEFORE the fallback visits of phase 7 - the visits pay
 ## face_path() and would mask the at-rest fault these legs
 ## convict).
-var _grad_gf7_stage: int = 0 ## 0 await warmer+fetcher drain, 1 settle + named chain legs, 2 the at-rest census sweep
+var _grad_gf7_stage: int = 0 ## 0 await warmer+fetcher drain, 1 settle + named chain legs, 2 the at-rest census sweep, 3 the heal-honesty rescan
+var _grad_gf7_heal_stage: int = 0 ## stage 3's sub-state: 0 plant the clone + rescan, 1 await adoption + sample the styled stamp, 2 await the warmer, then judge
+var _grad_gf7_heal_game: GameEntry = null ## the heal-check clone of Taxi (fresh stamp, same 31 MB .directb2s)
+var _grad_gf7_heal_before: String = "" ## the clone's stamped face key before the warmer lands (styled)
 var _grad_gf7_since: int = 0 ## msec the current gf7 stage began
-var _grad_gf7_boot_pressed: bool = false ## phase 0's early filter press + Taxi centring (GRADFIX7: taken on the first tick the room exists, so Taxi's face stamps while its extraction is still queued behind the field-scale BigB2S extraction)
-var _grad_gf7_taxi_key_before: String = "" ## Taxi's stamped face key, sampled in phase 1 (before the warmer drained)
-var _grad_gf7_taxi_sampled: bool = false
+var _grad_gf7_boot_pressed: bool = false ## phase 0's early filter press (GRADFIX7: taken on the first tick the room exists, so the phases below start from the whole library)
 var _grad_gf7_ti: int = 0 ## the chain-leg target cursor
 var _grad_gf7_focused: bool = false ## the current chain target has been centred
 var _grad_gf7_wait: int = 0
@@ -3590,26 +3591,12 @@ func _grad_gf7_step() -> void:
 		1:
 			if Time.get_ticks_msec() - _grad_gf7_since < 2000:
 				return
-			if _grad_gf7_ti == 0 and not _grad_gf7_focused:
-				# The heal-honesty leg, judged once, before any
-				# chain target is centred: Taxi's stamped key
-				# sampled in phase 1 (styled, empty art segment)
-				# against its key now (post-drain), with the
-				# no-paying-call witness - nothing in this boot
-				# has called face_path()/ensure_art() for Taxi
-				# yet (the paying visits run in phase 7, after
-				# this phase), so a landed art segment could
-				# only have arrived through the heal.
-				var tg: GameEntry = _grad_gf7_find("b2s", "Taxi")
-				_grad_expect(tg != null, "heal honesty: Taxi is in the library")
-				if tg != null:
-					var after: String = str(_room._panel_face_key.get(tg.game_id, ""))
-					var bparts: PackedStringArray = _grad_gf7_taxi_key_before.split("|")
-					var aparts: PackedStringArray = after.split("|")
-					_grad_expect(_grad_gf7_taxi_sampled and bparts.size() > 1 and bparts[1] == "",
-						"heal honesty: Taxi's stamped key starts styled (sampled before the warmer landed: '%s')" % _grad_gf7_taxi_key_before)
-					_grad_expect(aparts.size() > 1 and aparts[1] != "" and tg.art_path == "",
-						"heal honesty: Taxi's stamped key gains its art segment when the warmer lands, with no paying call")
+			# (The heal-honesty leg lives in stage 3: Taxi
+			# itself is already warm by any sample this boot
+			# allows - the warmer and the room start on the
+			# same scan landing and the warmer wins - so the
+			# leg re-creates Taxi's cold condition with a
+			# fresh-stamp clone of its own file, there.)
 			var targets: Array = [
 				["b2s", "Taxi", "chain upgrade: 'Taxi' wears its extracted backglass at rest"],
 				["b2s", "The Goonies Never Say Die Pinball", "chain upgrade: 'Goonies' wears its extracted backglass at rest"],
@@ -3655,6 +3642,8 @@ func _grad_gf7_step() -> void:
 				_grad_gf7_focused = false
 		2:
 			_grad_gf7_census_step()
+		3:
+			_grad_gf7_heal_step()
 
 
 ## One census centre's assertions (GRADFIX7 item 1): every
@@ -3794,10 +3783,110 @@ func _grad_gf7_census_step() -> void:
 				_grad_expect(true, lt)
 			else:
 				_grad_expect(false, "%s (%d violations; first: %s)" % [lt, cnt, str(_grad_gf7_viol_first.get(kk, ""))])
-		_grad_phase = 7
-		_grad_visit_i = -1
+		_grad_gf7_stage = 3
+		_grad_gf7_heal_stage = 0
 	else:
 		_room._set_focused(_room._panels[_grad_gf7_census_i])
+
+
+## The heal-honesty leg (GRADFIX7 item 1), stage 3: Taxi's
+## stamped key must gain its art segment when the warmer
+## lands, with no paying call. Taxi itself can never show
+## the transition in this boot - the warmer and the room
+## start on the same scan landing and the warmer extracts
+## Taxi before its panel first fills (measured twice: the
+## earliest sample already wore the art segment). So the leg
+## re-creates the identical cold condition deterministically:
+## a fresh-stamp clone of Taxi's own 31 MB .directb2s (plus
+## its dummy .vpx) is planted in the library folder and the
+## library rescans. The room is already built, so the clone's
+## face stamps STYLED within a tick of adoption, seconds
+## before its extraction can land; then the warmer drains
+## and the leg judges the standing upgrade - the stamped
+## key's art segment, the panel's from_art, and the
+## no-paying-call witness (the clone's art_path still unset:
+## nothing in this boot ever called face_path()/ensure_art()
+## for it - the heal and the probe did all the work).
+func _grad_gf7_heal_step() -> void:
+	match _grad_gf7_heal_stage:
+		0:
+			var stem: String = ""
+			for entry: Variant in _grad_manifest_games():
+				if entry is Dictionary and str((entry as Dictionary).get("kind", "")) == "b2s" \
+						and str((entry as Dictionary).get("name", "")) == "Taxi":
+					stem = str((entry as Dictionary).get("stem", ""))
+			var folder: String = str(_config.table_folders[0]) if _config != null and not _config.table_folders.is_empty() else ""
+			_grad_expect(stem != "" and folder != "",
+				"heal honesty: Taxi's fixture files are locatable for the clone")
+			if stem == "" or folder == "":
+				_grad_phase = 7
+				_grad_visit_i = -1
+				return
+			var new_stem: String = "Taxi Healcheck (Williams 1988)"
+			var ok_copy: bool = true
+			for ext: String in [".vpx", ".directb2s"]:
+				var bytes: PackedByteArray = FileAccess.get_file_as_bytes(folder.path_join(stem + ext))
+				var out: FileAccess = FileAccess.open(folder.path_join(new_stem + ext), FileAccess.WRITE)
+				if bytes.is_empty() or out == null:
+					ok_copy = false
+					break
+				out.store_buffer(bytes)
+				out.close()
+			_grad_expect(ok_copy, "heal honesty: the Taxi clone is planted")
+			if not ok_copy or not start_scan():
+				_grad_fail("heal honesty: the rescan never started")
+				_grad_phase = 7
+				_grad_visit_i = -1
+				return
+			_grad_gf7_heal_stage = 1
+			_grad_gf7_wait = 0
+		1:
+			_grad_gf7_wait += 1
+			if _scan_active:
+				return
+			if _grad_gf7_heal_game == null:
+				for g: GameEntry in _scanner.games:
+					if g.title == "Taxi Healcheck":
+						_grad_gf7_heal_game = g
+						break
+				if _grad_gf7_heal_game == null:
+					if _grad_gf7_wait > 3600:
+						_grad_fail("heal honesty: the clone never joined the library")
+						_grad_phase = 7
+						_grad_visit_i = -1
+					return
+				var pidx: int = _grad_panel_index(_grad_gf7_heal_game.game_id)
+				if pidx >= 0:
+					_room._set_focused(_room._panels[pidx])
+				return
+			var k: String = str(_room._panel_face_key.get(_grad_gf7_heal_game.game_id, ""))
+			if k != "":
+				_grad_gf7_heal_before = k
+				_grad_gf7_heal_stage = 2
+			elif _grad_gf7_wait > 3600:
+				_grad_fail("heal honesty: the clone's face never stamped")
+				_grad_phase = 7
+				_grad_visit_i = -1
+		2:
+			if _art_warmer != null and not _art_warmer.is_idle():
+				return
+			var g: GameEntry = _grad_gf7_heal_game
+			var after: String = str(_room._panel_face_key.get(g.game_id, ""))
+			var bparts: PackedStringArray = _grad_gf7_heal_before.split("|")
+			var aparts: PackedStringArray = after.split("|")
+			_grad_expect(bparts.size() > 1 and bparts[1] == "",
+				"heal honesty: the Taxi clone's stamped key starts styled ('%s')" % _grad_gf7_heal_before)
+			_grad_expect(aparts.size() > 1 and aparts[1] != "" and g.art_path == "",
+				"heal honesty: Taxi's stamped key gains its art segment when the warmer lands, with no paying call")
+			var from_art: bool = false
+			for st: Variant in _room.face_state():
+				if str((st as Dictionary).get("game_id", "")) == g.game_id:
+					from_art = bool((st as Dictionary).get("from_art", false))
+					break
+			_grad_expect(from_art,
+				"heal honesty: the Taxi clone stands wearing its extracted backglass after the heal")
+			_grad_phase = 7
+			_grad_visit_i = -1
 
 
 func _grad_leg_fallback_visit(e: Dictionary, g: GameEntry) -> void:
@@ -4024,15 +4113,11 @@ func _grad_poly_intersect_area(a: Array[Vector2], b: Array[Vector2]) -> float:
 func _drive_grad_smoke() -> void:
 	match _grad_phase:
 		0:
-			# GRADFIX7 (item 1): the filter press, the manifest
-			# and the Taxi centring happen on the FIRST tick
-			# the room exists - not after the boot view's wall
-			# lands. Taxi's face must stamp from the ready
-			# probe while its extraction is still queued (the
-			# warmer reaches it only after the field-scale
-			# BigB2S extraction ahead of it in scan order), so
-			# phase 1 can sample the styled stamp as the
-			# heal-honesty leg's "before" (see _grad_gf7_step).
+			# GRADFIX7 (item 1): the filter press and the
+			# manifest load happen on the FIRST tick the room
+			# exists - not after the boot view's wall lands -
+			# so every later phase (the at-rest legs included)
+			# starts from the whole library.
 			if not _grad_gf7_boot_pressed and _room != null and not _room._panels.is_empty():
 				_grad_gf7_boot_pressed = true
 				_room._handle_rail("filter:all")
@@ -4044,22 +4129,9 @@ func _drive_grad_smoke() -> void:
 						_grad_manifest = parsed
 				_grad_expect(not _grad_manifest.is_empty(),
 					"fixtures: the graduation manifest loads")
-				var taxi0: GameEntry = _grad_gf7_find("b2s", "Taxi")
-				if taxi0 != null:
-					var ti0: int = _grad_panel_index(taxi0.game_id)
-					if ti0 >= 0:
-						_room._set_focused(_room._panels[ti0])
-			if _grad_gf7_boot_pressed and not _grad_gf7_taxi_sampled and _room != null:
-				var tg0: GameEntry = _grad_gf7_find("b2s", "Taxi")
-				if tg0 != null:
-					var k0: String = str(_room._panel_face_key.get(tg0.game_id, ""))
-					if k0 != "":
-						_grad_gf7_taxi_key_before = k0
-						_grad_gf7_taxi_sampled = true
-						print("GRADFIX7: Taxi before-key sampled in phase 0: '", k0, "'")
 			if _room != null and _room.visible and _room.wall_ready and _grad_gf7_boot_pressed:
 				Input.warp_mouse(Vector2(512.0, 764.0)) ## parked: hover would drive the centre (see the nav driver)
-				_grad_boot_centre = _room.centre_index() ## the centre the boot's own seating left (the gf7 Taxi centring above is driver input, after the fact)
+				_grad_boot_centre = _room.centre_index() ## the centre the boot's own seating left
 				_grad_phase = 1
 				_grad_wait = 0
 			else:
@@ -4078,17 +4150,6 @@ func _drive_grad_smoke() -> void:
 			# outwaited the run: the faces legs below are
 			# where unclaimed shots are named, per game.)
 			_grad_wait += 1
-			# GRADFIX7 (item 1): sample Taxi's stamped face key
-			# the first tick it exists - the heal-honesty leg's
-			# "before" (the warmer is still walking; Taxi's
-			# extraction lands later in the queue).
-			if not _grad_gf7_taxi_sampled:
-				var tg1: GameEntry = _grad_gf7_find("b2s", "Taxi")
-				if tg1 != null:
-					var k1: String = str(_room._panel_face_key.get(tg1.game_id, ""))
-					if k1 != "":
-						_grad_gf7_taxi_key_before = k1
-						_grad_gf7_taxi_sampled = true
 			var drained: bool = _shot_fetcher != null and not _shot_fetcher.is_fetching()
 			if _grad_wait > 3600 and not drained:
 				_grad_fail("shots: the fetch queue never drained")
