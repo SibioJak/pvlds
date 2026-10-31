@@ -2822,6 +2822,29 @@ func _blackface_nc(game: GameEntry) -> bool:
 		and game.game_id == OS.get_environment("PVLDS_GF6_NC_TARGET")
 
 
+## Re-derive one card's nameplate + Launch seat from its
+## label's live AABB, with the seat's art aspect already
+## standing (GRADFIX7 item 1): the plate law's top seat is
+## gated on the face kind, and the standing derivation in
+## _refresh_card_plate skips a card whose label AABB did not
+## change - but the FACE under an unchanging label can change
+## kind (a styled card upgrading to art), and a rebuild can
+## reset the aspect under an unchanged face. Both paths that
+## settle a face's kind - the full fill and the already-
+## wearing early return - re-derive through here.
+func _rederive_card_plate(idx: int, game: GameEntry) -> void:
+	if idx < 0 or idx >= _panel_labels.size() or _panel_labels[idx] == null:
+		return
+	var fnodes: Dictionary = _panel_pool.get(game.game_id, {}) as Dictionary
+	if fnodes.is_empty() or str(fnodes.get("mode", "")) != "card":
+		return
+	var fla: AABB = _panel_labels[idx].get_aabb()
+	if fla.size.y <= 0.0:
+		return
+	fnodes["plate_basis_h"] = fla.size.y
+	_apply_card_plate(fnodes, fla)
+
+
 ## One card's face: the author shot first (GameEntry's
 ## ranking), then the shipped fallback chain - rendered
 ## WITHOUT the art's baked name strip: the nameplate's plate
@@ -2842,7 +2865,18 @@ func _fill_one_face(idx: int, gen: int) -> void:
 	var pup: bool = game.is_pup_tagged()
 	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
 	if str(_panel_face_key.get(game.game_id, "")) == fkey:
-		return  # already wearing exactly this face
+		# Already wearing exactly this face - but a rebuild
+		# since the fill reset this seat's art aspect to 0
+		# and re-derived its plate under the styled law, so
+		# an art card can be standing with the wrong Launch
+		# seat (and a lying aspect) under an honest face.
+		# Restore the aspect from the face cache's own record
+		# and re-derive the plate before returning.
+		var standing_face: Array = _face_cache_get(fkey)
+		if not standing_face.is_empty():
+			_panel_art_aspect[idx] = float(standing_face[1])
+		_rederive_card_plate(idx, game)
+		return
 	var tex: Texture2D = null
 	var art_aspect: float = 0.0
 	var from_art: bool = false
@@ -2924,20 +2958,7 @@ func _fill_one_face(idx: int, gen: int) -> void:
 	if quad == _power_panel:
 		_restore_power("face_arrived")
 	_panel_art_aspect[idx] = art_aspect if from_art else 0.0
-	# The face kind just changed under the plate law (GRADFIX7
-	# item 1): an upgrade from the styled card to art may owe
-	# the Launch its top seat, and the standing derivation in
-	# _refresh_card_plate would skip this card - its label's
-	# AABB did not change, only the face wearing it did. Force
-	# the re-derive from the label's live AABB now that the
-	# aspect (the law's face-kind fact) stands updated.
-	if idx < _panel_labels.size() and _panel_labels[idx] != null:
-		var fnodes: Dictionary = _panel_pool.get(game.game_id, {}) as Dictionary
-		if not fnodes.is_empty() and str(fnodes.get("mode", "")) == "card":
-			var fla: AABB = _panel_labels[idx].get_aabb()
-			if fla.size.y > 0.0:
-				fnodes["plate_basis_h"] = fla.size.y
-				_apply_card_plate(fnodes, fla)
+	_rederive_card_plate(idx, game)
 	if _panel_pop[idx] > 0.0:
 		# The card is already popped (focus rested while its
 		# face streamed in): force the pop transform to
