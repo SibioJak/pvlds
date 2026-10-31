@@ -215,10 +215,8 @@ const RAIL_GAP: float = 0.018 ## the Console rail's inter-tile gap (pre-Console 
 ## column is its index along its band). Only the columns
 ## within VISIBLE_HALF_COLUMNS of the focused column are
 ## drawn - the shelf is long (his ~356 games make ~119
-## columns, ~1600 degrees of arc) and the ends wear bookend
-## fins, gated into the same visibility window (DOME4's law:
-## an ungated fin folds back into the forward view mid-shelf
-## and paints its amber over card art).
+## columns, ~1600 degrees of arc) and its ends stand bare
+## (the DOME3 bookend fins were removed at GRADFIX8 item 5).
 const ROW_ELEVATIONS: Array[float] = [25.0, 5.0, -15.0] ## band elevations in degrees: top, middle, bottom
 const ANGLE_STEP_DEG: float = 13.5 ## column pitch, degrees
 const VISIBLE_HALF_COLUMNS: int = 10 ## drawn columns either side of the focused column
@@ -466,7 +464,7 @@ var _visible_games: Array[GameEntry] = []
 var _gen: int = 0
 var _mode: String = "wall" ## "wall" | "detail"
 
-var _wall: Node3D  ## the drum: every card + fin rides it; only it rotates
+var _wall: Node3D  ## the drum: every card rides it; only it rotates
 var _rail: Node3D
 var _status_plate: MeshInstance3D  ## the banner's new home (a plate, not a quad)
 var _status_label: Label3D
@@ -490,7 +488,7 @@ var _panel_frames: Array[MeshInstance3D] = [] ## per panel: the card's frame qua
 var _panel_plates: Array[MeshInstance3D] = [] ## per panel: the nameplate's dark plate behind the title label
 var _panel_labels: Array[Label3D] = [] ## per panel: the title label on its nameplate
 var _mat_frame_dark: StandardMaterial3D = null ## the cards' shared dark frame material
-var _mat_frame_amber: StandardMaterial3D = null ## the centred card's amber frame material (and the fins' edge)
+var _mat_frame_amber: StandardMaterial3D = null ## the centred card's amber frame material
 var _mat_plate: StandardMaterial3D = null ## the shared nameplate/status plate material (the marquee fade drives its alpha)
 var _window_fill_busy: bool = false ## a window face-fill pass is running (centre changes coalesce through _window_fill_dirty)
 var _window_fill_dirty: bool = false
@@ -498,8 +496,9 @@ var _power_subject_inflight: Dictionary = {} ## game_id -> true while its power-
 var _power_prefetch_asked: Dictionary = {} ## game_id -> true once the warmer has been asked for its cold backglass (GRADFIX6)
 var _face_heal_retries: Dictionary = {} ## GRADFIX6 item 2: "game_id|art_file" -> art-render retries already spent by the panel heal
 var _face_heal_msec: int = 0 ## GRADFIX6 item 2: the panel heal's throttle stamp (one sweep per BOARD_TEX_RETRY_MS)
-var _fin_start: Node3D = null ## the shelf's start bookend fin (child of the drum; DOME3/DOME4)
-var _fin_end: Node3D = null ## the shelf's end bookend fin
+## (The shelf's bookend fins stood here until GRADFIX8
+## item 5 - removed entirely, Chris's order; see
+## bookend_fin_count in the smoke-support section.)
 var _power_panel: ClickableQuad = null ## the card currently performing (or holding) the power-on
 var _power_candidate: ClickableQuad = null ## the pop target the settle debounce is timing
 var _power_candidate_t: float = 0.0 ## seconds the candidate has rested
@@ -1986,25 +1985,15 @@ func _refresh_all_card_plates() -> bool:
 	return settled
 
 
-## The shelf's bookend fins (DOME3): a dark slab with an amber
-## edge, three amber bars at the band heights, and a mark -
-## diamond for the opening end, square for the closing one.
-## They stand one column past each end of the shelf and obey
-## the card visibility window (DOME4's gating law, in
-## _refresh_window): an ungated fin folds back into the
-## forward view mid-shelf and paints over card art.
-func _make_bookend(display_col: int, is_start: bool) -> Node3D:
-	var root: Node3D = Node3D.new()
-	root.name = "BookendStart" if is_start else "BookendEnd"
-	root.transform = _card_transform_at(display_col, 1)
-	_make_card_quad(root, Vector2(0.42, 3.10), Vector3(0.0, 0.0, -0.006), _frame_mat(true))
-	_make_card_quad(root, Vector2(0.36, 3.04), Vector3.ZERO, _frame_mat(false))
-	for bar_y: float in [-1.11, 0.0, 1.11]:
-		_make_card_quad(root, Vector2(0.36, 0.06), Vector3(0.0, bar_y, 0.006), _frame_mat(true))
-	var mark: MeshInstance3D = _make_card_quad(root, Vector2(0.20, 0.20), Vector3(0.0, 0.0, 0.012), _frame_mat(true))
-	if is_start:
-		mark.rotation.z = PI * 0.25
-	return root
+## (The shelf's bookend fins - DOME3's dark slabs with amber
+## bars, one column past each shelf end - were removed
+## entirely by GRADFIX8 item 5, Chris's order: "doesn't fit
+## aesthetic", after days of trying to be rid of them. No
+## replacement geometry. The Tournament view already stood
+## without them since GRADFIX3; the library's pair followed
+## here - builder, window gating and rebuild seating are
+## all gone, and bookend_fin_count() below is the census
+## that proves no fin node stands in either view.)
 
 
 ## Centre the drum on a shelf index: the swing target moves,
@@ -2117,9 +2106,7 @@ func _refresh_card_frames() -> void:
 
 ## The drawn window: cards within VISIBLE_HALF_COLUMNS of the
 ## centred column are visible (and, in plain browsing, pickable);
-## the rest are dark and inert. The fins obey the same window
-## (DOME4): the start fin shows while the centred column is
-## within 9 of it, the end fin mirrored.
+## the rest are dark and inert.
 func _refresh_window() -> void:
 	var n: int = _visible_games.size()
 	if n == 0 or _panels.is_empty():
@@ -2144,10 +2131,6 @@ func _refresh_window() -> void:
 			continue
 		var bc2: Vector2i = _board_coord(bi)
 		bnode2.visible = bc2.x >= _panel_window_lo and bc2.x <= _panel_window_hi
-	if _fin_start != null:
-		_fin_start.visible = fc <= VISIBLE_HALF_COLUMNS - 1
-	if _fin_end != null:
-		_fin_end.visible = fc >= _columns - VISIBLE_HALF_COLUMNS
 	# The haze follows the centre (see _haze_for): re-apply
 	# the standing wall fade with the new centre's factors.
 	var keep_alpha: float = _wall_alpha_applied
@@ -2198,9 +2181,8 @@ func _rebuild_wall() -> void:
 	# a rebuild re-seats the same nodes at the new view's
 	# places, faces and all - freeing and re-minting 300+
 	# cards per letter pick is the pick-latency tax the pool
-	# exists to refuse). The fins are the view's own and die
-	# with it; the banner is Room furniture now (built once,
-	# below) and never rides the drum.
+	# exists to refuse). The banner is Room furniture now
+	# (built once, below) and never rides the drum.
 	for q: ClickableQuad in _panels:
 		if q != null and is_instance_valid(q) and q.get_parent() == _wall:
 			_wall.remove_child(q)
@@ -2209,12 +2191,6 @@ func _rebuild_wall() -> void:
 		if bnode != null and is_instance_valid(bnode) and bnode.get_parent() == _wall:
 			_wall.remove_child(bnode)
 	_board_nodes.clear()
-	if _fin_start != null:
-		_fin_start.queue_free()
-		_fin_start = null
-	if _fin_end != null:
-		_fin_end.queue_free()
-		_fin_end = null
 	_panels.clear()
 	_panel_launches.clear()
 	_panel_back_launches.clear()
@@ -2266,19 +2242,9 @@ func _rebuild_wall() -> void:
 	# freeze the phase-16 legs exist to convict).
 	if _tournament:
 		_seat_tournament_boards()
-	# The bookends, one column past each end of the shelf.
-	# The Tournament view stands WITHOUT them (GRADFIX3,
-	# the user's order: "nuke the orange pillars framing
-	# tournie tables") - its shelf is a handful of
-	# challenges, and the fins framed it like a stadium it
-	# is not. The library keeps its fins (DOME3
-	# field-passed; the DOME4 window gating below is
-	# untouched and null-safe).
-	if not _visible_games.is_empty() and not _tournament:
-		_fin_start = _make_bookend(-1, true)
-		_wall.add_child(_fin_start)
-		_fin_end = _make_bookend(_columns, false)
-		_wall.add_child(_fin_end)
+	# No bookend fins seat here any more (GRADFIX8 item 5):
+	# the Tournament view dropped them at GRADFIX3 and the
+	# library's pair is now gone too - the shelf ends bare.
 	# The drum rests centred on the standing centre (a rebuild
 	# is a new wall: it snaps, exactly as the flat wall rebuilt
 	# flat; travel WITHIN a standing wall is the swing's job).
@@ -5943,6 +5909,20 @@ func background_layers() -> Array:
 	return out
 
 
+
+
+## The bookend-fin census (GRADFIX8 item 5): how many fin
+## nodes stand anywhere in the room's subtree, counted by
+## the builder's own node names. The fins are REMOVED
+## (Chris's order - no builder, no seating, no gating
+## remains), so the honest count is zero in both views;
+## the grad and tournament smokes assert exactly that.
+func bookend_fin_count() -> int:
+	var n: int = 0
+	for node: Node in find_children("*", "Node", true, false):
+		if node.name == "BookendStart" or node.name == "BookendEnd":
+			n += 1
+	return n
 
 
 ## The desk bar's standing measurements (GRADFIX5, the

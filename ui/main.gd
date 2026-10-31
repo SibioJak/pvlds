@@ -4276,6 +4276,13 @@ func _grad_gf8_legs() -> void:
 	_grad_expect(not wm.is_empty() and wcr.size.y > 0.0 and absf(wcen.x - wtgt.x) <= 12.0 and absf(wcen.y - wtgt.y) <= 12.0,
 		"back centred: the flip back's TABLE DATA composition centres on its canvas (centroid (%.0f, %.0f) vs centre (%.0f, %.0f), delta (%.0f, %.0f) px; the pre-fix block rode 431 px high)"
 			% [wcen.x, wcen.y, wtgt.x, wtgt.y, wcen.x - wtgt.x, wcen.y - wtgt.y])
+	# Item 5: the shelf-end bookend fins are GONE from the
+	# room - no fin node stands in the library view (the
+	# tournament smoke's walk asserts the same count in the
+	# Tournament view, where GRADFIX3's removal is now
+	# verified by census rather than assumed).
+	_grad_expect(_room.bookend_fin_count() == 0,
+		"fins: zero bookend fin nodes stand in the room (library view; got %d)" % _room.bookend_fin_count())
 
 
 func _grad_leg_fallback_visit(e: Dictionary, g: GameEntry) -> void:
@@ -9480,8 +9487,8 @@ func _tournament_walk_judge_centre(i: int, row: Dictionary) -> void:
 	var front_launch: bool = i < _room._panel_launches.size() and _room._panel_launches[i].visible and _room._panel_launches[i].pick_enabled
 	_tournament_expect(front_launch == owned,
 		"selection walk: '%s' card front carries the pair's one Launch exactly when the challenge is his (owned %s)" % [tname, str(owned)])
-	_tournament_expect(_room._fin_start == null and _room._fin_end == null,
-		"pairing ends: no bookend fin stands in the Tournament view at '%s'" % tname)
+	_tournament_expect(_room.bookend_fin_count() == 0,
+		"pairing ends: no bookend fin stands in the Tournament view at '%s' (GRADFIX8: fins removed entirely, both views)" % tname)
 
 ## The wing-sized board probe (layout mode, GRADFIX2
 ## item 2): the field's own board - the Phantom extra from
