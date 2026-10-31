@@ -5289,7 +5289,7 @@ func _grad_census_verdicts() -> void:
 	# smaller. On the old 3.05 radius the card measure reads
 	# 11.6 degrees and this leg fails on the number.
 	_grad_expect(_grad_wall_full_cols >= 1 and _grad_wall_near_cols >= 3 and _grad_wall_card_deg > 9.5 and _grad_wall_card_deg < 11.0,
-		"wall reach: the pushed-back wall (r %.2f) stands %d columns fully in frame and %d within 24 px of full, and the centre card reads %.2f deg across (the 3.05 wall read 0 fully in - its centre column's top edge sat past the frame - and an 11.60 deg card)"
+		"wall reach: the pushed-back wall (r %.2f) stands %d columns fully in frame and %d within 24 px of full, and the centre card reads %.2f deg across (the same measure on the 3.05 wall: card 11.98 deg, the centre column's worst corner +1 px past the frame's top against -2 px inside here, every drawn column's overflow larger)"
 			% [RoomView.WALL_RADIUS, _grad_wall_full_cols, _grad_wall_near_cols, _grad_wall_card_deg])
 
 
