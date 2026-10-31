@@ -149,9 +149,32 @@ const PAIR_MIX_T0: float = 0.40 ## cascade second where a pair card's crossfade 
 ## order, and the two rows trade places only vertically.
 const STRIP_Y: float = 0.0825 ## the strip row's height (the rail rides at 0.225 above it - the graduation stack)
 const STRIP_Z: float = -1.62 ## the rail's depth: the strip is rail furniture
-const STRIP_LETTER_SIZE: Vector2 = Vector2(0.095, 0.13)
-const STRIP_THE_SIZE: Vector2 = Vector2(0.21, 0.13)
-const STRIP_GAP: float = 0.014
+## The Console bar (GRADFIX5 item 3, the user's pick - variant
+## A of the bar mocks: "the current bar, disciplined - pulled
+## in"): the whole desk rail tightened to ~70% of its former
+## span. The rail's tiles carry widths x0.72 with the gaps
+## closed 0.035 -> 0.018 and the tile height 0.15 -> 0.135
+## (see _build_rail); the strip's pads condense to sit WITHIN
+## the bar's new span (0.095 -> 0.080 wide, THE 0.21 -> 0.175,
+## height 0.13 -> 0.10, gap 0.014 -> 0.010); the status plate
+## slims to one line tucked under the bar (see
+## _build_status_line). Nothing is dropped and no behaviour
+## changes - focus laws, bumper anchors, THE-as-net, the
+## pager all ride the same quads; only the furniture's
+## measurements moved. Faces render on fixed canvases, so a
+## smaller quad carries proportionally smaller type - the
+## mock's discipline, not a font change. The pre-fix wide
+## bar stands behind the harness's negative-control seam
+## (PVLDS_GRADFIX5_NC=widebar) so the census's console leg
+## can fail against it by name.
+const STRIP_LETTER_SIZE: Vector2 = Vector2(0.080, 0.100)
+const STRIP_THE_SIZE: Vector2 = Vector2(0.175, 0.100)
+const STRIP_GAP: float = 0.010
+const STRIP_LETTER_SIZE_WIDE: Vector2 = Vector2(0.095, 0.13) ## the pre-Console strip (the widebar NC's restore)
+const STRIP_THE_SIZE_WIDE: Vector2 = Vector2(0.21, 0.13)
+const STRIP_GAP_WIDE: float = 0.014
+const RAIL_TILE_H: float = 0.135 ## the Console rail's tile height (pre-Console 0.15)
+const RAIL_GAP: float = 0.018 ## the Console rail's inter-tile gap (pre-Console 0.035)
 
 ## ------------------------------------------------------------ the drum
 ## The dome's geometry, ported from the field-approved
@@ -2136,12 +2159,17 @@ func _rebuild_wall() -> void:
 ## stack - down here its top edge rides at ~40 degrees of
 ## depression, below every label's sight line.
 func _build_status_line() -> void:
-	_status_plate = _make_card_quad(self, Vector2(2.3, 0.11), Vector3(0.0, 0.09, -1.30), _plate_mat())
+	# The Console (GRADFIX5 item 3): the plate slims with the
+	# bar - 2.3 x 0.11 -> 1.95 x 0.088, the type 30 -> 26 on a
+	# 680 px measure - one line, tucked under the bar at the
+	# same seat. The widebar NC restores the old plate.
+	var wide: bool = _console_wide()
+	_status_plate = _make_card_quad(self, Vector2(2.3, 0.11) if wide else Vector2(1.95, 0.088), Vector3(0.0, 0.09, -1.30), _plate_mat())
 	_status_label = Label3D.new()
 	_status_label.position = Vector3(0.0, 0.09, -1.288)
-	_status_label.pixel_size = 0.0028
-	_status_label.font_size = 30
-	_status_label.width = 780.0
+	_status_label.pixel_size = 0.0028 if wide else 0.0026
+	_status_label.font_size = 30 if wide else 26
+	_status_label.width = 780.0 if wide else 680.0
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2174,20 +2202,34 @@ func _build_rail(placeholder: Texture2D) -> void:
 	# counts and prints those, it does not convict them.
 	var y: float = 0.225
 	var z: float = -1.62
-	var defs: Array = [
-		["filter:all", 0.30], ["filter:vr", 0.24], ["filter:favorites", 0.44], ["filter:recents", 0.40],
-		["sort", 0.46], ["tournament", 0.44], ["page_prev", 0.18], ["page_label", 0.28], ["page_next", 0.18],
-		["wovp_refresh", 0.32], ["desk", 0.32], ["exit", 0.28],
-	]
+	# The Console (GRADFIX5 item 3): the same twelve stops at
+	# x0.72 widths, gaps closed to RAIL_GAP, tiles RAIL_TILE_H
+	# tall - total span 2.96 m against the old 4.225 (70%).
+	# The widebar NC restores the pre-Console row wholesale.
+	var defs: Array = []
+	if _console_wide():
+		defs = [
+			["filter:all", 0.30], ["filter:vr", 0.24], ["filter:favorites", 0.44], ["filter:recents", 0.40],
+			["sort", 0.46], ["tournament", 0.44], ["page_prev", 0.18], ["page_label", 0.28], ["page_next", 0.18],
+			["wovp_refresh", 0.32], ["desk", 0.32], ["exit", 0.28],
+		]
+	else:
+		defs = [
+			["filter:all", 0.216], ["filter:vr", 0.173], ["filter:favorites", 0.317], ["filter:recents", 0.288],
+			["sort", 0.331], ["tournament", 0.317], ["page_prev", 0.130], ["page_label", 0.202], ["page_next", 0.130],
+			["wovp_refresh", 0.230], ["desk", 0.230], ["exit", 0.202],
+		]
+	var gap: float = 0.035 if _console_wide() else RAIL_GAP
+	var tile_h: float = 0.15 if _console_wide() else RAIL_TILE_H
 	var total: float = 0.0
 	for d: Variant in defs:
-		total += float(d[1]) + 0.035
-	total -= 0.035
+		total += float(d[1]) + gap
+	total -= gap
 	var x: float = -total * 0.5
 	for d: Variant in defs:
 		var key: String = str(d[0])
 		var w: float = float(d[1])
-		var q: ClickableQuad = _make_quad(_rail, "rail", key, placeholder, Vector2(w, 0.15), Vector3(x + w * 0.5, y, z))
+		var q: ClickableQuad = _make_quad(_rail, "rail", key, placeholder, Vector2(w, tile_h), Vector3(x + w * 0.5, y, z))
 		if key == "page_label" or key == "wovp_refresh":
 			# page_label is a readout, never a stop. REFRESH is
 			# a stop only while the Tournament Room stands (see
@@ -2195,7 +2237,7 @@ func _build_rail(placeholder: Texture2D) -> void:
 			# looking at is not a rail job.
 			q.pick_enabled = false
 		_rail_quads[key] = q
-		x += w + 0.035
+		x += w + gap
 
 
 func _make_quad(parent: Node3D, action: String, payload: String, tex: Texture2D, size: Vector2, pos: Vector3) -> ClickableQuad:
@@ -2303,9 +2345,9 @@ func _build_strip(placeholder: Texture2D) -> void:
 	var provisional: Vector3 = Vector3(0.0, STRIP_Y, STRIP_Z)
 	for i: int in range(26):
 		var letter: String = String.chr(65 + i)
-		_strip_quads[letter] = _make_quad(_rail, "letter", letter, placeholder, STRIP_LETTER_SIZE, provisional)
-	_strip_quads["THE"] = _make_quad(_rail, "letter", "THE", placeholder, STRIP_THE_SIZE, provisional)
-	_strip_quads["#"] = _make_quad(_rail, "letter", "#", placeholder, STRIP_LETTER_SIZE, provisional)
+		_strip_quads[letter] = _make_quad(_rail, "letter", letter, placeholder, _strip_letter_size(), provisional)
+	_strip_quads["THE"] = _make_quad(_rail, "letter", "THE", placeholder, _strip_slot_size("THE"), provisional)
+	_strip_quads["#"] = _make_quad(_rail, "letter", "#", placeholder, _strip_letter_size(), provisional)
 
 
 ## The strip's per-rebuild truth, from the two presence reads
@@ -2326,8 +2368,8 @@ func _refresh_strip() -> void:
 	var keys: Array[String] = _strip_slot_keys()
 	var total: float = 0.0
 	for key: String in keys:
-		total += _strip_slot_size(key).x + STRIP_GAP
-	total -= STRIP_GAP
+		total += _strip_slot_size(key).x + _strip_gap()
+	total -= _strip_gap()
 	# The row is positioned BY THE ONE LIST (keys): the x
 	# cursor advances in slot_keys order, so the drawn
 	# sequence is the list's sequence by construction - it
@@ -2349,7 +2391,7 @@ func _refresh_strip() -> void:
 		# leaves, so a slot's facing follows its laid-out
 		# position, not the position it was built at.
 		ClickableQuad.face_point(q, EYE)
-		x += w + STRIP_GAP
+		x += w + _strip_gap()
 		q.pick_enabled = presence.has(key)
 		q.set_content_alpha(1.0)
 	for key: String in _strip_quads.keys():
@@ -2362,7 +2404,24 @@ func _refresh_strip() -> void:
 
 
 func _strip_slot_size(key: String) -> Vector2:
-	return STRIP_THE_SIZE if key == "THE" else STRIP_LETTER_SIZE
+	if key == "THE":
+		return STRIP_THE_SIZE_WIDE if _console_wide() else STRIP_THE_SIZE
+	return _strip_letter_size()
+
+
+## The Console bar's live seam (GRADFIX5): the widebar NC
+## restores the pre-Console furniture's measurements
+## wholesale - rail widths, gaps, strip pads, status plate.
+func _console_wide() -> bool:
+	return OS.get_environment("PVLDS_GRADFIX5_NC") == "widebar"
+
+
+func _strip_letter_size() -> Vector2:
+	return STRIP_LETTER_SIZE_WIDE if _console_wide() else STRIP_LETTER_SIZE
+
+
+func _strip_gap() -> float:
+	return STRIP_GAP_WIDE if _console_wide() else STRIP_GAP
 
 
 ## A slot's [label, state] under the current view: the label
@@ -2548,7 +2607,7 @@ func _fill_wall_textures(gen: int) -> void:
 		if _strip_tex_cache.has(sck):
 			squad.set_texture(_strip_tex_cache[sck] as Texture2D)
 			continue
-		var spx: Vector2i = Vector2i(420, 260) if skey == "THE" else Vector2i(190, 260)
+		var spx: Vector2i = Vector2i(438, 250) if skey == "THE" else Vector2i(200, 250) ## the Console pads' own aspect (0.175/0.10 and 0.080/0.10), so the condensed glyphs are not stretched (GRADFIX5)
 		bench_renders += 1
 		var stex: Texture2D = await _factory.render_texture(RoomSpecs.letter_spec(str(ls[0]), str(ls[1])), spx)
 		if gen != _gen:
@@ -5378,6 +5437,40 @@ func wing_state() -> Dictionary:
 		"seat": _wing_seat,
 		"enabled": _wing_enabled,
 		"borrowed_idx": _wing_borrowed_idx,
+	}
+
+
+## The desk bar's standing measurements (GRADFIX5, the
+## Console leg's subject): the rail row's total span and the
+## strip's, read off the laid-out quads themselves - plus the
+## furniture census (every stop and slot the bar must carry).
+func bar_state() -> Dictionary:
+	var rail_lo: float = 1.0e9
+	var rail_hi: float = -1.0e9
+	for k: Variant in _rail_quads.keys():
+		var q: ClickableQuad = _rail_quads[k] as ClickableQuad
+		if q == null:
+			continue
+		var half: float = q.quad_size().x * 0.5
+		rail_lo = minf(rail_lo, q.position.x - half)
+		rail_hi = maxf(rail_hi, q.position.x + half)
+	var strip_lo: float = 1.0e9
+	var strip_hi: float = -1.0e9
+	var strip_count: int = 0
+	for k2: Variant in _strip_quads.keys():
+		var sq: ClickableQuad = _strip_quads[k2] as ClickableQuad
+		if sq == null or not sq.visible:
+			continue
+		strip_count += 1
+		var shalf: float = sq.quad_size().x * 0.5
+		strip_lo = minf(strip_lo, sq.position.x - shalf)
+		strip_hi = maxf(strip_hi, sq.position.x + shalf)
+	return {
+		"rail_span": rail_hi - rail_lo if rail_hi > rail_lo else 0.0,
+		"strip_span": strip_hi - strip_lo if strip_hi > strip_lo else 0.0,
+		"rail_stops": _rail_quads.size(),
+		"strip_slots": strip_count,
+		"status_size": (_status_plate.mesh as QuadMesh).size if _status_plate != null and _status_plate.mesh is QuadMesh else Vector2.ZERO,
 	}
 
 
