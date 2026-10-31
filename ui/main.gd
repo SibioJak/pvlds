@@ -4851,8 +4851,15 @@ func _grad_measure_centre(c: int) -> void:
 				var cd3: float = cp3.global_position.distance_to(cam.global_position)
 				var page_h: float = p_bot.y - p_top.y
 				var card_h: float = c_bot.y - c_top.y
-				if page_h > 1.0 and card_h > 1.0 and pd2 > 0.0 and cd3 > 0.0:
-					var ratio2: float = (page_h * pd2) / (card_h * cd3 / RoomView.POP_OUT_SCALE)
+				# Each side's rendered scale is read off its
+				# own basis (the wing's arrival scale, the
+				# centre's pop scale - springs, not constants:
+				# a first cut divided by the pop constant and
+				# read the spring's lag as a +2.9% page).
+				var p_scale: float = wt3.basis.get_scale().y
+				var c_scale: float = cp3.global_transform.basis.get_scale().y
+				if page_h > 1.0 and card_h > 1.0 and pd2 > 0.0 and cd3 > 0.0 and p_scale > 0.01 and c_scale > 0.01:
+					var ratio2: float = (page_h * pd2 / p_scale) / (card_h * cd3 / c_scale)
 					if absf(ratio2 - 1.0) > _grad_flush_proj_err:
 						_grad_flush_worst_signed = ratio2
 					_grad_flush_proj_err = maxf(_grad_flush_proj_err, absf(ratio2 - 1.0))
