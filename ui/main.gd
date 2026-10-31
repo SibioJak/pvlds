@@ -3394,6 +3394,9 @@ var _grad_gf7_heal_game: GameEntry = null ## the heal-check clone of Taxi (fresh
 var _grad_gf7_heal_before: String = "" ## the clone's stamped face key before the warmer lands (styled)
 var _grad_gf7_since: int = 0 ## msec the current gf7 stage began
 var _grad_gf7_boot_pressed: bool = false ## phase 0's early filter press (GRADFIX7: taken on the first tick the room exists, so the phases below start from the whole library)
+var _grad_gf8_ti: int = 0 ## GRADFIX8 item 2 (face luminance leg, phase 8 stage 3): the luminance-leg target cursor
+var _grad_gf8_focused: bool = false ## the current luminance target has been centred
+var _grad_gf8_wait: int = 0
 var _grad_gf7_ti: int = 0 ## the chain-leg target cursor
 var _grad_gf7_focused: bool = false ## the current chain target has been centred
 var _grad_gf7_wait: int = 0
@@ -3642,6 +3645,8 @@ func _grad_gf7_step() -> void:
 				_grad_gf7_focused = false
 		2:
 			_grad_gf7_census_step()
+		3:
+			_grad_gf8_step()
 
 
 ## One census centre's assertions (GRADFIX7 item 1): every
@@ -3781,10 +3786,136 @@ func _grad_gf7_census_step() -> void:
 				_grad_expect(true, lt)
 			else:
 				_grad_expect(false, "%s (%d violations; first: %s)" % [lt, cnt, str(_grad_gf7_viol_first.get(kk, ""))])
-		_grad_phase = 7
-		_grad_visit_i = -1
+		_grad_gf7_stage = 3
+		_grad_gf8_ti = 0
+		_grad_gf8_focused = false
+		_grad_gf8_wait = 0
 	else:
 		_room._set_focused(_room._panels[_grad_gf7_census_i])
+
+
+## Mean luminance (0-255, Rec.709 weights, stride 2) of an
+## image over a window - the face-luminance leg's measure,
+## the same weights the harness census
+## (check_face_luminance.gd) uses.
+func _grad_mean_lum(img: Image, win: Rect2i) -> float:
+	if img == null or img.is_empty():
+		return -1.0
+	var x0: int = maxi(0, win.position.x)
+	var y0: int = maxi(0, win.position.y)
+	var x1: int = mini(img.get_width(), win.position.x + win.size.x)
+	var y1: int = mini(img.get_height(), win.position.y + win.size.y)
+	if x1 <= x0 or y1 <= y0:
+		return -1.0
+	var sum: float = 0.0
+	var n: int = 0
+	var y: int = y0
+	while y < y1:
+		var x: int = x0
+		while x < x1:
+			var c: Color = img.get_pixel(x, y)
+			sum += 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+			n += 1
+			x += 2
+		y += 2
+	if n == 0:
+		return -1.0
+	return sum / float(n) * 255.0
+
+
+## The centred window of a source image that the face's
+## KEEP_ASPECT_COVERED draw shows on the card canvas - the
+## source luminance the standing face must match.
+func _grad_cover_win(img: Image) -> Rect2i:
+	var iw: float = float(img.get_width())
+	var ih: float = float(img.get_height())
+	var scale: float = maxf(float(RoomView.CARD_FACE_PX.x) / iw, float(RoomView.CARD_FACE_PX.y) / ih)
+	var ww: int = int(round(float(RoomView.CARD_FACE_PX.x) / scale))
+	var wh: int = int(round(float(RoomView.CARD_FACE_PX.y) / scale))
+	return Rect2i(int((iw - float(ww)) * 0.5), int((ih - float(wh)) * 0.5), ww, wh)
+
+
+## GRADFIX8 (item 2, CRUSHED FACES) phase 8 stage 3: the
+## face-luminance legs. The convicted fault: a pair
+## backglass's standing face was its OFF half - the unlit
+## glass - at ~0.44x the mean luminance of its own lit On
+## half, while every other class stands in its lit picture
+## and the render pipeline itself is 1:1 (the harness census,
+## check_face_luminance.gd). Each target's STANDING panel
+## texture is measured against its lit source (the pair's On
+## half; a shot's cache; the chain's extraction), cover-window
+## to whole-face, inside the adopted tolerance: rendered
+## within max(10 grey levels, 15% of source). The seam
+## PVLDS_GRADFIX8_NC=crush restores the Off-half serving, so
+## the pair leg fails by name.
+func _grad_gf8_step() -> void:
+	var targets: Array = [
+		["bigb2s", "Big Chain Glass", "on"],
+		["shot", "Aaron Spelling", "shot"],
+		["b2s", "Taxi", "chain"],
+		["vpxonly", "Zulu Vpx Chain", "chain"],
+	]
+	if _grad_gf8_ti >= targets.size():
+		_grad_phase = 7
+		_grad_visit_i = -1
+		return
+	var t: Array = targets[_grad_gf8_ti]
+	var g: GameEntry = _grad_gf7_find(str(t[0]), str(t[1]))
+	if g == null:
+		_grad_fail("face luminance: '%s' standing face matches its lit source (fixture game not in the library)" % str(t[1]))
+		_grad_gf8_ti += 1
+		_grad_gf8_focused = false
+		return
+	var pidx: int = _grad_panel_index(g.game_id)
+	if not _grad_gf8_focused:
+		if pidx >= 0:
+			_room._set_focused(_room._panels[pidx])
+		_grad_gf8_focused = true
+		_grad_gf8_wait = 0
+		return
+	_grad_gf8_wait += 1
+	if _room.page_slide_active():
+		_grad_gf8_wait = 0
+		return
+	var standing: Dictionary = {}
+	for st: Variant in _room.face_state():
+		if str((st as Dictionary).get("game_id", "")) == g.game_id:
+			standing = st
+			break
+	var settled: bool = not standing.is_empty() and bool(standing.get("key_stamped", false)) \
+		and not bool(standing.get("is_placeholder", true)) and _grad_gf8_wait > 5
+	if not settled and _grad_gf8_wait <= 1500:
+		return
+	if not settled:
+		_grad_fail("face luminance: '%s' standing face matches its lit source (its face never settled at rest)" % str(t[1]))
+		_grad_gf8_ti += 1
+		_grad_gf8_focused = false
+		return
+	var src_path: String = ""
+	match str(t[2]):
+		"on":
+			src_path = g.pair_on_art()
+		"shot":
+			src_path = ArtProvider.shot_cache_path_for(g.shot_url)
+		_:
+			src_path = g.face_path_ready()
+	var src_img: Image = Image.new()
+	var src_lum: float = -1.0
+	if src_path != "" and src_img.load(src_path) == OK:
+		src_lum = _grad_mean_lum(src_img, _grad_cover_win(src_img))
+	var rendered_lum: float = -1.0
+	if pidx >= 0:
+		var ptex: Texture2D = _room._panels[pidx].current_texture()
+		if ptex != null:
+			var rimg: Image = ptex.get_image()
+			if rimg != null:
+				rendered_lum = _grad_mean_lum(rimg, Rect2i(0, 0, rimg.get_width(), rimg.get_height()))
+	var tol: float = maxf(10.0, 0.15 * src_lum) if src_lum > 0.0 else -1.0
+	_grad_expect(src_lum > 0.0 and rendered_lum >= 0.0 and absf(rendered_lum - src_lum) <= tol,
+		"face luminance: '%s' standing face matches its lit source (rendered %.1f, source %.1f, tolerance %.1f)"
+		% [str(t[1]), rendered_lum, src_lum, tol])
+	_grad_gf8_ti += 1
+	_grad_gf8_focused = false
 
 
 ## The heal-honesty leg (GRADFIX7 item 1), phase 14 - the

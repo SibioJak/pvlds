@@ -5634,6 +5634,22 @@ func _start_power(panel: ClickableQuad) -> void:
 		var on_path: String = game.pair_on_art()
 		if on_path != "":
 			on_tex = TextureFactory.load_art_texture(on_path)
+	if on_tex != null and game != null and not game.has_shot_face():
+		# GRADFIX8 item 2: a pair card's STANDING face is now
+		# its lit On half (GameEntry._standing_face), so the
+		# panel's own texture no longer holds the unlit glass
+		# this crossfade starts from. Perform on the backglass
+		# subject instead - the same Off extraction render the
+		# shot-faced path below uses - so the cascade's first
+		# instant is the dark glass exactly as before the fix,
+		# and only the resting wall changed. (A shot-faced pair
+		# card keeps the shipped shape: its overlay starts from
+		# the shot it stands in and crossfades to the On half.)
+		var pair_subject: Texture2D = _power_subject_cached(game)
+		if pair_subject == null:
+			_prepare_power_subject(panel, game)
+			return
+		face_tex = pair_subject
 	if on_tex == null and game != null and game.has_shot_face():
 		# The shot era's subject rule: perform on the
 		# backglass, not on the shot the card rests at.

@@ -126,9 +126,45 @@ func face_path() -> String:
 		if not ArtProvider.is_negative_outcome(ArtProvider.shot_outcome(shot_url)):
 			# Not landed, not failed: the standing chain
 			# answers until the fetch arrives.
-			return ensure_art()
+			return _standing_face(ensure_art())
 		# Landed-and-failed: fall through to the chain for good.
-	return ensure_art()
+	return _standing_face(ensure_art())
+
+
+## The STANDING face for a chain answer (GRADFIX8 item 2,
+## CRUSHED FACES): the path the wall and the detail view
+## actually wear, mapped from the chain's raw answer.
+## A pair backglass's extraction cache holds its OFF half -
+## the unlit glass - because that is the power-on's subject:
+## the cascade starts from the dark glass and crossfades to
+## the lit On half (backglass_face_path keeps serving it,
+## and ensure_art's raw answer stays the extraction cache).
+## But as a STANDING face the Off half crushed the card to
+## near-black next to every lit neighbour (the GRADFIX7
+## field captures: pair-sourced cards at ~0.44x the mean
+## luminance of their own On half - Bride fixture 20.2 vs
+## 45.8, Big Chain fixture 56.9 vs 127.5, cover windows -
+## while the render pipeline itself measured 1:1 for every
+## class). So where the chain's answer IS the backglass
+## extraction and that extraction cached its On sibling,
+## the standing face is the On half: the author's lit glass,
+## the same brightness family as a plain backglass, a side
+## image and the author shot. Any other answer (shot, side
+## image, plain extraction, embedded image) passes through
+## unchanged. PVLDS_GRADFIX8_NC=crush restores the pre-fix
+## serving (the Off half stands) so the grad smoke's face
+## luminance leg fails by name.
+func _standing_face(chain_path: String) -> String:
+	if chain_path == "":
+		return ""
+	if OS.get_environment("PVLDS_GRADFIX8_NC") == "crush":
+		return chain_path
+	var src: String = backglass_source()
+	if src == "":
+		return chain_path
+	if chain_path == ArtProvider.cache_path_for(src) and ArtProvider.has_pair_on(src):
+		return ArtProvider.pair_on_path_for(src)
+	return chain_path
 
 
 ## What face_path() would answer WITHOUT paying for it
@@ -153,7 +189,7 @@ func face_path_ready() -> String:
 		if ArtProvider.shot_is_cached(shot_url):
 			return ArtProvider.shot_cache_path_for(shot_url)
 	if art_path != "":
-		return art_path
+		return _standing_face(art_path)
 	if OS.get_environment("PVLDS_GRADFIX7_NC") == "chainblind":
 		# NC (GRADFIX7): the GRADFIX6 behaviour verbatim - the
 		# chain's extraction cache is never probed, so chain-
@@ -172,7 +208,7 @@ func face_path_ready() -> String:
 	# it for a lower source that happened to land first.
 	for src: String in art_sources():
 		if ArtProvider.is_cache_current(src):
-			return ArtProvider.cache_path_for(src)
+			return _standing_face(ArtProvider.cache_path_for(src))
 		if ArtProvider.is_negative_outcome(ArtProvider.outcome_for_source(src)):
 			continue
 		return ""
