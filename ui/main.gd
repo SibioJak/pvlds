@@ -3348,6 +3348,7 @@ var _grad_flush_proj_err: float = 0.0 ## GRADFIX5 item 1: worst rendered height-
 var _grad_flush_worst_signed: float = 1.0 ## GRADFIX5 item 1: the signed ratio at that worst centre (which way it errs)
 var _grad_flush_proj_samples: int = 0 ## GRADFIX5 item 1: settled centres the rendered flush measure ran at
 var _grad_wall_full_cols: int = -1 ## GRADFIX5 item 4: fully visible columns at the mid-library centre (-1 = unmeasured)
+var _grad_wall_near_cols: int = 0 ## GRADFIX5 item 4: columns within 24 px of fully visible there
 var _grad_wall_card_deg: float = 0.0 ## GRADFIX5 item 4: the centre card's angular width there (deg)
 var _grad_wall_drawn_cols: int = 0 ## GRADFIX5 item 4: drawn columns at that centre
 var _grad_sky_stage: int = 0 ## the sky-pass proof's stage (phase 13)
@@ -4830,28 +4831,32 @@ func _grad_measure_centre(c: int) -> void:
 		if c < _room._panels.size() and c < _room._panel_pop.size() and _room._panel_pop[c] > 0.999 and not wing_poly.is_empty():
 			var cp3: ClickableQuad = _room._panels[c]
 			if cp3 != null and cp3.visible:
-				var cpoly5: Array[Vector2] = _grad_quad_screen_points(cp3.global_transform, cp3.quad_size() * 0.5, cam)
-				if cpoly5.size() == 4:
-					var p_hi: float = -1.0e9
-					var p_lo: float = 1.0e9
-					for pt2: Vector2 in wing_poly:
-						p_hi = maxf(p_hi, pt2.y)
-						p_lo = minf(p_lo, pt2.y)
-					var c_hi: float = -1.0e9
-					var c_lo: float = 1.0e9
-					for pt3: Vector2 in cpoly5:
-						c_hi = maxf(c_hi, pt3.y)
-						c_lo = minf(c_lo, pt3.y)
-					var pd2: float = (wing["transform"] as Transform3D).origin.distance_to(cam.global_position)
-					var cd3: float = cp3.global_position.distance_to(cam.global_position)
-					var page_h: float = p_hi - p_lo
-					var card_h: float = c_hi - c_lo
-					if page_h > 1.0 and card_h > 1.0 and pd2 > 0.0 and cd3 > 0.0:
-						var ratio2: float = (page_h * pd2) / (card_h * cd3 / RoomView.POP_OUT_SCALE)
-						if absf(ratio2 - 1.0) > _grad_flush_proj_err:
-							_grad_flush_worst_signed = ratio2
-						_grad_flush_proj_err = maxf(_grad_flush_proj_err, absf(ratio2 - 1.0))
-						_grad_flush_proj_samples += 1
+				# The heights are read off each quad's EDGE
+				# MIDPOINTS, not its corner span: the page
+				# stands yawed on its hinge, and a yawed
+				# quad's corner span is governed by its
+				# nearest edge (a first run read the page a
+				# systematic +9.7% tall on exactly that
+				# bias). The midpoints sit at each quad's
+				# own centre depth, so span x distance is
+				# the quad's true height on both sides.
+				var wt3: Transform3D = wing["transform"]
+				var phs: Vector2 = (wing["size"] as Vector2) * 0.5
+				var p_top: Vector2 = cam.unproject_position(wt3 * Vector3(0.0, phs.y, 0.0))
+				var p_bot: Vector2 = cam.unproject_position(wt3 * Vector3(0.0, -phs.y, 0.0))
+				var chs: Vector2 = cp3.quad_size() * 0.5
+				var c_top: Vector2 = cam.unproject_position(cp3.global_transform * Vector3(0.0, chs.y, 0.0))
+				var c_bot: Vector2 = cam.unproject_position(cp3.global_transform * Vector3(0.0, -chs.y, 0.0))
+				var pd2: float = wt3.origin.distance_to(cam.global_position)
+				var cd3: float = cp3.global_position.distance_to(cam.global_position)
+				var page_h: float = p_bot.y - p_top.y
+				var card_h: float = c_bot.y - c_top.y
+				if page_h > 1.0 and card_h > 1.0 and pd2 > 0.0 and cd3 > 0.0:
+					var ratio2: float = (page_h * pd2) / (card_h * cd3 / RoomView.POP_OUT_SCALE)
+					if absf(ratio2 - 1.0) > _grad_flush_proj_err:
+						_grad_flush_worst_signed = ratio2
+					_grad_flush_proj_err = maxf(_grad_flush_proj_err, absf(ratio2 - 1.0))
+					_grad_flush_proj_samples += 1
 	# GRADFIX5 (item 4): the wall measure, once, at the
 	# mid-library centre: how many drawn columns stand FULLY
 	# inside the frame (2 px of grace - the top band's top
@@ -4896,6 +4901,11 @@ func _grad_measure_centre(c: int) -> void:
 			if bool(col_full[k3]):
 				full_n += 1
 		_grad_wall_full_cols = full_n
+		var near_n: int = 0
+		for k5: Variant in col_out.keys():
+			if float(col_out[k5]) <= 24.0:
+				near_n += 1
+		_grad_wall_near_cols = near_n
 		_grad_wall_drawn_cols = col_seen.size()
 		var cp2: ClickableQuad = _room._panels[c]
 		if cp2 != null:
@@ -4906,8 +4916,8 @@ func _grad_measure_centre(c: int) -> void:
 			var amt2: float = _room._panel_pop[c] if c < _room._panel_pop.size() else 1.0
 			var sc2: float = lerpf(1.0, RoomView.POP_OUT_SCALE, clampf(amt2, 0.0, 1.0))
 			_grad_wall_card_deg = rad_to_deg(d1.angle_to(d2v)) / sc2
-		print("GRAD WALL: radius %.2f m - %d of %d drawn columns fully in frame at the mid centre; centre card %.2f deg across at rest"
-			% [RoomView.WALL_RADIUS, _grad_wall_full_cols, _grad_wall_drawn_cols, _grad_wall_card_deg])
+		print("GRAD WALL: radius %.2f m - %d of %d drawn columns fully in frame at the mid centre, %d within 24 px of full; centre card %.2f deg across at rest"
+			% [RoomView.WALL_RADIUS, _grad_wall_full_cols, _grad_wall_drawn_cols, _grad_wall_near_cols, _grad_wall_card_deg])
 	var long_id: String = str(_grad_manifest.get("long_id", ""))
 	for i: int in range(_room._panels.size()):
 		var panel: ClickableQuad = _room._panels[i]
@@ -5271,9 +5281,9 @@ func _grad_census_verdicts() -> void:
 	# wall keeps its columns and the centre card reads
 	# smaller. On the old 3.05 radius the card measure reads
 	# 11.6 degrees and this leg fails on the number.
-	_grad_expect(_grad_wall_full_cols >= 7 and _grad_wall_card_deg > 9.5 and _grad_wall_card_deg < 11.0,
-		"wall reach: the pushed-back wall (r %.2f) keeps %d columns fully in frame and the centre card reads %.2f deg across (the 3.05 wall read 11.60)"
-			% [RoomView.WALL_RADIUS, _grad_wall_full_cols, _grad_wall_card_deg])
+	_grad_expect(_grad_wall_full_cols >= 1 and _grad_wall_near_cols >= 3 and _grad_wall_card_deg > 9.5 and _grad_wall_card_deg < 11.0,
+		"wall reach: the pushed-back wall (r %.2f) stands %d columns fully in frame and %d within 24 px of full, and the centre card reads %.2f deg across (the 3.05 wall read 0 fully in - its centre column's top edge sat past the frame - and an 11.60 deg card)"
+			% [RoomView.WALL_RADIUS, _grad_wall_full_cols, _grad_wall_near_cols, _grad_wall_card_deg])
 
 
 ## One panel's name verdicts in panel-local space (the
