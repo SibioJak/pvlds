@@ -3440,7 +3440,9 @@ var _grad_gf8_done: bool = false ## GRADFIX8 (item 3): the board-pairing legs ru
 ## GRADFIX8 (items 1/5/6) phase-9 state: the centring
 ## probes render through the room's factory in one unawaited
 ## pass (the layout probes' pattern), then the legs judge.
-var _grad_gf8_stage: int = 0
+## (_grad_gf8_stage is declared once above, with the item-4
+## state - both phase steps (9 and 15) drive it as a
+## phase-local stage counter, reset at each hand-off.)
 ## (_grad_gf8_wait is declared once above, with the item-2
 ## state - both phase steps use it as a phase-local counter
 ## and reset it on entry.)
