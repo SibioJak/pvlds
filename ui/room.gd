@@ -893,21 +893,30 @@ func _build_environment() -> void:
 	we.environment = env
 	add_child(we)
 
-	var floor_inst: MeshInstance3D = MeshInstance3D.new()
-	var plane: PlaneMesh = PlaneMesh.new()
-	plane.size = Vector2(14.0, 14.0)
-	floor_inst.mesh = plane
-	# The floor rides at the prototype's -0.02 (graduation):
-	# the DOME5 label census was measured against that plane -
-	# at y=0 the bottom band's three-line label blocks bottom
-	# out at +0.002, two millimetres of slack the census
-	# never had.
-	floor_inst.position = Vector3(0.0, -0.02, 0.0)
-	var fm: StandardMaterial3D = StandardMaterial3D.new()
-	fm.albedo_color = Color(0.045, 0.045, 0.065)
-	fm.roughness = 0.95
-	floor_inst.material_override = fm
-	add_child(floor_inst)
+	# GRADFIX5 (item 2): the floor is RETIRED - convicted as
+	# the occluder that ate the sky's lower half (his
+	# GRADFIX4 field verdict: "stars look a lot better but
+	# disappear on lower half of dome", in BOTH rooms). The
+	# GRADFIX4 shells themselves are whole: full spheres
+	# centred on the eye, a direction field with no horizon
+	# term - read in the shader, there is nothing to fade.
+	# What stood in their way was this: a 14 x 14 m opaque
+	# plane at y = -0.02 in near-black (0.045, 0.045, 0.065).
+	# From the eye at 1.25, EVERY look direction below the
+	# horizon meets that slab before it can reach either
+	# shell (12 / 30 m) - steeply down it fills the frame,
+	# at desk height it is the surface under the rail, and
+	# only a grazing band a few degrees deep ever slipped
+	# past its edges. The field read exactly that geometry:
+	# stars to a clean horizon line, bare black below. The
+	# slab was the flat room's ground and the DOME5 census's
+	# occluder besides (the prototype's fault #3); in a room
+	# whose sky is the point ("floating along in space"),
+	# the enclosure is the starfield in every direction,
+	# nadir included - the desk and rail now stand over open
+	# sky. The census's floor LINE survives as a datum (no
+	# label may sink below y = -0.0215); it was always a
+	# placement rule, never this mesh.
 
 	# The flat room's backdrop cylinder stood here (r 4.4,
 	# a dark enclosure around the wall). The graduation
