@@ -134,7 +134,11 @@ func face_path() -> String:
 ## What face_path() would answer WITHOUT paying for it
 ## (GRADFIX6 items 2+3): the shot when its cache file already
 ## sits on disk; the chain's art when a previous ensure_art
-## landed it (art_path set); "" while anything is still cold.
+## landed it (art_path set) or when the warmer's extraction
+## already sits in the cache (GRADFIX7 item 1: the chain leg
+## below - without it, chain-sourced art was invisible to
+## this probe forever, however warm the cache stood); ""
+## while anything is still cold.
 ## Never claims, never extracts, never spins - the room's
 ## fill path reads this so a cold card can dress in its
 ## styled title card NOW and upgrade when the warmer lands
@@ -148,7 +152,31 @@ func face_path_ready() -> String:
 	if shot_url != "" and OS.get_environment("PVLDS_GRAD_NC") != "oldrank":
 		if ArtProvider.shot_is_cached(shot_url):
 			return ArtProvider.shot_cache_path_for(shot_url)
-	return art_path
+	if art_path != "":
+		return art_path
+	if OS.get_environment("PVLDS_GRADFIX7_NC") == "chainblind":
+		# NC (GRADFIX7): the GRADFIX6 behaviour verbatim - the
+		# chain's extraction cache is never probed, so chain-
+		# sourced art is invisible to the wall forever and the
+		# grad smoke's chain legs fail by name.
+		return art_path
+	# The chain leg (GRADFIX7 item 1): probe the extraction
+	# cache in ensure_art()'s own source order, exactly as
+	# backglass_face_path_ready() probes its one source. A
+	# source whose extraction already landed serves; a source
+	# with a stamped negative outcome falls through to the
+	# next source (a backglass holding no usable image does
+	# not end the search - the .vpx is tried, as ensure_art
+	# does); the first UNTRIED source stops the walk with ""
+	# - the warmer still owes it, and ranking forbids jumping
+	# it for a lower source that happened to land first.
+	for src: String in art_sources():
+		if ArtProvider.is_cache_current(src):
+			return ArtProvider.cache_path_for(src)
+		if ArtProvider.is_negative_outcome(ArtProvider.outcome_for_source(src)):
+			continue
+		return ""
+	return ""
 
 
 ## backglass_face_path() without the extraction: the cached
