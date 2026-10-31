@@ -25,7 +25,7 @@ signal art_prefetch_requested(games: Array) ## a page settled: Main's warmer sho
 signal tournament_refresh_requested ## the Tournament Room wants its boards (re)fetched: entering the view, or REFRESH pressed - Main owns the WoVP client
 signal wovp_key_pasted(api_key: String) ## the SETUP panel's PASTE KEY read a key off the clipboard: Main saves it to the config
 signal wovp_key_test_requested ## the SETUP panel's TEST KEY: Main validates the saved key and reports whose it is
-signal display_settings_changed ## a SETUP display dial turned (wing / starfield): Main persists the room's standing values to the config
+signal display_settings_changed ## a SETUP display dial turned (the starfield): Main persists the room's standing values to the config
 
 const PAGE_COLS: int = 4
 const PAGE_ROWS: int = 3
@@ -238,73 +238,33 @@ const LABEL_WIDTH_PX: float = 246.0 ## wrapped-title width: a long name takes up
 const SWING_MIN_SEC: float = 0.16
 const SWING_MAX_SEC: float = 0.72
 ## Stage B - the background stack (all WORLD-LOCKED; see
-## _build_background) and the focused card's wing.
+## _build_background) and the focused card's flip.
 const BG_STAR_RADIUS: float = 30.0 ## the starfield shell's radius around the eye
 const BG_WIRE_RADIUS: float = 14.0 ## the lat/long wireframe shell's radius
 ## (The orbit ring's radius const went with the ring -
 ## GRADFIX4 item 5e removed it; see _build_background.)
 const HAZE_FLOOR: float = 0.45 ## the far window columns' dim floor (see _haze_for)
-const WING_SIZE: Vector2 = Vector2(0.62, 1.08) ## the focused card's wing, inside its borrowed slot (see _wing_size). GRADFIX3 (the Standing Book): the wing IS the book now - where GRADFIX2's 0.44 x 0.72 panel (a 440x720 px canvas the board face's layout could not stand whole in - the band ran off its right edge, see CardFace's band fit) was walked down on the old census's angular budget. The book separates by DEPTH, not by shrinking: it floats BOOK-proud in front of the popped centre card and tilts on its spine (see _make_book), so the angular budget that shrunk the old panel no longer binds it. GRADFIX5: the page is the card's EXACT size (0.62 x 1.08, was a breath under at 1.00 through GRADFIX3/4) - see RoomSpecs.BOARD_PANEL_SIZE for the headroom arithmetic the wall's move back bought.
-const WING_Y: float = 0.0 ## the book's centre in its slot, card-local: FLUSH with the slot's own card (GRADFIX5) - the two pages share top and bottom edges, so the hinge reads. GRADFIX3/4 seated it a breath low (-0.02) under the short page's seam arithmetic.
-## The wing's seat discipline (the GRAD FIX round): the wing
-## stands IN the left neighbour's slot, shrunk inside the
-## slot's own bounds (0.62 x 1.08) with margin on every side,
-## and the slot's card is borrowed away - hidden and
-## unpickable - for as long as the wing stands there. The
-## pre-fix wing (0.66 x 0.634 at 0.225, no borrowing) hung
-## over the card below-left and ate its art; the NC seam
-## PVLDS_GRAD_NC=wing restores that size and seat, unborrowed.
-const WING_SIZE_NC: Vector2 = Vector2(0.66, 0.634)
-const WING_Y_NC: float = 0.225
-const WING_PROUD: float = 0.30 ## how far in front of the neighbour card the wing floats at full pop. GRADFIX3: the Standing Book separates by depth - at 0.30 the book stands a full pop (0.15) in front of the popped centre card, so no viewpoint in the room puts the card's silhouette over the book's page; GRADFIX2's 0.08 floated it inside the pop's own reach, which is how the shipped build's wing lost its right quarter behind the focused card in the field while the census (judging a nearer, timider eye ring) acquitted it.
-## The One Book's hinge angle (GRADFIX4): the text page
-## pivots on its SPINE edge - the edge nearest the centred
-## card - by this many degrees, leaning BACK from the hinge
-## so the art page and the text page read as one object
-## opened toward the viewer. The hinge, the shared frame
-## and the cover do the separating now; GRADFIX3's slabs and
-## cast shadow are gone (see _make_book). Three degrees:
-## GRADFIX3's census walked the old swing to five when it
-## charged the bare page; GRADFIX4's book-cover leg charges
-## the WHOLE book (frame, knuckle, page) and walked the
-## hinge to three - at five the dressed silhouette's swing
-## excess over its untilted twin measured 319 px against
-## the leg's 256 bound.
-const BOOK_TILT_DEG: float = 3.0
-## The book's cover stock: the spine knuckle's tone, in the
-## card frame's own family (the frame material itself is
-## _frame_mat - one stock, two cuts).
-const BOOK_COVER_COLOR: Color = Color(0.03, 0.035, 0.07)
-## The companion clearance (GRADFIX2 item 2): a standing
-## companion (the wing, the Tournament board) also shifts
-## this far along the drum AWAY from the centred card, on
-## top of its slot seat. The popped centre card (0.15 out,
-## 1.04x) otherwise covers the companion's inner strip from
-## real viewpoints - the field's eaten board edges (the
-## Phantom board's right-hand text, the Addams board's
-## score tails) - a cover the old census's depth acquittal
-## never charged. The borrowed/freed slot's ground is
-## empty, so the shift costs nothing visually. The NC seam
-## PVLDS_GRADFIX_NC=oldwing restores the pre-fix wing
-## (0.54 x 0.58 at 0.21, no shift).
-const COMPANION_CLEAR: float = 0.12
-## The wing's own clearance shift is ZERO since the
-## Standing Book (GRADFIX3): GRADFIX2 shifted the wing
-## away from the centred card because the popped card
-## (0.15 out) floated in FRONT of the old wing (0.08) and
-## covered its inner strip. The book floats 0.30 - a full
-## pop in front of the popped card - so the shift's job
-## is done by depth, and the shift itself only bought
-## centre clearance at the price of the far neighbours:
-## the census measured the shifted, tilted book's left
-## edge crossing the wide labels of the column beyond
-## its slot. The book now seats exactly in its borrowed
-## slot, like the card it replaces. The board stands in
-## free slots and still spends the whole COMPANION_CLEAR.
-const WING_CLEAR: float = 0.0
-const WING_SIZE_GF1: Vector2 = Vector2(0.54, 0.58) ## the GRAD FIX round's wing size (the oldwing NC's restore)
-const WING_Y_GF1: float = 0.21 ## the GRAD FIX round's wing seat height (the oldwing NC's restore)
-const TBOARD_PROUD: float = 0.30 ## how far in front of its slot the Tournament board floats at full pop (GRADFIX3: the Standing Book's depth law, the wing's own - see WING_PROUD; the pre-book board floated 0.06)
+## The card flip (GRADFIX6 item 1 - Chris's design, back to
+## the original concept after the wing/book line died in the
+## GRADFIX5 field verdict: "the book look ain't working...
+## still off-center, still butting into table art's
+## business"): Y flips the focused card IN PLACE - the art
+## face in front, the info the wing/book used to carry on
+## the card's own back (RoomSpecs.wing_spec in the library,
+## the TR3 board spec in the Tournament Room). The wing,
+## the book, the hinge, the borrowed slots and the board's
+## free-slot seating are DELETED: a card's back has no side
+## to get wrong, covers no neighbour at any point of the
+## motion (at mid-flip the card is edge-on inside its own
+## slot), and never leaves its seat. The flip is a rotation
+## about the card's own vertical centre axis on the quad's
+## flip pivot (see ClickableQuad), at FLIP_SEC for the full
+## half-turn - quick, neat, one clean ease (Chris: "earn a
+## bagel on the quick, neat flip"). Input is never gated by
+## the flip: the animation is cosmetic, presses land on the
+## standing state. The NC seam PVLDS_GRADFIX6_NC=noflip
+## makes Y inert, so the flip legs fail by name.
+const FLIP_SEC: float = 0.30 ## the flip's full half-turn, seconds
 ## The starfield shaders (GRADFIX4 item 5, the sky pass): the
 ## field is computed from the fragment's DIRECTION in the
 ## shell's local space, hashed over 3D cells - never from the
@@ -518,6 +478,7 @@ var _desk_rig: Node3D
 var _desk_camera: Camera3D
 var _panels: Array[ClickableQuad] = []
 var _panel_launches: Array[ClickableQuad] = [] ## per-panel Launch button, parallel to _panels
+var _panel_back_launches: Array[ClickableQuad] = [] ## per-panel BACK Launch button (GRADFIX6 item 1: the flipped card's own Launch, on its back), parallel to _panels; null where a panel has no back
 var _panel_base_pos: Array[Vector3] = [] ## wall-flush position per panel, parallel to _panels
 var _panel_pop_dir: Array[Vector3] = [] ## unit vector from the panel toward the viewer (its wall normal)
 var _panel_pop: Array[float] = [] ## current pop amount per panel, 0 flush .. 1 popped
@@ -600,7 +561,9 @@ static var debug_b_nc: String = ""
 ## the factory's fallback solid AND count it as the board
 ## (the pre-GRADFIX4 bookkeeping) - the field's empty-
 ## faced board, stuck - so the heal leg fails by name.
-## Empty in every real run.
+## GRADFIX6: the seam now bites in _render_card_back, the
+## board's render on the flipped card. Empty in every
+## real run.
 static var debug_gf4_nc: String = ""
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
 var _bg_starfield: MeshInstance3D = null
@@ -608,58 +571,30 @@ var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD F
 var _starfield_mode: String = "layered" ## the SETUP dial: "layered" | "flat" | "off" (see set_starfield_mode)
 var _bg_wireframe: MeshInstance3D = null
 var _bg_ring: MeshInstance3D = null ## always null since GRADFIX4 removed the orbit ring (item 5e); background_layers() skips it
-var _wing: Node3D = null ## the focused card's wing holder (a DRUM child: it must ride the swing glued to the centred card - it is a card companion, not a background layer)
-var _wing_quad: MeshInstance3D = null
-var _wing_tilt: Node3D = null ## the wing-book's tilt pivot (see _make_book)
-var _wing_mat: StandardMaterial3D = null
-var _wing_key: String = "" ## the content key the wing's standing texture was rendered for
-var _wing_game_id: String = "" ## the game the wing currently serves ("" = no wing content)
-var _wing_enabled: bool = true ## the SETUP dial (the GRAD FIX round): the wing stands only while this holds
-var _wing_borrowed_idx: int = -1 ## the panel whose slot the wing stands in, hidden + unpickable while borrowed (-1 = none)
-## The Tournament Room's standing board (the GRAD FIX
-## round's redesign): one board, standing as furniture in
-## the slot RIGHT of the centred challenge's art card, its
-## slot's card borrowed away - the pairing is art + board
-## side by side, and stepping re-pairs the board's content,
-## never the layout.
-var _tboard: Node3D = null
-var _tboard_quad: MeshInstance3D = null
-var _tboard_tilt: Node3D = null ## the board-book's tilt pivot (see _make_book)
-var _tboard_mat: StandardMaterial3D = null
-var _tboard_launch: ClickableQuad = null
-var _tboard_slot: Transform3D = Transform3D() ## the board's seated slot transform on the drum
-var _tboard_key: String = "" ## the standing board content's key (challenge + fetch stamp + player + owned)
-var _tboard_challenge_id: String = ""
-var _tboard_owned: bool = false
-var _tboard_borrowed_idx: int = -1 ## the panel whose slot the board stands in (-1 = none; the GRADFIX2 seating borrows none - the field survives for the oldseat NC)
-var _tboard_seat: Vector2i = Vector2i(-1, -1) ## the board's standing seat coord (see _tboard_seat_coord; the smoke's pairing legs read it)
-## GRADFIX4 item 6 (the blank-board heal): a companion's
-## standing key and its APPLIED texture's key are different
-## facts. A render whose capture came back empty lands the
-## factory's 4x4 fallback solid - a dark, textless face,
-## exactly the field's empty Walking Dead board - and under
-## the old bookkeeping that counted as the board, forever:
-## no later refresh ever re-rendered a standing key. Now the
-## applied texture's key and whether it is a REAL capture are
-## tracked separately, and a per-frame watchdog re-issues
-## the render (bounded) whenever the standing key's face is
-## missing or unreal. Same bookkeeping on both companions.
-var _tboard_tex_key: String = "" ## the key the board's APPLIED texture was rendered for
-var _tboard_tex_real: bool = false ## the applied board texture is a real capture, not the fallback solid
-var _tboard_render_key: String = "" ## the key a board render is in flight for ("" = none)
-var _tboard_retry_key: String = ""
-var _tboard_retries: int = 0
-var _tboard_retry_msec: int = 0
-var _wing_tex_key: String = "" ## the key the wing's APPLIED texture was rendered for
-var _wing_tex_real: bool = false ## the applied wing texture is a real capture, not the fallback solid
-var _wing_render_key: String = "" ## the key a wing render is in flight for ("" = none)
-var _wing_retry_key: String = ""
-var _wing_retries: int = 0
-var _wing_retry_msec: int = 0
+## The card flip's standing state (GRADFIX6 item 1): one
+## card at a time wears the turn - the one the player
+## flipped. _flip_idx is its index in _panels (-1 = no card
+## flipped or turning); _flip_t is the turn's progress
+## (0 = front, 1 = back) and _flip_open its target. The
+## back's content bookkeeping mirrors the deleted
+## companions' heal discipline (the GRADFIX4 blank-face
+## heal, carried over whole): the standing key, the APPLIED
+## texture's key and whether it is a real capture are
+## separate facts, and a watchdog re-issues the render
+## (bounded) whenever the standing back's face is missing
+## or the factory's fallback solid.
+var _flip_idx: int = -1
+var _flip_t: float = 0.0
+var _flip_open: bool = false
+var _flip_key: String = "" ## the standing back content's key (game/challenge + fetch stamp + player + owned)
+var _flip_tex_key: String = "" ## the key the flipped card's APPLIED back texture was rendered for
+var _flip_tex_real: bool = false ## the applied back texture is a real capture, not the fallback solid
+var _flip_render_key: String = "" ## the key a back render is in flight for ("" = none)
+var _flip_retry_key: String = ""
+var _flip_retries: int = 0
+var _flip_retry_msec: int = 0
 const BOARD_TEX_MAX_RETRIES: int = 5 ## the blank-face heal's bound per standing key
 const BOARD_TEX_RETRY_MS: int = 600 ## the heal's minimum interval between re-renders
-var _wing_slot: Transform3D = Transform3D() ## the wing's seated slot transform on the drum (its pop offset applies per frame)
-var _wing_seat: Vector2i = Vector2i(-1, -1) ## the wing's standing seat coord (the grad census's baseline reads it)
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
@@ -682,7 +617,6 @@ var _setup_panel_scan_btn: ClickableQuad = null
 var _setup_panel_dl_btn: ClickableQuad = null
 var _setup_panel_wovp_paste_btn: ClickableQuad = null ## PASTE KEY: reads the WoVP key off the PC clipboard (VR has no keyboard - the paste IS the field)
 var _setup_panel_wovp_test_btn: ClickableQuad = null ## TEST KEY: Main validates the saved key and names whose it is
-var _setup_panel_wing_btn: ClickableQuad = null ## WING: ON/OFF - the display dial (the GRAD FIX round)
 var _setup_panel_stars_btn: ClickableQuad = null ## STARS: LAYERED/FLAT/OFF - the display dial (the GRAD FIX round)
 var _setup_panel_back_btn: ClickableQuad = null
 var _setup_panel_up: bool = false
@@ -1328,11 +1262,13 @@ func set_wovp_data(d: Dictionary) -> void:
 		_recompute_visible()
 		_rebuild_wall()
 	else:
-		# Fresh boards can give the centred card a wing it
-		# did not have (or change the one it has).
-		_wing_key = ""
-		_refresh_wing()
-		_refresh_tboard()
+		# Fresh boards can give the flipped card a back it
+		# did not have (or change the one it has): the back's
+		# key carries the fetch stamp, so a re-render under
+		# the new key is the refresh's whole job.
+		if _flip_idx >= 0:
+			_flip_key = _card_back_key(_flip_idx)
+			_refresh_card_back()
 
 
 func tournament_active() -> bool:
@@ -1580,8 +1516,7 @@ func _grid_coord(index: int) -> Vector2i:
 
 
 ## The unclamped shelf index at a grid place, under the
-## standing mapping - the raw material _index_at clamps
-## and the wing's borrow arithmetic compares.
+## standing mapping - the raw material _index_at clamps.
 func _raw_index(col: int, row: int) -> int:
 	if debug_grid_nc == "rowmajor":
 		return row * _columns + col
@@ -1682,11 +1617,16 @@ func _make_card_label(parent: Node, text: String) -> Label3D:
 ## Mint one game's card nodes (once per library adoption; the
 ## pool re-seats them per view - see _panel_pool). The root is
 ## the panel ClickableQuad the whole room already speaks
-## (payload = game_id); riding on it in card mode: the frame
-## quad behind, the nameplate plate + title label in front,
-## and the Launch button. Board mode mints the bare board
-## panel at the board's own size (its face carries its own
-## text; no plate, no label, no frame).
+## (payload = game_id); riding on its flip pivot in card mode:
+## the frame quad behind, the nameplate plate + title label
+## in front, the Launch button - and the card's BACK (a
+## holder turned PI on the pivot: its own frame, its info
+## face, its own Launch button), which the flip shows
+## instead of the front past the turn's midpoint (GRADFIX6
+## item 1). Board mode mints the bare board panel at the
+## board's own size (its face carries its own text; no
+## plate, no label, no frame, no back - the state row has
+## nothing to flip to).
 func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 	var size: Vector2 = RoomSpecs.board_panel_size() if mode == "board" else CARD_SIZE
 	var q: ClickableQuad = ClickableQuad.new()
@@ -1700,17 +1640,54 @@ func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 	if mode == "card":
 		q.set_frame_size(CARD_FRAME_SIZE)
 	var nodes: Dictionary = {"root": q, "mode": mode}
+	var pivot: Node3D = q.flip_pivot()
 	if mode == "card":
-		nodes["frame"] = _make_card_quad(q, CARD_FRAME_SIZE, Vector3(0.0, 0.0, -0.007), _frame_mat(false))
-		nodes["label"] = _make_card_label(q, game.title)
+		nodes["frame"] = _make_card_quad(pivot, CARD_FRAME_SIZE, Vector3(0.0, 0.0, -0.007), _frame_mat(false))
+		nodes["label"] = _make_card_label(pivot, game.title)
 		# The plate starts at the strip's floor size; _seat_card
 		# grows it to the title block's measured height once the
 		# label is in the tree and its AABB is real.
-		nodes["plate"] = _make_card_quad(q, LABEL_STRIP_SIZE, Vector3(0.0, LABEL_STRIP_Y, 0.005), _plate_mat())
+		nodes["plate"] = _make_card_quad(pivot, LABEL_STRIP_SIZE, Vector3(0.0, LABEL_STRIP_Y, 0.005), _plate_mat())
+		# The back assembly: a holder turned PI inside the
+		# pivot, so the pivot's own half-turn brings it square
+		# to the player. Its local frame is the front's mirror:
+		# frame behind (-0.007), face at +0.001 (a breath proud
+		# of the front face's plane, so the two never z-fight
+		# at the turn's edge-on instant), Launch at +0.020 on
+		# the board face's reserved plinth (RoomSpecs.
+		# board_launch_y - the back IS a board-sized face).
+		# Hidden and unpickable until the flip's midpoint swap
+		# (see _apply_flip_side).
+		var back: Node3D = Node3D.new()
+		back.name = "CardBack"
+		back.rotation.y = PI
+		back.visible = false
+		pivot.add_child(back)
+		nodes["back_frame"] = _make_card_quad(back, CARD_FRAME_SIZE, Vector3(0.0, 0.0, -0.007), _frame_mat(false))
+		var bface: MeshInstance3D = MeshInstance3D.new()
+		bface.name = "CardBackFace"
+		var bqm: QuadMesh = QuadMesh.new()
+		bqm.size = CARD_SIZE
+		bface.mesh = bqm
+		var bmat: StandardMaterial3D = StandardMaterial3D.new()
+		bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		bface.material_override = bmat
+		bface.position = Vector3(0.0, 0.0, 0.001)
+		back.add_child(bface)
+		nodes["back"] = back
+		nodes["back_mat"] = bmat
+		var blq: ClickableQuad = ClickableQuad.new()
+		blq.setup("panel_launch", game.game_id, _placeholder_tex, PANEL_LAUNCH_SIZE)
+		blq.position = Vector3(0.0, RoomSpecs.board_launch_y(), 0.020)
+		blq.pick_enabled = false
+		back.add_child(blq)
+		nodes["back_launch"] = blq
+		nodes["back_key"] = "" ## the content key this card's back texture was rendered for ("" = never)
+		nodes["back_tex_real"] = false ## the back's standing texture is a real capture, not the fallback solid
 	var lq: ClickableQuad = ClickableQuad.new()
 	lq.setup("panel_launch", game.game_id, _placeholder_tex, PANEL_LAUNCH_SIZE)
 	lq.position = Vector3(0.0, RoomSpecs.board_launch_y() if mode == "board" else PANEL_LAUNCH_Y, 0.020)
-	q.add_child(lq)
+	pivot.add_child(lq)
 	nodes["launch"] = lq
 	# The card's layer stack, declared (the GRAD FIX round):
 	# at equal render priority the transparent sort could seat
@@ -1928,8 +1905,10 @@ func _set_centre(index: int, snap: bool = false) -> void:
 		_refresh_window()
 		_refresh_card_frames()
 		_request_window_fill()
-		_refresh_wing()
-		_refresh_tboard()
+		# No companion follows the centre any more (the flip
+		# replaced the wing/board): a centre change is one of
+		# the flip's closing conditions, and _update_flip
+		# reads it per frame - no hook needed here.
 
 
 ## Per-frame swing drive, from _process: a critically damped
@@ -1998,7 +1977,7 @@ func _refresh_window() -> void:
 	var browsing: bool = _mode == "wall" and not _placard_up and not _setup_panel_up and _launching_game_id == ""
 	for idx: int in range(_panels.size()):
 		var c: int = _grid_coord(idx).x
-		var vis: bool = c >= _panel_window_lo and c <= _panel_window_hi and idx != _wing_borrowed_idx and idx != _tboard_borrowed_idx
+		var vis: bool = c >= _panel_window_lo and c <= _panel_window_hi
 		_panels[idx].visible = vis
 		if browsing:
 			_panels[idx].pick_enabled = vis
@@ -2031,15 +2010,15 @@ func _rebuild_wall() -> void:
 	# the wall being torn down: drop the state without
 	# touching the (about to be freed) nodes.
 	_power_reset_state()
-	# The Tournament board's borrowed slot belongs to the
-	# wall being torn down: release it before the new wall's
-	# window refresh reads the borrow (a stale borrow would
-	# hide a library card).
-	_release_tboard_borrow()
-	if _tboard != null:
-		_tboard.visible = false
-		_tboard_challenge_id = ""
-		_tboard_key = ""
+	# The flip's standing turn belongs to the wall being
+	# torn down: snap it shut before the new wall seats (the
+	# pooled cards keep their nodes - a pivot left turned
+	# would seat its card backwards).
+	_snap_flip_shut()
+	for q2: ClickableQuad in _panels:
+		if q2 != null and is_instance_valid(q2):
+			q2.set_flip_angle(0.0)
+			q2.set_face_shown(true)
 	# The SETUP panel's focus, remembered across the rebuild:
 	# if a rebuild ever runs while the panel stands, the
 	# player's place on the panel must survive it (the tail
@@ -2072,6 +2051,7 @@ func _rebuild_wall() -> void:
 		_fin_end = null
 	_panels.clear()
 	_panel_launches.clear()
+	_panel_back_launches.clear()
 	_panel_base_pos.clear()
 	_panel_pop_dir.clear()
 	_panel_pop.clear()
@@ -2102,6 +2082,7 @@ func _rebuild_wall() -> void:
 		var nodes: Dictionary = _pool_card(game)
 		_panels.append(nodes["root"] as ClickableQuad)
 		_panel_launches.append(nodes["launch"] as ClickableQuad)
+		_panel_back_launches.append(nodes.get("back_launch") as ClickableQuad)
 		_panel_base_pos.append(Vector3.ZERO)
 		_panel_pop_dir.append(Vector3.ZERO)
 		_panel_pop.append(0.0)
@@ -2171,10 +2152,6 @@ func _rebuild_wall() -> void:
 	_refresh_window()
 	_refresh_card_frames()
 	_fill_wall_textures(gen)
-	# The standing board re-seats on every rebuilt wall (a
-	# boards refresh rebuilds the Tournament wall under the
-	# standing pairing; the teardown above cleared it).
-	_refresh_tboard()
 	if _placard_up:
 		# A rebuild while the placard stands (the launch-failure
 		# path) must not resurrect live controls behind it.
@@ -2809,6 +2786,11 @@ func _fill_one_face(idx: int, gen: int) -> void:
 			# NC seam (graduation smoke): the nameplate
 			# removed - the nameplate legs must convict it.
 			_panel_plates[idx].visible = false
+		if idx == _flip_idx and _flip_t >= 0.5:
+			# A face landing under a standing back: the
+			# derivation above speaks for the FRONT - the
+			# flip's side swap re-asserts the back's claim.
+			_apply_flip_side(idx, true)
 	# The face has landed. Two power-on debts settle here
 	# (the boot fault's halves): a performance that skipped
 	# this card for wearing the placeholder retries now - its
@@ -2885,8 +2867,8 @@ func refresh_shot_faces(game: GameEntry) -> void:
 ## view is a single state panel - no key, a failed fetch, no
 ## live challenges - that panel wears the state face at the
 ## board's size. Challenge panels are cards now and dress
-## through _fill_one_face; the standing board beside the
-## centred challenge renders in _render_tboard_content.
+## through _fill_one_face; a challenge's scoreboard stands
+## on its card's back (the flip - see _render_card_back).
 func _fill_tournament_state_faces(gen: int) -> void:
 	for i: int in range(_panels.size()):
 		var row: Dictionary = _tournament_rows[i]
@@ -2970,7 +2952,7 @@ func _refresh_focusables() -> void:
 		if _placard_back != null:
 			_focusables.append(_placard_back)
 	elif _setup_panel_up:
-		# The SETUP panel owns the room: its seven buttons are
+		# The SETUP panel owns the room: its six buttons are
 		# the only focus stops (see show_setup_panel).
 		if _setup_panel_scan_btn != null:
 			_focusables.append(_setup_panel_scan_btn)
@@ -2980,8 +2962,6 @@ func _refresh_focusables() -> void:
 			_focusables.append(_setup_panel_wovp_paste_btn)
 		if _setup_panel_wovp_test_btn != null:
 			_focusables.append(_setup_panel_wovp_test_btn)
-		if _setup_panel_wing_btn != null:
-			_focusables.append(_setup_panel_wing_btn)
 		if _setup_panel_stars_btn != null:
 			_focusables.append(_setup_panel_stars_btn)
 		if _setup_panel_back_btn != null:
@@ -3027,6 +3007,9 @@ func _refresh_quad_states() -> void:
 	var all: Array[ClickableQuad] = []
 	all.append_array(_panels)
 	all.append_array(_panel_launches)
+	for blq: ClickableQuad in _panel_back_launches:
+		if blq != null:
+			all.append(blq)
 	for k: Variant in _rail_quads.keys():
 		all.append(_rail_quads[k])
 	# The strip's slots are focus stops too, so they take
@@ -3059,8 +3042,6 @@ func _refresh_quad_states() -> void:
 		all.append(_setup_panel_wovp_paste_btn)
 	if _setup_panel_wovp_test_btn != null:
 		all.append(_setup_panel_wovp_test_btn)
-	if _setup_panel_wing_btn != null:
-		all.append(_setup_panel_wing_btn)
 	if _setup_panel_stars_btn != null:
 		all.append(_setup_panel_stars_btn)
 	if _setup_panel_back_btn != null:
@@ -3084,6 +3065,9 @@ func _panel_for(q: ClickableQuad) -> ClickableQuad:
 	var lidx: int = _panel_launches.find(q)
 	if lidx >= 0 and lidx < _panels.size():
 		return _panels[lidx]
+	var bidx: int = _panel_back_launches.find(q)
+	if bidx >= 0 and bidx < _panels.size():
+		return _panels[bidx]
 	return null
 
 
@@ -3174,629 +3158,417 @@ func _update_pop(delta: float) -> void:
 		q.position = _panel_base_pos[i] + _panel_pop_dir[i] * (POP_OUT_DISTANCE * amt)
 		var s: float = lerpf(1.0, POP_OUT_SCALE, amt)
 		q.scale = Vector3(s, s, s)
-	_update_wing_frame()
-	_update_tboard_frame()
+	_update_flip(delta)
 
 
-## The focused card's wing (the user's design, 2026-10-28;
-## built in the graduation's Stage B): a companion panel on
-## the LEFT of the centred card only, arriving with the pop.
-## For a tournament table it carries the live WoVP board
-## (his row, the leader, the cut/promotion line, the clock -
-## WovpChallenge.board_rows via the TR3 board spec); the
-## table's metadata (manufacturer / year / designer /
-## version) rides beneath the board inside the same render,
-## and a table with no board still gets its metadata wing.
-## Unfocused cards stay pure art - the wing exists once, for
-## the centre.
+## ------------------------------------------------------ the card flip
 ##
-## Placement law (the DOME5 census's wing legs): the wing
-## stands in the left neighbour's slot on the drum (so it
-## rides the swing glued to the centred card), floated
-## WING_PROUD in front of the slot plane. The GRAD FIX
-## round's discipline - the wing SMALLER than its slot on
-## every side - held through GRADFIX4; GRADFIX5 retires it:
-## the page is the slot's exact size, centred flush at
-## WING_Y = 0 (see WING_SIZE), and the slot's own card is
-## borrowed away - hidden and unpickable - for as long as
-## the wing stands there, so no part of any card is ever
-## under it. At the shelf's first column there is no card
-## to borrow: the wing overhangs the start fin's ground
-## instead (the fin is furniture, not a card).
-## The wing's live size and seat height (the NC seams serve
-## the pre-fix values: PVLDS_GRAD_NC=wing the graduation
-## round's oversize wing, PVLDS_GRADFIX_NC=oldwing the
-## GRAD FIX round's squarer wing with no clearance shift).
-func _wing_size() -> Vector2:
-	if OS.get_environment("PVLDS_GRADFIX_NC") == "oldwing":
-		return WING_SIZE_GF1
-	if OS.get_environment("PVLDS_GRADFIX5_NC") == "shortpage":
-		return Vector2(0.62, 1.00) ## the GRADFIX3/4 page (the flush leg's NC restore)
-	return WING_SIZE_NC if OS.get_environment("PVLDS_GRAD_NC") == "wing" else WING_SIZE
+## The flip (GRADFIX6 item 1 - Chris's design, the original
+## concept restored): Y turns the focused card over IN ITS
+## SEAT. The front is the art face as always; the back is
+## the info the wing and the book used to carry beside the
+## card - in the library, RoomSpecs.wing_spec (the table's
+## data, and the live board too when the table stands in a
+## challenge); in the Tournament Room, the challenge's full
+## TR3 scoreboard (RoomSpecs.tournament_board_spec). What
+## the flip replaces, it deletes: no companion panel, no
+## borrowed slot, no hinge - the GRADFIX5 field verdict on
+## the book was "still off-center, still butting into table
+## art's business", and a card's back can be neither.
+##
+## Mechanics: the turn rides the quad's flip pivot (see
+## ClickableQuad) about the card's own vertical centre
+## axis. _flip_t walks 0 (front) to 1 (back) at FLIP_SEC
+## for the half-turn on a cubic in-out ease; at the
+## midpoint the showing side swaps - front furniture hides,
+## the back assembly shows - so no mirrored face or label
+## ever reads through the turn. The card never leaves its
+## seat: the pop's position/scale are the root's, the turn
+## is the pivot's, and at mid-flip the card is edge-on
+## inside its own slot, so its swept volume stays home
+## (the grad census charges exactly that, per centre).
+## Input is never gated: a press mid-turn lands on the
+## standing state, and the turn itself is one variable
+## walking toward its target.
+##
+## One card wears the turn at a time. The turn closes -
+## target back to front - when the centre moves to another
+## card, when the view leaves the wall (detail, placard,
+## SETUP panel, the load wait), or when the wall rebuilds;
+## a snap shut (no animation) happens only on rebuild,
+## where the wall itself snaps.
+
+## The flip's NC seam: under PVLDS_GRADFIX6_NC=noflip the
+## Y press is inert (the pre-fix world, where Y opened the
+## detail view instead) - the flip legs fail by name.
+func _flip_disabled() -> bool:
+	return OS.get_environment("PVLDS_GRADFIX6_NC") == "noflip"
 
 
-func _wing_y() -> float:
-	if OS.get_environment("PVLDS_GRADFIX_NC") == "oldwing":
-		return WING_Y_GF1
-	if OS.get_environment("PVLDS_GRADFIX5_NC") == "shortpage":
-		return -0.02 ## the GRADFIX3/4 seat (the flush leg's NC restore)
-	return WING_Y
-
-
-## The horizontal direction along the drum from the centred
-## card's seat to a companion's seat - the direction a
-## companion shifts to keep the popped centre card's
-## silhouette off its text (COMPANION_CLEAR, GRADFIX2
-## item 2). Zero when the seats coincide (no drum direction
-## exists to shift along).
-func _companion_away(centre_origin: Vector3, seat_origin: Vector3) -> Vector3:
-	var away: Vector3 = seat_origin - centre_origin
-	away.y = 0.0
-	if away.length() < 0.001:
-		return Vector3.ZERO
-	return away.normalized()
-
-
-## Borrow the slot at the centred card's left: its panel is
-## hidden and unpickable until the wing moves on. The
-## borrowed index is what _refresh_window consults, so a
-## window refresh mid-borrow keeps the card down; releasing
-## restores the card's standing visibility (its pick state
-## returns with the next window refresh).
-func _borrow_wing_slot(coord: Vector2i) -> void:
-	var want: int = -1
-	if coord.x >= 1:
-		var raw: int = _raw_index(coord.x - 1, coord.y)
-		if raw >= 0 and raw < _panels.size() and _grid_coord(raw) == Vector2i(coord.x - 1, coord.y):
-			want = raw
-	if want == _wing_borrowed_idx:
+## Y's new job (see _info_focused_card): turn the focused
+## card over, or back. Only a card-mode panel in the plain
+## wall flips; the state row has no back, and a board-mode
+## panel never reaches here. Starting a turn on a card
+## snaps any other card's turn shut first - one back shows
+## at a time, and the snap is instant so the new turn owns
+## the stage.
+func _toggle_flip(idx: int) -> void:
+	if idx < 0 or idx >= _panels.size():
 		return
-	_release_wing_borrow()
-	if want >= 0:
-		_wing_borrowed_idx = want
-		_panels[want].visible = false
-		_panels[want].pick_enabled = false
-		if want < _panel_launches.size():
-			_panel_launches[want].pick_enabled = false
-
-
-func _release_wing_borrow() -> void:
-	if _wing_borrowed_idx < 0:
+	var q: ClickableQuad = _panels[idx]
+	if q == null or q.flip_pivot() == null:
 		return
-	var idx: int = _wing_borrowed_idx
-	_wing_borrowed_idx = -1
-	if idx < _panels.size() and _panel_window_lo >= 0:
-		var c: int = _grid_coord(idx).x
-		_panels[idx].visible = c >= _panel_window_lo and c <= _panel_window_hi
-
-
-## The wing dial (the SETUP panel's WING button rides it):
-## off releases the borrowed card and folds the wing away at
-## once; on re-seats it at the standing centre.
-func set_wing_enabled(on: bool) -> void:
-	_wing_enabled = on
-	if not on:
-		_release_wing_borrow()
-		if _wing != null:
-			_wing.visible = false
+	if _flip_nodes(idx).is_empty():
+		return ## no back to turn to (the Tournament state row wears a board face already)
+	if _flip_idx == idx:
+		_flip_open = not _flip_open
 	else:
-		_refresh_wing()
-		_refresh_tboard()
+		if _flip_idx >= 0:
+			_snap_flip_shut()
+		_flip_idx = idx
+		_flip_open = true
+		_flip_key = _card_back_key(idx)
+		_flip_tex_key = ""
+		_flip_tex_real = false
+		_flip_render_key = ""
+		_flip_retry_key = ""
+		_flip_retries = 0
+		# The power-on performs on the FRONT: a performance
+		# standing on this card restores before it turns.
+		if _power_panel == q or _power_candidate == q:
+			_restore_power("flip")
+	_refresh_card_back()
 
 
-func wing_enabled() -> bool:
-	return _wing_enabled
+## Close the turn (animated): the target returns to the
+## front; _update_flip walks it home and clears the state
+## when it lands.
+func _close_flip() -> void:
+	_flip_open = false
 
 
-func _refresh_wing() -> void:
-	if _wing == null:
-		_build_wing()
-	if _wing == null:
-		return
-	if _tournament or _centre_index < 0 or _centre_index >= _visible_games.size() or not _wing_enabled:
-		_release_wing_borrow()
-		_wing_game_id = ""
-		_wing.visible = false
-		return
-	var game: GameEntry = _visible_games[_centre_index]
-	# Seat first (the slot follows the centre even while the
-	# content renders).
-	var coord: Vector2i = _grid_coord(_centre_index)
-	_wing_seat = Vector2i(coord.x - 1, coord.y)
-	var nc_wing: bool = OS.get_environment("PVLDS_GRAD_NC") == "wing"
-	if not nc_wing:
-		_borrow_wing_slot(coord)
-	_wing_slot = _card_transform_at(coord.x - 1, coord.y)
-	_wing_slot.origin += _wing_slot.basis.y * (WING_Y_NC if nc_wing else _wing_y())
-	if not nc_wing and OS.get_environment("PVLDS_GRADFIX_NC") != "oldwing":
-		# The companion clearance (GRADFIX2 item 2): shift
-		# the wing along the drum away from the centred
-		# card, so the popped card's silhouette never
-		# covers the wing's text from a real viewpoint.
-		var centre_origin: Vector3 = _card_transform_at(coord.x, coord.y).origin
-		_wing_slot.origin += _companion_away(centre_origin, _wing_slot.origin) * WING_CLEAR
-	if nc_wing:
-		# NC seam (graduation smoke): the wing shoved onto
-		# the focused card and down over its label - the
-		# occlusion census must convict it.
-		_wing_slot.origin += _wing_slot.basis.x * 0.30
-		_wing_slot.origin += _wing_slot.basis.y * -0.35
-	_wing.transform = _wing_slot
-	# Content: the challenge whose table this is, if any.
-	var ch: WovpChallenge = null
+## Snap the turn shut with no animation (a wall rebuild:
+## the wall itself snaps, so the card does too).
+func _snap_flip_shut() -> void:
+	if _flip_idx >= 0 and _flip_idx < _panels.size():
+		var q: ClickableQuad = _panels[_flip_idx]
+		if q != null:
+			q.set_flip_angle(0.0)
+			_apply_flip_side(_flip_idx, false)
+	_flip_idx = -1
+	_flip_t = 0.0
+	_flip_open = false
+	_flip_key = ""
+	_flip_tex_key = ""
+	_flip_tex_real = false
+	_flip_render_key = ""
+
+
+## The standing back's content key for a panel: the same
+## discipline the companions used - content identity plus
+## the boards' fetch stamp and the player, so a boards
+## refresh re-renders the back under its standing key.
+func _card_back_key(idx: int) -> String:
+	var game: GameEntry = _visible_games[idx]
+	if _tournament and idx < _tournament_rows.size():
+		var row: Dictionary = _tournament_rows[idx] as Dictionary
+		if str(row.get("kind", "")) == "challenge":
+			var ch: WovpChallenge = row["challenge"] as WovpChallenge
+			if ch != null:
+				return "board|" + ch.challenge_id + "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id \
+					+ "|" + ("owned" if bool(row.get("owned", false)) else "none")
+	var ch2: WovpChallenge = null
 	for cv: Variant in _wovp_challenges:
 		var cand: WovpChallenge = cv as WovpChallenge
 		if cand != null and cand.table_external_id == game.game_id:
-			ch = cand
+			ch2 = cand
 			break
-	var key: String = game.game_id + "|" + (ch.challenge_id if ch != null else "") \
+	return "wing|" + game.game_id + "|" + (ch2.challenge_id if ch2 != null else "") \
 		+ "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id
-	_wing_key = key
-	_wing_game_id = game.game_id
-	if key == _wing_tex_key and _wing_tex_real:
-		return ## the standing key's real face already stands
-	if _wing_render_key == key:
-		return ## its render is already in flight
-	_wing_render_key = key
-	_render_wing_content(game, ch, key)
 
 
-## One flat material for the book's furniture.
-func _book_mat(color: Color) -> StandardMaterial3D:
-	var m: StandardMaterial3D = StandardMaterial3D.new()
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.albedo_color = color
-	if color.a < 1.0:
-		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	return m
-
-
-## ONE BOOK (GRADFIX4, the user's pick after the GRADFIX3
-## field session): the dressing both info panels wear - the
-## library wing and the Tournament board are ONE treatment,
-## and the treatment is a PAGE OF THE FOCUSED CARD'S OWN
-## BOOK. The centred card is the art page; this panel is the
-## text page; the two share a spine at their join and ONE
-## frame language - the card's own frame stock runs around
-## the text page's face exactly as it runs around the card
-## (same stock, same inset), and the face's paper sits inside
-## a cover border of the same stock (see CardFace's page).
-## The hinge is the SPINE EDGE - the edge NEAREST the centred
-## card - and the page leans back BOOK_TILT_DEG on that edge:
-## spine_sign +1 puts the spine at the page's right edge (the
-## wing, which stands LEFT of its card), -1 at its left edge
-## (the board, which stands RIGHT of its card). GRADFIX3's
-## cast-shadow slab and page-block slabs are GONE (GRADFIX4
-## item 2: the black opaque slab on left-seated panels goes
-## entirely, not softened) - separation comes from the hinge
-## and the shared cover. What remains: the frame, one spine
-## knuckle straddling the join edge, and the face. Returns
-## the tilt pivot and the face holder: the caller parents its
-## face quad (and any furniture, like a Launch button) to
-## "inner", whose local frame is the book's face frame.
-func _make_book(root: Node3D, size: Vector2, prefix: String, spine_sign: float) -> Dictionary:
-	var tilt: Node3D = Node3D.new()
-	tilt.name = prefix + "BookTilt"
-	tilt.position = Vector3(spine_sign * size.x * 0.5, 0.0, 0.0)
-	tilt.rotation.y = spine_sign * deg_to_rad(BOOK_TILT_DEG)
-	root.add_child(tilt)
-	var inner: Node3D = Node3D.new()
-	inner.name = prefix + "BookFace"
-	inner.position = Vector3(-spine_sign * size.x * 0.5, 0.0, 0.0)
-	tilt.add_child(inner)
-	# The shared frame: the card's frame stock at the card's
-	# own inset, so the text page and the art page carry the
-	# same border - the single-object read lives here.
-	var frame: MeshInstance3D = _make_card_quad(inner,
-		size + (CARD_FRAME_SIZE - CARD_SIZE), Vector3(0.0, 0.0, -0.007),
-		_frame_mat(false))
-	frame.name = prefix + "BookFrame"
-	# The spine knuckle: a dark bar straddling the join edge,
-	# the book's hinge made visible - it reaches a little
-	# INTO the gap toward the art page, never onto it.
-	var spine: MeshInstance3D = _make_card_quad(inner,
-		Vector2(0.055, size.y + (CARD_FRAME_SIZE.y - CARD_SIZE.y)),
-		Vector3(spine_sign * (size.x * 0.5 + 0.010), 0.0, -0.012),
-		_book_mat(BOOK_COVER_COLOR))
-	spine.name = prefix + "BookSpine"
-	return {"tilt": tilt, "inner": inner}
-
-
-func _build_wing() -> void:
-	if _wall == null:
-		return
-	_wing = Node3D.new()
-	_wing.name = "FocusWing"
-	_wing.visible = false
-	# The One Book (GRADFIX4): the wing is the text page of
-	# the centred card's book - spine at its right edge, the
-	# join with the art page - and its face quad lives in the
-	# book's face frame.
-	var book: Dictionary = _make_book(_wing, _wing_size(), "Wing", 1.0)
-	_wing_tilt = book["tilt"] as Node3D
-	_wing_quad = MeshInstance3D.new()
-	var qm: QuadMesh = QuadMesh.new()
-	qm.size = _wing_size()
-	_wing_quad.mesh = qm
-	_wing_mat = StandardMaterial3D.new()
-	_wing_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_wing_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_wing_quad.material_override = _wing_mat
-	(book["inner"] as Node3D).add_child(_wing_quad)
-	_wall.add_child(_wing)
-
-
-func _render_wing_content(game: GameEntry, ch: WovpChallenge, key: String) -> void:
+## The spec a panel's back renders: the Tournament board
+## for a challenge card in the Tournament Room, the wing
+## spec (table data, or board + data) in the library -
+## with the book's dressing retired: the spine key goes
+## (a card's back joins nothing) and the footer plinth the
+## wing waived is restored, because the back carries its
+## own Launch button where the board's always sat.
+func _card_back_spec(idx: int) -> Dictionary:
+	var game: GameEntry = _visible_games[idx]
 	var now_unix: int = int(Time.get_unix_time_from_system())
-	var spec: Dictionary = RoomSpecs.wing_spec(game, ch, _wovp_user_id, now_unix)
-	var px: Vector2i = Vector2i(
-		int(float(RoomSpecs.board_face_px().x) * _wing_size().x / RoomSpecs.board_panel_size().x),
-		int(float(RoomSpecs.board_face_px().y) * _wing_size().y / RoomSpecs.board_panel_size().y))
-	var tex: Texture2D = await _factory.render_texture(spec, px)
-	if tex == null or key != _wing_key:
-		if _wing_render_key == key:
-			_wing_render_key = ""
-		return
-	_wing_render_key = ""
-	_wing_mat.albedo_texture = tex
-	_wing_tex_key = key
-	_wing_tex_real = _tex_is_real(tex)
+	if _tournament and idx < _tournament_rows.size():
+		var row: Dictionary = _tournament_rows[idx] as Dictionary
+		if str(row.get("kind", "")) == "challenge":
+			var ch: WovpChallenge = row["challenge"] as WovpChallenge
+			if ch != null:
+				var bspec: Dictionary = RoomSpecs.tournament_board_spec(
+					ch, bool(row.get("owned", false)), _wovp_user_id, now_unix)
+				bspec["spine_side"] = ""
+				return bspec
+	var ch2: WovpChallenge = null
+	for cv: Variant in _wovp_challenges:
+		var cand: WovpChallenge = cv as WovpChallenge
+		if cand != null and cand.table_external_id == game.game_id:
+			ch2 = cand
+			break
+	var spec: Dictionary = RoomSpecs.wing_spec(game, ch2, _wovp_user_id, now_unix)
+	spec["spine_side"] = ""
+	spec["footer_px"] = RoomSpecs.BOARD_FOOTER_PX
+	return spec
+
+
+## The flipped card's nodes ({} when the panel has no back
+## - a board-mode panel, or an index off the wall).
+func _flip_nodes(idx: int) -> Dictionary:
+	if idx < 0 or idx >= _panels.size():
+		return {}
+	var game: GameEntry = _visible_games[idx]
+	var nodes: Dictionary = _panel_pool.get(game.game_id, {}) as Dictionary
+	if nodes.is_empty() or str(nodes.get("mode", "")) != "card":
+		return {}
+	return nodes
 
 
 ## A real capture is never the factory's fallback: the
 ## fallback solid is 4x4, every real face renders at its
 ## spec size (hundreds of pixels). The blank-face heal
-## (GRADFIX4 item 6) keys on this.
+## (GRADFIX4 item 6, carried into the flip) keys on this.
 func _tex_is_real(tex: Texture2D) -> bool:
 	return tex != null and tex.get_width() > 16 and tex.get_height() > 16
 
 
-## The blank-face heal, wing side (GRADFIX4 item 6): while
-## the wing stands, if its standing key's applied face is
-## missing or a fallback solid, re-issue the render -
-## throttled, and bounded per key so a truly broken renderer
-## costs five renders, not a spin.
-func _heal_wing_face() -> void:
-	if _wing_key == "" or _wing_render_key != "":
+## (Re)render the flipped card's back for its standing key:
+## a no-op when the applied texture already serves the key
+## with a real capture, or when that render is in flight.
+## The render is the factory's ordinary async path - it
+## never blocks a frame, and the turn never waits for it:
+## a back whose art is still landing shows the page's
+## ground, then the content swaps in (the heal below keeps
+## retrying a fallback landing, bounded).
+func _refresh_card_back() -> void:
+	if _flip_idx < 0:
 		return
-	if _wing_tex_key == _wing_key and _wing_tex_real:
+	var nodes: Dictionary = _flip_nodes(_flip_idx)
+	if nodes.is_empty():
 		return
-	if _wing_retry_key != _wing_key:
-		_wing_retry_key = _wing_key
-		_wing_retries = 0
-	if _wing_retries >= BOARD_TEX_MAX_RETRIES:
+	if _flip_key == "":
+		_flip_key = _card_back_key(_flip_idx)
+	if _flip_tex_key == _flip_key and _flip_tex_real:
 		return
-	var now: int = Time.get_ticks_msec()
-	if now - _wing_retry_msec < BOARD_TEX_RETRY_MS:
+	if _flip_render_key == _flip_key:
 		return
-	_wing_retry_msec = now
-	_wing_retries += 1
-	_refresh_wing()
+	_flip_render_key = _flip_key
+	_render_card_back(_flip_idx, _flip_key)
 
 
-## The blank-face heal, board side: the same law on the
-## Tournament board's standing key.
-func _heal_tboard_face() -> void:
-	if _tboard_key == "" or _tboard_render_key != "":
+func _render_card_back(idx: int, key: String) -> void:
+	var nodes: Dictionary = _flip_nodes(idx)
+	if nodes.is_empty():
+		if _flip_render_key == key:
+			_flip_render_key = ""
 		return
-	if _tboard_tex_key == _tboard_key and _tboard_tex_real:
+	var spec: Dictionary = _card_back_spec(idx)
+	# The back is a CARD face: it renders at the card's own
+	# face size (the BOARD_FACE_PX constant), never through
+	# the state-panel seams (oldlayout/shortpage resize the
+	# board-mode state panels, not a card).
+	var tex: Texture2D = await _factory.render_texture(spec, RoomSpecs.BOARD_FACE_PX)
+	if tex == null or idx != _flip_idx or key != _flip_key:
+		if _flip_render_key == key:
+			_flip_render_key = ""
 		return
-	if _tboard_retry_key != _tboard_key:
-		_tboard_retry_key = _tboard_key
-		_tboard_retries = 0
-	if _tboard_retries >= BOARD_TEX_MAX_RETRIES:
-		return
-	var now: int = Time.get_ticks_msec()
-	if now - _tboard_retry_msec < BOARD_TEX_RETRY_MS:
-		return
-	_tboard_retry_msec = now
-	_tboard_retries += 1
-	_refresh_tboard()
-
-
-## Per-frame wing dressing, from _update_pop: the wing
-## arrives with the centred card's pop - it slides from the
-## neighbour card's surface to WING_PROUD and grows the
-## pop's last fraction as the amount rises, and it is gone
-## whenever the centre has no pop (detail, placard, panel,
-## load wait - the pop target's own law) or no content.
-func _update_wing_frame() -> void:
-	if _wing == null:
-		return
-	var amt: float = 0.0
-	if _centre_index >= 0 and _centre_index < _panel_pop.size():
-		amt = _panel_pop[_centre_index]
-	var live: bool = _wing_game_id != "" and _wing_enabled and not _tournament and _mode == "wall" \
-		and not _placard_up and not _setup_panel_up and _launching_game_id == ""
-	if live:
-		_heal_wing_face()
-	_wing.visible = live and amt > 0.02
-	if not _wing.visible:
-		return
-	# The oldwing NC restores the GRAD FIX wing's float
-	# (0.08) along with its size and seat: under the book's
-	# 0.30 the restored wing would ride the depth law the
-	# GRAD FIX wing never had, and the wing-whole NC would
-	# judge a geometry that never shipped.
-	var proud: float = (0.08 if OS.get_environment("PVLDS_GRADFIX_NC") == "oldwing" else WING_PROUD) * amt
-	_wing.transform = Transform3D(_wing_slot.basis,
-		_wing_slot.origin + _wing_slot.basis.z * proud)
-	var s: float = lerpf(0.92, 1.0, amt)
-	_wing.scale = Vector3(s, s, s)
-
-
-## ------------------------------------------------- the Tournament board
-
-## The standing board beside the centred challenge (the
-## GRAD FIX round's Tournament redesign): furniture on the
-## wing's pattern - built once, seated per centre in the
-## first free slot to the centred challenge's right (see
-## _tboard_seat_coord - it borrows no card's slot since
-## GRADFIX2), content re-rendered when the pairing changes.
-func _build_tboard() -> void:
-	if _wall == null:
-		return
-	_tboard = Node3D.new()
-	_tboard.name = "TournamentBoard"
-	_tboard.visible = false
-	# The One Book (GRADFIX4): the Tournament board is the
-	# text page of the focused challenge card's book - spine
-	# at its LEFT edge, the join with the art page. Its
-	# Launch button lives in the book's face frame, over the
-	# face's footer plinth.
-	var book: Dictionary = _make_book(_tboard, RoomSpecs.board_panel_size(), "Board", -1.0)
-	_tboard_tilt = book["tilt"] as Node3D
-	var tinner: Node3D = book["inner"] as Node3D
-	_tboard_quad = MeshInstance3D.new()
-	var qm: QuadMesh = QuadMesh.new()
-	qm.size = RoomSpecs.board_panel_size()
-	_tboard_quad.mesh = qm
-	_tboard_mat = StandardMaterial3D.new()
-	_tboard_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_tboard_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_tboard_quad.material_override = _tboard_mat
-	tinner.add_child(_tboard_quad)
-	_tboard_launch = ClickableQuad.new()
-	_tboard_launch.setup("panel_launch", "", _placeholder_tex, PANEL_LAUNCH_SIZE)
-	_tboard_launch.position = Vector3(0.0, RoomSpecs.board_launch_y(), 0.020)
-	_tboard_launch.visible = false
-	_tboard_launch.pick_enabled = false
-	tinner.add_child(_tboard_launch)
-	_wall.add_child(_tboard)
-
-
-## The pre-GRADFIX2 Tournament behaviour, behind the NC
-## seam PVLDS_TOURN_NC=oldseat: the board borrowed the slot
-## right of the centred challenge (hiding its card) and the
-## focus walk in the Tournament Room used projection scoring
-## instead of the drum's grid step. The tournament layout
-## and selection legs fail against it by name.
-func _tournament_legacy() -> bool:
-	return OS.get_environment("PVLDS_TOURN_NC") == "oldseat"
-
-
-## The standing board's seat (GRADFIX2 items 3+4): the
-## first slot to the RIGHT of the centred challenge that no
-## panel stands in, stepping past occupied slots up to one
-## past the shelf's end - the end fin's column, where the
-## board floats in front of the fin, never behind it, and
-## never behind a card. The board borrows NO challenge's
-## slot: the shipped borrow hid whichever challenge stood
-## right of the centre, and with The Walking Dead standing
-## right of The Addams Family, centring Addams vanished
-## Walking Dead's card from the wall - "cant select walking
-## dead on tournie screen" (the user's words). Every
-## challenge card now stands, visible and pickable, at
-## every centre; the pairing follows the centre as before.
-func _tboard_seat_coord(coord: Vector2i) -> Vector2i:
-	if _tournament_legacy():
-		return Vector2i(coord.x + 1, coord.y)
-	if _tournament and debug_grid_nc != "rowmajor":
-		# GRADFIX4 (item 3): inside the block, the book's
-		# first home is the OTHER BAND of the focused
-		# challenge's own column - the pair composes as one
-		# object and the grid never collapses around it. Then
-		# rightward, either band, first unoccupied slot wins;
-		# past the block's end it floats, as before.
-		var other_band: int = TOURN_BAND0 + (1 - (coord.y - TOURN_BAND0))
-		var home: Vector2i = Vector2i(coord.x, other_band)
-		if not _slot_occupied_by_card(home):
-			return home
-		var sx: int = coord.x
-		while sx < _columns:
-			sx += 1
-			for by: int in [coord.y, other_band]:
-				var cand: Vector2i = Vector2i(sx, by)
-				if not _slot_occupied_by_card(cand):
-					return cand
-		return Vector2i(_columns, coord.y)
-	var seat: Vector2i = Vector2i(coord.x + 1, coord.y)
-	while seat.x < _columns:
-		if not _slot_occupied_by_card(seat):
-			break
-		seat.x += 1
-	return seat
-
-
-## A drum slot is occupied when some card other than the
-## centred one stands there (the GRADFIX2 no-borrow law in
-## slot terms: a companion stands only where no card stands -
-## or past the shelf's end entirely).
-func _slot_occupied_by_card(seat: Vector2i) -> bool:
-	for idx: int in range(_visible_games.size()):
-		if idx != _centre_index and _grid_coord(idx) == seat:
-			return true
-	return false
-
-
-func _borrow_tboard_slot(coord: Vector2i) -> void:
-	var target: Vector2i = Vector2i(coord.x + 1, coord.y)
-	if _tboard_borrowed_idx >= 0:
-		if _tboard_borrowed_idx < _visible_games.size() and _grid_coord(_tboard_borrowed_idx) == target:
-			return
-		_release_tboard_borrow()
-	for idx: int in range(_visible_games.size()):
-		if idx == _centre_index:
-			continue
-		if _grid_coord(idx) == target:
-			_tboard_borrowed_idx = idx
-			if idx < _panels.size():
-				_panels[idx].visible = false
-				_panels[idx].pick_enabled = false
-				if idx < _panel_launches.size():
-					_panel_launches[idx].pick_enabled = false
-			return
-
-
-func _release_tboard_borrow() -> void:
-	if _tboard_borrowed_idx < 0:
-		return
-	var idx: int = _tboard_borrowed_idx
-	_tboard_borrowed_idx = -1
-	if idx < _panels.size() and _panel_window_lo >= 0:
-		var c: int = _grid_coord(idx).x
-		_panels[idx].visible = c >= _panel_window_lo and c <= _panel_window_hi and idx != _wing_borrowed_idx
-
-
-func _refresh_tboard() -> void:
-	if _tboard == null:
-		_build_tboard()
-	if _tboard == null:
-		return
-	if not _tournament or _centre_index < 0 or _centre_index >= _tournament_rows.size() \
-			or str((_tournament_rows[_centre_index] as Dictionary).get("kind", "")) != "challenge":
-		_release_tboard_borrow()
-		_tboard_challenge_id = ""
-		_tboard_key = ""
-		_tboard.visible = false
-		return
-	var row: Dictionary = _tournament_rows[_centre_index]
-	var ch: WovpChallenge = row["challenge"] as WovpChallenge
-	var game: GameEntry = _visible_games[_centre_index]
-	var coord: Vector2i = _grid_coord(_centre_index)
-	var seat: Vector2i = _tboard_seat_coord(coord)
-	if _tournament_legacy():
-		_borrow_tboard_slot(coord)
-	else:
-		_release_tboard_borrow()
-	_tboard_seat = seat
-	_tboard_slot = _card_transform_at(seat.x, seat.y)
-	# The book seats FLUSH in its slot, the wing's own seat
-	# law (_wing_y - GRADFIX5: 0, the pages share edges).
-	_tboard_slot.origin += _tboard_slot.basis.y * _wing_y()
-	if not _tournament_legacy():
-		# The companion clearance (GRADFIX2 item 2): the
-		# board shifts along the drum away from the centred
-		# card, so the popped card's silhouette never
-		# covers the board's text from a real viewpoint.
-		var centre_origin: Vector3 = _card_transform_at(coord.x, coord.y).origin
-		_tboard_slot.origin += _companion_away(centre_origin, _tboard_slot.origin) * COMPANION_CLEAR
-	_tboard.transform = _tboard_slot
-	var owned: bool = bool(row.get("owned", false))
-	_tboard_owned = owned
-	if _tboard_launch != null:
-		_tboard_launch.payload = game.game_id
-		_tboard_launch.visible = owned
-	var key: String = ch.challenge_id + "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id \
-		+ "|" + ("owned" if owned else "none")
-	_tboard_key = key
-	_tboard_challenge_id = ch.challenge_id
-	if key == _tboard_tex_key and _tboard_tex_real:
-		return ## the standing key's real face already stands
-	if _tboard_render_key == key:
-		return ## its render is already in flight
-	_tboard_render_key = key
-	_render_tboard_content(ch, owned, key)
-
-
-func _render_tboard_content(ch: WovpChallenge, owned: bool, key: String) -> void:
-	var now_unix: int = int(Time.get_unix_time_from_system())
-	var spec: Dictionary = RoomSpecs.tournament_board_spec(ch, owned, _wovp_user_id, now_unix)
-	var tex: Texture2D = await _factory.render_texture(spec, RoomSpecs.board_face_px())
+	_flip_render_key = ""
 	var real: bool = _tex_is_real(tex)
 	if debug_gf4_nc == "solidboard" and real:
 		# NC (PVLDS_GRADFIX4_NC=solidboard): the field's
-		# fault, restored - the capture comes back empty,
-		# the fallback solid stands as the board, and the
-		# pre-fix bookkeeping counts it as the board, so the
-		# heal never re-renders it. EVERY render lands the
-		# solid under the NC: the applied-face bookkeeping
-		# is single-slot, so a first-render-only fault is
-		# undone by the walk's own re-pairings before the
-		# judge samples (measured - the spent-gated version
-		# of this NC passed the healthy legs).
+		# fault, restored on the flip's back - the render
+		# lands the factory's fallback solid and the
+		# pre-GRADFIX4 bookkeeping counts it as the face, so
+		# the heal never re-renders it and the blank-board
+		# leg fails by name. Every render lands the solid
+		# under the NC (the single-slot bookkeeping reason
+		# is in the retired board render's history).
 		tex = TextureFactory.make_solid(Color(0.055, 0.055, 0.095))
 		real = true
-	if tex == null or key != _tboard_key:
-		if _tboard_render_key == key:
-			_tboard_render_key = ""
-		return
-	_tboard_render_key = ""
-	_tboard_mat.albedo_texture = tex
-	_tboard_tex_key = key
-	_tboard_tex_real = real
-	if owned and _tboard_launch != null:
-		var ltex: Texture2D = _btn_tex_cache.get("LAUNCH|a") as Texture2D
+	var bmat: StandardMaterial3D = nodes["back_mat"] as StandardMaterial3D
+	if bmat != null:
+		bmat.albedo_texture = tex
+	nodes["back_key"] = key
+	nodes["back_tex_real"] = real
+	_flip_tex_key = key
+	_flip_tex_real = real
+	# The back's Launch wears the same two faces as the
+	# front's (the shared button cache), seated on the
+	# spec's plinth; in the Tournament Room it stands only
+	# for a challenge he owns - the board spec's own law,
+	# the pick-side of which _apply_flip_side enforces.
+	var blq: ClickableQuad = nodes["back_launch"] as ClickableQuad
+	if blq != null:
+		var failed: bool = _visible_games[idx].game_id == _failed_game_id
+		var blabel: String = "FAILED" if failed else "LAUNCH"
+		var bkey: String = blabel + "|" + ("a" if not failed else "p")
+		var ltex: Texture2D = _btn_tex_cache.get(bkey) as Texture2D
 		if ltex == null:
-			ltex = await _factory.render_texture(RoomSpecs.button_spec("LAUNCH", true), Vector2i(512, 164))
+			ltex = await _factory.render_texture(
+				RoomSpecs.button_spec(blabel, not failed), Vector2i(512, 164))
 			if ltex != null:
-				_btn_tex_cache["LAUNCH|a"] = ltex
-		if ltex != null and key == _tboard_key:
-			_tboard_launch.set_texture(ltex)
+				_btn_tex_cache[bkey] = ltex
+		if ltex != null and idx == _flip_idx and key == _flip_key:
+			blq.set_texture(ltex)
 
 
-## Per-frame board dressing, from _update_pop beside the
-## wing's: the board arrives with the centred card's pop and
-## stands only while the Tournament pairing stands.
-func _update_tboard_frame() -> void:
-	if _tboard == null:
+## The blank-back heal (the GRADFIX4 companions' heal, on
+## the flipped card): while a back stands open, if its
+## standing key's applied face is missing or a fallback
+## solid, re-issue the render - throttled, and bounded per
+## key so a truly broken renderer costs five renders, not
+## a spin.
+func _heal_card_back() -> void:
+	if _flip_idx < 0 or not _flip_open or _flip_key == "" or _flip_render_key != "":
 		return
-	var amt: float = 0.0
-	if _centre_index >= 0 and _centre_index < _panel_pop.size():
-		amt = _panel_pop[_centre_index]
-	var live: bool = _tournament and _tboard_challenge_id != "" and _mode == "wall" \
-		and not _placard_up and not _setup_panel_up and _launching_game_id == ""
-	if live:
-		_heal_tboard_face()
-	_tboard.visible = live and amt > 0.02
-	if _tboard_launch != null:
-		_tboard_launch.pick_enabled = _tboard.visible and _tboard_owned
-	if not _tboard.visible:
+	if _flip_tex_key == _flip_key and _flip_tex_real:
 		return
-	_tboard.transform = Transform3D(_tboard_slot.basis,
-		_tboard_slot.origin + _tboard_slot.basis.z * (TBOARD_PROUD * amt))
+	if _flip_retry_key != _flip_key:
+		_flip_retry_key = _flip_key
+		_flip_retries = 0
+	if _flip_retries >= BOARD_TEX_MAX_RETRIES:
+		return
+	var now: int = Time.get_ticks_msec()
+	if now - _flip_retry_msec < BOARD_TEX_RETRY_MS:
+		return
+	_flip_retry_msec = now
+	_flip_retries += 1
+	_refresh_card_back()
 
 
-## Smoke support: the standing board's state.
-func tournament_board_state() -> Dictionary:
-	if _tboard == null:
-		return {"exists": false}
-	return {
-		"exists": true,
-		"visible": _tboard.visible,
-		"challenge_id": _tboard_challenge_id,
-		"has_board_texture": _tboard_mat != null and _tboard_mat.albedo_texture != null,
-		"texture": _tboard_mat.albedo_texture if _tboard_mat != null else null,
-		# GRADFIX4 item 6: the heal's bookkeeping, readable -
-		# the applied texture's key, and whether it is a real
-		# capture rather than the factory's fallback solid.
-		"texture_key": _tboard_tex_key,
-		"texture_real": _tboard_tex_real,
-		"standing_key": _tboard_key,
-		# GRADFIX3: the judged surface is the book's FACE -
-		# the tilted quad inside the book frame - not the
-		# seat holder; its global transform is the page the
-		# player reads.
-		"transform": _tboard_quad.global_transform if _tboard_quad != null else _tboard.global_transform,
-		"size": RoomSpecs.board_panel_size(),
-		# GRADFIX5: the flush leg's measures (see wing_state).
-		"seat_y": _wing_y(),
-		"card_size": CARD_SIZE,
-		"owned": _tboard_owned,
-		"borrowed_idx": _tboard_borrowed_idx,
-		"seat": _tboard_seat,
+## The showing side of a panel, applied: past the turn's
+## midpoint the BACK stands (front face, frame, plate,
+## label and front Launch hidden; back assembly shown, its
+## Launch pickable under the standing laws); before it, the
+## FRONT stands and the back is hidden and unpickable.
+## Called on every midpoint crossing and wherever a
+## standing visibility changes underneath a flipped card
+## (a face landing re-derives the plate - see _fill_one_face).
+func _apply_flip_side(idx: int, back_up: bool) -> void:
+	if idx < 0 or idx >= _panels.size():
+		return
+	var nodes: Dictionary = _flip_nodes(idx)
+	var q: ClickableQuad = _panels[idx]
+	if nodes.is_empty() or q == null:
+		return
+	q.set_face_shown(not back_up)
+	var frame: MeshInstance3D = nodes.get("frame") as MeshInstance3D
+	if frame != null:
+		frame.visible = not back_up
+	if idx < _panel_plates.size() and _panel_plates[idx] != null:
+		# The plate/label follow the face fill's own law on
+		# the front (an art face wears them, a title card
+		# does not - _fill_one_face owns that fact via the
+		# standing face key); the swap only ever ADDS the
+		# back's claim: while the back is up both hide.
+		var from_art: bool = str(_panel_face_key.get(_visible_games[idx].game_id, "")) != "" \
+			and _panel_art_aspect[idx] > 0.0
+		if OS.get_environment("PVLDS_GRAD_NC") == "noplate":
+			from_art = false ## the nameplate NC's removal stands on both sides of the turn
+		_panel_plates[idx].visible = not back_up and from_art
+		_panel_labels[idx].visible = not back_up and from_art
+	if idx < _panel_launches.size() and _panel_launches[idx] != null:
+		_panel_launches[idx].pick_enabled = not back_up and _mode == "wall" \
+			and _panels[idx].visible and not (_tournament and not _tournament_launchable(idx))
+	var back: Node3D = nodes["back"] as Node3D
+	if back != null:
+		back.visible = back_up
+	var blq: ClickableQuad = nodes["back_launch"] as ClickableQuad
+	if blq != null:
+		var launchable: bool = not _tournament or _tournament_launchable(idx)
+		blq.visible = back_up and launchable
+		blq.pick_enabled = back_up and launchable and _mode == "wall" and _panels[idx].visible
+
+
+## The flip's cubic in-out ease: slow at both ends of the
+## turn, honest speed through the edge-on midpoint - the
+## "quick, neat" profile (FLIP_SEC for the whole half-turn).
+static func flip_ease(t: float) -> float:
+	if t < 0.5:
+		return 4.0 * t * t * t
+	return 1.0 - pow(-2.0 * t + 2.0, 3.0) / 2.0
+
+
+## Per-frame flip drive, from _update_pop beside the pop's
+## own walk: the closing conditions are read fresh (the
+## centre moved, the view left the wall), the progress
+## walks toward its target, the pivot turns, and the
+## showing side swaps at the midpoint. A resting room with
+## no turn standing pays one comparison.
+func _update_flip(delta: float) -> void:
+	if _flip_idx < 0:
+		return
+	if _flip_idx >= _panels.size():
+		_snap_flip_shut()
+		return
+	# Closing conditions: the centre left the flipped card,
+	# or the room left the plain wall (detail, placard,
+	# SETUP panel, the load wait). The turn closes; it never
+	# holds the room hostage while doing so.
+	if _flip_open and (_centre_index != _flip_idx or _mode != "wall" or _placard_up \
+			or _setup_panel_up or _launching_game_id != ""):
+		_flip_open = false
+	var target: float = 1.0 if _flip_open else 0.0
+	if _flip_t != target:
+		var was_back: bool = _flip_t >= 0.5
+		_flip_t = move_toward(_flip_t, target, delta / FLIP_SEC)
+		var q: ClickableQuad = _panels[_flip_idx]
+		if q != null:
+			q.set_flip_angle(flip_ease(_flip_t) * PI)
+			var is_back: bool = _flip_t >= 0.5
+			if is_back != was_back:
+				_apply_flip_side(_flip_idx, is_back)
+	if _flip_t == 0.0 and not _flip_open:
+		# The turn is home: clear the standing state (the
+		# pivot already rests at 0 and the front stands).
+		_flip_idx = -1
+		_flip_key = ""
+		_flip_tex_key = ""
+		_flip_tex_real = false
+		_flip_render_key = ""
+	elif _flip_open:
+		_heal_card_back()
+
+
+## Smoke support: the flip's standing state - the turned
+## card, the turn's progress and angle, which side shows,
+## and the back's applied-texture bookkeeping (the heal's
+## facts, readable: standing key, applied key, real or
+## fallback).
+func flip_state() -> Dictionary:
+	var out: Dictionary = {
+		"active": _flip_idx >= 0,
+		"idx": _flip_idx,
+		"t": _flip_t,
+		"open": _flip_open,
+		"angle_deg": 0.0,
+		"back_up": _flip_t >= 0.5,
+		"standing_key": _flip_key,
+		"texture_key": _flip_tex_key,
+		"texture_real": _flip_tex_real,
+		"centre_index": _centre_index,
 	}
+	if _flip_idx >= 0 and _flip_idx < _panels.size():
+		var q: ClickableQuad = _panels[_flip_idx]
+		if q != null:
+			out["angle_deg"] = rad_to_deg(q.flip_angle())
+			out["game_id"] = _visible_games[_flip_idx].game_id
+			var nodes: Dictionary = _flip_nodes(_flip_idx)
+			if not nodes.is_empty():
+				var back: Node3D = nodes["back"] as Node3D
+				out["back_visible"] = back != null and back.visible
+				var bmat: StandardMaterial3D = nodes["back_mat"] as StandardMaterial3D
+				out["has_back_texture"] = bmat != null and bmat.albedo_texture != null
+				out["back_texture"] = bmat.albedo_texture if bmat != null else null
+				out["back_launch_pickable"] = (nodes["back_launch"] as ClickableQuad) != null \
+					and (nodes["back_launch"] as ClickableQuad).pick_enabled
+	return out
 
 
 func _on_select(quad: ClickableQuad) -> void:
@@ -3808,7 +3580,7 @@ func _on_select(quad: ClickableQuad) -> void:
 
 func _activate(quad: ClickableQuad) -> void:
 	if _setup_panel_up:
-		# While the SETUP panel stands, its seven buttons are
+		# While the SETUP panel stands, its six buttons are
 		# the room: everything else refuses. The pick flags
 		# already say so for the pointer; this is the lock for
 		# the keyboard/gamepad paths, which activate the
@@ -3832,11 +3604,6 @@ func _activate(quad: ClickableQuad) -> void:
 				quad.pulse()
 				set_setup_panel_message("Testing the saved WoVP key...")
 				wovp_key_test_requested.emit()
-			"setup_setting_wing":
-				quad.pulse()
-				set_wing_enabled(not _wing_enabled)
-				display_settings_changed.emit()
-				_request_setup_panel_render(true)
 			"setup_setting_stars":
 				quad.pulse()
 				var modes: Array[String] = ["layered", "flat", "off"]
@@ -3927,19 +3694,27 @@ func _a_press() -> void:
 		_activate(_focused)
 
 
-## Y on the pad (and KEY_Y on the keyboard): More Info for
-## the focused card - the panel's own activation path, which
-## is where A used to go before the swap. Only a PANEL
-## focused in plain wall mode counts: rail focus, the detail
-## view (already looking at the info), the SETUP panel, and
-## the placard all leave Y inert, as does the load wait (the
-## poll's deaf gate at the call site).
+## Y on the pad (and KEY_Y on the keyboard): FLIP the
+## focused card (GRADFIX6 item 1 - Chris's ruling, 2026-10-31:
+## "back to how we originally had the concept: Y button
+## flips the card"). The card turns in its seat: the back
+## carries the table's data (and its Launch button), a
+## second Y turns it back. This replaces Y's More Info
+## binding outright - the detail view still stands behind
+## the pointer's click on a card, which is where build
+## picking lives. Only a PANEL focused in plain wall mode
+## counts: rail focus, the detail view, the SETUP panel,
+## and the placard all leave Y inert, as does the load wait
+## (the poll's deaf gate at the call site). Under the
+## noflip NC the press is inert (the pre-flip world).
 func _info_focused_card() -> void:
 	if _mode != "wall" or _placard_up or _setup_panel_up or _focused == null:
 		return
 	if not _panels.has(_focused):
 		return
-	_activate(_focused)
+	if _flip_disabled():
+		return
+	_toggle_flip(_panels.find(_focused))
 
 
 ## Rail handling. Page travel (page_prev / page_next) is the
@@ -4249,6 +4024,9 @@ func _open_detail(game: GameEntry) -> void:
 		q.pick_enabled = false
 	for q: ClickableQuad in _panel_launches:
 		q.pick_enabled = false
+	for q: ClickableQuad in _panel_back_launches:
+		if q != null:
+			q.pick_enabled = false
 	for k: Variant in _rail_quads.keys():
 		_rail_quads[k].pick_enabled = false
 	for skey: Variant in _strip_quads.keys():
@@ -4388,8 +4166,9 @@ func _room_pickables() -> Array[ClickableQuad]:
 			out.append(sq)
 	if _detail != null:
 		out.append_array(_detail.get_clickables())
-	if _tboard_launch != null:
-		out.append(_tboard_launch)
+	for blq: ClickableQuad in _panel_back_launches:
+		if blq != null:
+			out.append(blq)
 	return out
 
 
@@ -4475,7 +4254,7 @@ func _restore_room_pick_states() -> void:
 ## While the panel stands, the room behind it is inert,
 ## exactly as behind the placard: pick flags down (the
 ## snapshot restores them on the way out), focus confined
-## to the panel's seven buttons, _activate refusing
+## to the panel's six buttons, _activate refusing
 ## everything else, launching unreachable, and B / D-pad
 ## Right acting as BACK - the panel never exits the app.
 func show_setup_panel() -> void:
@@ -4579,10 +4358,6 @@ func setup_panel_wovp_paste_quad() -> ClickableQuad:
 
 func setup_panel_wovp_test_quad() -> ClickableQuad:
 	return _setup_panel_wovp_test_btn
-
-
-func setup_panel_wing_quad() -> ClickableQuad:
-	return _setup_panel_wing_btn
 
 
 func setup_panel_stars_quad() -> ClickableQuad:
@@ -4707,19 +4482,16 @@ func _build_setup_panel() -> void:
 	_setup_panel_wovp_test_btn.setup("setup_panel_wovp_test", "", placeholder, Vector2(0.66, 0.16))
 	_setup_panel_wovp_test_btn.position = Vector3(0.375, -0.5, 0.0)
 	_setup_panel.add_child(_setup_panel_wovp_test_btn)
-	# The display dials row (the GRAD FIX round): taste gets
-	# a dial, not a dictate - WING toggles the focused card's
-	# info wing, STARS cycles the starfield's layering. Each
-	# button's label states the standing value; a press turns
-	# the dial one step, applies it in the room at once, and
-	# Main persists it (display_settings_changed).
-	_setup_panel_wing_btn = ClickableQuad.new()
-	_setup_panel_wing_btn.setup("setup_setting_wing", "", placeholder, Vector2(0.66, 0.16))
-	_setup_panel_wing_btn.position = Vector3(-0.375, -0.76, 0.0)
-	_setup_panel.add_child(_setup_panel_wing_btn)
+	# The display dial row (the GRAD FIX round; the WING
+	# dial retired with the wing itself in GRADFIX6 - the
+	# flip has no off state to offer): STARS cycles the
+	# starfield's layering. The button's label states the
+	# standing value; a press turns the dial one step,
+	# applies it in the room at once, and Main persists it
+	# (display_settings_changed).
 	_setup_panel_stars_btn = ClickableQuad.new()
 	_setup_panel_stars_btn.setup("setup_setting_stars", "", placeholder, Vector2(0.66, 0.16))
-	_setup_panel_stars_btn.position = Vector3(0.375, -0.76, 0.0)
+	_setup_panel_stars_btn.position = Vector3(-0.375, -0.76, 0.0)
 	_setup_panel.add_child(_setup_panel_stars_btn)
 	_setup_panel_back_btn = ClickableQuad.new()
 	_setup_panel_back_btn.setup("setup_panel_back", "", placeholder, Vector2(0.5, 0.16))
@@ -4735,7 +4507,7 @@ func _build_setup_panel() -> void:
 	# placard's lesson).
 
 
-## Panel textures - face plus the seven buttons - render
+## Panel textures - face plus the six buttons - render
 ## from current state, generation-guarded like the
 ## placard's. Renders serialize (the shared factory takes
 ## one at a time): a state change during a render, or
@@ -4796,12 +4568,6 @@ func _fill_setup_panel_textures(gen: int) -> void:
 		_after_setup_render()
 		return
 	_setup_panel_wovp_test_btn.set_texture(test_tex)
-	var wing_tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.button_spec("WING: ON" if _wing_enabled else "WING: OFF", false), Vector2i(512, 124))
-	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_wing_btn == null:
-		_after_setup_render()
-		return
-	_setup_panel_wing_btn.set_texture(wing_tex)
 	var stars_tex: Texture2D = await _factory.render_texture(
 		RoomSpecs.button_spec("STARS: " + _starfield_mode.to_upper(), false), Vector2i(512, 124))
 	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_stars_btn == null:
@@ -4839,6 +4605,7 @@ func _fill_setup_panel_textures(gen: int) -> void:
 func begin_launch(game: GameEntry) -> void:
 	_launching_game_id = game.game_id
 	_failed_game_id = ""
+	_snap_flip_shut() ## the wall freezes for the wait: no card stands turned behind the marquee
 	_status_note = "Launching %s... controls are locked while the table loads" % game.title
 	for q: ClickableQuad in _panels:
 		q.pick_enabled = false
@@ -5139,6 +4906,8 @@ func _update_power(delta: float) -> void:
 		cand = null ## boards are standings, not backglasses: no power-on performance stands on a Tournament panel
 	if _swing_active:
 		cand = null
+	if cand != null and _flip_idx >= 0 and _panels[_flip_idx] == cand and _flip_t > 0.0:
+		cand = null ## a turned card shows its back: the power-on performs on fronts only (a flip starting mid-performance restores it - see _toggle_flip)
 	if cand != _power_candidate:
 		_power_candidate = cand
 		_power_candidate_t = 0.0
@@ -5444,8 +5213,8 @@ func power_overlay_count() -> int:
 ## Graduation queries (the graduation smoke reads the room's
 ## Stage B surfaces the way the other smokes read theirs):
 ## the centred shelf index, the background stack's layers
-## (with their parents - the world-lock leg), and the wing's
-## standing state for the occlusion census.
+## (with their parents - the world-lock leg), and the flip's
+## standing state (see flip_state).
 func centre_index() -> int:
 	return _centre_index
 
@@ -5462,35 +5231,6 @@ func background_layers() -> Array:
 	return out
 
 
-func wing_state() -> Dictionary:
-	if _wing == null:
-		return {"exists": false}
-	return {
-		"exists": true,
-		"visible": _wing.visible,
-		"game_id": _wing_game_id,
-		"has_board_texture": _wing_mat != null and _wing_mat.albedo_texture != null,
-		# GRADFIX3: the judged surface is the book's FACE -
-		# the tilted quad inside the book frame - not the
-		# seat holder; its global transform is the page the
-		# player reads.
-		"transform": _wing_quad.global_transform if _wing_quad != null else _wing.global_transform,
-		"holder_transform": _wing.global_transform,
-		"size": _wing_size(),
-		# GRADFIX5: the flush leg's measures - the seat's
-		# vertical offset from its slot (0 is flush) and the
-		# card size the page must equal.
-		"seat_y": _wing_y(),
-		"card_size": CARD_SIZE,
-		# GRADFIX4: the book's full silhouette size - the
-		# face plus its shared frame (the census's
-		# book-cover leg judges the whole book, dressing
-		# included, not just the page).
-		"frame_size": _wing_size() + (CARD_FRAME_SIZE - CARD_SIZE),
-		"seat": _wing_seat,
-		"enabled": _wing_enabled,
-		"borrowed_idx": _wing_borrowed_idx,
-	}
 
 
 ## The desk bar's standing measurements (GRADFIX5, the
@@ -5700,12 +5440,14 @@ func _process(delta: float) -> void:
 		elif _tournament and _mode == "wall" and debug_b_nc != "nobexit":
 			_b_exit_tournament() ## B leaves the Tournament view for Table Select (GRADFIX4 item 4)
 	_joy_prev_b = b_now
-	# Y: More Info for the focused card (Chris's swap ruling,
-	# 2026-10-26 - A starts, Y informs). Edge only, like A
-	# and B; the prev-state update runs even while deaf, so a
-	# press held through the load wait can't resurface as a
-	# phantom info-open on the other side. The mode/focus
-	# gating lives in _info_focused_card.
+	# Y: flip the focused card (GRADFIX6 item 1 - Chris's
+	# ruling, 2026-10-31; Y's old More Info binding is
+	# retired, the detail view lives on the pointer's card
+	# click). Edge only, like A and B; the prev-state update
+	# runs even while deaf, so a press held through the load
+	# wait can't resurface as a phantom flip on the other
+	# side. The mode/focus gating lives in
+	# _info_focused_card.
 	var y_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_Y)
 	if y_now and not _joy_prev_y and not deaf:
 		_info_focused_card()
@@ -5860,6 +5602,20 @@ func _rail_focus_neighbour(step: int) -> ClickableQuad:
 ## run.
 func _descent_legacy() -> bool:
 	return OS.get_environment("PVLDS_TOURN_NC") == "trap"
+
+
+## The oldseat NC (PVLDS_TOURN_NC=oldseat): the pre-GRADFIX2
+## Tournament behaviour's surviving half - the focus walk in
+## the Tournament Room used projection scoring instead of
+## the drum's grid step. (Its other half - the standing
+## board borrowing the slot right of the centred challenge,
+## hiding its card - is DELETED with the board itself in
+## GRADFIX6: the flip has no slot to borrow, so no NC can
+## restore it; the tournament smoke's no-borrow legs now
+## pass on every build and guard the flip instead.) Empty
+## in every real run.
+func _tournament_legacy() -> bool:
+	return OS.get_environment("PVLDS_TOURN_NC") == "oldseat"
 
 
 ## The descent to the bar (GRADFIX3 item 3): DOWN from the

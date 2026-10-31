@@ -16,6 +16,8 @@ var _size: Vector2 = Vector2.ZERO ## the quad's face size, as set up (the tourna
 var _mat: StandardMaterial3D
 var _frame_mat: StandardMaterial3D
 var _frame: MeshInstance3D
+var _face_mesh: MeshInstance3D = null ## the textured face itself (rides the flip pivot, below)
+var _pivot: Node3D = null ## the flip pivot (GRADFIX6 item 1): the face and everything the room hangs on the card's front/back ride it; the highlight frame and the collision box stay unrotated - the frame rings whichever side faces the player, and the pick box is symmetric
 var _content_alpha: float = 1.0 ## the face's current fade (set_content_alpha): the frame's ceiling too
 var _hovered: bool = false ## the last visual state the room asked for; the frame's showing is derived, never stored raw
 var _focused: bool = false
@@ -59,12 +61,15 @@ func setup(p_action: String, p_payload: String, tex: Texture2D, size: Vector2) -
 	_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
 	_mat.albedo_texture = tex
-	var mesh_instance: MeshInstance3D = MeshInstance3D.new()
+	_pivot = Node3D.new()
+	_pivot.name = "FlipPivot"
+	add_child(_pivot)
+	_face_mesh = MeshInstance3D.new()
 	var qm: QuadMesh = QuadMesh.new()
 	qm.size = size
-	mesh_instance.mesh = qm
-	mesh_instance.material_override = _mat
-	add_child(mesh_instance)
+	_face_mesh.mesh = qm
+	_face_mesh.material_override = _mat
+	_pivot.add_child(_face_mesh)
 
 	var shape: CollisionShape3D = CollisionShape3D.new()
 	var box: BoxShape3D = BoxShape3D.new()
@@ -76,6 +81,36 @@ func setup(p_action: String, p_payload: String, tex: Texture2D, size: Vector2) -
 func set_texture(tex: Texture2D) -> void:
 	if _mat != null and tex != null:
 		_mat.albedo_texture = tex
+
+
+## The flip pivot (GRADFIX6 item 1): the holder the card's
+## front furniture, back assembly and face all ride. The
+## room rotates it about the card's own vertical centre axis
+## to flip the card in place; angle 0 = front, PI = back.
+func flip_pivot() -> Node3D:
+	return _pivot
+
+
+func set_flip_angle(ang: float) -> void:
+	if _pivot != null:
+		_pivot.rotation.y = ang
+
+
+func flip_angle() -> float:
+	return _pivot.rotation.y if _pivot != null else 0.0
+
+
+## The face's own showing (GRADFIX6 item 1): at the flip's
+## midpoint the room swaps which side of the card shows -
+## the face mesh hides so its mirrored back can never read
+## through the card's real back.
+func set_face_shown(shown: bool) -> void:
+	if _face_mesh != null:
+		_face_mesh.visible = shown
+
+
+func face_shown() -> bool:
+	return _face_mesh != null and _face_mesh.visible
 
 
 ## The quad's place in the transparent draw order, for stacks

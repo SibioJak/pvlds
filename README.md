@@ -66,7 +66,11 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
 ## The hand-off (M2)
 
 - **Launch.** Every wall panel carries a **LAUNCH** button (the card
-  itself still opens the detail view — More Info). The detail view's
+  itself still opens the detail view). In the VR room, **Y flips the
+  focused card** to its data back — table data and its own LAUNCH in
+  the library, the live scoreboard in the tournament view — and Y
+  again turns it back (GRADFIX6; the back replaces the old hinged
+  panel outright). The detail view's
   Play fires the same path, including its play-once / make-default
   build choice. Launching uses the player's **default build** and
   the config's **launch-args template** (`{table}` expands to the
