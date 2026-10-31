@@ -507,6 +507,15 @@ func _ready() -> void:
 	# lands the fallback solid and counts it, so the
 	# tournament smoke's heal leg fails by name.
 	RoomView.debug_gf4_nc = OS.get_environment("PVLDS_GRADFIX4_NC")
+	# GRADFIX8's board-pairing negative-control seam
+	# (PVLDS_GRADFIX8_NC=oldpair): restores the pre-fix
+	# pairing - the board forgets the build half of the
+	# pairing (no DIFFERENT BUILD chip), and the scanner's
+	# parens referee (which reads the same env itself, in
+	# LibraryScanner._referee_survivors) restores its
+	# per-game veto - so the grad smoke's board-pairing legs
+	# fail by name.
+	RoomSpecs.pairing_nc_old = OS.get_environment("PVLDS_GRADFIX8_NC") == "oldpair"
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -3303,7 +3312,16 @@ func _drive_shot_setup_panel() -> void:
 ##     must fail by name);
 ##   - power: the pair table performs mode 3 on focus and
 ##     settles back onto its author shot, pixel-compared;
-##     a no-shot table performs mode 2 on its backglass.
+##     a no-shot table performs mode 2 on its backglass;
+##   - board pairing (GRADFIX8 item 3): Chris's Iron Maiden
+##     case rebuilt from the real VPS record - his renamed
+##     file resolves game AND build, the board carries no
+##     library chip, and his #35 row stands on it; a
+##     different build of the same game earns the DIFFERENT
+##     BUILD chip, never the blanket one, which stays
+##     reserved for a game he does not own (NC
+##     PVLDS_GRADFIX8_NC=oldpair restores the old comparison
+##     and the legs fail by name, "board pairing:").
 ## Grabs (PVLDS_GRAB_DIR): grad_boot.png (mid-shelf at
 ## boot), grad_swing.png (mid-swing), grad_flip.png (the
 ## tournament table's card, back up), grad_fallback_power.png
@@ -3409,6 +3427,7 @@ var _grad_gf7_fallback_ok: int = 0 ## visible-panel observations standing styled
 var _grad_gf7_seat_viol: int = 0 ## Launch-seat law violations across the census
 var _grad_gf7_viol: Dictionary = {}
 var _grad_gf7_viol_first: Dictionary = {}
+var _grad_gf8_done: bool = false ## GRADFIX8 (item 3): the board-pairing legs run once, on the grad run's last phase (phase 6, before the verdict)
 ## Census violation counters (the sweep counts; the named
 ## verdicts print once, with the first example of each kind).
 var _grad_viol: Dictionary = {}
@@ -4026,6 +4045,131 @@ func _grad_gf7_heal_step() -> void:
 			_grad_phase = 6
 
 
+## GRADFIX8 (item 3) board-pairing legs, run once on the
+## grad run's last phase: Chris's field case rebuilt from
+## the real records - the VPS database's own Iron Maiden
+## Legacy of the Beast record (game ZhNnPRvbTS, Stern 2018;
+## its VPW build _UMEFSmYor at v1.0.12, authors ["VPW"],
+## the vpuniverse slug "iron-maiden-legacy-of-the-beast-
+## original-2022-vpw" - fields copied verbatim from the
+## real vpsdb.json record) and his renamed file "Iron
+## Maiden Legacy of the Beast (Original 2022) VPW
+## 1.0.12.vpx". The board side is the fixture shape the
+## TR1-era data carries (a monthly_contracts challenge
+## naming the game and build by their VPS ids), with his
+## real field row on it: #35, 135,990,580.
+func _grad_gf8_pairing_legs() -> void:
+	var root_user: String = "user://gradfix8_pairing"
+	_wipe_tree(ProjectSettings.globalize_path(root_user))
+	var user_dir: DirAccess = DirAccess.open("user://")
+	if user_dir != null and not user_dir.dir_exists("gradfix8_pairing"):
+		user_dir.make_dir("gradfix8_pairing")
+	var root_dir: DirAccess = DirAccess.open(root_user)
+	if root_dir != null and not root_dir.dir_exists("tables_exact"):
+		root_dir.make_dir("tables_exact")
+	if root_dir != null and not root_dir.dir_exists("tables_diff"):
+		root_dir.make_dir("tables_diff")
+	var exact_tables: String = root_user.path_join("tables_exact")
+	var diff_tables: String = root_user.path_join("tables_diff")
+	var db_data: Array = [
+		{
+			"id": "ZhNnPRvbTS", "name": "Iron Maiden Legacy of the Beast",
+			"manufacturer": "Stern", "year": 2018, "designers": ["Keith Elwin"],
+			"tableFiles": [
+				{"id": "_UMEFSmYor", "version": "1.0.12", "tableFormat": "VPX", "authors": ["VPW"], "createdAt": 1678510800000, "features": ["VR", "Hybrid", "FastFlips", "SSF", "Music", "incl. PuP", "4k", "Scorbit", "no ROM", "nFozzy", "Fleep"], "imgUrl": "https://virtualpinballspreadsheet.github.io/vps-db/img/ZhNnPRvbTS_table_1672516219642.webp", "urls": [{"url": "https://vpuniverse.com/files/file/12603-iron-maiden-legacy-of-the-beast-original-2022-vpw/"}]},
+				{"id": "N1Rm5GDsRK", "version": "1.1", "tableFormat": "VPX", "authors": ["Solters", "Oroborus"], "createdAt": 1659564000000, "features": ["MOD", "VR", "FlexDMD", "no ROM"], "imgUrl": "https://virtualpinballspreadsheet.github.io/vps-db/img/ZhNnPRvbTS_table_1660072135926.webp", "urls": [{"url": "https://vpuniverse.com/files/file/10946-vr-room-im-legacy-of-the-beast-pro-tribute/"}]},
+				{"id": "xJ9vBfm2Ib", "version": "1.1", "tableFormat": "VPX", "authors": ["Oroborus", "JPSalas", "Enomao", "Arngrim"], "createdAt": 1658872800000, "features": ["Music", "no ROM", "Retheme"], "imgUrl": "https://virtualpinballspreadsheet.github.io/vps-db/img/undefined_table_1656291728556.webp", "urls": [{"url": "https://vpuniverse.com/files/file/10592-iron-maiden-legacy-of-the-beast-pro-tribute/"}, {"url": "https://www.vpforums.org/index.php?app=downloads&showfile=16735"}]},
+			],
+		},
+	]
+	_grad_expect(_write_text_file(root_user.path_join("vpsdb.json"), JSON.stringify(db_data)),
+		"board pairing: the Iron Maiden fixture db is written")
+	var pair_db: VpsDatabase = VpsDatabase.new()
+	_grad_expect(pair_db.load_db(root_user.path_join("vpsdb.json")),
+		"board pairing: the Iron Maiden fixture db loads")
+	var exact_name: String = "Iron Maiden Legacy of the Beast (Original 2022) VPW 1.0.12.vpx"
+	var diff_name: String = "Iron Maiden Legacy of the Beast (Stern 2018) v1.1.vpx"
+	_grad_expect(_write_text_file(exact_tables.path_join(exact_name), "fixture"),
+		"board pairing: his renamed file is planted")
+	_grad_expect(_write_text_file(diff_tables.path_join(diff_name), "fixture"),
+		"board pairing: the different-build file is planted")
+	var ch: WovpChallenge = WovpChallenge.new()
+	ch.challenge_id = "gradfix8-monthly-lotb"
+	ch.name = "October"
+	ch.type_code = WovpChallenge.TYPE_MONTHLY
+	ch.table_external_id = "ZhNnPRvbTS"
+	ch.table_name = "Iron Maiden Legacy of the Beast"
+	ch.table_manufacturer = "Stern"
+	ch.table_year = 2018
+	ch.version_external_id = "_UMEFSmYor"
+	ch.version_name = "VPW 1.0.12"
+	ch.end_unix = 1999999999
+	var his: WovpScoreRow = WovpScoreRow.new()
+	his.position = 35
+	his.participant_name = "S. Kubrick"
+	his.score = 135990580.0
+	his.user_id = "fixture-user-1"
+	ch.rows.append(his)
+	# The exact case: his renamed file, scanned fresh.
+	var exact_folders: Array[String] = [exact_tables]
+	var scan_exact: LibraryScanner = LibraryScanner.new()
+	scan_exact.scan(exact_folders, pair_db)
+	var g_exact: GameEntry = scan_exact.game_by_id("ZhNnPRvbTS")
+	_grad_expect(g_exact != null,
+		"board pairing: his renamed Iron Maiden file resolves to the VPS game ZhNnPRvbTS - the board's join key (the (Original 2022) paren states the build's kind and year, not Stern 2018's)")
+	if g_exact != null:
+		var b_exact: TableBuild = g_exact.build_by_path(exact_tables.path_join(exact_name))
+		_grad_expect(b_exact != null and b_exact.matched_db and b_exact.table_file_id == "_UMEFSmYor",
+			"board pairing: his renamed file resolves to the VPW build _UMEFSmYor itself, not just the game")
+		_grad_expect(_room._challenge_build_owned(g_exact, ch),
+			"board pairing: the challenge's build is his build")
+		var spec_exact: Dictionary = RoomSpecs.tournament_board_spec(
+			ch, true, "fixture-user-1", 1700000000, _room._challenge_build_owned(g_exact, ch))
+		_grad_expect(not _nav_spec_has_chip(spec_exact, "NOT IN YOUR LIBRARY")
+			and not _nav_spec_has_chip(spec_exact, "DIFFERENT BUILD IN YOUR LIBRARY"),
+			"board pairing: the Iron Maiden board carries no library chip - the game and the build are both his")
+		var his_row_stands: bool = false
+		for rv: Variant in (spec_exact.get("rows", []) as Array):
+			if rv is Dictionary and str((rv as Dictionary).get("text", "")).contains("#35") \
+					and str((rv as Dictionary).get("text", "")).contains("135,990,580"):
+				his_row_stands = true
+		_grad_expect(his_row_stands,
+			"board pairing: his #35 row (135,990,580) stands on the Iron Maiden board the chip used to contradict")
+	# The honesty branch: the right game, a different build.
+	var diff_folders: Array[String] = [diff_tables]
+	var scan_diff: LibraryScanner = LibraryScanner.new()
+	scan_diff.scan(diff_folders, pair_db)
+	var g_diff: GameEntry = scan_diff.game_by_id("ZhNnPRvbTS")
+	_grad_expect(g_diff != null,
+		"board pairing: the different-build file still resolves to the game - the game is his")
+	if g_diff != null:
+		var b_diff: TableBuild = g_diff.build_by_path(diff_tables.path_join(diff_name))
+		_grad_expect(b_diff != null and b_diff.matched_db and b_diff.table_file_id == "N1Rm5GDsRK",
+			"board pairing: the different-build file resolves to build N1Rm5GDsRK - a real build of the game, and not the challenge's")
+		_grad_expect(not _room._challenge_build_owned(g_diff, ch),
+			"board pairing: the challenge's build is NOT among his builds of the game")
+		var spec_diff: Dictionary = RoomSpecs.tournament_board_spec(
+			ch, true, "fixture-user-1", 1700000000, _room._challenge_build_owned(g_diff, ch))
+		_grad_expect(_nav_spec_has_chip(spec_diff, "DIFFERENT BUILD IN YOUR LIBRARY")
+			and not _nav_spec_has_chip(spec_diff, "NOT IN YOUR LIBRARY"),
+			"board pairing: the different-build board says DIFFERENT BUILD IN YOUR LIBRARY, never the blanket NOT IN YOUR LIBRARY")
+	# The blanket chip's reserved case: a game he does not own.
+	var ch_none: WovpChallenge = WovpChallenge.new()
+	ch_none.challenge_id = "gradfix8-season-acdc"
+	ch_none.name = "Main - Week 3"
+	ch_none.type_code = WovpChallenge.TYPE_SEASON
+	ch_none.table_external_id = "kGBkVb-v"
+	ch_none.table_name = "AC/DC (LUCI Premium)"
+	ch_none.version_external_id = "butCgIcLzI"
+	ch_none.end_unix = 1999999999
+	var spec_none: Dictionary = RoomSpecs.tournament_board_spec(
+		ch_none, scan_exact.game_by_id("kGBkVb-v") != null, "fixture-user-1", 1700000000, false)
+	_grad_expect(_nav_spec_has_chip(spec_none, "NOT IN YOUR LIBRARY")
+		and not _nav_spec_has_chip(spec_none, "DIFFERENT BUILD IN YOUR LIBRARY"),
+		"board pairing: a game he does not own at all keeps the blanket NOT IN YOUR LIBRARY chip, and only that case does")
+	_wipe_tree(ProjectSettings.globalize_path(root_user))
+
+
 func _grad_leg_fallback_visit(e: Dictionary, g: GameEntry) -> void:
 	var kind: String = str(e.get("kind", ""))
 	if g == null:
@@ -4325,6 +4469,9 @@ func _drive_grad_smoke() -> void:
 		5:
 			_grad_power_step()
 		6:
+			if not _grad_gf8_done:
+				_grad_gf8_done = true
+				_grad_gf8_pairing_legs()
 			_finish_grad_smoke()
 		10:
 			_grad_ink_step()

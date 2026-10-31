@@ -250,10 +250,7 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 		# own (Maker Year) parens: exactly one consistent game,
 		# or no match.
 		var scrub_ids: Array[String] = db.find_game_ids_by_scrubbed_name(b.file_name)
-		var survivors: Array[String] = []
-		for sid: String in scrub_ids:
-			if _meta_consistent(db, sid, b.file_name):
-				survivors.append(sid)
+		var survivors: Array[String] = _referee_survivors(db, scrub_ids, b.file_name)
 		if survivors.size() == 1:
 			return _finish_game_match(b, db, survivors[0], "scrubbed", version_guess)
 		# 3b) Edition referee: the file states a game's EDITION
@@ -271,10 +268,7 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 		# on another edition's entry, and words naming no game's
 		# edition complete nothing.
 		var edition_ids: Array[String] = db.find_game_ids_by_edition(b.file_name)
-		var ed_survivors: Array[String] = []
-		for eid: String in edition_ids:
-			if _meta_consistent(db, eid, b.file_name):
-				ed_survivors.append(eid)
+		var ed_survivors: Array[String] = _referee_survivors(db, edition_ids, b.file_name)
 		if ed_survivors.size() == 1:
 			return _finish_game_match(b, db, ed_survivors[0], "edition", version_guess)
 	# 4) Unknown to the db: group by normalized title from the filename.
@@ -306,6 +300,63 @@ func _finish_game_match(b: TableBuild, db: VpsDatabase, game_id: String, tier: S
 			return b
 	b.version = version_guess
 	return b
+
+
+## The parens referee over a whole candidate set. The unit
+## below (_meta_consistent) judges one game at a time, but
+## whether the file's parens are "(Maker Year)" evidence at
+## all is a property of the SET: the paren's maker words
+## must engage at least one candidate's maker (the same
+## subset-either-way test the unit applies). A paren that
+## engages NONE of the candidates is not a statement about
+## any bearer of this name - the field case (GRADFIX8 item
+## 3): "Iron Maiden Legacy of the Beast (Original 2022) VPW
+## 1.0.12.vpx", where the paren states the BUILD's kind and
+## year (an original, no-ROM recreation released in 2022 -
+## the very words the build's VPS download slug carries,
+## "iron-maiden-legacy-of-the-beast-original-2022-vpw"),
+## not the physical game's maker and year (Stern 2018).
+## The old per-game veto read it as (Maker Year) and
+## refused the game's sole claimant on both the scrubbed
+## and edition roads, so a db-exact build filed as local
+## and its WoVP board read NOT IN YOUR LIBRARY. So: no
+## engagement anywhere -> the paren carries no evidence
+## and every candidate survives (the callers' uniqueness
+## rules still decide - several survivors is an ambiguity
+## refusal, as before). Engagement anywhere -> the old
+## per-game referee judges every candidate exactly as it
+## always has: the same-name twins are still separated by
+## their parens, and a file whose parens name the right
+## maker with the wrong year is still refused. A paren
+## with no maker words (a bare "(2022)") always engages -
+## a year-only paren is still judged the old way.
+## NC: PVLDS_GRADFIX8_NC=oldpair restores the pre-fix
+## per-game veto for every candidate, engaged or not.
+func _referee_survivors(db: VpsDatabase, candidate_ids: Array, file_name: String) -> Array[String]:
+	var out: Array[String] = []
+	if OS.get_environment("PVLDS_GRADFIX8_NC") == "oldpair":
+		for cid: Variant in candidate_ids:
+			if _meta_consistent(db, str(cid), file_name):
+				out.append(str(cid))
+		return out
+	var meta: Dictionary = _parse_paren_meta(file_name)
+	var ft: PackedStringArray = VpsDatabase.scrub_tokens(str(meta.get("manufacturer", "")))
+	var engaged: bool = ft.is_empty()
+	if not engaged:
+		for cid2: Variant in candidate_ids:
+			var g: Dictionary = db.game_dict(str(cid2))
+			var gt: PackedStringArray = VpsDatabase.scrub_tokens(str(g.get("manufacturer", "")))
+			if not gt.is_empty() and (_tokens_subset(ft, gt) or _tokens_subset(gt, ft)):
+				engaged = true
+				break
+	if not engaged:
+		for cid3: Variant in candidate_ids:
+			out.append(str(cid3))
+		return out
+	for cid4: Variant in candidate_ids:
+		if _meta_consistent(db, str(cid4), file_name):
+			out.append(str(cid4))
+	return out
 
 
 ## Whether the file name's own "(Manufacturer Year)" parens agree
@@ -362,10 +413,7 @@ func _match_game_id(db: VpsDatabase, title_guess: String, file_name: String) -> 
 		names.append(title_guess.substr(4))
 	for candidate: String in names:
 		var ids: Array[String] = db.find_game_ids_by_name(VpsDatabase.normalize_name(candidate))
-		var survivors: Array[String] = []
-		for gid: String in ids:
-			if _meta_consistent(db, gid, file_name):
-				survivors.append(gid)
+		var survivors: Array[String] = _referee_survivors(db, ids, file_name)
 		if survivors.size() == 1:
 			return survivors[0]
 		# Zero survivors: the name exists but the file's own

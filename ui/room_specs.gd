@@ -77,6 +77,7 @@ const LEGACY_BOARD_LAUNCH_Y: float = -0.155 ## == RoomView.PANEL_LAUNCH_Y
 
 static var board_nc_old: bool = false ## Main sets this from PVLDS_BOARD_NC before any room exists
 static var board_short_page: bool = false ## Main sets this from PVLDS_GRADFIX5_NC=shortpage before any room exists
+static var pairing_nc_old: bool = false ## Main sets this from PVLDS_GRADFIX8_NC=oldpair before any room exists: the board forgets the build half of the pairing (no DIFFERENT BUILD chip)
 
 
 static func board_panel_size() -> Vector2:
@@ -357,7 +358,12 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 ## challenge's own mathematics (WovpChallenge.board_rows);
 ## this spec only dresses it. A table he does not own still
 ## gets its board - with the NOT IN YOUR LIBRARY chip, and
-## the room gives it no Launch button.
+## the room gives it no Launch button. A table he owns in a
+## DIFFERENT build than the challenge specifies gets its
+## board too - with the DIFFERENT BUILD IN YOUR LIBRARY
+## chip (GRADFIX8 item 3): NOT IN YOUR LIBRARY is reserved
+## for not owning the game at all, and the board says which
+## of the two is true.
 ##
 ## TR3 dressing: score rows carry their parts (position /
 ## name / score) separately so the face can lay them out in
@@ -369,7 +375,7 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 ## knows its tone: "up" for a promotion line, "down" for a
 ## cut line - the face draws it as a ruled line, not a
 ## sentence.
-static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int) -> Dictionary:
+static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true) -> Dictionary:
 	var rows: Array = []
 	for entry: Variant in ch.board_rows(user_id):
 		var e: Dictionary = entry
@@ -404,6 +410,8 @@ static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: Strin
 	var chips: Array = []
 	if not owned:
 		chips.append({"text": "NOT IN YOUR LIBRARY", "accent": true})
+	elif not build_owned and not pairing_nc_old:
+		chips.append({"text": "DIFFERENT BUILD IN YOUR LIBRARY", "accent": true})
 	var title: String = ch.table_name if ch.table_name != "" else ch.name
 	var remaining: int = ch.end_unix - now_unix
 	var sub: String = "Ends %s - %s" % [WovpTime.format_deadline(ch.end_unix), WovpTime.format_remaining(ch.end_unix, now_unix)]

@@ -664,7 +664,7 @@ const FACE_CACHE_MAX: int = 96 ## the drawn window is 63 faces; the cache holds 
 var _strip_has_number: bool = false ## the library holds a non-letter title, so the "#" slot is laid out (see _refresh_strip)
 var _letter_net: String = "" ## "" | "THE" | "#": the standing net view - the wall shows exactly that net's games, in title order (see _jump_to_letter)
 var _tournament: bool = false ## the Tournament Room view stands: the wall shows WoVP challenge boards, not the library (see _build_tournament_rows)
-var _tournament_rows: Array = [] ## the standing view's rows, aligned 1:1 with _visible_games: {"kind": "challenge"|"state", "challenge", "game", "owned", "lines"}
+var _tournament_rows: Array = [] ## the standing view's rows, aligned 1:1 with _visible_games: {"kind": "challenge"|"state", "challenge", "game", "owned", "build_owned", "lines"}
 var _wovp_has_key: bool = false ## Main's word on the config: a WoVP key is saved
 var _wovp_user_id: String = "" ## whose key it is (validate-apikey's answer, or the cache's) - how the wall knows which row is HIS
 var _wovp_challenges: Array = [] ## the last-good boards (Array of WovpChallenge), live or from the disk cache
@@ -1340,9 +1340,13 @@ func _tournament_banner_line() -> String:
 
 ## The standing view's rows from the standing data. A
 ## challenge he owns joins his library by its VPS game id
-## against the scanner's match data (the version id rides
-## along in the challenge; the join is game-level in this
-## round - the build the wall launches is his default).
+## against the scanner's match data (the join is game-level
+## - the build the wall launches is his default), and the
+## build half of the truth rides along in the row: whether
+## any of his builds IS the challenge's build, by the VPS
+## table-file id the challenge carries. The board's chip
+## reads the pair (owned, build_owned) - see
+## RoomSpecs.tournament_board_spec.
 func _build_tournament_rows() -> Array:
 	var rows: Array = []
 	if not _wovp_has_key:
@@ -1374,7 +1378,8 @@ func _build_tournament_rows() -> Array:
 		var owned: bool = game != null
 		if not owned:
 			game = _tournament_unowned_game(ch)
-		rows.append({"kind": "challenge", "challenge": ch, "game": game, "owned": owned, "lines": []})
+		rows.append({"kind": "challenge", "challenge": ch, "game": game, "owned": owned,
+			"build_owned": owned and _challenge_build_owned(game, ch), "lines": []})
 	return rows
 
 
@@ -1398,6 +1403,25 @@ func _match_challenge(ch: WovpChallenge) -> GameEntry:
 	if _scanner == null or ch.table_external_id == "":
 		return null
 	return _scanner.game_by_id(ch.table_external_id)
+
+
+## Whether any of his builds of this game IS the challenge's
+## build, by the VPS table-file id the challenge carries
+## (WovpChallenge.version_external_id). A build his scan
+## resolved to the game only - its table_file_id still "" -
+## is not the challenge's build, and neither is a db build
+## of the game he happens not to hold. A challenge carrying
+## no version id specifies no build, so there is nothing to
+## miss: every build of the game serves, and this reads true.
+func _challenge_build_owned(game: GameEntry, ch: WovpChallenge) -> bool:
+	if game == null or ch == null:
+		return false
+	if ch.version_external_id == "":
+		return true
+	for b: TableBuild in game.builds:
+		if b.table_file_id == ch.version_external_id:
+			return true
+	return false
 
 
 ## Enter the Tournament Room: the wall becomes the boards
@@ -3313,8 +3337,11 @@ func _tournament_board_key(idx: int) -> String:
 	var ch: WovpChallenge = row["challenge"] as WovpChallenge
 	if ch == null:
 		return ""
+	var pair_state: String = "none"
+	if bool(row.get("owned", false)):
+		pair_state = "owned" if bool(row.get("build_owned", false)) else "diff"
 	return "board|" + ch.challenge_id + "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id \
-		+ "|" + ("owned" if bool(row.get("owned", false)) else "none")
+		+ "|" + pair_state
 
 
 ## Seat the standing boards for the standing Tournament
@@ -3451,7 +3478,8 @@ func _render_tournament_board(idx: int) -> void:
 		return
 	book["render_key"] = key
 	var spec: Dictionary = RoomSpecs.tournament_board_spec(
-		ch, bool(row.get("owned", false)), _wovp_user_id, int(Time.get_unix_time_from_system()))
+		ch, bool(row.get("owned", false)), _wovp_user_id, int(Time.get_unix_time_from_system()),
+		bool(row.get("build_owned", false)))
 	var bc: Vector2i = _board_coord(idx)
 	var cc: Vector2i = _grid_coord(idx)
 	spec["spine_side"] = "right" if bc.x < cc.x else "left"
