@@ -8037,7 +8037,7 @@ func _drive_tournament_full() -> void:
 					var rseason: WovpChallenge = (rrows[0] as Dictionary).get("challenge") as WovpChallenge if rrows.size() >= 1 else null
 					if rseason != null and bool(rfs.get("open", false)) and int(rfs.get("idx", -1)) == 0 \
 							and str(rfs.get("standing_key", "")).contains(rseason.challenge_id) \
-							and bool(rfs.get("texture_real", false)):
+							and bool(rfs.get("texture_real", false)) and float(rfs.get("t", 0.0)) >= 1.0:
 						_tournament_leg_rendered()
 						_tournament_smoke_wait = 0
 						_tournament_smoke_phase = 4
@@ -8083,7 +8083,7 @@ func _drive_tournament_full() -> void:
 					_tournament_smoke_wait += 1
 					if ch4 != null and bool(fs13.get("open", false)) and int(fs13.get("idx", -1)) == 4 \
 							and str(fs13.get("standing_key", "")).contains(ch4.challenge_id) \
-							and bool(fs13.get("texture_real", false)):
+							and bool(fs13.get("texture_real", false)) and float(fs13.get("t", 0.0)) >= 1.0:
 						_tournament_expect(not bool(fs13.get("back_launch_pickable", true)),
 							"pairing: the not-owned challenge's back shows its board - and no Launch")
 						_tournament_pairing_stage = 3
@@ -8119,7 +8119,7 @@ func _drive_tournament_full() -> void:
 					_tournament_smoke_wait += 1
 					if ch0 != null and bool(fs13.get("open", false)) and int(fs13.get("idx", -1)) == 0 \
 							and str(fs13.get("standing_key", "")).contains(ch0.challenge_id) \
-							and bool(fs13.get("texture_real", false)):
+							and bool(fs13.get("texture_real", false)) and float(fs13.get("t", 0.0)) >= 1.0:
 						_tournament_expect(bool(fs13.get("back_launch_pickable", false)),
 							"pairing: the first challenge's back shows its board - with its Launch")
 						_tournament_pairing_stage = 4
@@ -8338,11 +8338,19 @@ func _tournament_walk_step() -> void:
 						_tw_pair_i += 1
 						_tw_sub = 0
 				2:
+					# Judge only once the turn has COMPLETED
+					# (t >= 1.0): the back render can land
+					# before the card crosses its midpoint,
+					# and the back's pick state is applied AT
+					# the midpoint swap - judging earlier
+					# races the animation (the GRADFIX6
+					# battery's own finding; the same clause
+					# guards phases 3 and 13).
 					_tw_wait += 1
 					var fs: Dictionary = _room.flip_state()
 					if ch != null and bool(fs.get("open", false)) and int(fs.get("idx", -1)) == _tw_pair_i \
 							and str(fs.get("standing_key", "")).contains(ch.challenge_id) \
-							and bool(fs.get("texture_real", false)):
+							and bool(fs.get("texture_real", false)) and float(fs.get("t", 0.0)) >= 1.0:
 						_tournament_walk_judge_centre(_tw_pair_i, row)
 						_room._info_focused_card() ## turn it home for the next centre
 						_tw_sub = 3
@@ -8396,7 +8404,7 @@ func _tournament_walk_step() -> void:
 					var ch3: WovpChallenge = (rows[br_idx] as Dictionary).get("challenge") as WovpChallenge
 					if ch3 != null and bool(fs2.get("open", false)) and int(fs2.get("idx", -1)) == br_idx \
 							and str(fs2.get("standing_key", "")).contains(ch3.challenge_id) \
-							and bool(fs2.get("texture_real", false)) and _tw_wait >= 12:
+							and bool(fs2.get("texture_real", false)) and float(fs2.get("t", 0.0)) >= 1.0 and _tw_wait >= 12:
 						_grad_save_grab("tournament_walk_br.png")
 						_room._info_focused_card()
 						_tw_stage = 3
@@ -8803,10 +8811,17 @@ func _tournament_leg_rendered() -> void:
 				# palette color that can sit in the accent
 				# window, and it must not be able to fake this
 				# leg - his row or nothing.
+				# The window is centred on the TR3 accent
+				# ground itself (Color(0.66, 0.46, 0.10) in
+				# CardFace, measured (0.659, 0.459, 0.098) in
+				# the captured texture) with margin on every
+				# side; the steel-blue band (b 0.55), the gold
+				# border (1.0, 0.80, 0.30) and the promotion
+				# green all stay outside it.
 				for x: int in range(0, img.get_width(), 3):
 					for y: int in range(150, mini(740, img.get_height()), 3):
 						var px: Color = img.get_pixel(x, y)
-						if px.r >= 0.48 and px.r <= 0.64 and px.g >= 0.30 and px.g <= 0.47 and px.b <= 0.16:
+						if px.r >= 0.56 and px.r <= 0.76 and px.g >= 0.36 and px.g <= 0.56 and px.b <= 0.20:
 							accent_px += 1
 		_tournament_expect(accent_px >= 60,
 			"his row: the rendered season board carries his row on the accent ground (%d accent samples)" % accent_px)
