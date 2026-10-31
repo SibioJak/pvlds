@@ -1781,6 +1781,30 @@ func _seat_card(idx: int, nodes: Dictionary) -> void:
 ## Launch button moves to the card's top when the grown
 ## plate's bottom would reach its low seat - the plate
 ## never shares ground with the button, by construction.
+## Whether a card's STANDING face is an art face, for the
+## plate law below (GRADFIX7 item 1): the stamped face key's
+## art segment is non-empty AND the fill recorded a real art
+## aspect for the panel's current seat. A styled title card
+## (empty art segment, aspect 0) is NOT an art face even
+## though its plate and label stand hidden - the plate law
+## must not read geometry off a face that is not standing.
+func _nodes_face_is_art(nodes: Dictionary) -> bool:
+	var root: ClickableQuad = nodes.get("root") as ClickableQuad
+	if root == null:
+		return false
+	var gid: String = root.payload
+	if gid == "":
+		return false
+	var fkey: String = str(_panel_face_key.get(gid, ""))
+	var parts: PackedStringArray = fkey.split("|")
+	if parts.size() <= 1 or parts[1] == "":
+		return false
+	for idx: int in range(_visible_games.size()):
+		if _visible_games[idx].game_id == gid:
+			return idx < _panel_art_aspect.size() and _panel_art_aspect[idx] > 0.0
+	return false
+
+
 func _apply_card_plate(nodes: Dictionary, aabb: AABB) -> void:
 	var plate: MeshInstance3D = nodes["plate"] as MeshInstance3D
 	var block_h: float = maxf(LABEL_STRIP_SIZE.y, aabb.size.y + 0.034)
@@ -1791,7 +1815,16 @@ func _apply_card_plate(nodes: Dictionary, aabb: AABB) -> void:
 	plate.position = Vector3(0.0, block_cy, 0.005)
 	var lq: ClickableQuad = nodes["launch"] as ClickableQuad
 	var plate_bottom: float = block_cy - block_h * 0.5
-	lq.position = Vector3(0.0, PANEL_LAUNCH_Y_TOP if plate_bottom < -0.40 else PANEL_LAUNCH_Y, 0.020)
+	# The top seat is an ART face's remedy only (GRADFIX7
+	# item 1): it exists for a standing nameplate whose grown
+	# block would reach the low seat. A styled title card's
+	# plate/label are hidden - there is no block standing over
+	# the low seat - yet the old law derived the seat from the
+	# hidden label's AABB anyway, so a long-title data card
+	# seated its one Launch at the card's top, over the styled
+	# face's own band/title. Styled faces always seat low.
+	var top_seat: bool = plate_bottom < -0.40 and _nodes_face_is_art(nodes)
+	lq.position = Vector3(0.0, PANEL_LAUNCH_Y_TOP if top_seat else PANEL_LAUNCH_Y, 0.020)
 
 
 ## The GRADFIX2 item 1 fix: the nameplate derivation runs
@@ -2891,6 +2924,20 @@ func _fill_one_face(idx: int, gen: int) -> void:
 	if quad == _power_panel:
 		_restore_power("face_arrived")
 	_panel_art_aspect[idx] = art_aspect if from_art else 0.0
+	# The face kind just changed under the plate law (GRADFIX7
+	# item 1): an upgrade from the styled card to art may owe
+	# the Launch its top seat, and the standing derivation in
+	# _refresh_card_plate would skip this card - its label's
+	# AABB did not change, only the face wearing it did. Force
+	# the re-derive from the label's live AABB now that the
+	# aspect (the law's face-kind fact) stands updated.
+	if idx < _panel_labels.size() and _panel_labels[idx] != null:
+		var fnodes: Dictionary = _panel_pool.get(game.game_id, {}) as Dictionary
+		if not fnodes.is_empty() and str(fnodes.get("mode", "")) == "card":
+			var fla: AABB = _panel_labels[idx].get_aabb()
+			if fla.size.y > 0.0:
+				fnodes["plate_basis_h"] = fla.size.y
+				_apply_card_plate(fnodes, fla)
 	if _panel_pop[idx] > 0.0:
 		# The card is already popped (focus rested while its
 		# face streamed in): force the pop transform to
