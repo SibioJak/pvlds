@@ -3426,7 +3426,8 @@ var _grad_gf7_wait: int = 0
 var _grad_gf7_census_i: int = -1 ## the census centre cursor (-1 = not started)
 var _grad_gf7_census_settle: int = 0
 var _grad_gf7_census_wait: int = 0 ## ticks spent at the current census centre (the settle timeout's clock)
-var _grad_gf8_stage: int = 0 ## phase 15 (GRADFIX8 item 4, the tournie border): 0 census leg + centre the bordered card, 1 settle then grab A, 2 wait 400+ ms then grab B (the motion pair)
+var _grad_gf8_stage: int = 0 ## phase 15 (GRADFIX8 item 4, the tournie border): 0 ask Main's own WoVP fetch for the fixture boards and wait until they stand, 1 census leg + centre the bordered card, 2 settle then grab A, 3 wait 400+ ms then grab B (the motion pair)
+var _grad_gf8_fetch_asked: bool = false ## phase 15 stage 0: Main's fetch has been requested (once - the client coalesces)
 var _grad_gf8_since: int = 0 ## msec the current gf8 stage began
 var _grad_gf8_frames: int = 0 ## driver frames counted in the current gf8 stage (the frame-sample print)
 var _grad_gf7_seen: Dictionary = {} ## panel idx -> true, every panel the census judged
@@ -6118,18 +6119,38 @@ func _grad_leg_tourney_border() -> void:
 		"tourney border: each border's colour is its soonest-closing challenge's type colour%s" % ("" if colour_bad == "" else " (" + colour_bad + ")"))
 
 
-## GRADFIX8 (item 4), phase 15: the border census, then
-## the motion pair - the bordered (tournament) card is
-## centred, the drum settles, grab A lands, and grab B
-## lands 400+ ms of wall clock later with the same card
-## standing in the same place, so the only thing that
-## can differ along the ring is the shader's phase. The
-## stage's frame span prints as the run's frame sample.
+## GRADFIX8 (item 4), phase 15: stage 0 lands the fixture
+## boards through Main's own fetch, stage 1 runs the
+## border census and centres the bordered (tournament)
+## card, and stages 2-3 take the motion pair - the drum
+## settles, grab A lands, and grab B lands 400+ ms of
+## wall clock later with the same card standing in the
+## same place, so the only thing that can differ along
+## the ring is the shader's phase. The last stage's
+## frame span prints as the run's frame sample.
 func _grad_gf8_border_step() -> void:
 	var tid: String = str(_grad_manifest.get("tournament_id", ""))
 	var idx: int = _grad_panel_index(tid)
 	match _grad_gf8_stage:
 		0:
+			# The boards reach the room the production way:
+			# Main's own fetch (the call entering the
+			# Tournament Room emits) against the harness
+			# stub serving the fixture challenges - its
+			# landing also writes the WoVP disk cache, and
+			# _push_wovp_data is what seats the borders.
+			if _room._wovp_challenges.is_empty():
+				if not _grad_gf8_fetch_asked:
+					_grad_gf8_fetch_asked = true
+					_grad_gf8_since = Time.get_ticks_msec()
+					_wovp_fetch_boards()
+				elif Time.get_ticks_msec() - _grad_gf8_since > 30000:
+					_grad_fail("tourney border: the fixture challenge set never landed (fetch asked, none standing after 30 s)")
+					_grad_phase = 4
+					_grad_power_stage = 0
+				return
+			_grad_gf8_stage = 1
+		1:
 			_grad_leg_tourney_border()
 			if idx < 0:
 				_grad_fail("tourney border: the bordered card is on the shelf for the motion grabs")
@@ -6137,21 +6158,21 @@ func _grad_gf8_border_step() -> void:
 				_grad_power_stage = 0
 				return
 			_room._set_focused(_room._panels[idx])
-			_grad_gf8_stage = 1
+			_grad_gf8_stage = 2
 			_grad_gf8_since = Time.get_ticks_msec()
 			_grad_gf8_frames = 0
-		1:
+		2:
 			_grad_gf8_frames += 1
 			if not _room.page_slide_active() and _grad_gf8_frames >= 12:
 				_grad_save_grab("gradfix8_border_a.png")
-				_grad_gf8_stage = 2
+				_grad_gf8_stage = 3
 				_grad_gf8_since = Time.get_ticks_msec()
 				_grad_gf8_frames = 0
 			elif Time.get_ticks_msec() - _grad_gf8_since > 20000:
 				_grad_fail("tourney border: the drum never settled for the motion grabs")
 				_grad_phase = 4
 				_grad_power_stage = 0
-		2:
+		3:
 			_grad_gf8_frames += 1
 			var elapsed: int = Time.get_ticks_msec() - _grad_gf8_since
 			if elapsed >= 400:
