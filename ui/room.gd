@@ -495,6 +495,9 @@ var _mat_plate: StandardMaterial3D = null ## the shared nameplate/status plate m
 var _window_fill_busy: bool = false ## a window face-fill pass is running (centre changes coalesce through _window_fill_dirty)
 var _window_fill_dirty: bool = false
 var _power_subject_inflight: Dictionary = {} ## game_id -> true while its power-on subject renders
+var _power_prefetch_asked: Dictionary = {} ## game_id -> true once the warmer has been asked for its cold backglass (GRADFIX6)
+var _face_heal_retries: Dictionary = {} ## GRADFIX6 item 2: "game_id|art_file" -> art-render retries already spent by the panel heal
+var _face_heal_msec: int = 0 ## GRADFIX6 item 2: the panel heal's throttle stamp (one sweep per BOARD_TEX_RETRY_MS)
 var _fin_start: Node3D = null ## the shelf's start bookend fin (child of the drum; DOME3/DOME4)
 var _fin_end: Node3D = null ## the shelf's end bookend fin
 var _power_panel: ClickableQuad = null ## the card currently performing (or holding) the power-on
@@ -2591,6 +2594,14 @@ func _face_cache_put(key: String, tex: Texture2D, aspect: float) -> void:
 		_face_tex_cache.erase(old)
 
 
+## Drop one cached face (the panel heal's art retry: the
+## styled card cached under an art key must not re-serve
+## itself when the heal asks for the art render again).
+func _face_cache_evict(key: String) -> void:
+	_face_tex_cache.erase(key)
+	_face_cache_order.erase(key)
+
+
 func _fill_wall_textures(gen: int) -> void:
 	var bench_t0: int = Time.get_ticks_msec()
 	var bench_renders: int = 0
@@ -2646,14 +2657,16 @@ func _fill_wall_textures(gen: int) -> void:
 	var bench_t_furniture: int = Time.get_ticks_msec()
 	if _tournament:
 		# The Tournament Room's challenge panels are cards and
-		# dress through the standard window fill below; the
-		# lone state panel (when the view is a state row) wears
-		# its board face here, and the standing board beside
-		# the centred challenge re-renders on its own refresh.
+		# dress through the standard window fill; the lone
+		# state panel (when the view is a state row) wears its
+		# board face here. GRADFIX6 (item 3): the window fill
+		# is requested FIRST - the state face's render used to
+		# head-of-line block the challenge faces in the serial
+		# factory queue on first entry.
+		_request_window_fill()
 		await _fill_tournament_state_faces(gen)
 		if gen != _gen:
 			return
-		_request_window_fill()
 		if gen == _gen:
 			wall_ready = true
 		return
@@ -2711,14 +2724,24 @@ func _fill_window_faces(gen: int) -> void:
 	for idx: int in order:
 		if gen != _gen:
 			return
+		# A fast sweep moves the window mid-pass (centre
+		# changes do not bump the generation): never spend a
+		# render on a card the window has already left.
+		var cc: int = _grid_coord(idx).x
+		if cc < _panel_window_lo or cc > _panel_window_hi:
+			continue
 		await _fill_one_face(idx, gen)
 	if gen == _gen:
 		wall_ready = true
 		# The window is dressed: ask Main's warmer to bring
 		# the columns just outside it forward, so a swing
-		# lands on warm art even mid-warm-up.
+		# lands on warm art even mid-warm-up. GRADFIX6 widens
+		# the ask from one column to two - the fill path no
+		# longer extracts inline, so the warmer's lookahead
+		# is the only thing standing between a fast sweep and
+		# a wall of title cards.
 		var near: Array = []
-		for c: int in [_panel_window_lo - 1, _panel_window_hi + 1]:
+		for c: int in [_panel_window_lo - 2, _panel_window_lo - 1, _panel_window_hi + 1, _panel_window_hi + 2]:
 			if c < 0 or c >= _columns:
 				continue
 			for row: int in range(3):
@@ -2727,6 +2750,32 @@ func _fill_window_faces(gen: int) -> void:
 					near.append(_visible_games[idx])
 		if not near.is_empty():
 			art_prefetch_requested.emit(near)
+
+
+## The fill path's face read (GRADFIX6 items 2+3): the
+## READY probe - art that already sits on disk - never the
+## paying read. A cold card dresses in its styled title
+## card immediately and upgrades when the warmer lands the
+## real thing (the panel heal watches for the key change);
+## the old read extracted synchronously on this path, which
+## is the convicted mechanism behind both the tournie
+## first-entry freeze and the serial stall a fast sweep
+## outruns. PVLDS_TOURN_NC=coldfill restores the paying
+## read so the tournament smoke's first-entry legs can
+## fail against it by name.
+func _face_path_for(game: GameEntry) -> String:
+	if OS.get_environment("PVLDS_TOURN_NC") == "coldfill":
+		return game.face_path()
+	return game.face_path_ready()
+
+
+## The blank-face negative control's predicate (see
+## _fill_one_face): PVLDS_GRADFIX6_NC=blackface with the
+## target game in PVLDS_GF6_NC_TARGET restores the pre-fix
+## accept-cache-stamp bookkeeping for that one game.
+func _blackface_nc(game: GameEntry) -> bool:
+	return OS.get_environment("PVLDS_GRADFIX6_NC") == "blackface" \
+		and game.game_id == OS.get_environment("PVLDS_GF6_NC_TARGET")
 
 
 ## One card's face: the author shot first (GameEntry's
@@ -2744,7 +2793,7 @@ func _fill_one_face(idx: int, gen: int) -> void:
 		return # the state panel wears its board face (see _fill_tournament_state_faces), never a card face
 	var game: GameEntry = _visible_games[idx]
 	var quad: ClickableQuad = _panels[idx]
-	var art_file: String = game.face_path()
+	var art_file: String = _face_path_for(game)
 	var fav: bool = _store != null and _store.is_favorite(game.game_id)
 	var pup: bool = game.is_pup_tagged()
 	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
@@ -2765,13 +2814,37 @@ func _fill_one_face(idx: int, gen: int) -> void:
 				art_aspect = float(art_tex.get_width()) / float(art_tex.get_height())
 				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store, false), _panel_face_px)
 				from_art = tex != null
+				if from_art and _blackface_nc(game):
+					# NC (PVLDS_GRADFIX6_NC=blackface, target in
+					# PVLDS_GF6_NC_TARGET): the pre-GRADFIX6
+					# bookkeeping restored for one named game -
+					# the failed capture's dark solid accepted
+					# as its face, cached and stamped below, so
+					# the sweep smoke's dwell leg fails by name.
+					tex = TextureFactory.make_solid(Color(0.08, 0.08, 0.12))
+				elif from_art and not _tex_is_real(tex):
+					# GRADFIX6 item 2 (the convicted blank-face
+					# mechanism): a failed factory capture comes
+					# back as a dark fallback solid, and the old
+					# code cached and key-stamped it as the
+					# card's art face - black forever. It is not
+					# a face: never cache it, never stamp it.
+					# Fall through to the styled title card; the
+					# panel heal re-tries the art render.
+					tex = null
+					from_art = false
 		if tex == null:
 			tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), _panel_face_px)
 			from_art = false
 		if gen != _gen:
 			return
-		if tex != null:
+		if tex != null and (_tex_is_real(tex) or _blackface_nc(game)):
 			_face_cache_put(fkey, tex, art_aspect if from_art else 0.0)
+		elif tex != null:
+			# The styled card's own capture failed too: stamp
+			# nothing, cache nothing - the placeholder stands
+			# and the heal retries (bounded per face key).
+			tex = null
 	if tex == null:
 		return
 	quad.set_texture(tex)
@@ -2836,13 +2909,12 @@ func _fill_one_face(idx: int, gen: int) -> void:
 			var launchable: bool = _tournament_launchable(idx)
 			_panel_launches[idx].visible = launchable
 			_panel_launches[idx].pick_enabled = launchable and _mode == "wall"
-	# Warm the power-on's subject while the card is dressed:
-	# the backglass extraction is claim-joined with the
-	# library warmer, so a card whose backglass is already
-	# extracted costs a stat, and focus time never pays an
-	# extraction of its own.
-	if game.backglass_source() != "":
-		game.backglass_face_path()
+	# The power-on's subject warms through the warmer now,
+	# not here (GRADFIX6 items 2+3): this tail used to call
+	# backglass_face_path() - a synchronous extraction on
+	# the fill path, one of the convicted first-entry
+	# blocks. _prepare_power_subject reads the ready probe
+	# and asks the warmer forward when it is cold.
 
 
 ## A shot landed for a game (Main's ShotFetcher): if its card
@@ -2861,6 +2933,98 @@ func refresh_shot_faces(game: GameEntry) -> void:
 	if c < _panel_window_lo or c > _panel_window_hi:
 		return
 	_fill_one_face(idx, _gen)
+
+
+## The panel-face heal (GRADFIX6 item 2 - the GRADFIX4
+## companions' heal discipline, extended to the cards
+## themselves, which the original heal left out): once per
+## BOARD_TEX_RETRY_MS, walk the standing window's panels
+## and re-issue the fill for any face that is not honestly
+## standing:
+##   - the standing texture is unreal (the placeholder, or
+##     a fallback solid that got applied before the reality
+##     gate existed in a render race) - restamp and refill;
+##   - the card wears its styled title card while READY art
+##     now exists for it (the warmer landed the extraction,
+##     or the shot arrived without a refresh hook) - the
+##     face key the ready probe computes differs from the
+##     stamped key, so refill (an upgrade, never charged
+##     against the retry budget);
+##   - the card wears its styled card over art that was
+##     ready all along but whose RENDER captured empty -
+##     evict the cached styled face and retry the art
+##     render, bounded per face key (BOARD_TEX_MAX_RETRIES)
+##     so a persistently failing capture settles on the
+##     styled card instead of spinning.
+func _heal_panel_faces() -> void:
+	if _panel_window_lo < 0 or _panels.is_empty():
+		return
+	var now: int = Time.get_ticks_msec()
+	if now - _face_heal_msec < BOARD_TEX_RETRY_MS:
+		return
+	_face_heal_msec = now
+	for idx: int in range(_panels.size()):
+		if idx >= _visible_games.size():
+			continue
+		var cc: int = _grid_coord(idx).x
+		if cc < _panel_window_lo or cc > _panel_window_hi:
+			continue
+		if _tournament and idx < _tournament_rows.size() \
+				and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+			continue # state panels wear board faces, not card faces
+		var game: GameEntry = _visible_games[idx]
+		var quad: ClickableQuad = _panels[idx]
+		var tex: Texture2D = quad.current_texture()
+		var stamped: String = str(_panel_face_key.get(game.game_id, ""))
+		var art_file: String = _face_path_for(game)
+		var fav: bool = _store != null and _store.is_favorite(game.game_id)
+		var pup: bool = game.is_pup_tagged()
+		var want_key: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+		if tex == null or tex == _placeholder_tex or not _tex_is_real(tex):
+			_panel_face_key.erase(game.game_id)
+			_fill_one_face(idx, _gen)
+		elif stamped != want_key:
+			_fill_one_face(idx, _gen) # an upgrade is ready - the fill's own key check does the rest
+		elif art_file != "" and _panel_art_aspect[idx] <= 0.0:
+			# The styled card stands over ready art: its art
+			# render captured empty at fill time. Retry it,
+			# bounded; then the styled card stands for good.
+			var rkey: String = game.game_id + "|" + art_file
+			var spent: int = int(_face_heal_retries.get(rkey, 0))
+			if spent < BOARD_TEX_MAX_RETRIES:
+				_face_heal_retries[rkey] = spent + 1
+				_face_cache_evict(stamped)
+				_panel_face_key.erase(game.game_id)
+				_fill_one_face(idx, _gen)
+
+
+## Per-panel face state for the smokes (the sweep driver's
+## instrumentation): for every panel in the standing
+## window, what its face honestly is right now.
+func face_state() -> Array:
+	var out: Array = []
+	if _panel_window_lo < 0:
+		return out
+	for idx: int in range(_panels.size()):
+		if idx >= _visible_games.size():
+			continue
+		var cc: int = _grid_coord(idx).x
+		if cc < _panel_window_lo or cc > _panel_window_hi:
+			continue
+		var quad: ClickableQuad = _panels[idx]
+		var tex: Texture2D = quad.current_texture()
+		out.append({
+			"idx": idx,
+			"game_id": _visible_games[idx].game_id,
+			"title": _visible_games[idx].title,
+			"col": cc,
+			"key_stamped": _panel_face_key.has(_visible_games[idx].game_id),
+			"tex_w": tex.get_width() if tex != null else 0,
+			"is_placeholder": tex != null and tex == _placeholder_tex,
+			"is_unreal": tex == null or tex == _placeholder_tex or not _tex_is_real(tex),
+			"from_art": _panel_art_aspect[idx] > 0.0 if idx < _panel_art_aspect.size() else false,
+		})
+	return out
 
 
 ## The state row's fill (the Tournament redesign): when the
@@ -3159,6 +3323,7 @@ func _update_pop(delta: float) -> void:
 		var s: float = lerpf(1.0, POP_OUT_SCALE, amt)
 		q.scale = Vector3(s, s, s)
 	_update_flip(delta)
+	_heal_panel_faces()
 
 
 ## ------------------------------------------------------ the card flip
@@ -5033,7 +5198,21 @@ func _prepare_power_subject(panel: ClickableQuad, game: GameEntry) -> void:
 		return
 	_power_subject_inflight[game.game_id] = true
 	var gen: int = _gen
-	var path: String = game.backglass_face_path()
+	# GRADFIX6 items 2+3: the ready probe only - a cold
+	# backglass must not extract synchronously on the focus
+	# path (the convicted seat-path block). Ask the warmer
+	# forward once per game; the candidate machinery
+	# re-prepares while focus rests, and the performance
+	# starts when the extraction lands.
+	var path: String = game.backglass_face_path_ready()
+	if path == "" and game.backglass_source() != "":
+		if not _power_prefetch_asked.has(game.game_id):
+			_power_prefetch_asked[game.game_id] = true
+			art_prefetch_requested.emit([game])
+		_power_subject_inflight.erase(game.game_id)
+		return
+	if path != "":
+		_power_prefetch_asked.erase(game.game_id)
 	var tex: Texture2D = null
 	if path != "":
 		var src: Texture2D = TextureFactory.load_art_texture(path)

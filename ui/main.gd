@@ -177,6 +177,11 @@ var _tournament_validate_count_seen: int = 0 ## the stub's validate count when t
 var _tournament_smoke_mode: String = "full" ## PVLDS_WOVP_SMOKE_MODE: full | nokey | failfetch | errbody | errempty | cache | layout - which harness boot this is
 var _tournament_pairing_stage: int = 0 ## full mode phase 13 (the flip-pairing proof): step out, flip, verify, step back, flip, verify
 var _tournament_rendered_flip: int = 0 ## full mode phase 3: 0 seat + flip the season card, 1 waiting for its back, 2 judged
+var _tournament_entry_msec: int = 0 ## GRADFIX6 item 3: first-entry stamps - when the rail press landed
+var _tournament_entry_last_msec: int = 0 ## the driver's previous frame stamp inside the entry window
+var _tournament_entry_gap_max: int = 0 ## the worst inter-frame gap inside the entry window (the freeze, measured)
+var _tournament_entry_frames: int = 0 ## frames counted inside the entry window
+var _tournament_entry_moved: bool = false ## a nav press inside the first frames moved focus/centre
 var _tw_stage: int = 0 ## full mode phase 14 (the GRADFIX2 selection walk): 0 expand the focus graph, 1 pair-verify per challenge, 2 the Battle Royale grab
 var _tw_queue: Array = [] ## quads waiting to be expanded (the entry rail stop, then every panel the walk lands on)
 var _tw_expanded: Dictionary = {} ## quad instance id -> true
@@ -441,6 +446,8 @@ func _ready() -> void:
 		_smoke_letters = true
 	if user_args.has("--pvlds-smoke-grad"):
 		_smoke_grad = true
+	if user_args.has("--pvlds-smoke-sweep"):
+		_smoke_sweep = true
 		# The negative control (harness env): the index stops
 		# stripping a leading "The", so every canonical-The
 		# game files under T and the driver's canonical-The
@@ -698,6 +705,8 @@ func _process(_delta: float) -> void:
 		_drive_letters_smoke()
 	if _smoke_grad:
 		_drive_grad_smoke()
+	if _smoke_sweep:
+		_drive_sweep_smoke()
 	if _smoke_tournament:
 		_drive_tournament_smoke()
 	if _smoke_bootfocus:
@@ -929,6 +938,23 @@ func _push_wovp_data() -> void:
 		"fetch_error": _wovp_fetch_error,
 	})
 	_resolve_unowned_shots()
+	# GRADFIX6 (item 3): pre-warm the challenge set's art at
+	# push time - boot/cache-load, long before anyone enters
+	# the Tournament Room - so the room's first entry never
+	# meets a cold extraction on its seat path (the fill
+	# reads ready art only now; the warmer is what makes it
+	# ready).
+	if _art_warmer != null:
+		var owned_games: Array[GameEntry] = []
+		for rv: Variant in _room.tournament_rows():
+			var row: Dictionary = rv as Dictionary
+			if str(row.get("kind", "")) != "challenge":
+				continue
+			var g: GameEntry = row.get("game") as GameEntry
+			if g != null and not owned_games.has(g):
+				owned_games.append(g)
+		if not owned_games.is_empty():
+			_art_warmer.prioritize(owned_games)
 
 
 ## A challenge whose table he does not own still gets its
@@ -7913,13 +7939,56 @@ func _drive_tournament_full() -> void:
 				_tournament_expect(_room.tournament_active(), "enter: the TOURNAMENT stop raises the Tournament Room")
 				_tournament_expect(_room.focused_quad() == _room.rail_quad("tournament"),
 					"enter: focus lands on the TOURNAMENT stop that was pressed")
-				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 45000
-				_tournament_smoke_phase = 1
+				# GRADFIX6 (item 3): the first-entry window -
+				# the freeze's own measurement ground. Phase 16
+				# watches the driver's own frame gaps and
+				# presses navigation before any art can land.
+				_tournament_entry_msec = Time.get_ticks_msec()
+				_tournament_entry_last_msec = _tournament_entry_msec
+				_tournament_entry_gap_max = 0
+				_tournament_entry_frames = 0
+				_tournament_entry_moved = false
+				_tournament_smoke_phase = 16
 			else:
 				_tournament_smoke_wait += 1
 				if _tournament_smoke_wait > 3600:
 					_tournament_fail("the room never came up")
 					_finish_tournament_smoke()
+		16:
+			# First entry, judged on the driver's own clock:
+			# this driver runs on the main thread, exactly
+			# like the room's input poll - a synchronous
+			# extraction on the seat path starves BOTH, so
+			# the worst inter-frame gap inside the window IS
+			# the freeze, measured rather than described.
+			# Bound: no single gap over 500 ms in the first
+			# 2.5 s. And on frame 3 a real navigation press
+			# (the room's own _move_focus, the pad poll's
+			# call) must move focus or centre - before the
+			# centre card's real art has landed (its face
+			# still the styled card or placeholder at that
+			# frame is recorded, not required: on a warm
+			# fixture the art may already stand, and the law
+			# is that input never waits for it).
+			# PVLDS_TOURN_NC=coldfill restores the synchronous
+			# face read on the seat path and both legs fail
+			# by name against it.
+			var now16: int = Time.get_ticks_msec()
+			_tournament_entry_gap_max = maxi(_tournament_entry_gap_max, now16 - _tournament_entry_last_msec)
+			_tournament_entry_last_msec = now16
+			_tournament_entry_frames += 1
+			if _tournament_entry_frames == 3:
+				var before_q: ClickableQuad = _room.focused_quad()
+				var before_c: int = _room.centre_index()
+				_room._move_focus(Vector2(0.0, -1.0))
+				_tournament_entry_moved = _room.focused_quad() != before_q or _room.centre_index() != before_c
+			if now16 - _tournament_entry_msec >= 2500:
+				_tournament_expect(_tournament_entry_gap_max <= 500,
+					"first entry: no frame gap over 500 ms in the first 2.5 s after entry (worst %d ms over %d frames - the freeze is a main-thread block, and the driver shares that thread with the input poll)" % [_tournament_entry_gap_max, _tournament_entry_frames])
+				_tournament_expect(_tournament_entry_moved,
+					"first entry: navigation input in the first frames moves focus - input never waits for art")
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 45000
+				_tournament_smoke_phase = 1
 		1:
 			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy():
 				_tournament_leg_boards()
@@ -8905,6 +8974,116 @@ func _finish_tournament_smoke() -> void:
 	else:
 		printerr("PVLDS TOURNAMENT SMOKE: FAIL (%d)" % _tournament_smoke_failures)
 		get_tree().quit(1)
+
+
+# -------------------------------------------------- sweep smoke
+
+## --pvlds-smoke-sweep: the blank-face contract (GRADFIX6
+## item 2), driven over the graduation fixture library from
+## a cold home. The driver sweeps the centre across the
+## whole shelf at one panel per frame - a fast alphabet
+## sweep the fill cannot pace - sampling the room's
+## face_state() every frame. THE BOUND: a card inside
+## +/-3 columns of the centre may not stay on an unpainted
+## face (the placeholder, or a texture too small to be a
+## face - the factory fallback solid the field captures
+## wore) for more than 1000 ms after it first enters that
+## zone; a styled title card counts as painted - it is the
+## deliberate fallback, not a failure. At the sweep's end
+## + 2 s of settle, no visible card may be unpainted.
+## PVLDS_GRADFIX6_NC=blackface (target in
+## PVLDS_GF6_NC_TARGET) restores the pre-fix
+## accept-and-stamp bookkeeping for one game, and its
+## dwell leg fails by name.
+var _smoke_sweep: bool = false ## --pvlds-smoke-sweep
+var _sweep_phase: int = 0
+var _sweep_failures: int = 0
+var _sweep_idx: int = 0 ## the centre the sweep has reached
+var _sweep_first_unreal: Dictionary = {} ## game_id -> msec it first stood unpainted inside the judged zone
+var _sweep_violated: Dictionary = {} ## game_id -> true once its dwell leg has been charged
+var _sweep_worst_dwell: int = 0 ## the worst dwell actually observed (ms), printed with the verdict
+var _sweep_settle_since: int = 0
+const SWEEP_DWELL_BOUND_MS: int = 1000
+
+
+func _sweep_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - sweep smoke: ", label)
+	else:
+		_sweep_fail(label)
+
+
+func _sweep_fail(label: String) -> void:
+	_sweep_failures += 1
+	printerr("  FAIL - sweep smoke: ", label)
+
+
+func _finish_sweep_smoke() -> void:
+	if _sweep_failures == 0:
+		print("PVLDS SWEEP SMOKE: PASS (worst dwell %d ms against the %d ms bound)" % [_sweep_worst_dwell, SWEEP_DWELL_BOUND_MS])
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS SWEEP SMOKE: FAIL (%d)" % _sweep_failures)
+		get_tree().quit(1)
+
+
+func _drive_sweep_smoke() -> void:
+	match _sweep_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and _room._panels.size() > 10:
+				Input.warp_mouse(Vector2(512.0, 764.0)) ## parked: hover would drive the centre
+				_room._set_centre(0, true)
+				_sweep_idx = 0
+				_sweep_phase = 1
+			# (no timeout leg: a room that never comes up is
+			# the runner's timeout, as in the grad driver)
+		1:
+			# One panel per frame, the whole shelf, no
+			# waiting for fills - the sweep a player's thumb
+			# makes, at machine speed.
+			if _sweep_idx < _room._panels.size() - 1:
+				_sweep_idx += 1
+				_room._set_centre(_sweep_idx, false)
+			_sweep_sample_faces()
+			if _sweep_idx >= _room._panels.size() - 1:
+				_sweep_phase = 2
+				_sweep_settle_since = Time.get_ticks_msec()
+		2:
+			_sweep_sample_faces()
+			if Time.get_ticks_msec() - _sweep_settle_since >= 2000:
+				var left: Array = []
+				for st: Variant in _room.face_state():
+					var sd: Dictionary = st as Dictionary
+					if bool(sd.get("is_unreal", false)):
+						left.append(str(sd.get("title", "")))
+				_sweep_expect(left.is_empty(),
+					"sweep settle: no visible card stands unpainted 2 s after the sweep ends%s"
+						% ("" if left.is_empty() else " - still unpainted: " + ", ".join(left.slice(0, 5))))
+				_finish_sweep_smoke()
+
+
+## One frame's face sample: charge any card inside the
+## judged zone (+/-3 columns of the centre) that has stood
+## unpainted past the bound, once per game, by title.
+func _sweep_sample_faces() -> void:
+	var now: int = Time.get_ticks_msec()
+	var centre_col: int = _room._grid_coord(_room.centre_index()).x
+	for st: Variant in _room.face_state():
+		var sd: Dictionary = st as Dictionary
+		if absi(int(sd.get("col", 0)) - centre_col) > 3:
+			continue
+		var gid: String = str(sd.get("game_id", ""))
+		if bool(sd.get("is_unreal", false)):
+			if not _sweep_first_unreal.has(gid):
+				_sweep_first_unreal[gid] = now
+			var dwell: int = now - int(_sweep_first_unreal[gid])
+			_sweep_worst_dwell = maxi(_sweep_worst_dwell, dwell)
+			if dwell > SWEEP_DWELL_BOUND_MS and not _sweep_violated.has(gid):
+				_sweep_violated[gid] = true
+				_sweep_fail("sweep face dwell: '%s' stayed unpainted %d ms inside the judged zone (bound %d ms)"
+					% [str(sd.get("title", "")), dwell, SWEEP_DWELL_BOUND_MS])
+		else:
+			_sweep_first_unreal.erase(gid)
 
 
 # -------------------------------------------------- desk smoke

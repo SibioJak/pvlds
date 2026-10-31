@@ -131,6 +131,37 @@ func face_path() -> String:
 	return ensure_art()
 
 
+## What face_path() would answer WITHOUT paying for it
+## (GRADFIX6 items 2+3): the shot when its cache file already
+## sits on disk; the chain's art when a previous ensure_art
+## landed it (art_path set); "" while anything is still cold.
+## Never claims, never extracts, never spins - the room's
+## fill path reads this so a cold card can dress in its
+## styled title card NOW and upgrade when the warmer lands
+## the real art, instead of blocking the main thread on a
+## synchronous extraction (the first-entry freeze, and the
+## serial stall behind the blank faces). PVLDS_TOURN_NC=
+## coldfill restores the paying read on the room's seat
+## path so the tournament smoke's first-entry legs can
+## fail against it by name.
+func face_path_ready() -> String:
+	if shot_url != "" and OS.get_environment("PVLDS_GRAD_NC") != "oldrank":
+		if ArtProvider.shot_is_cached(shot_url):
+			return ArtProvider.shot_cache_path_for(shot_url)
+	return art_path
+
+
+## backglass_face_path() without the extraction: the cached
+## extraction when it is already current, "" while cold.
+func backglass_face_path_ready() -> String:
+	var src: String = backglass_source()
+	if src == "":
+		return ""
+	if ArtProvider.is_cache_current(src):
+		return ArtProvider.cache_path_for(src)
+	return ""
+
+
 ## Whether this game's face IS its author screenshot right
 ## now (the power-on's settle rule reads it: a performance
 ## whose subject was the backglass settles back to the shot
