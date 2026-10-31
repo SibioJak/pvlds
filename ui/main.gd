@@ -6247,7 +6247,7 @@ func _nav_leg_ay_swap_async() -> void:
 	_room._set_focused(_room._panels[2])
 	await _nav_feed_button(JOY_BUTTON_Y)
 	var fguard: int = 0
-	while not bool(_room.flip_state().get("open", false)) and fguard < 1200:
+	while not (bool(_room.flip_state().get("open", false)) and float(_room.flip_state().get("t", 0.0)) >= 1.0) and fguard < 1200:
 		await get_tree().process_frame
 		fguard += 1
 	var fs: Dictionary = _room.flip_state()
