@@ -4283,6 +4283,23 @@ func _grad_gf8_legs() -> void:
 	# verified by census rather than assumed).
 	_grad_expect(_room.bookend_fin_count() == 0,
 		"fins: zero bookend fin nodes stand in the room (library view; got %d)" % _room.bookend_fin_count())
+	# Item 6: the pager stops are gone from the rail; the
+	# page readout stays and still TRACKS the centred
+	# column - move the centre a page over and the readout
+	# must name the new page, then restore the boot centre.
+	_grad_expect(not _room._rail_quads.has("page_prev") and not _room._rail_quads.has("page_next") and _room._rail_quads.has("page_label"),
+		"pager stops: the rail carries no < > pager stops and keeps the page readout (quads: %s)" % str(_room._rail_quads.keys()))
+	var la_before: Array = _room._rail_label_accent("page_label")
+	var readout_before: String = str(la_before[0]) if not la_before.is_empty() else ""
+	var target_idx: int = mini(RoomView.PAGE_SIZE, maxi(0, _room._visible_games.size() - 1))
+	_room._set_centre(target_idx)
+	var la_after: Array = _room._rail_label_accent("page_label")
+	var readout_after: String = str(la_after[0]) if not la_after.is_empty() else ""
+	var readout_want: String = "%d / %d" % [_room._page + 1, _room.page_count()]
+	_grad_expect(readout_after == readout_want and readout_after != readout_before,
+		"page readout: the readout still tracks the centred column (was '%s', centre moved to shelf %d, reads '%s', page state %s)"
+			% [readout_before, target_idx, readout_after, readout_want])
+	_room._set_centre(_grad_boot_centre)
 
 
 func _grad_leg_fallback_visit(e: Dictionary, g: GameEntry) -> void:
@@ -5934,8 +5951,8 @@ func _grad_census_verdicts() -> void:
 	var status_sz: Vector2 = bar.get("status_size", Vector2.ZERO)
 	print("GRAD CONSOLE: rail span %.3f m (pre-Console 4.225, pass 1 2.964), strip span %.3f m, %d rail stops, %d strip slots, status plate %s, tile height %.3f m, rail/strip gap %.3f m"
 		% [rail_span, strip_span, int(bar.get("rail_stops", 0)), int(bar.get("strip_slots", 0)), str(status_sz), float(bar.get("rail_tile_h", 0.0)), float(bar.get("rail_strip_gap", 0.0))])
-	_grad_expect(rail_span > 0.0 and rail_span <= 2.75 and int(bar.get("rail_stops", 0)) == 12 and status_sz.x <= 2.0,
-		"console bar: the rail is tightened to the pass-2 Console span and loses no stop (span %.3f m of the pre-Console 4.225 - %.0f%% - %d stops, status plate %.2f m wide)"
+	_grad_expect(rail_span > 0.0 and rail_span <= 2.75 and int(bar.get("rail_stops", 0)) == 10 and status_sz.x <= 2.0,
+		"console bar: the rail is tightened to the pass-2 Console span and carries 10 stops (span %.3f m of the pre-Console 4.225 - %.0f%% - %d stops, status plate %.2f m wide; GRADFIX8 item 6: the count drops 12 -> 10 on Chris's order - the < > pager stops are removed, the page readout is not a stop and stays)"
 			% [rail_span, rail_span / 4.225 * 100.0, int(bar.get("rail_stops", 0)), status_sz.x])
 	_grad_expect(strip_span > 0.0 and strip_span <= rail_span and int(bar.get("strip_slots", 0)) >= 27,
 		"console bar: the strip condenses inside the bar's span and keeps every slot (strip %.3f m within rail %.3f m, %d slots)"
@@ -6461,7 +6478,7 @@ func _nav_key_of(q: ClickableQuad) -> String:
 func _nav_leg_rail_walk() -> void:
 	var order: Array[String] = [
 		"filter:all", "filter:vr", "filter:favorites", "filter:recents",
-		"sort", "tournament", "page_prev", "page_next", "desk", "exit"]
+		"sort", "tournament", "desk", "exit"] ## GRADFIX8 (item 6): page_prev/page_next removed with the pager stops (Chris's order)
 	# The Tournament Room round's stops: TOURNAMENT walks
 	# with the rail always; REFRESH is a stop only while the
 	# Tournament Room stands, so this library-mode walk

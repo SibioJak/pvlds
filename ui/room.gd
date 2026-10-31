@@ -195,11 +195,15 @@ const STRIP_Z: float = -1.62 ## the rail's depth: the strip is rail furniture
 ## degree sight-line clearance, and the two never share
 ## ground. The widebar NC still restores the PRE-Console
 ## bar wholesale (4.225 m), so it still convicts pass 2
-## by name. Nothing dropped: 12 rail stops, 28 strip
-## slots (A-Z, THE, #) - bar_state counts them.
-const STRIP_LETTER_SIZE: Vector2 = Vector2(0.078, 0.085)
+## by name. Nothing dropped at pass 2: 12 rail stops, 28
+## strip slots (A-Z, THE, #) - bar_state counts them.
+## GRADFIX8 (item 6, Chris's order) drops the two pager
+## stops from the rail: TEN entries stand from here
+## (bar_state's rail_stops reads 10), span 2.417 m; the
+## page readout stays (see _build_rail).
+const STRIP_LETTER_SIZE: Vector2 = Vector2(0.076, 0.085) ## GRADFIX8 (item 6): letters 0.078 -> 0.076 and STRIP_GAP 0.010 -> 0.006 - the pager removal shortens the rail to 2.417 m, and the strip condenses the last hair (span 2.546 -> 2.384 m) so the Console law - the strip sits WITHIN the rail's span - survives the tightening instead of being amended away
 const STRIP_THE_SIZE: Vector2 = Vector2(0.170, 0.085)
-const STRIP_GAP: float = 0.010
+const STRIP_GAP: float = 0.006
 const STRIP_LETTER_SIZE_WIDE: Vector2 = Vector2(0.095, 0.13) ## the pre-Console strip (the widebar NC's restore)
 const STRIP_THE_SIZE_WIDE: Vector2 = Vector2(0.21, 0.13)
 const STRIP_GAP_WIDE: float = 0.014
@@ -2373,18 +2377,31 @@ func _build_rail(placeholder: Texture2D) -> void:
 	# span 2.687 m, total angular width 79.3 degrees at the
 	# rail's z -1.62 (see the constants block for the full
 	# arithmetic). The widebar NC restores the pre-Console
-	# row wholesale.
+	# row wholesale. GRADFIX8 (item 6) then drops the two
+	# pager stops from both rows: the standing span is
+	# 2.417 m over ten entries (see the GRADFIX8 note on the
+	# defs below).
 	var defs: Array = []
+	# GRADFIX8 (item 6, Chris's order): the < > pager stops
+	# are REMOVED from both bars' defs - unused, with the
+	# thumbstick and bumpers covering travel. What stays is
+	# the page-position READOUT (page_label): information,
+	# not navigation - it keeps its seat in the row, now
+	# directly right of TOURNAMENT, and _set_centre keeps
+	# its text tracking the centred column's page exactly
+	# as before. Page TRAVEL itself is untouched: the
+	# bumpers (_bumper_page) and _handle_rail's page
+	# branches remain the travel engine.
 	if _console_wide():
 		defs = [
 			["filter:all", 0.30], ["filter:vr", 0.24], ["filter:favorites", 0.44], ["filter:recents", 0.40],
-			["sort", 0.46], ["tournament", 0.44], ["page_prev", 0.18], ["page_label", 0.28], ["page_next", 0.18],
+			["sort", 0.46], ["tournament", 0.44], ["page_label", 0.28],
 			["wovp_refresh", 0.32], ["desk", 0.32], ["exit", 0.28],
 		]
 	else:
 		defs = [
 			["filter:all", 0.194], ["filter:vr", 0.156], ["filter:favorites", 0.285], ["filter:recents", 0.259],
-			["sort", 0.298], ["tournament", 0.285], ["page_prev", 0.117], ["page_label", 0.182], ["page_next", 0.117],
+			["sort", 0.298], ["tournament", 0.285], ["page_label", 0.182],
 			["wovp_refresh", 0.207], ["desk", 0.207], ["exit", 0.182],
 		]
 	var gap: float = 0.035 if _console_wide() else RAIL_GAP
@@ -2464,10 +2481,6 @@ func _rail_label_accent(key: String) -> Array:
 		accent = _tournament
 	elif key == "wovp_refresh":
 		label = "REFRESH"
-	elif key == "page_prev":
-		label = "<"
-	elif key == "page_next":
-		label = ">"
 	elif key == "page_label":
 		label = "%d / %d" % [_page + 1, page_count()]
 	elif key == "desk":
@@ -6197,8 +6210,8 @@ func _cycle_focus(step: int) -> void:
 ## rail walks THIS order and nothing else.
 const RAIL_FOCUS_ORDER: Array[String] = [
 	"filter:all", "filter:vr", "filter:favorites", "filter:recents",
-	"sort", "tournament", "page_prev", "page_next", "wovp_refresh", "desk", "exit",
-]
+	"sort", "tournament", "wovp_refresh", "desk", "exit",
+] ## GRADFIX8 (item 6): no page_prev/page_next - the pager stops are removed (Chris's order); the readout between them was never a stop and stays a readout
 
 
 func _is_rail_quad(q: ClickableQuad) -> bool:
