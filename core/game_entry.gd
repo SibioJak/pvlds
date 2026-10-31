@@ -202,6 +202,17 @@ func is_vr_tagged() -> bool:
 	return false
 
 
+## PuP-flagged (GRADFIX6 item 5): deliberately NOT the
+## any-build rule is_vr_tagged uses. The flag describes the
+## build the wall launches by default and the card's back
+## describes - the CURRENT build (which prefers a db-matched
+## build, see current_build) - so a PuP pack on some older
+## build the player no longer runs does not flag the table.
+func is_pup_tagged() -> bool:
+	var cur: TableBuild = current_build()
+	return cur != null and cur.has_pup_tag()
+
+
 func year_text() -> String:
 	return str(year) if year > 0 else "Year unknown"
 

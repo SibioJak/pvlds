@@ -127,10 +127,20 @@ static func manufacturer_color(manufacturer: String) -> Color:
 	return PALETTE[absi(manufacturer.hash()) % PALETTE.size()]
 
 
+## The PuP note (GRADFIX6 item 5): the one line a PuP-flagged
+## table carries on its back and in its detail view, word for
+## word - a PuP pack's video windows assume the PC display
+## sits at 100% scale, so the player is told before he
+## launches, not after the pack opens wrong.
+const PUP_NOTE: String = "PuP pack — set PC display scale to 100%"
+
+
 static func panel_spec(game: GameEntry, store: StateStore) -> Dictionary:
 	var chips: Array = []
 	if game.is_vr_tagged():
 		chips.append({"text": "VR", "accent": true})
+	if game.is_pup_tagged():
+		chips.append({"text": "PuP", "accent": true})
 	if game.build_count() > 1:
 		chips.append({"text": "%d BUILDS" % game.build_count(), "accent": false})
 	if store != null and store.is_favorite(game.game_id):
@@ -180,6 +190,11 @@ static func art_spec(game: GameEntry, art_texture: Texture2D, store: StateStore,
 		# as a star badge (CardFace draws it). One store, one truth,
 		# mirrored on both face kinds.
 		"favorite": store != null and store.is_favorite(game.game_id),
+		# The PuP mark (GRADFIX6 item 5): the art face carries
+		# it as a badge in the corner opposite the favorite
+		# star (CardFace draws it), from the same one truth -
+		# the game's CURRENT build (GameEntry.is_pup_tagged).
+		"pup": game.is_pup_tagged(),
 	}
 
 
@@ -192,6 +207,8 @@ static func info_spec(game: GameEntry, store: StateStore) -> Dictionary:
 		def.display_version() if def != null else "?"]
 	if game.build_count() > MAX_LISTED_NOTE:
 		body += "\n(+%d more builds on disk)" % (game.build_count() - MAX_LISTED_NOTE)
+	if game.is_pup_tagged():
+		body += "\n" + PUP_NOTE
 	return {
 		"kind": "info",
 		"bg": CARD_BG,
@@ -467,6 +484,8 @@ static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_u
 		ver_line += (" - " if ver_line != "" else "") + "%d builds" % game.build_count()
 	if ver_line != "":
 		meta.append({"kind": "note", "text": ver_line, "size": 30})
+	if game.is_pup_tagged():
+		meta.append({"kind": "note", "text": PUP_NOTE, "size": 30})
 	if ch != null:
 		var spec: Dictionary = tournament_board_spec(ch, true, user_id, now_unix)
 		var rows: Array = (spec.get("rows", []) as Array).duplicate()

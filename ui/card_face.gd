@@ -62,6 +62,14 @@ const ART_STRIP_HEIGHT_PX: int = 92
 ## third) at wall distance.
 const FAVORITE_STAR_COLOR: Color = Color(1.0, 0.78, 0.25)
 
+## The art face's PuP mark (GRADFIX6 item 5): a badge in the
+## face's top LEFT corner - the favorite star owns the top
+## right - worn when the game's current build ships a PuP
+## pack (RoomSpecs.art_spec's "pup" key). A cool video-blue,
+## so the two corner marks never read as one family: amber
+## is the player's own flag, blue is the table's cargo.
+const PUP_BADGE_COLOR: Color = Color(0.45, 0.85, 1.0)
+
 ## Board score rows: TR3's fixed right-aligned score
 ## column is superseded by the Standing Book (GRADFIX3) -
 ## a row is a centred block (position / name / score at
@@ -93,6 +101,8 @@ var _art_strip: PanelContainer
 var _art_label: Label
 var _art_fav: PanelContainer
 var _art_fav_label: Label
+var _art_pup: PanelContainer ## art kind (GRADFIX6): the PuP badge, top-left (the star's opposite corner)
+var _art_pup_label: Label
 var _label_stock: Array = [] ## [label, autowrap, max_lines, overrun] per text label, for per-spec restore
 
 
@@ -184,6 +194,23 @@ func _init() -> void:
 	_art_fav.add_child(_art_fav_label)
 	_art_fav.visible = false
 	add_child(_art_fav)
+
+	_art_pup = PanelContainer.new()
+	_art_pup.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_art_pup.offset_left = 14.0
+	_art_pup.offset_top = 14.0
+	_art_pup.offset_right = 98.0
+	_art_pup.offset_bottom = 62.0
+	_art_pup.add_theme_stylebox_override("panel", _box(Color(0.03, 0.03, 0.05, 0.82), 10))
+	_art_pup_label = Label.new()
+	_art_pup_label.text = "PuP"
+	_art_pup_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_art_pup_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_art_pup_label.add_theme_font_size_override("font_size", 30)
+	_art_pup_label.add_theme_color_override("font_color", PUP_BADGE_COLOR)
+	_art_pup.add_child(_art_pup_label)
+	_art_pup.visible = false
+	add_child(_art_pup)
 
 	_margin = MarginContainer.new()
 	_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -332,6 +359,7 @@ func apply_spec(spec: Dictionary) -> void:
 	# the face would double it (the graduation round).
 	_art_strip.visible = kind == "art" and bool(spec.get("strip", true))
 	_art_fav.visible = kind == "art" and bool(spec.get("favorite", false))
+	_art_pup.visible = kind == "art" and bool(spec.get("pup", false))
 	_margin.visible = kind != "art"
 	if kind == "art":
 		var tex: Variant = spec.get("art_texture", null)

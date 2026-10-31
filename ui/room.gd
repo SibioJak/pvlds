@@ -2566,8 +2566,11 @@ func _face_cache_get(key: String) -> Array:
 ## The panel face cache's LRU write: past FACE_CACHE_MAX
 ## the oldest faces are dropped (their games simply
 ## re-render on a later visit - a miss is a cost, never a
-## wrong face, because the key carries the game's art path
-## and favorite flag, and a fresh library clears the cache).
+## wrong face, because the key carries the game's art path,
+## favorite flag and PuP flag (GRADFIX6 item 5: a face
+## rendered before the db match lands must not serve forever
+## without its PuP badge), and a fresh library clears the
+## cache).
 func _face_cache_put(key: String, tex: Texture2D, aspect: float) -> void:
 	_face_tex_cache[key] = [tex, aspect]
 	_face_cache_order.erase(key)
@@ -2658,7 +2661,7 @@ func _fill_wall_textures(gen: int) -> void:
 ## centre change mid-pass marks the fill dirty and the pass
 ## re-runs for the new window when the current one ends, so a
 ## fast swing never stacks render queues. A face is a pure
-## function of (game, its face file, favorite flag) inside
+## function of (game, its face file, favorite flag, PuP flag) inside
 ## one library adoption, cached like the furniture's faces
 ## (the pick-latency fix): pooled cards keep their faces
 ## across rebuilds, so a revisit usually costs nothing at all.
@@ -2732,7 +2735,8 @@ func _fill_one_face(idx: int, gen: int) -> void:
 	var quad: ClickableQuad = _panels[idx]
 	var art_file: String = game.face_path()
 	var fav: bool = _store != null and _store.is_favorite(game.game_id)
-	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "")
+	var pup: bool = game.is_pup_tagged()
+	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
 	if str(_panel_face_key.get(game.game_id, "")) == fkey:
 		return  # already wearing exactly this face
 	var tex: Texture2D = null

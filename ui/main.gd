@@ -10949,7 +10949,7 @@ func _run_core_test() -> void:
 			"id": "fx-quasar-queen", "name": "Quasar Queen", "manufacturer": "Starlite",
 			"year": 1982, "designers": ["D. Zed"],
 			"tableFiles": [
-				{"id": "fx-qq-1", "version": "1.0", "tableFormat": "VPX", "authors": ["Zippy"], "createdAt": 1700000000, "features": ["VR"], "urls": [{"url": "https://vpuniverse.com/files/file/24896-quasar-queen-starlite-1982-zippy/"}]},
+				{"id": "fx-qq-1", "version": "1.0", "tableFormat": "VPX", "authors": ["Zippy"], "createdAt": 1700000000, "features": ["VR", "incl. PuP"], "urls": [{"url": "https://vpuniverse.com/files/file/24896-quasar-queen-starlite-1982-zippy/"}]},
 				{"id": "fx-qq-2", "version": "2.0", "tableFormat": "VPX", "authors": ["Zippy"], "createdAt": 1710000000, "features": [], "imgUrl": "https://example.invalid/shots/quasar-queen-v2.webp", "urls": [{"url": "https://www.vpforums.org/index.php?app=downloads&showfile=19031"}]},
 			],
 		},
@@ -10957,7 +10957,7 @@ func _run_core_test() -> void:
 			"id": "fx-lunar-tide", "name": "Lunar Tide", "manufacturer": "Marlin",
 			"year": 1975, "designers": ["K. Ito"],
 			"tableFiles": [
-				{"id": "fx-lt-1", "version": "1.0", "tableFormat": "VPX", "authors": ["Marlin Works"], "createdAt": 1700000000, "features": ["VR"], "urls": [{"url": "https://www.vpforums.org/index.php?app=downloads&showfile=18675"}]},
+				{"id": "fx-lt-1", "version": "1.0", "tableFormat": "VPX", "authors": ["Marlin Works"], "createdAt": 1700000000, "features": ["VR", "incl. PuP"], "urls": [{"url": "https://www.vpforums.org/index.php?app=downloads&showfile=18675"}]},
 			],
 		},
 		{
@@ -11070,6 +11070,44 @@ func _run_core_test() -> void:
 		var dec5: TableBuild = mt_lt.build_by_path(mt_tables.path_join("Lunar Tide w Room.vpx"))
 		_expect(dec5 != null and dec5.table_file_id == "fx-lt-1" and dec5.match_tier == "scrubbed",
 			"the trailing 'w Room' suffix drops and the file meets its game (his 'Apollo 13 w Room' shape)", failures)
+	# PuP flags (GRADFIX6 item 5): the fixture db carries the
+	# real db's literal feature string "incl. PuP" (censused
+	# on the real vpsdb.json: 325 tableFiles) on two builds -
+	# Lunar Tide's fx-lt-1, its ONLY build and therefore its
+	# current one (the positive), and Quasar Queen's older
+	# fx-qq-1, whose game's current build is the newer
+	# fx-qq-2 with no PuP (the current-only control: an
+	# any-build rule like is_vr_tagged's would flag it).
+	if mt_lt != null:
+		_expect(mt_lt.current_build() != null and mt_lt.current_build().has_pup_tag(),
+			"PuP: Lunar Tide's current build carries the db literal 'incl. PuP' and has_pup_tag reads it (substring, not exact match)", failures)
+		_expect(mt_lt.is_pup_tagged(),
+			"PuP: a game whose current build ships a PuP pack is PuP-flagged", failures)
+		_expect(_nav_spec_has_chip(RoomSpecs.panel_spec(mt_lt, store), "PuP"),
+			"PuP: the panel spec carries the PuP chip beside the VR chip", failures)
+		_expect(bool(RoomSpecs.art_spec(mt_lt, null, store).get("pup", false)),
+			"PuP: the art spec carries the pup key the face's top-left badge draws from", failures)
+		var pup_wing: Dictionary = RoomSpecs.wing_spec(mt_lt, null, "", 1700000000)
+		var pup_note_seen: bool = false
+		for rv: Variant in (pup_wing.get("rows", []) as Array):
+			if rv is Dictionary and str((rv as Dictionary).get("text", "")) == "PuP pack — set PC display scale to 100%":
+				pup_note_seen = true
+		_expect(pup_note_seen,
+			"PuP: the wing (card-back) spec carries the exact note row 'PuP pack — set PC display scale to 100%'", failures)
+		_expect(str(RoomSpecs.info_spec(mt_lt, store).get("body", "")).contains("PuP pack — set PC display scale to 100%"),
+			"PuP: the detail view's info body carries the same exact note", failures)
+	if mt_qq != null:
+		var qq_any_pup: bool = false
+		for qb: TableBuild in mt_qq.builds:
+			if qb.has_pup_tag():
+				qq_any_pup = true
+		_expect(qq_any_pup,
+			"PuP control: a non-current Quasar Queen build (fx-qq-1) does carry 'incl. PuP'", failures)
+		_expect(mt_qq.current_build() != null and not mt_qq.current_build().has_pup_tag() and not mt_qq.is_pup_tagged(),
+			"PuP control: Quasar Queen is NOT flagged - the flag reads the current build only, never any-build", failures)
+		_expect(not _nav_spec_has_chip(RoomSpecs.panel_spec(mt_qq, store), "PuP")
+			and not bool(RoomSpecs.art_spec(mt_qq, null, store).get("pup", true)),
+			"PuP control: the unflagged game's panel spec has no PuP chip and its art spec's pup key is false", failures)
 	var mt_pr: GameEntry = mt_scan.game_by_id("fx-panic-room")
 	_expect(mt_pr != null and mt_pr.builds.size() == 1, "matcher fixture: Panic Room holds its file", failures)
 	if mt_pr != null:

@@ -41,6 +41,21 @@ func has_vr_tag() -> bool:
 	return false
 
 
+## PuP (GRADFIX6 item 5): the VPS db's literal feature string
+## for a build that ships a PuP pack is "incl. PuP" (325 of
+## the real db's tableFiles carry it - censused 2026-10-31
+## against the real vpsdb.json, where it sits alongside tags
+## like "VR" and "incl. B2S"). A substring predicate, not
+## has_vr_tag's exact match: it catches the db literal and a
+## bare "PuP" alike, and no other real feature string
+## contains the substring.
+func has_pup_tag() -> bool:
+	for f: String in features:
+		if f.contains("PuP"):
+			return true
+	return false
+
+
 ## Numeric dotted-version compare: returns 1, 0, or -1.
 static func compare_versions(a: String, b: String) -> int:
 	var pa: PackedStringArray = a.split(".")
