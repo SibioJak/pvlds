@@ -309,17 +309,36 @@ const LABEL_WIDTH_PX: float = 246.0 ## wrapped-title width: a long name takes up
 ## drum's current angle (the prototype's speed-gate law).
 const SWING_MIN_SEC: float = 0.16
 const SWING_MAX_SEC: float = 0.72
-## The SMOOTH wall-motion dial (GRADFIX10 item 3): the drum
-## rolls CONTINUOUSLY - a velocity-commanded cruise with an
-## exponential approach, calibrated so a multi-column travel
-## is one unbroken roll at up to SWING_SMOOTH_CRUISE_DEG and
-## the last stretch eases in over SWING_SMOOTH_TAU. The
+## The SMOOTH wall-motion dial (GRADFIX10 item 3, retuned
+## GRADFIX12 item 1): the drum rolls CONTINUOUSLY - a
+## velocity-commanded cruise with an exponential approach.
+## GRADFIX12: Chris's field verdict on the GRADFIX10 tuning
+## was "no difference. Still column to column" - and the
+## traces convicted it: at tau 0.14 / lag 0.09 a one-column
+## SMOOTH glide settled in ~0.32 s against STEPPED's ~0.25 s
+## spring, both short glides that start and end at rest on a
+## column, so their characters converged in the hand. The
+## retune makes SMOOTH a ROLL by construction: a heavy
+## velocity lag (SWING_SMOOTH_VEL_LAG_SEC) melts it off the
+## mark, SWING_SMOOTH_TAU stretches the approach so a single
+## column takes ~0.9 s (over 2.5x the spring's settle) at a
+## peak near 20 deg/s against the spring's ~175 deg/s snap,
+## and the cruise (SWING_SMOOTH_CRUISE_DEG, grown with the
+## journey's length in _swing_smooth_retarget so a letter
+## jump still crosses the shelf) carries multi-column travel
+## as one sustained body with no per-column notching. Inside
+## the last SWING_SMOOTH_LAND_DEG the approach stiffens
+## (SWING_SMOOTH_LAND_TAU) so the long tail still lands
+## bounded and exact on the standing snap thresholds. The
 ## duration law (in _swing_smooth_retarget) replaces the
 ## stepped spring's recalibration for this mode only; the
 ## STEPPED dial keeps the spring above, byte-for-byte.
-const SWING_SMOOTH_CRUISE_DEG: float = 155.0 ## the smooth roll's cruise speed, degrees per second (~11.5 columns/s)
+const SWING_SMOOTH_CRUISE_DEG: float = 72.0 ## the smooth roll's cruise speed, degrees per second (~5.3 columns/s), for journeys up to six columns; longer journeys grow it (see _swing_smooth_retarget)
 const SWING_SMOOTH_MIN_SEC: float = 0.30 ## the smooth travel's shortest calibrated duration (one column)
-const SWING_SMOOTH_TAU: float = 0.14 ## the smooth approach's distance constant, seconds: desired speed = remaining / tau, capped at cruise
+const SWING_SMOOTH_TAU: float = 0.42 ## the smooth approach's distance constant, seconds: desired speed = remaining / tau, capped at cruise
+const SWING_SMOOTH_VEL_LAG_SEC: float = 0.30 ## the smooth roll's velocity relax lag, seconds: the drum's speed eases toward the command over this - the slow melt off the mark (GRADFIX12; was a hard-coded 0.09)
+const SWING_SMOOTH_LAND_DEG: float = 3.0 ## inside this remaining distance the approach stiffens to SWING_SMOOTH_LAND_TAU, so the roll's long tail still lands bounded
+const SWING_SMOOTH_LAND_TAU: float = 0.09 ## the landing window's distance constant, seconds
 ## Stage B - the background stack (all WORLD-LOCKED; see
 ## _build_background) and the focused card's flip.
 const BG_STAR_RADIUS: float = 30.0 ## the starfield shell's radius around the eye
@@ -680,6 +699,14 @@ static var debug_input_nc: String = ""
 ## so the smooth-travel leg fails by name. Empty in every
 ## real run.
 static var debug_gf10_nc: String = ""
+## Negative-control seam for GRADFIX12 item 1 (the harness
+## env PVLDS_GRADFIX12_NC, set by Main before any room
+## exists): "nolive" severs the wall-motion dial's live
+## apply - set_wall_motion_mode still records the mode the
+## SETUP panel reads, but the DRIVER keeps the boot mode
+## (see _wall_driver_mode), so the motion smoke's live
+## toggle leg fails by name. Empty in every real run.
+static var debug_gf12_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
@@ -801,6 +828,9 @@ var _swing_journey: bool = false ## a retarget arrived mid-travel in the travel'
 var _swing_active: bool = false
 var _swing_from: float = 0.0 ## the smooth travel's anchor yaw (GRADFIX10 item 3): where the standing continuous travel began, re-anchored at every retarget
 var _swing_cruise_sign: float = 1.0 ## the smooth travel's direction from its anchor toward its target
+var _swing_cruise_rad: float = 1.2566371 ## the smooth roll's standing cruise cap, radians/s (72 deg/s at rest; _swing_smooth_retarget grows it with the travel's length)
+var _wall_boot_mode: String = "smooth" ## the wall-motion mode the room booted with (the first set_wall_motion_mode call - Main's config apply at room build); only the GRADFIX12 nolive NC reads it
+var _wall_boot_mode_captured: bool = false ## the boot mode above has been captured
 var _drum_yaw: float = 0.0 ## the drum's current yaw, radians (== _swing_to at rest)
 var _panel_pool: Dictionary = {} ## game_id -> {root, launch, frame, plate, label, mode, plate_done}: card nodes built once per library adoption and re-seated per view (a rebuild that freed and rebuilt 300+ cards would tax every letter pick - the pick-latency law)
 var _plates_pending: bool = false ## a rebuild stood new cards: their nameplates re-derive from the labels' live AABBs until every one settles (see _refresh_card_plate)
@@ -1153,6 +1183,12 @@ func starfield_mode() -> String:
 ## speed-gate law). Default "smooth" (Chris's pick).
 func set_wall_motion_mode(mode: String) -> void:
 	_wall_motion_mode = mode if ["smooth", "stepped"].has(mode) else "smooth"
+	if not _wall_boot_mode_captured:
+		# The first call on a room is Main's config apply at
+		# room build: that is the boot mode the GRADFIX12
+		# nolive NC's driver would be stuck with.
+		_wall_boot_mode = _wall_motion_mode
+		_wall_boot_mode_captured = true
 	# A dial turn mid-travel hands the standing travel to the
 	# newly chosen driver from the drum's current angle and
 	# velocity - no snap, no restart.
@@ -1162,6 +1198,23 @@ func set_wall_motion_mode(mode: String) -> void:
 
 func wall_motion_mode() -> String:
 	return _wall_motion_mode
+
+
+## The mode the swing DRIVER actually obeys this frame. In
+## every real run it is the dial's standing mode - flipping
+## the SETUP dial changes the wall's behaviour in the same
+## session, no room re-entry (the live-apply law, proven by
+## the motion smoke's live toggle leg). Only the GRADFIX12
+## nolive NC severs the seam: the panel still reads the new
+## mode above, but the driver keeps the boot mode.
+func _wall_driver_mode() -> String:
+	if debug_gf12_nc == "nolive" and _wall_boot_mode_captured:
+		return _wall_boot_mode
+	return _wall_motion_mode
+
+
+func wall_driver_mode() -> String:
+	return _wall_driver_mode()
 
 
 ## Hand the standing travel to the (possibly newly chosen)
@@ -2332,7 +2385,7 @@ func _set_centre(index: int, snap: bool = false) -> void:
 			_swing_cols = cols
 			_swing_duration = clampf(0.14 + 0.055 * sqrt(maxf(cols, 1.0)), SWING_MIN_SEC, SWING_MAX_SEC)
 			_swing_active = true
-			if _wall_motion_mode == "smooth":
+			if _wall_driver_mode() == "smooth":
 				# The SMOOTH dial's travel re-anchors here:
 				# its duration law and cruise replace the
 				# spring's recalibration above (which the
@@ -2384,6 +2437,20 @@ func _swing_smooth_retarget() -> void:
 	var cols: float = absf(_swing_to - _drum_yaw) / deg_to_rad(ANGLE_STEP_DEG)
 	_swing_cols = cols
 	_swing_duration = clampf(0.30 + 0.16 * cols, SWING_SMOOTH_MIN_SEC, 2.8)
+	# The cruise cap (GRADFIX12): a travel up to six columns
+	# rolls at SWING_SMOOTH_CRUISE_DEG - the pace the traces
+	# calibrate. A longer travel (a letter jump across a big
+	# library) grows the cap with its length, so crossing the
+	# whole shelf does not take a minute at the short-roll
+	# pace. The cap is set here, at the retarget: nothing
+	# recomputes it mid-roll, so it never sags under the drum
+	# as the remaining distance shrinks - only a new press
+	# (a new retarget) re-paces the roll, from the distance
+	# then remaining.
+	var cruise_deg: float = SWING_SMOOTH_CRUISE_DEG
+	if cols > 6.0:
+		cruise_deg = minf(SWING_SMOOTH_CRUISE_DEG * sqrt(cols / 6.0), 240.0)
+	_swing_cruise_rad = deg_to_rad(cruise_deg)
 
 
 ## The SMOOTH dial's per-frame drive: a velocity-commanded
@@ -2393,18 +2460,26 @@ func _swing_smooth_retarget() -> void:
 ## cadence, no pauses at column boundaries), and inside the
 ## last ~tau of travel the command itself decays
 ## exponentially into the landing. The drum's velocity
-## relaxes toward the command (a ~0.09 s lag), so setting
-## off and arriving are both eased without any ease curve
-## ever restarting: a retarget - same direction, farther
-## column, or a full reversal from a mid-roll press - just
-## changes the command, and the roll bends. Input is never
-## gated: _set_centre retargets this drive the frame a
-## press lands (the planetarium speed-gate law). The NC
-## seam (PVLDS_GRADFIX10_NC=stepswing) quantises the
-## APPLIED rotation to whole slots, restoring the
-## slot-stepping under SMOOTH so the motion smoke's
-## smooth-travel leg fails by name; the travel state itself
-## stays continuous, exactly like the pop's NC.
+## relaxes toward the command over SWING_SMOOTH_VEL_LAG_SEC
+## (GRADFIX12: 0.30 s, was 0.09 - the heavy lag is what
+## melts the roll off the mark instead of snapping it up to
+## speed like the spring), so setting off and arriving are
+## both eased without any ease curve ever restarting: a
+## retarget - same direction, farther column, or a full
+## reversal from a mid-roll press - just changes the
+## command, and the roll bends. Inside the last
+## SWING_SMOOTH_LAND_DEG the approach stiffens to
+## SWING_SMOOTH_LAND_TAU, bounding the long tail the big
+## tau would otherwise trail into the landing; the snap
+## thresholds below are the standing ones, so the landing
+## stays exact. Input is never gated: _set_centre retargets
+## this drive the frame a press lands (the planetarium
+## speed-gate law). The NC seam (PVLDS_GRADFIX10_NC=
+## stepswing) quantises the APPLIED rotation to whole
+## slots, restoring the slot-stepping under SMOOTH so the
+## motion smoke's smooth-travel leg fails by name; the
+## travel state itself stays continuous, exactly like the
+## pop's NC.
 func _update_swing_smooth(delta: float) -> void:
 	var remaining: float = _swing_to - _drum_yaw
 	var dist: float = absf(remaining)
@@ -2415,14 +2490,17 @@ func _update_swing_smooth(delta: float) -> void:
 		_swing_journey = false
 		_wall.rotation.y = _swing_to
 		return
-	var cruise: float = deg_to_rad(SWING_SMOOTH_CRUISE_DEG)
+	var cruise: float = _swing_cruise_rad
 	var cap: float = cruise
 	if signf(_swing_vel) == -signf(remaining) and absf(_swing_vel) > cruise:
 		# A reversal in flight: the approach law keeps full
 		# authority while the drum swings back through zero.
 		cap = absf(_swing_vel)
-	var desired: float = signf(remaining) * minf(dist / SWING_SMOOTH_TAU, cap)
-	var blend: float = 1.0 - exp(-delta / 0.09)
+	var tau: float = SWING_SMOOTH_TAU
+	if dist < deg_to_rad(SWING_SMOOTH_LAND_DEG):
+		tau = SWING_SMOOTH_LAND_TAU
+	var desired: float = signf(remaining) * minf(dist / tau, cap)
+	var blend: float = 1.0 - exp(-delta / SWING_SMOOTH_VEL_LAG_SEC)
 	_swing_vel += (desired - _swing_vel) * blend
 	var step: float = _swing_vel * delta
 	if absf(step) >= dist:
@@ -2446,7 +2524,7 @@ func _update_swing_smooth(delta: float) -> void:
 func _update_swing(delta: float) -> void:
 	if not _swing_active or _wall == null:
 		return
-	if _wall_motion_mode == "smooth":
+	if _wall_driver_mode() == "smooth":
 		_update_swing_smooth(delta)
 		return
 	var tau: float = maxf(_swing_duration / (3.5 + 0.55 * log(maxf(_swing_cols, 1.0))), 0.02)
@@ -6697,6 +6775,17 @@ func page_slide_active() -> bool:
 ## _update_pop).
 func drum_yaw_rad() -> float:
 	return _drum_yaw
+
+
+## The drum's yaw in degrees and whether a swing is live
+## (GRADFIX12 item 1: the motion smoke's dense traces sample
+## the travel through these, at the pacing the box runs).
+func drum_yaw_deg() -> float:
+	return rad_to_deg(_drum_yaw)
+
+
+func swing_active() -> bool:
+	return _swing_active
 
 
 func swing_target_rad() -> float:

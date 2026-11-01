@@ -310,6 +310,16 @@ var _motion_press_i: int = -1 ## the yaw-trace index the press landed on
 var _motion_answer_i: int = -1 ## the yaw-trace index the centre first answered on
 var _motion_perf: Dictionary = {} ## mode -> [frames, total_usec] over an identical travel (the perf note)
 var _motion_perf_mode: String = ""
+var _motion_tr: Array = [] ## GRADFIX12: the standing dense trace, per frame [msec, drum_yaw_deg] sampled through the room's drum accessor
+var _motion_tr_name: String = "" ## the standing trace's name (its leg/print label)
+var _motion_tr_leg: String = "" ## the standing trace's leg name for failures
+var _motion_tr_y0: float = 0.0 ## the standing trace's start yaw, degrees
+var _motion_tr_y1: float = 0.0 ## the standing trace's target yaw, degrees
+var _motion_tr_stats: Dictionary = {} ## trace name -> stats Dictionary (see _motion_trace_stats)
+var _motion_live_boot_mode: String = "" ## the mode the live-toggle leg booted under
+var _motion_live_flip_mode: String = "" ## the mode the SETUP panel flip left standing
+var _motion_hold_presses: int = 0 ## held-scroll leg: same-direction presses already landed
+var _motion_hold_next_msec: int = 0 ## held-scroll leg: when the next press lands
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -591,6 +601,13 @@ func _ready() -> void:
 	# legs fail against them by name. Set here, before any
 	# room exists.
 	RoomView.debug_gf10_nc = OS.get_environment("PVLDS_GRADFIX10_NC")
+	# GRADFIX12's live-apply negative-control seam
+	# (PVLDS_GRADFIX12_NC=nolive): the wall-motion panel
+	# still records the flipped mode, but the swing driver
+	# keeps the boot mode - the motion smoke's live toggle
+	# leg fails against it by name. Set here, before any
+	# room exists.
+	RoomView.debug_gf12_nc = OS.get_environment("PVLDS_GRADFIX12_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -9107,9 +9124,19 @@ func _finish_jumpbench_smoke() -> void:
 ## and a stepped-vs-smooth frame-time note measured on this
 ## box over identical travels. Leg names: "pop smoothness:",
 ## "wall motion dial:", "smooth wall travel:", "input
-## during roll:". The NC seams (PVLDS_GRADFIX10_NC=steppop /
-## stepswing) restore the convicted steppings so the named
-## legs fail by name.
+## during roll:". GRADFIX12 item 1 adds dense drum-yaw
+## traces (sampled through the room's accessor): a
+## single-column travel under the boot mode, the SETUP
+## panel's real quad action flipping the dial mid-session,
+## the same travel again ("live wall motion toggle:"), the
+## SMOOTH-vs-STEPPED feel verdict over single- and
+## six-column traces ("wall motion feel:"), and held scrolls
+## under both modes ("held scroll:"). The NC seams
+## (PVLDS_GRADFIX10_NC=steppop / stepswing) restore the
+## convicted steppings so the named legs fail by name;
+## PVLDS_GRADFIX12_NC=nolive severs the dial's live apply
+## (the driver keeps the boot mode) so the live toggle leg
+## fails by name.
 func _drive_motion_smoke() -> void:
 	match _motion_phase:
 		0:
@@ -9203,12 +9230,70 @@ func _drive_motion_smoke() -> void:
 				_motion_phase = 3
 				_motion_wait = 0
 		3:
-			# Dial legs, then the STEPPED travel (perf + arrival).
+			# Dial legs, then the LIVE TOGGLE leg (GRADFIX12
+			# item 1): measure a single-column travel under
+			# the boot mode, flip the dial through the room's
+			# own SETUP panel action, measure the same travel
+			# again in the same session - the driver must have
+			# changed in the hand, not just on the panel.
 			_motion_wait += 1
 			if _motion_wait == 1:
 				_motion_leg_dial()
+				_motion_live_boot_mode = _room.wall_motion_mode()
+			if _motion_wait > 10 and not _room.page_slide_active():
+				_motion_begin_trace("single_boot", "live wall motion toggle:", _motion_travel_start(), _motion_single_target(_motion_travel_start()))
+				_motion_phase = 8
+				_motion_wait = 0
+			elif _motion_wait > 3600:
+				_motion_fail("live wall motion toggle: the boot-mode single-column travel never armed (the drum never settled)")
+				_finish_motion_smoke()
+		8:
+			# Live toggle, first measurement (boot mode).
+			_motion_wait += 1
+			if _motion_sample_trace():
+				_motion_store_trace("single_" + _motion_live_boot_mode)
+				_motion_phase = 9
+				_motion_wait = 0
+			elif _motion_wait > 3600:
+				_motion_fail("live wall motion toggle: the boot-mode single-column travel never settled")
+				_finish_motion_smoke()
+		9:
+			# Live toggle, the flip itself: the SETUP panel's
+			# real quad action, exactly the player's path.
+			_motion_wait += 1
+			if _motion_wait == 1:
+				_room.show_setup_panel()
+			elif _motion_wait == 3:
+				_motion_expect(_room.is_setup_panel_up() and _room.setup_panel_wall_quad() != null,
+					"live wall motion toggle: the SETUP panel stands with its WALL MOTION quad")
+				_room._activate(_room.setup_panel_wall_quad())
+				_motion_live_flip_mode = _room.wall_motion_mode()
+			elif _motion_wait == 5:
+				_room._activate(_room.setup_panel_back_quad())
+			elif _motion_wait > 8 and not _room.is_setup_panel_up():
+				_motion_begin_trace("single_flip", "live wall motion toggle:", _motion_travel_start(), _motion_single_target(_motion_travel_start()))
+				_motion_phase = 10
+				_motion_wait = 0
+			elif _motion_wait > 3600:
+				_motion_fail("live wall motion toggle: the SETUP panel never closed after the flip")
+				_finish_motion_smoke()
+		10:
+			# Live toggle, second measurement (flipped mode),
+			# then arm the STEPPED six-column travel (perf +
+			# arrival, the standing phase 4).
+			_motion_wait += 1
+			if _motion_sample_trace():
+				_motion_store_trace("single_" + _motion_live_flip_mode)
+				_motion_judge_live_toggle()
 				_room.set_wall_motion_mode("stepped")
 				_motion_snap_to_travel_start()
+				_motion_phase = 35
+				_motion_wait = 0
+			elif _motion_wait > 3600:
+				_motion_fail("live wall motion toggle: the flipped-mode single-column travel never settled")
+				_finish_motion_smoke()
+		35:
+			_motion_wait += 1
 			if _motion_wait > 10 and not _room.page_slide_active():
 				_motion_perf_mode = "stepped"
 				_motion_yaw_trace.clear()
@@ -9224,6 +9309,10 @@ func _drive_motion_smoke() -> void:
 			_motion_yaw_trace.append([Time.get_ticks_msec() - _motion_t0_msec, rad_to_deg(_room.drum_node().rotation.y)])
 			if (_motion_wait >= 3 and not _room.page_slide_active()) or _motion_wait > 1800:
 				_motion_record_perf("stepped")
+				var y0_4: float = float((_motion_yaw_trace[0] as Array)[1]) if not _motion_yaw_trace.is_empty() else 0.0
+				var stats_4: Dictionary = _motion_trace_stats(_motion_yaw_trace, y0_4, y0_4 + 81.0)
+				_motion_tr_stats["six_stepped"] = stats_4
+				_motion_print_stats("six_stepped", stats_4)
 				_motion_expect(_room.centre_index() == _motion_travel_target(),
 					"smooth wall travel: the stepped travel landed on its centre (arrival is mode-independent)")
 				_motion_expect(absf(rad_to_deg(_room.drum_yaw_rad() - _room.swing_target_rad())) < 0.05,
@@ -9271,9 +9360,55 @@ func _drive_motion_smoke() -> void:
 				_motion_judge_smooth_travel()
 				_motion_judge_input_during_roll()
 				_motion_print_perf()
-				_finish_motion_smoke()
+				# GRADFIX12: on to the clean (uninterrupted)
+				# SMOOTH six-column trace, the feel judges and
+				# the held-scroll legs.
+				_room.set_wall_motion_mode("smooth")
+				_motion_begin_trace("six_smooth", "wall motion feel:", _motion_travel_start(), _motion_travel_target())
+				_motion_phase = 11
+				_motion_wait = 0
 			elif _motion_wait > 3600:
 				_motion_fail("smooth wall travel: the smooth travel never settled after the mid-roll press")
+				_finish_motion_smoke()
+		11:
+			# The clean SMOOTH six-column roll (no mid-roll
+			# press): settle, peak and slot-boundary velocities
+			# are judged from this trace.
+			_motion_wait += 1
+			if _motion_sample_trace():
+				_motion_store_trace("six_smooth")
+				_motion_judge_feel()
+				_room.set_wall_motion_mode("stepped")
+				_motion_begin_hold("held_stepped")
+				_motion_phase = 12
+				_motion_wait = 0
+			elif _motion_wait > 3600:
+				_motion_fail("wall motion feel: the clean smooth six-column roll never settled")
+				_finish_motion_smoke()
+		12:
+			# Held scroll, STEPPED: repeated same-direction
+			# presses while the drum travels.
+			_motion_wait += 1
+			if _motion_sample_hold():
+				_motion_store_trace("held_stepped")
+				_motion_judge_hold("held_stepped")
+				_room.set_wall_motion_mode("smooth")
+				_motion_begin_hold("held_smooth")
+				_motion_phase = 13
+				_motion_wait = 0
+			elif _motion_wait > 7200:
+				_motion_fail("held scroll: the stepped held scroll never settled")
+				_finish_motion_smoke()
+		13:
+			# Held scroll, SMOOTH, then the verdict.
+			_motion_wait += 1
+			if _motion_sample_hold():
+				_motion_store_trace("held_smooth")
+				_motion_judge_hold("held_smooth")
+				_motion_print_ratio()
+				_finish_motion_smoke()
+			elif _motion_wait > 7200:
+				_motion_fail("held scroll: the smooth held scroll never settled")
 				_finish_motion_smoke()
 
 
@@ -9303,6 +9438,257 @@ func _motion_snap_to_travel_start() -> void:
 	var start: int = _motion_travel_start()
 	_room._set_centre(start, true)
 	_room._set_focused(_room._panels[start])
+
+
+## The panel one column over from a panel, same band (the
+## single-column traces' target), or -1 when there is none.
+func _motion_single_target(from_idx: int) -> int:
+	var col: int = _room._grid_coord(from_idx).x
+	var row: int = _room._grid_coord(from_idx).y
+	for i: int in range(_room._panels.size()):
+		if _room._grid_coord(i).x == col + 1 and _room._grid_coord(i).y == row:
+			return i
+	return -1
+
+
+## The panel `offset` columns over from a panel, same band.
+func _motion_panel_at_col_offset(from_idx: int, offset: int) -> int:
+	var col: int = _room._grid_coord(from_idx).x
+	var row: int = _room._grid_coord(from_idx).y
+	for i: int in range(_room._panels.size()):
+		if _room._grid_coord(i).x == col + offset and _room._grid_coord(i).y == row:
+			return i
+	return -1
+
+
+## Begin a dense trace (GRADFIX12): snap to the start panel
+## at rest, then press to the target panel and sample the
+## drum's yaw through the room's accessor every frame until
+## the swing settles.
+func _motion_begin_trace(name: String, leg: String, from_idx: int, to_idx: int) -> void:
+	_motion_tr_name = name
+	_motion_tr_leg = leg
+	_room._set_centre(from_idx, true)
+	_room._set_focused(_room._panels[from_idx])
+	_motion_tr_y0 = _room.drum_yaw_deg()
+	_motion_tr.clear()
+	_motion_t0_msec = Time.get_ticks_msec()
+	_room._set_focused(_room._panels[to_idx])
+	_motion_tr_y1 = rad_to_deg(_room.swing_target_rad())
+
+
+## Sample one frame of the standing trace. Returns true
+## once the swing has settled (the caller judges).
+func _motion_sample_trace() -> bool:
+	_motion_tr.append([Time.get_ticks_msec() - _motion_t0_msec, _room.drum_yaw_deg()])
+	return _motion_tr.size() >= 3 and not _room.swing_active()
+
+
+## Reduce a dense trace to its verdict numbers: sample and
+## moving counts, settle time (the last sample still more
+## than 0.05 deg from the target, plus one), peak interval
+## velocity, the interval velocity at each intermediate
+## slot-boundary crossing, the longest run of non-moving
+## samples between first motion and settle, the final yaw
+## error and the effective sample rate.
+func _motion_trace_stats(trace: Array, y0: float, y1: float) -> Dictionary:
+	var n: int = trace.size()
+	var moving: int = 0
+	var peak: float = 0.0
+	var max_gap: int = 0
+	var last_out: int = -1
+	var stall_run: int = 0
+	var max_stall_run: int = 0
+	var started: bool = false
+	var vels: Array[float] = []
+	for i: int in range(n):
+		var t: int = int((trace[i] as Array)[0])
+		var y: float = float((trace[i] as Array)[1])
+		if absf(y - y1) > 0.05:
+			last_out = i
+		if i > 0:
+			var tprev: int = int((trace[i - 1] as Array)[0])
+			var yprev: float = float((trace[i - 1] as Array)[1])
+			max_gap = maxi(max_gap, t - tprev)
+			var dt: float = maxf(float(t - tprev), 1.0) / 1000.0
+			var v: float = (y - yprev) / dt
+			vels.append(v)
+			if absf(y - yprev) > 0.005:
+				moving += 1
+				started = true
+				stall_run = 0
+				peak = maxf(peak, absf(v))
+			elif started and last_out >= i:
+				stall_run += 1
+				max_stall_run = maxi(max_stall_run, stall_run)
+	var settle_ms: int = 0
+	if last_out >= 0 and last_out + 1 < n:
+		settle_ms = int((trace[last_out + 1] as Array)[0])
+	elif last_out >= 0:
+		settle_ms = int((trace[last_out] as Array)[0])
+	var span: float = y1 - y0
+	var dir: float = signf(span)
+	var boundary_vels: Array[float] = []
+	if absf(span) > 13.5 + 0.01 and n > 1:
+		var k: int = 1
+		while float(k) * 13.5 < absf(span) - 0.01:
+			var b: float = y0 + dir * float(k) * 13.5
+			for i2: int in range(1, n):
+				var ya: float = float((trace[i2 - 1] as Array)[1])
+				var yb: float = float((trace[i2] as Array)[1])
+				if (ya - b) * (yb - b) <= 0.0 and absf(yb - ya) > 0.0001:
+					boundary_vels.append(absf(vels[i2 - 1]))
+					break
+			k += 1
+	var bmin: float = -1.0
+	for bv: float in boundary_vels:
+		if bmin < 0.0 or bv < bmin:
+			bmin = bv
+	var dur_ms: int = int((trace[n - 1] as Array)[0]) if n > 0 else 0
+	return {
+		"samples": n,
+		"moving": moving,
+		"settle_ms": settle_ms,
+		"peak_deg_s": peak,
+		"boundary_min_deg_s": bmin,
+		"boundary_vels": boundary_vels,
+		"max_gap_ms": max_gap,
+		"max_stall_run": max_stall_run,
+		"final_err_deg": absf(float((trace[n - 1] as Array)[1]) - y1) if n > 0 else 999.0,
+		"rate_per_s": float(n) * 1000.0 / maxf(float(dur_ms), 1.0),
+	}
+
+
+func _motion_print_stats(name: String, stats: Dictionary) -> void:
+	var peak: float = float(stats.get("peak_deg_s", 0.0))
+	var bmin: float = float(stats.get("boundary_min_deg_s", -1.0))
+	print("MOTION TRACE %s: samples %d, moving %d, settle %d ms, peak %.1f deg/s, boundary-min %s, rate %.1f/s, final err %.3f deg, max stall run %d"
+		% [name, int(stats.get("samples", 0)), int(stats.get("moving", 0)), int(stats.get("settle_ms", 0)), peak,
+			("%.1f deg/s (%.0f%% of peak)" % [bmin, 100.0 * bmin / maxf(peak, 0.001)]) if bmin >= 0.0 else "n/a (no intermediate slot)",
+			float(stats.get("rate_per_s", 0.0)), float(stats.get("final_err_deg", 999.0)), int(stats.get("max_stall_run", 0))])
+
+
+## Store the standing trace's stats under a key and print
+## them (the per-trace table the GRADFIX12 report quotes).
+func _motion_store_trace(key: String) -> void:
+	var stats: Dictionary = _motion_trace_stats(_motion_tr, _motion_tr_y0, _motion_tr_y1)
+	_motion_tr_stats[key] = stats
+	_motion_print_stats(key, stats)
+
+
+## The live-toggle verdict (GRADFIX12 item 1, leg i): the
+## panel flipped the mode string, the driver the trace
+## measured actually changed with it - same session, same
+## room, no re-entry. Boot is SMOOTH, the flip lands on
+## STEPPED, so the flipped trace must settle far faster and
+## peak far harder than the boot trace. Under the nolive NC
+## the driver keeps the boot mode and both trace expects
+## fail here, by this leg's name.
+func _motion_judge_live_toggle() -> void:
+	_motion_expect(_motion_live_flip_mode != "" and _motion_live_flip_mode != _motion_live_boot_mode,
+		"live wall motion toggle: the SETUP panel action flipped the mode (%s -> %s)" % [_motion_live_boot_mode, _motion_live_flip_mode])
+	_motion_expect(_room.wall_driver_mode() == _room.wall_motion_mode(),
+		"live wall motion toggle: the swing driver obeys the flipped mode in the same session (driver %s, dial %s)" % [_room.wall_driver_mode(), _room.wall_motion_mode()])
+	var boot: Dictionary = _motion_tr_stats.get("single_" + _motion_live_boot_mode, {}) as Dictionary
+	var flip: Dictionary = _motion_tr_stats.get("single_" + _motion_live_flip_mode, {}) as Dictionary
+	if boot.is_empty() or flip.is_empty():
+		_motion_fail("live wall motion toggle: a single-column trace is missing (boot %s, flip %s)" % [_motion_live_boot_mode, _motion_live_flip_mode])
+		return
+	_motion_expect(int(flip.get("settle_ms", 0)) <= int(float(int(boot.get("settle_ms", 0))) * 0.65),
+		"live wall motion toggle: the flipped mode's single-column settle (%d ms) is a different driver from the boot mode's (%d ms) - the dial changed the wall in the hand, same session" % [int(flip.get("settle_ms", 0)), int(boot.get("settle_ms", 0))])
+	_motion_expect(float(flip.get("peak_deg_s", 0.0)) >= 1.8 * float(boot.get("peak_deg_s", 0.0)),
+		"live wall motion toggle: the flipped mode's single-column peak velocity (%.1f deg/s) is the other driver's character, not the boot mode's (%.1f deg/s)" % [float(flip.get("peak_deg_s", 0.0)), float(boot.get("peak_deg_s", 0.0))])
+
+
+## The feel verdict (GRADFIX12 item 1, leg ii): SMOOTH must
+## read as a ROLL against STEPPED's spring - the traces are
+## the verdict, not the constants.
+func _motion_judge_feel() -> void:
+	var ss: Dictionary = _motion_tr_stats.get("single_smooth", {}) as Dictionary
+	var st: Dictionary = _motion_tr_stats.get("single_stepped", {}) as Dictionary
+	var xs: Dictionary = _motion_tr_stats.get("six_smooth", {}) as Dictionary
+	var xt: Dictionary = _motion_tr_stats.get("six_stepped", {}) as Dictionary
+	if ss.is_empty() or st.is_empty() or xs.is_empty() or xt.is_empty():
+		_motion_fail("wall motion feel: a trace is missing (single smooth %s, single stepped %s, six smooth %s, six stepped %s)" % [str(not ss.is_empty()), str(not st.is_empty()), str(not xs.is_empty()), str(not xt.is_empty())])
+		return
+	_motion_expect(float(ss.get("rate_per_s", 0.0)) >= 10.0,
+		"wall motion feel: the smooth single-column trace sampled at %.1f/s (the dense-trace floor is 10/s)" % float(ss.get("rate_per_s", 0.0)))
+	_motion_expect(int(ss.get("settle_ms", 0)) >= int(ceil(2.5 * float(int(st.get("settle_ms", 0))))),
+		"wall motion feel: SMOOTH single-column settle (%d ms) is at least 2.5x STEPPED's (%d ms) - the two settings feel different in the hand" % [int(ss.get("settle_ms", 0)), int(st.get("settle_ms", 0))])
+	_motion_expect(int(ss.get("settle_ms", 0)) <= 1400 + int(ss.get("max_gap_ms", 0)),
+		"wall motion feel: SMOOTH single-column settle (%d ms) stays bounded at 1.4 s (plus one frame of sampling slop)" % int(ss.get("settle_ms", 0)))
+	_motion_expect(float(ss.get("peak_deg_s", 0.0)) <= 0.45 * float(st.get("peak_deg_s", 0.0)),
+		"wall motion feel: SMOOTH single-column peak velocity (%.1f deg/s) is a melt, not the spring's snap (%.1f deg/s)" % [float(ss.get("peak_deg_s", 0.0)), float(st.get("peak_deg_s", 0.0))])
+	_motion_expect(int(xs.get("settle_ms", 0)) <= 2200 + int(xs.get("max_gap_ms", 0)),
+		"wall motion feel: SMOOTH six-column settle (%d ms) stays bounded at ~2.2 s (plus one frame of sampling slop)" % int(xs.get("settle_ms", 0)))
+	_motion_expect(int(xs.get("settle_ms", 0)) >= int(ceil(1.4 * float(int(xt.get("settle_ms", 0))))),
+		"wall motion feel: SMOOTH six-column settle (%d ms) is at least 1.4x STEPPED's (%d ms)" % [int(xs.get("settle_ms", 0)), int(xt.get("settle_ms", 0))])
+	_motion_expect(float(xs.get("boundary_min_deg_s", -1.0)) >= 0.55 * float(xs.get("peak_deg_s", 0.0)),
+		"wall motion feel: SMOOTH six-column slot-boundary velocity (%.1f deg/s) stays at or above 55%% of the roll's peak (%.1f deg/s) - no per-column notching" % [float(xs.get("boundary_min_deg_s", -1.0)), float(xs.get("peak_deg_s", 0.0))])
+	for key: String in ["single_smooth", "single_stepped", "six_smooth", "six_stepped"]:
+		var s: Dictionary = _motion_tr_stats.get(key, {}) as Dictionary
+		_motion_expect(float(s.get("final_err_deg", 999.0)) < 0.05,
+			"wall motion feel: the %s travel landed exactly (final yaw error %.3f deg)" % [key, float(s.get("final_err_deg", 999.0))])
+
+
+## Arm a held-scroll leg: at the travel start, at rest; the
+## sampler lands a same-direction press every 300 ms until
+## the drum's target stands six columns over.
+func _motion_begin_hold(name: String) -> void:
+	var start: int = _motion_travel_start()
+	_motion_tr_name = name
+	_motion_tr_leg = "held scroll:"
+	_room._set_centre(start, true)
+	_room._set_focused(_room._panels[start])
+	_motion_tr_y0 = _room.drum_yaw_deg()
+	_motion_tr_y1 = _motion_tr_y0 + 81.0
+	_motion_tr.clear()
+	_motion_t0_msec = Time.get_ticks_msec()
+	_motion_hold_presses = 0
+	_motion_hold_next_msec = 0
+
+
+## Sample one held-scroll frame, landing the presses on
+## their cadence. Returns true once every press has landed
+## and the drum has settled.
+func _motion_sample_hold() -> bool:
+	var now: int = Time.get_ticks_msec() - _motion_t0_msec
+	_motion_tr.append([now, _room.drum_yaw_deg()])
+	if _motion_hold_presses < 6 and now >= _motion_hold_next_msec:
+		var idx: int = _motion_panel_at_col_offset(_motion_travel_start(), _motion_hold_presses + 1)
+		if idx >= 0:
+			_room._set_focused(_room._panels[idx])
+		_motion_hold_presses += 1
+		_motion_hold_next_msec = now + 200
+	return _motion_hold_presses >= 6 and _motion_tr.size() >= 3 and not _room.swing_active()
+
+
+func _motion_judge_hold(key: String) -> void:
+	var s: Dictionary = _motion_tr_stats.get(key, {}) as Dictionary
+	if s.is_empty():
+		_motion_fail("held scroll: the %s trace is missing" % key)
+		return
+	_motion_expect(_room.centre_index() == _motion_travel_target(),
+		"held scroll: the %s held scroll landed on its final centre" % key)
+	_motion_expect(float(s.get("final_err_deg", 999.0)) < 0.05,
+		"held scroll: the %s held scroll landed exactly (final yaw error %.3f deg)" % [key, float(s.get("final_err_deg", 999.0))])
+	_motion_expect(int(s.get("max_stall_run", 99)) <= 3,
+		"held scroll: the %s held scroll never stalls mid-travel (longest still run %d samples - no settling between steps)" % [key, int(s.get("max_stall_run", 99))])
+	if key == "held_smooth":
+		_motion_expect(float(s.get("boundary_min_deg_s", -1.0)) >= 0.45 * float(s.get("peak_deg_s", 0.0)),
+			"held scroll: the smooth held scroll's slot-boundary velocity (%.1f deg/s) stays at or above 45%% of its peak (%.1f deg/s) - no per-column notching" % [float(s.get("boundary_min_deg_s", -1.0)), float(s.get("peak_deg_s", 0.0))])
+
+
+func _motion_print_ratio() -> void:
+	var ss: Dictionary = _motion_tr_stats.get("single_smooth", {}) as Dictionary
+	var st: Dictionary = _motion_tr_stats.get("single_stepped", {}) as Dictionary
+	var xs: Dictionary = _motion_tr_stats.get("six_smooth", {}) as Dictionary
+	var xt: Dictionary = _motion_tr_stats.get("six_stepped", {}) as Dictionary
+	if ss.is_empty() or st.is_empty() or xs.is_empty() or xt.is_empty():
+		return
+	print("MOTION RATIO: smooth/stepped settle - single-column %.2fx (%d ms / %d ms), six-column %.2fx (%d ms / %d ms)"
+		% [float(int(ss.get("settle_ms", 0))) / maxf(float(int(st.get("settle_ms", 1))), 1.0), int(ss.get("settle_ms", 0)), int(st.get("settle_ms", 0)),
+			float(int(xs.get("settle_ms", 0))) / maxf(float(int(xt.get("settle_ms", 1))), 1.0), int(xs.get("settle_ms", 0)), int(xt.get("settle_ms", 0))])
 
 
 func _motion_record_perf(mode: String) -> void:
@@ -9514,6 +9900,18 @@ func _motion_judge_smooth_travel() -> void:
 		"smooth wall travel: the roll never reverses before the press (got %d)" % reversals)
 	_motion_expect(near_slot_frames <= 2,
 		"smooth wall travel: the roll does not crawl at slot boundaries (got %d slow slot frames)" % near_slot_frames)
+	# GRADFIX12: the outbound roll's slot-boundary velocities,
+	# from the same applied trace (the press cuts the roll at
+	# half span, so the boundaries it crossed are the ones
+	# judged): each crossing keeps at least 55% of the
+	# outbound peak - a roll, not a column-to-column advance.
+	if end_i >= 1:
+		var out_trace: Array = _motion_yaw_trace.slice(0, end_i + 1)
+		var oy0: float = float((out_trace[0] as Array)[1])
+		var ostats: Dictionary = _motion_trace_stats(out_trace, oy0, oy0 + 81.0)
+		_motion_print_stats("six_smooth_outbound_to_press", ostats)
+		_motion_expect(float(ostats.get("boundary_min_deg_s", -1.0)) >= 0.55 * float(ostats.get("peak_deg_s", 0.0)),
+			"smooth wall travel: the outbound roll's slot-boundary velocity (%.1f deg/s) stays at or above 55%% of its peak (%.1f deg/s)" % [float(ostats.get("boundary_min_deg_s", -1.0)), float(ostats.get("peak_deg_s", 0.0))])
 
 
 func _motion_judge_input_during_roll() -> void:
