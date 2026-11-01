@@ -9574,6 +9574,10 @@ func _motion_store_trace(key: String) -> void:
 	var stats: Dictionary = _motion_trace_stats(_motion_tr, _motion_tr_y0, _motion_tr_y1)
 	_motion_tr_stats[key] = stats
 	_motion_print_stats(key, stats)
+	var raw: String = ""
+	for ri: int in range(_motion_tr.size()):
+		raw += " [%dms %.2f]" % [int((_motion_tr[ri] as Array)[0]), float((_motion_tr[ri] as Array)[1])]
+	print("MOTION TRACE RAW %s (y0 %.2f -> y1 %.2f):" % [key, _motion_tr_y0, _motion_tr_y1], raw)
 
 
 ## The live-toggle verdict (GRADFIX12 item 1, leg i): the
