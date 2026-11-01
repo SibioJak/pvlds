@@ -8339,12 +8339,13 @@ func _input_trigger_step(axis: JoyAxis, anchors: Array[int], step: int, label: S
 ## landing on their nearest band; from a non-anchor column
 ## the first press goes to the next anchor in its
 ## direction; a held trigger steps exactly once; rail and
-## strip focus leave the triggers inert; the Tournament
-## view follows its stated decision (its own card columns'
-## anchors - this fixture stands a single state card, so
-## the press is spent there). Under PVLDS_INPUT_NC=notrig
-## the room never reads the triggers and these legs fail
-## by name.
+## strip focus hop their own zones' anchors (GRADFIX14
+## item 3 - see _input_leg_gf14_grammar_async, called at
+## the tail of these legs); the Tournament view follows
+## its stated decision (its own card columns' anchors -
+## this fixture stands a single state card, so the press
+## is spent there). Under PVLDS_INPUT_NC=notrig the room
+## never reads the triggers and these legs fail by name.
 func _input_leg_triggers_async() -> void:
 	var cols: int = _room._columns
 	var expected: Array[int] = []
@@ -8412,26 +8413,17 @@ func _input_leg_triggers_async() -> void:
 	_input_expect(_input_focus_coord().x == anchors[1],
 		"triggers held: a held RT steps exactly once, to the middle anchor, and never repeats (got column %d)" % _input_focus_coord().x)
 	await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 0.0)
-	# Rail and strip focus: the triggers are inert there.
-	var rail_stop: ClickableQuad = _room.rail_quad("sort")
-	_room._set_focused(rail_stop)
-	await _input_wait_frames(4)
-	await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)
-	await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 0.0)
-	_input_expect(_room.focused_quad() == rail_stop,
-		"triggers rail: RT with the rail focused is inert (the bumpers own the rail's travel)")
-	var strip_q: ClickableQuad = null
-	for k: Variant in _room._strip_quads.keys():
-		if _room.strip_slot_pickable(str(k)):
-			strip_q = _room.letter_quad(str(k))
-			break
-	if strip_q != null:
-		_room._set_focused(strip_q)
-		await _input_wait_frames(4)
-		await _input_feed_axis(JOY_AXIS_TRIGGER_LEFT, 1.0)
-		await _input_feed_axis(JOY_AXIS_TRIGGER_LEFT, 0.0)
-		_input_expect(_room.focused_quad() == strip_q,
-			"triggers strip: LT with a strip slot focused is inert (the bumpers own the strip's anchors)")
+	# ---- GRADFIX14 item 3: the unified travel grammar ----
+	# Controls follow focus in the bar countries too. Every
+	# press below rides the real poll (buttons and trigger
+	# axes through the Input singleton), and the wall state
+	# (centre index, page, swing target) is asserted
+	# byte-identical across every bar press - nothing in
+	# the bar moves the wall. The NCs key to the three
+	# supersession seams: PVLDS_GF14_NC=stripanchor fails
+	# the strip bumper legs, =railwall fails the rail
+	# bumper legs, =bartriginert fails the trigger legs.
+	await _input_leg_gf14_grammar_async()
 	# Tournament view: the block's own anchors (the stated
 	# decision). This fixture stands one state card in one
 	# column, so the decision's degenerate case applies.
@@ -8452,8 +8444,185 @@ func _input_leg_triggers_async() -> void:
 		else:
 			await _input_trigger_step(JOY_AXIS_TRIGGER_RIGHT, tanchors, 1,
 				"triggers tournament: RT cycles the block's own anchors")
+		# GRADFIX14: tournament bumpers step within the
+		# block - one card column (the pair grid's own
+		# sideways step predicts the landing; this fixture's
+		# single column clamps, so the step is spent here -
+		# the multi-column block is judged in the tournament
+		# smoke). Never a fall-through to the library's page
+		# travel.
+		_room._set_focused(tpanel)
+		await _input_wait_frames(4)
+		var twant: int = _room._tourn_side_step(0, 1)
+		await _nav_feed_button(JOY_BUTTON_RIGHT_SHOULDER)
+		_input_expect(_room.focused_quad() == _room._panels[twant],
+			"gf14 grammar: tournament bumpers step within the block (RB from the first card lands on the next card column's card, or clamps on a one-column block)")
 	_room._handle_rail("filter:all")
 	await _input_wait_frames(10)
+
+
+## The wall state the bar grammar legs hold byte-identical:
+## [centre index, page, swing target]. Rail/strip focus
+## never drives the drum, so any bar press that moves one
+## of these has reached across countries - the exact fault
+## GRADFIX14 item 3 removes.
+func _input_wall_state() -> Array:
+	return [_room.centre_index(), _room._page, _room.swing_target_rad()]
+
+
+func _input_wall_state_matches(state: Array) -> bool:
+	return _room.centre_index() == int(state[0]) and _room._page == int(state[1]) \
+		and absf(_room.swing_target_rad() - float(state[2])) < 0.0001
+
+
+## The strip key of a quad, or "" when it is not a strip
+## slot.
+func _input_strip_key_of(q: ClickableQuad) -> String:
+	if q == null or _room == null:
+		return ""
+	for k: Variant in _room._strip_quads.keys():
+		if _room._strip_quads[k] == q:
+			return str(k)
+	return ""
+
+
+## One trigger press with a RAIL stop focused, asserted
+## against the expected landing key (the grammar's rail
+## anchor hop, driven through the real axis feed).
+func _input_rail_trigger_step(axis: JoyAxis, want_key: String, label: String) -> void:
+	await _input_feed_axis(axis, 1.0)
+	await _input_feed_axis(axis, 0.0)
+	_input_expect(_nav_key_of(_room.focused_quad()) == want_key,
+		"%s (want rail stop '%s', got '%s')" % [label, want_key, _nav_key_of(_room.focused_quad())])
+
+
+## The GRADFIX14 grammar legs (item 3): bumpers step
+## within the focused bar zone, triggers hop its anchors,
+## and the wall stands byte-identical across all of it.
+## Supersession seams, each failing by name under its NC:
+## (a) strip bumpers anchor-hopping again
+##     (PVLDS_GF14_NC=stripanchor),
+## (b) rail bumpers driving the wall again (=railwall),
+## (c) triggers inert in the bar again (=bartriginert).
+func _input_leg_gf14_grammar_async() -> void:
+	var wall0: Array = _input_wall_state()
+	# -- Rail bumpers: one stop at a time, wall untouched.
+	_room._set_focused(_room.rail_quad("sort"))
+	await _input_wait_frames(4)
+	await _nav_feed_button(JOY_BUTTON_RIGHT_SHOULDER)
+	_input_expect(_nav_key_of(_room.focused_quad()) == "tournament",
+		"gf14 grammar: rail bumpers step the rail one stop (RB: sort -> tournament, got '%s')" % _nav_key_of(_room.focused_quad()))
+	await _nav_feed_button(JOY_BUTTON_RIGHT_SHOULDER)
+	_input_expect(_nav_key_of(_room.focused_quad()) == "desk",
+		"gf14 grammar: rail bumpers step the rail one stop (RB: tournament -> desk, the unstanding REFRESH skipped, got '%s')" % _nav_key_of(_room.focused_quad()))
+	await _nav_feed_button(JOY_BUTTON_LEFT_SHOULDER)
+	await _nav_feed_button(JOY_BUTTON_LEFT_SHOULDER)
+	_input_expect(_nav_key_of(_room.focused_quad()) == "sort",
+		"gf14 grammar: rail bumpers step the rail one stop (LB twice returns desk -> sort, got '%s')" % _nav_key_of(_room.focused_quad()))
+	_room._set_focused(_room.rail_quad("filter:all"))
+	await _input_wait_frames(4)
+	await _nav_feed_button(JOY_BUTTON_LEFT_SHOULDER)
+	_input_expect(_nav_key_of(_room.focused_quad()) == "filter:all",
+		"gf14 grammar: rail bumpers clamp at the rail's first stop (LB on filter:all stays, got '%s')" % _nav_key_of(_room.focused_quad()))
+	await _input_wait_frames(6)
+	_input_expect(_input_wall_state_matches(wall0),
+		"gf14 grammar: rail bumpers leave the wall byte-identical (centre index, page and swing target unmoved - no page travel from the rail)")
+	# -- Rail triggers: hop the rail's anchors, wrapping,
+	# wall untouched.
+	_input_expect(_room.rail_anchor_keys() == ["filter:all", "filter:new", "exit"],
+		"gf14 grammar: the rail anchors are first / middle / last of the live stops (got %s)" % str(_room.rail_anchor_keys()))
+	_room._set_focused(_room.rail_quad("sort"))
+	await _input_wait_frames(4)
+	await _input_rail_trigger_step(JOY_AXIS_TRIGGER_RIGHT, "exit",
+		"gf14 grammar: rail triggers hop anchors (RT from non-anchor sort goes to the nearest anchor forward, exit)")
+	await _input_rail_trigger_step(JOY_AXIS_TRIGGER_RIGHT, "filter:all",
+		"gf14 grammar: rail triggers hop anchors (RT on the last anchor wraps to the first, filter:all)")
+	await _input_rail_trigger_step(JOY_AXIS_TRIGGER_RIGHT, "filter:new",
+		"gf14 grammar: rail triggers hop anchors (RT on the first anchor advances to the middle, filter:new)")
+	await _input_rail_trigger_step(JOY_AXIS_TRIGGER_LEFT, "filter:all",
+		"gf14 grammar: rail triggers hop anchors (LT on the middle anchor goes back to the first, filter:all)")
+	await _input_rail_trigger_step(JOY_AXIS_TRIGGER_LEFT, "exit",
+		"gf14 grammar: rail triggers hop anchors (LT on the first anchor wraps to the last, exit)")
+	_room._set_focused(_room.rail_quad("sort"))
+	await _input_wait_frames(4)
+	await _input_rail_trigger_step(JOY_AXIS_TRIGGER_LEFT, "filter:new",
+		"gf14 grammar: rail triggers hop anchors (LT from non-anchor sort goes to the nearest anchor backward, filter:new)")
+	# A held rail trigger hops exactly once (the press
+	# semantics are the wall's, preserved).
+	_room._set_focused(_room.rail_quad("filter:all"))
+	await _input_wait_frames(4)
+	await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)
+	await _input_wait_frames(30)
+	_input_expect(_nav_key_of(_room.focused_quad()) == "filter:new",
+		"gf14 grammar: rail triggers held - a held RT hops exactly once, to the middle anchor (got '%s')" % _nav_key_of(_room.focused_quad()))
+	await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 0.0)
+	await _input_wait_frames(6)
+	_input_expect(_input_wall_state_matches(wall0),
+		"gf14 grammar: rail triggers leave the wall byte-identical (the hop lands ON a stop, never presses it, never moves the drum)")
+	# -- Strip bumpers: one slot at a time, wall untouched.
+	var keys: Array[String] = _room._strip_pickable_keys()
+	_input_expect(keys.size() >= 2,
+		"gf14 grammar: the fixture strip has at least two pickable slots for the bumper legs (got %s)" % str(keys))
+	if keys.size() >= 2:
+		_room._set_focused(_room.letter_quad(keys[0]))
+		await _input_wait_frames(4)
+		await _nav_feed_button(JOY_BUTTON_RIGHT_SHOULDER)
+		_input_expect(_input_strip_key_of(_room.focused_quad()) == keys[1],
+			"gf14 grammar: strip bumpers step one slot (RB: %s -> %s, got '%s')" % [keys[0], keys[1], _input_strip_key_of(_room.focused_quad())])
+		if keys.size() >= 3:
+			await _nav_feed_button(JOY_BUTTON_RIGHT_SHOULDER)
+			_input_expect(_input_strip_key_of(_room.focused_quad()) == keys[2],
+				"gf14 grammar: strip bumpers step one slot (RB: %s -> %s, got '%s')" % [keys[1], keys[2], _input_strip_key_of(_room.focused_quad())])
+			await _nav_feed_button(JOY_BUTTON_LEFT_SHOULDER)
+			_input_expect(_input_strip_key_of(_room.focused_quad()) == keys[1],
+				"gf14 grammar: strip bumpers step one slot (LB: %s -> %s, got '%s')" % [keys[2], keys[1], _input_strip_key_of(_room.focused_quad())])
+		_room._set_focused(_room.letter_quad(keys[0]))
+		await _input_wait_frames(4)
+		await _nav_feed_button(JOY_BUTTON_LEFT_SHOULDER)
+		_input_expect(_input_strip_key_of(_room.focused_quad()) == keys[0],
+			"gf14 grammar: strip bumpers clamp at the strip's first pickable slot (LB on %s stays)" % keys[0])
+		await _input_wait_frames(6)
+		_input_expect(_input_wall_state_matches(wall0),
+			"gf14 grammar: strip bumpers leave the wall byte-identical (no page turn, no anchor hop)")
+	# -- Strip triggers: hop the pickable anchors,
+	# recomputed live, clamp law kept, wall untouched.
+	if keys.size() >= 2:
+		var sanchors: Array[String] = LetterIndex.anchor_keys(keys)
+		_input_expect(sanchors.size() >= 2,
+			"gf14 grammar: the fixture strip has at least two anchors for the trigger legs (got %s over %s)" % [str(sanchors), str(keys)])
+		if sanchors.size() >= 2:
+			# From a non-anchor slot with an anchor ahead:
+			# the hop lands exactly on anchor_target's say.
+			var probed: bool = false
+			for k: String in keys:
+				var t: String = LetterIndex.anchor_target(keys, k, 1)
+				if t != "" and t != k:
+					_room._set_focused(_room.letter_quad(k))
+					await _input_wait_frames(4)
+					await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)
+					await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 0.0)
+					_input_expect(_input_strip_key_of(_room.focused_quad()) == t,
+						"gf14 grammar: strip triggers hop pickable anchors (RT from %s lands on anchor %s, got '%s')" % [k, t, _input_strip_key_of(_room.focused_quad())])
+					probed = true
+					break
+			_input_expect(probed, "gf14 grammar: strip triggers - the fixture offered a non-anchor slot with an anchor ahead to probe")
+			# The clamp law: at the far anchor the press is
+			# spent, both directions.
+			_room._set_focused(_room.letter_quad(sanchors[sanchors.size() - 1]))
+			await _input_wait_frames(4)
+			await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)
+			await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 0.0)
+			_input_expect(_input_strip_key_of(_room.focused_quad()) == sanchors[sanchors.size() - 1],
+				"gf14 grammar: strip triggers clamp at the last anchor (RT on %s stays - no wrap, the strip's clamp law)" % sanchors[sanchors.size() - 1])
+			_room._set_focused(_room.letter_quad(sanchors[0]))
+			await _input_wait_frames(4)
+			await _input_feed_axis(JOY_AXIS_TRIGGER_LEFT, 1.0)
+			await _input_feed_axis(JOY_AXIS_TRIGGER_LEFT, 0.0)
+			_input_expect(_input_strip_key_of(_room.focused_quad()) == sanchors[0],
+				"gf14 grammar: strip triggers clamp at the first anchor (LT on %s stays)" % sanchors[0])
+			await _input_wait_frames(6)
+			_input_expect(_input_wall_state_matches(wall0),
+				"gf14 grammar: strip triggers leave the wall byte-identical (the hop lands on a slot, the drum never turns)")
 
 
 ## The rail key a quad answers to, or "" when it is not a rail
@@ -8893,8 +9062,10 @@ func _nav_flip_proof(step: int) -> void:
 ## derives from the centre), and the bumper law is the
 ## shelf's: a focused panel travels one page of shelf FROM
 ## ITSELF (index +/- PAGE_SIZE, clamped to the shelf's ends)
-## and the centre lands on it; a focused rail stop keeps its
-## stop while the centre jumps a page; no focus lands on the
+## and the centre lands on it; a focused rail stop steps
+## one stop along the rail and the wall does not move
+## (GRADFIX14 item 3 - the shipped law kept the stop and
+## jumped the centre a page); no focus lands on the
 ## new page's first panel. The leg drives to known centres
 ## first (focus moves the drum now), because earlier legs
 ## leave the centre where their browsing left it.
@@ -8939,14 +9110,22 @@ func _nav_leg_bumpers_async() -> void:
 	_nav_expect(_room.focused_quad() == held, "bumpers: a clamped LB leaves focus untouched")
 	_nav_expect(_room._filter == filter0 and _room._sort == sort0,
 		"bumpers: page travel leaves filter and sort alone")
-	# Focus on a rail stop carries to the same stop.
+	# GRADFIX14 (item 3, supersession (b)): a bumper with a
+	# rail stop focused steps the RAIL one stop and the
+	# wall does not move at all - the shipped law kept the
+	# stop and jumped the centre a page from here. Under
+	# PVLDS_GF14_NC=railwall these legs fail by name.
+	var rail_centre0: int = _room.centre_index()
+	var rail_target0: float = _room.swing_target_rad()
 	_room._set_focused(_room.rail_quad("sort"))
 	_room._bumper_page(1)
 	await _nav_await_slide()
-	_nav_expect(_room.centre_index() == 12 and _room._page == 1 and _nav_key_of(_room.focused_quad()) == "sort",
-		"bumpers: rail focus carries to the same stop across the flip")
+	_nav_expect(_nav_key_of(_room.focused_quad()) == "tournament" and _room.centre_index() == rail_centre0 and _room._page == 0 and absf(_room.swing_target_rad() - rail_target0) < 0.0001,
+		"gf14 grammar: rail bumpers step the rail one stop (sort -> tournament) and the wall does not move (centre, page and swing target unmoved)")
 	_room._bumper_page(-1)
 	await _nav_await_slide()
+	_nav_expect(_nav_key_of(_room.focused_quad()) == "sort" and _room.centre_index() == rail_centre0 and _room._page == 0,
+		"gf14 grammar: rail bumpers step the rail one stop back (tournament -> sort), wall still unmoved")
 	# No focus lands on the new page's first panel.
 	_room._set_focused(null)
 	_room._bumper_page(1)
@@ -10040,17 +10219,27 @@ func _letters_leg_full_strip_walks() -> void:
 		"strip order: holding LEFT visits the exact reverse (got %s, want %s)" % [str(left_seq), str(drawn_rev)])
 
 
-## The bumper-anchor legs (the bumper-anchors round,
-## 2026-10-28 - Chris: bumpers on the strip should "move
-## you to middle, then end"): while a strip slot holds
-## focus, LB/RB step between the anchors over the pickable
-## slots - first / middle / last - instead of turning the
-## wall's page. The fixture's pickable strip is A F G M S
-## T W THE # (nine slots), so the anchors are A, S (index
-## (9-1)/2 = 4) and #. Every press rides _bumper_page, the
-## pad poll's own call, and every landing is asserted by
-## key AND checked against the drawn pickable list - a
-## greyed slot is never a landing.
+## The strip-anchor legs: while a strip slot holds focus,
+## LT/RT hop between the anchors over the pickable slots -
+## first / middle / last - and the wall's page never turns.
+## The fixture's pickable strip is A F G M S T W THE #
+## (nine slots), so the anchors are A, S (index (9-1)/2 =
+## 4) and # - note the pickable set is a FILTERED strip
+## (the fixture's greyed letters stand between the pickable
+## ones), so these legs are also the recomputed-live proof:
+## the anchors run over pickable slots, not all slots.
+## Every press rides _trigger_anchor, the pad poll's own
+## call, and every landing is asserted by key AND checked
+## against the drawn pickable list - a greyed slot is
+## never a landing.
+##
+## GRADFIX14 SUPERSESSION (a): this hop lived on the
+## BUMPERS from the bumper-anchors round (2026-10-28,
+## field-passed 2026-10-29) until this round moved it to
+## the triggers; the bumpers now step ONE slot, judged by
+## the gf14 legs at this function's tail (under
+## PVLDS_GF14_NC=stripanchor the bumper legs fail by name
+## and the wall here would turn anchor hops again).
 func _letters_leg_anchors() -> void:
 	var drawn: Array[String] = _letters_drawn_pickable_order()
 	_letters_expect(drawn == ["A", "F", "G", "M", "S", "T", "W", "THE", "#"],
@@ -10058,37 +10247,37 @@ func _letters_leg_anchors() -> void:
 	var page0: int = _room._page
 	var landings: Array[String] = []
 	_room._set_focused(_room.letter_quad("G"))
-	_room._bumper_page(1)
+	_room._trigger_anchor(1)
 	landings.append(_letters_key_of(_room.focused_quad()))
 	_letters_expect(landings[landings.size() - 1] == "S",
-		"anchors: RB from G (left of the middle) lands on the middle, S (got '%s')" % landings[landings.size() - 1])
-	_room._bumper_page(1)
+		"anchors: RT from G (left of the middle) lands on the middle, S (got '%s')" % landings[landings.size() - 1])
+	_room._trigger_anchor(1)
 	landings.append(_letters_key_of(_room.focused_quad()))
 	_letters_expect(landings[landings.size() - 1] == "#",
-		"anchors: RB from the middle lands on the last slot, # (got '%s')" % landings[landings.size() - 1])
-	_room._bumper_page(1)
+		"anchors: RT from the middle lands on the last slot, # (got '%s')" % landings[landings.size() - 1])
+	_room._trigger_anchor(1)
 	landings.append(_letters_key_of(_room.focused_quad()))
 	_letters_expect(landings[landings.size() - 1] == "#",
-		"anchors: RB at the last slot clamps - focus stays on # (got '%s')" % landings[landings.size() - 1])
-	_room._bumper_page(-1)
+		"anchors: RT at the last slot clamps - focus stays on # (got '%s')" % landings[landings.size() - 1])
+	_room._trigger_anchor(-1)
 	landings.append(_letters_key_of(_room.focused_quad()))
 	_letters_expect(landings[landings.size() - 1] == "S",
-		"anchors: LB from the last slot lands back on the middle, S (got '%s')" % landings[landings.size() - 1])
-	_room._bumper_page(-1)
+		"anchors: LT from the last slot lands back on the middle, S (got '%s')" % landings[landings.size() - 1])
+	_room._trigger_anchor(-1)
 	landings.append(_letters_key_of(_room.focused_quad()))
 	_letters_expect(landings[landings.size() - 1] == "A",
-		"anchors: LB from the middle lands on the first slot, A (got '%s')" % landings[landings.size() - 1])
-	_room._bumper_page(-1)
+		"anchors: LT from the middle lands on the first slot, A (got '%s')" % landings[landings.size() - 1])
+	_room._trigger_anchor(-1)
 	landings.append(_letters_key_of(_room.focused_quad()))
 	_letters_expect(landings[landings.size() - 1] == "A",
-		"anchors: LB at the first slot clamps - focus stays on A (got '%s')" % landings[landings.size() - 1])
+		"anchors: LT at the first slot clamps - focus stays on A (got '%s')" % landings[landings.size() - 1])
 	_room._set_focused(_room.letter_quad("W"))
-	_room._bumper_page(-1)
+	_room._trigger_anchor(-1)
 	landings.append(_letters_key_of(_room.focused_quad()))
 	_letters_expect(landings[landings.size() - 1] == "S",
-		"anchors: LB from W (right of the middle) lands on the middle, S (got '%s')" % landings[landings.size() - 1])
+		"anchors: LT from W (right of the middle) lands on the middle, S (got '%s')" % landings[landings.size() - 1])
 	_room._set_focused(_room.letter_quad("A"))
-	_room._bumper_page(1)
+	_room._trigger_anchor(1)
 	landings.append(_letters_key_of(_room.focused_quad()))
 	_letters_expect(landings[landings.size() - 1] == "S",
 		"anchors: a press while ON the first anchor advances to the middle - never a no-op (got '%s')" % landings[landings.size() - 1])
@@ -10099,7 +10288,26 @@ func _letters_leg_anchors() -> void:
 	_letters_expect(all_pickable,
 		"anchors: every landing is a pickable slot - a greyed slot is never landed on (landings %s)" % str(landings))
 	_letters_expect(_room._page == page0,
-		"anchors: bumper presses inside the strip never turned the wall page (page %d, was %d)" % [_room._page, page0])
+		"anchors: trigger presses inside the strip never turned the wall page (page %d, was %d)" % [_room._page, page0])
+	# GRADFIX14: the strip's bumpers step ONE slot now -
+	# the tap-tap-tap Chris asked to keep, per slot, with
+	# the anchor hop gone from them.
+	_room._set_focused(_room.letter_quad("G"))
+	_room._bumper_page(1)
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "M",
+		"gf14 strip bumpers: RB from G steps ONE slot to M - not the middle anchor S (got '%s')" % _letters_key_of(_room.focused_quad()))
+	_room._bumper_page(1)
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "S",
+		"gf14 strip bumpers: RB from M steps ONE slot to S (got '%s')" % _letters_key_of(_room.focused_quad()))
+	_room._bumper_page(-1)
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "M",
+		"gf14 strip bumpers: LB from S steps ONE slot back to M (got '%s')" % _letters_key_of(_room.focused_quad()))
+	_room._set_focused(_room.letter_quad("A"))
+	_room._bumper_page(-1)
+	_letters_expect(_letters_key_of(_room.focused_quad()) == "A",
+		"gf14 strip bumpers: LB at the first pickable slot clamps - focus stays on A (got '%s')" % _letters_key_of(_room.focused_quad()))
+	_letters_expect(_room._page == page0,
+		"gf14 strip bumpers: bumper presses inside the strip never turned the wall page (page %d, was %d)" % [_room._page, page0])
 
 
 func _letters_leg_jump() -> void:
@@ -12173,6 +12381,45 @@ func _tournament_leg_block() -> void:
 	_tournament_expect(bad == "", label)
 
 
+## GRADFIX14 (item 3): tournament bumpers step WITHIN the
+## block - one card column per press (the pair grid's own
+## sideways step, _tourn_side_step, predicts every landing),
+## ends clamped, focus always on a block card. Pre-fix a
+## bumper here ran the library page law (index ± PAGE_SIZE
+## clamped), which on this block is a jump to the far end.
+## Focus is restored to its entry quad at the end - this
+## leg borrows the room mid-phase.
+func _tournament_leg_gf14_bumpers() -> void:
+	var entry_focus: ClickableQuad = _room.focused_quad()
+	var cols: Array[int] = _room._card_columns()
+	_tournament_expect(cols.size() >= 2,
+		"gf14 tournament bumpers: the block stands in at least two card columns for the step legs (got %s)" % str(cols))
+	if cols.size() >= 2 and not _room._panels.is_empty():
+		# Seat the leftmost card column's first card.
+		var start_idx: int = -1
+		for i: int in range(_room._panels.size()):
+			if _room._grid_coord(i).x == cols[0]:
+				start_idx = i
+				break
+		_room._set_focused(_room._panels[start_idx])
+		var cur: int = start_idx
+		for press: int in range(cols.size() + 1):
+			var want: int = _room._tourn_side_step(cur, 1)
+			_room._bumper_page(1)
+			var got_idx: int = _room._panels.find(_room.focused_quad())
+			_tournament_expect(got_idx == want,
+				"gf14 tournament bumpers: RB steps one card column within the block (press %d: panel %d -> %d, got %d)" % [press, cur, want, got_idx])
+			cur = want
+		_tournament_expect(_room._grid_coord(cur).x == cols[cols.size() - 1],
+			"gf14 tournament bumpers: repeated RB clamps on the block's last card column (ended at column %d of %s)" % [_room._grid_coord(cur).x, str(cols)])
+		var want_back: int = _room._tourn_side_step(cur, -1)
+		_room._bumper_page(-1)
+		_tournament_expect(_room._panels.find(_room.focused_quad()) == want_back,
+			"gf14 tournament bumpers: LB steps one card column back within the block")
+	if entry_focus != null:
+		_room._set_focused(entry_focus)
+
+
 func _drive_tournament_full() -> void:
 	match _tournament_smoke_phase:
 		0:
@@ -12236,6 +12483,7 @@ func _drive_tournament_full() -> void:
 				_tournament_leg_boards()
 				_tournament_leg_block()
 				_tournament_leg_standing_boards()
+				_tournament_leg_gf14_bumpers()
 				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 20000
 				_tournament_smoke_phase = 2
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
