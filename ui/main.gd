@@ -9306,7 +9306,7 @@ func _drive_motion_smoke() -> void:
 				_finish_motion_smoke()
 		4:
 			_motion_wait += 1
-			_motion_yaw_trace.append([Time.get_ticks_msec() - _motion_t0_msec, rad_to_deg(_room.drum_node().rotation.y)])
+			_motion_yaw_trace.append([Time.get_ticks_msec() - _motion_t0_msec, rad_to_deg(_room.drum_node().rotation.y), _room.swing_velocity_deg_s()])
 			if (_motion_wait >= 3 and not _room.page_slide_active()) or _motion_wait > 1800:
 				_motion_record_perf("stepped")
 				var y0_4: float = float((_motion_yaw_trace[0] as Array)[1]) if not _motion_yaw_trace.is_empty() else 0.0
@@ -9339,7 +9339,7 @@ func _drive_motion_smoke() -> void:
 		6:
 			_motion_wait += 1
 			var now6: int = Time.get_ticks_msec() - _motion_t0_msec
-			_motion_yaw_trace.append([now6, rad_to_deg(_room.drum_node().rotation.y)])
+			_motion_yaw_trace.append([now6, rad_to_deg(_room.drum_node().rotation.y), _room.swing_velocity_deg_s()])
 			# The mid-roll press: once the drum has covered a
 			# third of the travel, a focus press back to the
 			# start panel must answer at once.
@@ -9474,13 +9474,18 @@ func _motion_begin_trace(name: String, leg: String, from_idx: int, to_idx: int) 
 	_motion_tr.clear()
 	_motion_t0_msec = Time.get_ticks_msec()
 	_room._set_focused(_room._panels[to_idx])
-	_motion_tr_y1 = rad_to_deg(_room.swing_target_rad())
+	# The target yaw from the column delta itself: the
+	# room's standing swing target only updates when its
+	# follow law centres on the new focus (its next
+	# _process), so reading swing_target_rad() here would
+	# capture the PREVIOUS travel's target.
+	_motion_tr_y1 = _motion_tr_y0 + float(_room._grid_coord(to_idx).x - _room._grid_coord(from_idx).x) * 13.5
 
 
 ## Sample one frame of the standing trace. Returns true
 ## once the swing has settled (the caller judges).
 func _motion_sample_trace() -> bool:
-	_motion_tr.append([Time.get_ticks_msec() - _motion_t0_msec, _room.drum_yaw_deg()])
+	_motion_tr.append([Time.get_ticks_msec() - _motion_t0_msec, _room.drum_yaw_deg(), _room.swing_velocity_deg_s()])
 	return _motion_tr.size() >= 3 and not _room.swing_active()
 
 
@@ -9528,6 +9533,24 @@ func _motion_trace_stats(trace: Array, y0: float, y1: float) -> Dictionary:
 		settle_ms = int((trace[last_out] as Array)[0])
 	var span: float = y1 - y0
 	var dir: float = signf(span)
+	# The velocity AT each sample: the trace's own velocity
+	# channel when it carries one (the driver's standing
+	# velocity - the honest measure on a box whose frame
+	# pacing bursts, where interval velocities over clustered
+	# samples inflate), else the interval velocity.
+	var vel_at: Array[float] = []
+	for vi: int in range(n):
+		var row_v: Array = trace[vi] as Array
+		if row_v.size() > 2:
+			vel_at.append(float(row_v[2]))
+		elif vi > 0:
+			vel_at.append(vels[vi - 1])
+		else:
+			vel_at.append(vels[0] if not vels.is_empty() else 0.0)
+	if not vel_at.is_empty():
+		peak = 0.0
+		for va: float in vel_at:
+			peak = maxf(peak, absf(va))
 	var boundary_vels: Array[float] = []
 	if absf(span) > 13.5 + 0.01 and n > 1:
 		var k: int = 1
@@ -9537,7 +9560,7 @@ func _motion_trace_stats(trace: Array, y0: float, y1: float) -> Dictionary:
 				var ya: float = float((trace[i2 - 1] as Array)[1])
 				var yb: float = float((trace[i2] as Array)[1])
 				if (ya - b) * (yb - b) <= 0.0 and absf(yb - ya) > 0.0001:
-					boundary_vels.append(absf(vels[i2 - 1]))
+					boundary_vels.append(absf(vel_at[i2]))
 					break
 			k += 1
 	var bmin: float = -1.0
@@ -9576,7 +9599,8 @@ func _motion_store_trace(key: String) -> void:
 	_motion_print_stats(key, stats)
 	var raw: String = ""
 	for ri: int in range(_motion_tr.size()):
-		raw += " [%dms %.2f]" % [int((_motion_tr[ri] as Array)[0]), float((_motion_tr[ri] as Array)[1])]
+		var row: Array = _motion_tr[ri] as Array
+		raw += " [%dms %.2f v%.0f]" % [int(row[0]), float(row[1]), float(row[2]) if row.size() > 2 else 0.0]
 	print("MOTION TRACE RAW %s (y0 %.2f -> y1 %.2f):" % [key, _motion_tr_y0, _motion_tr_y1], raw)
 
 
@@ -9657,7 +9681,7 @@ func _motion_begin_hold(name: String) -> void:
 ## and the drum has settled.
 func _motion_sample_hold() -> bool:
 	var now: int = Time.get_ticks_msec() - _motion_t0_msec
-	_motion_tr.append([now, _room.drum_yaw_deg()])
+	_motion_tr.append([now, _room.drum_yaw_deg(), _room.swing_velocity_deg_s()])
 	if _motion_hold_presses < 6 and now >= _motion_hold_next_msec:
 		var idx: int = _motion_panel_at_col_offset(_motion_travel_start(), _motion_hold_presses + 1)
 		if idx >= 0:

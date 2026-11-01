@@ -6788,6 +6788,13 @@ func swing_active() -> bool:
 	return _swing_active
 
 
+## The drum's standing swing velocity, degrees per second
+## (the motion traces read it beside the yaw so a velocity
+## spike and an external yaw jump are distinguishable).
+func swing_velocity_deg_s() -> float:
+	return rad_to_deg(_swing_vel)
+
+
 func swing_target_rad() -> float:
 	return _swing_to
 
