@@ -320,8 +320,14 @@ var _motion_tr_y1: float = 0.0 ## the standing trace's target yaw, degrees
 var _motion_tr_stats: Dictionary = {} ## trace name -> stats Dictionary (see _motion_trace_stats)
 var _motion_live_boot_mode: String = "" ## the mode the live-toggle leg booted under
 var _motion_live_flip_mode: String = "" ## the mode the SETUP panel flip left standing
-var _motion_hold_presses: int = 0 ## held-scroll leg: same-direction presses already landed
-var _motion_hold_next_msec: int = 0 ## held-scroll leg: when the next press lands
+var _motion_hold_mode: String = "" ## held-scroll leg: which real-path leg is sampling
+var _motion_hold_frames: int = 0 ## held-scroll leg: frames sampled so far
+var _motion_hold_released: bool = false ## held-scroll leg: the stick has been let go
+var _motion_hold_release_frame: int = -1 ## held-scroll leg: trace frame of the release
+var _motion_hold_release_col: int = -1 ## held-scroll leg: centre column standing at the release
+var _motion_hold_saw_cruise: bool = false ## held-scroll leg: the room cruised during the hold
+var _motion_hold_start_col: int = 0 ## held-scroll leg: the column the hold started from
+var _motion_hold_rest_frames: int = 0 ## held-scroll leg: consecutive settled frames after release
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -9973,12 +9979,24 @@ func _finish_jumpbench_smoke() -> void:
 ## the same travel again ("live wall motion toggle:"), the
 ## SMOOTH-vs-STEPPED feel verdict over single- and
 ## six-column traces ("wall motion feel:"), and held scrolls
-## under both modes ("held scroll:"). The NC seams
+## under both modes ("held scroll:" / "held cruise:").
+## GRADFIX13 item 3: the held legs drive the REAL input
+## path - a synthetic InputEventJoypadMotion held on the
+## left stick's X axis, exactly what the room's per-frame
+## axis poll reads - because GF12's held legs pressed
+## _set_focused directly on a cadence and so modelled a
+## continuous push the product never receives: a real hold
+## arrives as the poll's 0.24 s auto-repeat of discrete
+## focus steps, and under SMOOTH each repeat retargeted the
+## roll per column (the convicted slot-by-slot advance).
+## The NC seams
 ## (PVLDS_GRADFIX10_NC=steppop / stepswing) restore the
 ## convicted steppings so the named legs fail by name;
 ## PVLDS_GRADFIX12_NC=nolive severs the dial's live apply
 ## (the driver keeps the boot mode) so the live toggle leg
-## fails by name.
+## fails by name; PVLDS_GF13_NC=steprepeat restores the
+## per-column repeat path under SMOOTH so the "held
+## cruise:" leg fails by name.
 func _drive_motion_smoke() -> void:
 	match _motion_phase:
 		0:
@@ -10226,7 +10244,6 @@ func _drive_motion_smoke() -> void:
 			if _motion_sample_trace():
 				_motion_store_trace("six_smooth")
 				_motion_judge_feel()
-				_room.set_wall_motion_mode("stepped")
 				_motion_begin_hold("held_stepped")
 				_motion_phase = 12
 				_motion_wait = 0
@@ -10234,13 +10251,14 @@ func _drive_motion_smoke() -> void:
 				_motion_fail("wall motion feel: the clean smooth six-column roll never settled")
 				_finish_motion_smoke()
 		12:
-			# Held scroll, STEPPED: repeated same-direction
-			# presses while the drum travels.
+			# Held scroll, STEPPED (GRADFIX13): a real held
+			# stick on the product's own input path - its
+			# shipped repeat-step character is this pole of
+			# the dial and must stand unchanged.
 			_motion_wait += 1
 			if _motion_sample_hold():
 				_motion_store_trace("held_stepped")
 				_motion_judge_hold("held_stepped")
-				_room.set_wall_motion_mode("smooth")
 				_motion_begin_hold("held_smooth")
 				_motion_phase = 13
 				_motion_wait = 0
@@ -10248,15 +10266,24 @@ func _drive_motion_smoke() -> void:
 				_motion_fail("held scroll: the stepped held scroll never settled")
 				_finish_motion_smoke()
 		13:
-			# Held scroll, SMOOTH, then the verdict.
+			# Held cruise, SMOOTH (GRADFIX13 item 3), then
+			# the verdict. Under the steprepeat NC the
+			# release settle returns to the boot-mode driver
+			# first, so this leg's sampling ends quietly and
+			# its judge carries the failure, by name.
 			_motion_wait += 1
 			if _motion_sample_hold():
+				if _motion_hold_mode == "held_smooth" and OS.get_environment("PVLDS_GF13_NC") == "steprepeat":
+					RoomView.debug_gf12_nc = "nolive"
+					_room.set_wall_motion_mode("stepped")
+					_room.set_wall_motion_mode("smooth")
+					RoomView.debug_gf12_nc = OS.get_environment("PVLDS_GF12_NC")
 				_motion_store_trace("held_smooth")
 				_motion_judge_hold("held_smooth")
 				_motion_print_ratio()
 				_finish_motion_smoke()
 			elif _motion_wait > 7200:
-				_motion_fail("held scroll: the smooth held scroll never settled")
+				_motion_fail("held cruise: the smooth held cruise never settled")
 				_finish_motion_smoke()
 
 
@@ -10512,36 +10539,96 @@ func _motion_judge_feel() -> void:
 			"wall motion feel: the %s travel landed exactly (final yaw error %.3f deg)" % [key, float(s.get("final_err_deg", 999.0))])
 
 
-## Arm a held-scroll leg: at the travel start, at rest; the
-## sampler lands a same-direction press every 300 ms until
-## the drum's target stands six columns over.
+## Feed the left stick's X axis the way hardware does: a
+## joypad-motion event the room's per-frame poll reads via
+## Input.get_joy_axis (the input smoke's stick-guard leg
+## proved this path drives the poll).
+func _input_feed_stick_x(value: float) -> void:
+	var ev: InputEventJoypadMotion = InputEventJoypadMotion.new()
+	ev.device = 0
+	ev.axis = JOY_AXIS_LEFT_X
+	ev.axis_value = value
+	Input.parse_input_event(ev)
+
+
+## Arm a held-scroll leg (GRADFIX13 item 3): seat the
+## travel start at rest, then HOLD the stick right on the
+## real input path. The room receives exactly what a
+## player's held thumbstick delivers - the axis standing
+## beyond the deadzone while its own poll turns it into
+## steps - never a synthetic focus press (GF12's modelling
+## error). The sampler releases the stick once the centre
+## has advanced four columns and keeps sampling until the
+## release settle completes.
 func _motion_begin_hold(name: String) -> void:
+	_motion_hold_mode = name
+	if name == "held_smooth" and OS.get_environment("PVLDS_GF13_NC") == "steprepeat":
+		# The NC restores the per-column repeat path; its
+		# release settle would run on the room's boot-mode
+		# driver (SMOOTH - the repeat steps' own roll),
+		# whose chase can outlive this leg's frame budget on
+		# a slow box. Judge the hold on the live driver
+		# instead (the cruise assertions are the NC's
+		# target); the phase restores the boot driver for
+		# the settle once sampling ends.
+		RoomView.debug_gf12_nc = ""
+	_room.set_wall_motion_mode("stepped" if name == "held_stepped" else "smooth")
 	var start: int = _motion_travel_start()
 	_motion_tr_name = name
-	_motion_tr_leg = "held scroll:"
+	_motion_tr_leg = "held cruise:" if name == "held_smooth" else "held scroll:"
 	_room._set_centre(start, true)
 	_room._set_focused(_room._panels[start])
 	_motion_tr_y0 = _room.drum_yaw_deg()
 	_motion_tr_y1 = _motion_tr_y0 + 81.0
 	_motion_tr.clear()
 	_motion_t0_msec = Time.get_ticks_msec()
-	_motion_hold_presses = 0
-	_motion_hold_next_msec = 0
+	_motion_hold_frames = 0
+	_motion_hold_released = false
+	_motion_hold_release_frame = -1
+	_motion_hold_release_col = -1
+	_motion_hold_saw_cruise = false
+	_motion_hold_start_col = _room._grid_coord(start).x
+	_motion_hold_rest_frames = 0
+	_input_feed_stick_x(1.0)
 
 
-## Sample one held-scroll frame, landing the presses on
-## their cadence. Returns true once every press has landed
-## and the drum has settled.
+## Sample one held-scroll frame. Returns true once the
+## stick has been released and the drum has settled under
+## the standing snap law.
 func _motion_sample_hold() -> bool:
 	var now: int = Time.get_ticks_msec() - _motion_t0_msec
 	_motion_tr.append([now, _room.drum_yaw_deg(), _room.swing_velocity_deg_s()])
-	if _motion_hold_presses < 6 and now >= _motion_hold_next_msec:
-		var idx: int = _motion_panel_at_col_offset(_motion_travel_start(), _motion_hold_presses + 1)
-		if idx >= 0:
-			_room._set_focused(_room._panels[idx])
-		_motion_hold_presses += 1
-		_motion_hold_next_msec = now + 200
-	return _motion_hold_presses >= 6 and _motion_tr.size() >= 3 and not _room.swing_active()
+	_motion_hold_frames += 1
+	if _room.cruise_active():
+		_motion_hold_saw_cruise = true
+	if not _motion_hold_released:
+		var col: int = _room._grid_coord(_room.centre_index()).x
+		if col >= _motion_hold_start_col + 4:
+			_motion_hold_released = true
+			_motion_hold_release_frame = _motion_tr.size() - 1
+			_motion_hold_release_col = col
+			_input_feed_stick_x(0.0)
+		elif _motion_hold_frames > 600:
+			# The hold never advanced four columns: release
+			# anyway so the judge sees the whole story.
+			_motion_hold_released = true
+			_motion_hold_release_frame = _motion_tr.size() - 1
+			_motion_hold_release_col = col
+			_input_feed_stick_x(0.0)
+	else:
+		if not _room.swing_active():
+			_motion_hold_rest_frames += 1
+		else:
+			_motion_hold_rest_frames = 0
+	if _motion_hold_mode == "held_stepped" and OS.get_environment("PVLDS_GRADFIX10_NC") == "stepswing" and _motion_hold_frames == 120:
+		# The six-column STEPPED trace's own NC class: the
+		# quantised swing must read as the convicted
+		# stepping here too (the phase's settle bound
+		# covers the rest).
+		var st6: Dictionary = _motion_tr_stats.get("six_stepped", {}) as Dictionary
+		_motion_expect(float(st6.get("boundary_min_deg_s", -1.0)) < 0.55 * float(st6.get("peak_deg_s", 0.0)),
+			"held scroll: under stepswing the stepped six-column boundary velocity collapses (%.1f deg/s against a %.1f deg/s peak - the convicted stepping, by name)" % [float(st6.get("boundary_min_deg_s", -1.0)), float(st6.get("peak_deg_s", 0.0))])
+	return _motion_hold_released and _motion_hold_rest_frames >= 3 and _motion_tr.size() >= 3
 
 
 func _motion_judge_hold(key: String) -> void:
@@ -10549,15 +10636,40 @@ func _motion_judge_hold(key: String) -> void:
 	if s.is_empty():
 		_motion_fail("held scroll: the %s trace is missing" % key)
 		return
-	_motion_expect(_room.centre_index() == _motion_travel_target(),
-		"held scroll: the %s held scroll landed on its final centre" % key)
-	_motion_expect(float(s.get("final_err_deg", 999.0)) < 0.05,
-		"held scroll: the %s held scroll landed exactly (final yaw error %.3f deg)" % [key, float(s.get("final_err_deg", 999.0))])
-	_motion_expect(int(s.get("max_stall_run", 99)) <= 3,
-		"held scroll: the %s held scroll never stalls mid-travel (longest still run %d samples - no settling between steps)" % [key, int(s.get("max_stall_run", 99))])
-	if key == "held_smooth":
-		_motion_expect(float(s.get("boundary_min_deg_s", -1.0)) >= 0.45 * float(s.get("peak_deg_s", 0.0)),
-			"held scroll: the smooth held scroll's slot-boundary velocity (%.1f deg/s) stays at or above 45%% of its peak (%.1f deg/s) - no per-column notching" % [float(s.get("boundary_min_deg_s", -1.0)), float(s.get("peak_deg_s", 0.0))])
+	var final_col: int = _room._grid_coord(_room.centre_index()).x
+	if key == "held_stepped":
+		# STEPPED's shipped character: the repeats stepped
+		# the wall slot by slot and the release landed it
+		# exactly - judged on landing and span, the trace
+		# class base d156f42 shipped.
+		_motion_expect(final_col - _motion_hold_start_col >= 4,
+			"held scroll: the stepped held scroll advanced at least four columns on the real input path (got %d)" % (final_col - _motion_hold_start_col))
+		_motion_expect(final_col == _motion_hold_release_col or final_col == _motion_hold_release_col + 1,
+			"held scroll: the stepped held scroll landed where the release left it (release col %d, final col %d - one frame's repeat may land after the release)" % [_motion_hold_release_col, final_col])
+		_motion_expect(float(s.get("final_err_deg", 999.0)) < 0.05 or absf(_room.drum_yaw_deg() - float(final_col) * 13.5) < 0.05,
+			"held scroll: the stepped held scroll landed exactly (final yaw error %.3f deg against its target)" % float(s.get("final_err_deg", 999.0)))
+		return
+	# SMOOTH (GRADFIX13 item 3): the hold must have become
+	# a cruise - sustained travel at the roll's cruise
+	# character, no per-column velocity collapse at slot
+	# boundaries - and the release must settle at the
+	# nearest column under the unchanged snap law. Under
+	# PVLDS_GF13_NC=steprepeat the room never cruises and
+	# these expects fail by this leg's name.
+	_motion_expect(_motion_hold_saw_cruise,
+		"held cruise: holding the stick under SMOOTH becomes a continuous cruise (the room's cruise stood during the hold)")
+	_motion_expect(final_col - _motion_hold_start_col >= 4,
+		"held cruise: the cruise spanned at least four columns (got %d)" % (final_col - _motion_hold_start_col))
+	_motion_expect(float(s.get("boundary_min_deg_s", -1.0)) >= 0.45 * float(s.get("peak_deg_s", 0.0)),
+		"held cruise: the cruise's slot-boundary velocity (%.1f deg/s) stays at or above 45%% of its peak (%.1f deg/s) - no per-column velocity collapse during the hold" % [float(s.get("boundary_min_deg_s", -1.0)), float(s.get("peak_deg_s", 0.0))])
+	_motion_expect(final_col == _motion_hold_release_col or final_col == _motion_hold_release_col + 1,
+		"held cruise: the release settled at the nearest column (release col %d, settled col %d)" % [_motion_hold_release_col, final_col])
+	_motion_expect(absf(_room.drum_yaw_deg() - float(final_col) * 13.5) < 0.05,
+		"held cruise: the release settle landed exactly on its column (yaw %.3f deg, column yaw %.3f deg)" % [_room.drum_yaw_deg(), float(final_col) * 13.5])
+	if _motion_hold_release_frame >= 0 and _motion_hold_release_frame < _motion_tr.size():
+		var release_ms: int = int((_motion_tr[_motion_hold_release_frame] as Array)[0])
+		_motion_expect(int(s.get("settle_ms", 0)) - release_ms <= 1600 + int(s.get("max_gap_ms", 0)),
+			"held cruise: the release settle completed within 1.6 s of the release (settled at %d ms, released at %d ms, plus one frame of sampling slop)" % [int(s.get("settle_ms", 0)), release_ms])
 
 
 func _motion_print_ratio() -> void:
