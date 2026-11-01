@@ -505,6 +505,8 @@ func _ready() -> void:
 		_smoke_letters = true
 	if user_args.has("--pvlds-smoke-grad"):
 		_smoke_grad = true
+	if user_args.has("--pvlds-smoke-xpress"):
+		_smoke_xpress = true
 	if user_args.has("--pvlds-smoke-sweep"):
 		_smoke_sweep = true
 		# The negative control (harness env): the index stops
@@ -808,6 +810,8 @@ func _process(_delta: float) -> void:
 		_drive_letters_smoke()
 	if _smoke_grad:
 		_drive_grad_smoke()
+	if _smoke_xpress:
+		_drive_xpress_smoke()
 	if _smoke_sweep:
 		_drive_sweep_smoke()
 	if _smoke_tournament:
@@ -3468,6 +3472,10 @@ func _drive_shot_setup_panel() -> void:
 ## tournament table's card, back up), grad_fallback_power.png
 ## (a fallback table mid-performance).
 var _smoke_grad: bool = false ## --pvlds-smoke-grad
+var _smoke_xpress: bool = false ## --pvlds-smoke-xpress (GRADFIX12 item 2: the X-press art swap census)
+var _xpress_started: bool = false
+var _xpress_failures: int = 0
+var _xpress_manifest: Dictionary = {}
 var _grad_phase: int = 0
 var _grad_wait: int = 0
 var _grad_failures: int = 0
@@ -6660,6 +6668,418 @@ func _finish_grad_smoke() -> void:
 	else:
 		printerr("PVLDS GRAD SMOKE: FAIL (%d)" % _grad_failures)
 		get_tree().quit(1)
+
+
+# ---------------------------------------------------- xpress smoke (GRADFIX12 item 2)
+
+## --pvlds-smoke-xpress: the X-press art-swap census (Chris's
+## field report, GRADFIX12 item 2): pressing X to favourite
+## flip-flopped the card between its standing art and an
+## ALTERNATIVE art, and the star did not survive on the
+## standing face. For every fixture face-source class -
+## (a) db-shot standing with a backglass also present (the
+## Bride pair table), (b) pair-chain (Big Chain Glass: a
+## pair .directb2s, no shot), (c) plain-b2s chain (Taxi),
+## (d) styled-only (Krull, the title-card fixture) - the
+## driver focuses the card, lets the power performance
+## settle, presses X through the REAL joypad poll path,
+## and asserts the standard: favouriting changes NOTHING
+## but the badge -
+##   (a) "x-press art:" the quad texture's pixels outside
+##       the badge region are identical before/after the
+##       press, and the rendered grab's panel crop outside
+##       the badge region is identical too;
+##   (b) "x-press star:" the badge is present in the
+##       RENDERED grab after the press, still present after
+##       heal/warm time and a focus-leave/return cycle (the
+##       power performance's settle included);
+##   (c) "x-press star:" a second press removes the badge
+##       and still changes no art.
+## Every sample prints an XPRESS TRACE line (art file,
+## face key, quad/rendered badge counts, power phase /
+## panel / mode, the power subject's own badge count - the
+## S1/S2 discriminator), so a failure names its mechanism.
+## NC: PVLDS_GRADFIX12_NC=powerbadge restores the pre-fix
+## power binding (the performance's subject / pair-On
+## sources ignore the favourite state), and the
+## "x-press star:" legs must fail by name.
+
+func _drive_xpress_smoke() -> void:
+	if _xpress_started:
+		return
+	if _room == null or not _room.visible or not _room.wall_ready:
+		return
+	_xpress_started = true
+	_room._handle_rail("filter:all")
+	var mpath: String = OS.get_environment("PVLDS_GRAD_MANIFEST")
+	var f: FileAccess = FileAccess.open(mpath, FileAccess.READ)
+	if f != null:
+		var parsed: Variant = JSON.parse_string(f.get_as_text())
+		if parsed is Dictionary:
+			_xpress_manifest = parsed
+	Input.warp_mouse(Vector2(512.0, 764.0))
+	_xpress_run_async()
+
+
+func _xpress_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - xpress smoke: ", label)
+	else:
+		_xpress_failures += 1
+		printerr("  FAIL - xpress smoke: ", label)
+
+
+func _xpress_game_by_id(game_id: String) -> GameEntry:
+	if _room == null or _room._scanner == null:
+		return null
+	for g: GameEntry in _room._scanner.games:
+		if g.game_id == game_id:
+			return g
+	return null
+
+
+func _xpress_game_by_title(title: String) -> GameEntry:
+	if _room == null or _room._scanner == null:
+		return null
+	for g: GameEntry in _room._scanner.games:
+		if g.title == title:
+			return g
+	return null
+
+
+func _xpress_panel_index(g: GameEntry) -> int:
+	if g == null or _room == null:
+		return -1
+	for i: int in range(_room._panels.size()):
+		if _room._panels[i] != null and _room._panels[i].payload == g.game_id:
+			return i
+	return -1
+
+
+## Wait (wall clock) until the named panel's power
+## performance has settled: phase 2 standing on that panel.
+## Returns false on timeout.
+func _xpress_wait_settled(idx: int, timeout_sec: float) -> bool:
+	var panel: ClickableQuad = _room._panels[idx]
+	var t0: int = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < int(timeout_sec * 1000.0):
+		if _room.power_panel() == panel and _room.power_phase() == 2:
+			return true
+		await get_tree().process_frame
+	return _room.power_panel() == panel and _room.power_phase() == 2
+
+
+## Wait until the panel's face honestly stands: a real
+## texture, stamped with a face key that names want_path
+## ("" = any stamped key; styled cards stamp their title).
+func _xpress_wait_face(idx: int, g: GameEntry, want_path: String, timeout_sec: float) -> bool:
+	var t0: int = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < int(timeout_sec * 1000.0):
+		var tex: Texture2D = _room._panels[idx].current_texture()
+		var key: String = str(_room._panel_face_key.get(g.game_id, ""))
+		if tex != null and tex.get_width() > 16 and key != "" \
+				and (want_path == "" or key.contains(want_path)):
+			return true
+		await get_tree().process_frame
+	return false
+
+
+func _xpress_wait_centre(idx: int, timeout_sec: float) -> bool:
+	var t0: int = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < int(timeout_sec * 1000.0):
+		if _room.centre_index() == idx and not _room.page_slide_active():
+			return true
+		await get_tree().process_frame
+	return false
+
+
+## Count pixels of (near-)exact colour c in img's region.
+func _xpress_count_colour(img: Image, region: Rect2i, c: Color, tol: float) -> int:
+	var count: int = 0
+	var x0: int = maxi(0, region.position.x)
+	var y0: int = maxi(0, region.position.y)
+	var x1: int = mini(img.get_width(), region.position.x + region.size.x)
+	var y1: int = mini(img.get_height(), region.position.y + region.size.y)
+	for y: int in range(y0, y1):
+		for x: int in range(x0, x1):
+			var px: Color = img.get_pixel(x, y)
+			if absf(px.r - c.r) < tol and absf(px.g - c.g) < tol and absf(px.b - c.b) < tol:
+				count += 1
+	return count
+
+
+## Star-ISH pixels (the badge glyph's amber, loose enough
+## to survive the power grade's shoulder) in a region of a
+## RENDERED grab or a face texture.
+func _xpress_count_starish(img: Image, region: Rect2i) -> int:
+	var count: int = 0
+	var x0: int = maxi(0, region.position.x)
+	var y0: int = maxi(0, region.position.y)
+	var x1: int = mini(img.get_width(), region.position.x + region.size.x)
+	var y1: int = mini(img.get_height(), region.position.y + region.size.y)
+	for y: int in range(y0, y1):
+		for x: int in range(x0, x1):
+			var px: Color = img.get_pixel(x, y)
+			if px.r > 0.72 and px.g > 0.42 and px.g < 0.99 and px.b < 0.52 and px.r - px.b > 0.32:
+				count += 1
+	return count
+
+
+## Pixel difference between two same-size images, split by
+## a badge region: returns [diff_outside, total_outside,
+## diff_inside, bbox_of_all_diffs (Rect2i, empty if none)].
+## A pixel differs when any channel moves by more than tol.
+func _xpress_diff(a: Image, b: Image, badge: Rect2i, tol: float) -> Array:
+	var out_diff: int = 0
+	var out_total: int = 0
+	var in_diff: int = 0
+	var have: bool = false
+	var bb: Rect2i = Rect2i()
+	if a.get_size() != b.get_size():
+		return [-1, 0, -1, bb]
+	for y: int in range(a.get_height()):
+		for x: int in range(a.get_width()):
+			var pa: Color = a.get_pixel(x, y)
+			var pb: Color = b.get_pixel(x, y)
+			var d: bool = absf(pa.r - pb.r) > tol or absf(pa.g - pb.g) > tol or absf(pa.b - pb.b) > tol
+			var inside: bool = badge.has_point(Vector2i(x, y))
+			if not inside:
+				out_total += 1
+			if d:
+				if inside:
+					in_diff += 1
+				else:
+					out_diff += 1
+				if not have:
+					bb = Rect2i(x, y, 1, 1)
+					have = true
+				else:
+					bb = bb.expand(Vector2i(x, y))
+	return [out_diff, out_total, in_diff, bb]
+
+
+## The focused panel's screen bbox + badge bbox from its
+## projected corners (the camera's own projection, as the
+## grad census reads its quads).
+func _xpress_panel_screen_rects(idx: int, badge_face: Rect2) -> Array:
+	var panel: ClickableQuad = _room._panels[idx]
+	var cam: Camera3D = _room._active_camera()
+	var half: Vector2 = _room._panel_size * 0.5
+	var pts: Array[Vector2] = _grad_quad_screen_points(panel.global_transform, half, cam)
+	var rect: Rect2 = Rect2(pts[0], Vector2.ZERO)
+	for p: Vector2 in pts:
+		rect = rect.expand(p)
+	# Badge rect in face UV -> panel-local -> screen.
+	var fs: Vector2 = Vector2(496.0, 864.0)
+	var lp: Array[Vector2] = []
+	for c: Vector2 in [badge_face.position, Vector2(badge_face.position.x + badge_face.size.x, badge_face.position.y),
+			Vector2(badge_face.position.x + badge_face.size.x, badge_face.position.y + badge_face.size.y),
+			Vector2(badge_face.position.x, badge_face.position.y + badge_face.size.y)]:
+		var local: Vector3 = Vector3((c.x / fs.x - 0.5) * _room._panel_size.x,
+			(0.5 - c.y / fs.y) * _room._panel_size.y, 0.0)
+		lp.append(cam.unproject_position(panel.global_transform * local))
+	var brect: Rect2 = Rect2(lp[0], Vector2.ZERO)
+	for p2: Vector2 in lp:
+		brect = brect.expand(p2)
+	return [rect, brect]
+
+
+func _xpress_grab() -> Image:
+	await get_tree().process_frame
+	await get_tree().process_frame
+	return get_viewport().get_texture().get_image()
+
+
+func _xpress_trace(tag: String, cls: String, idx: int, g: GameEntry, quad_img: Image, grab: Image) -> void:
+	var badge_face: Rect2 = Rect2(386.0, 0.0, 110.0, 110.0)
+	var rects: Array = _xpress_panel_screen_rects(idx, badge_face)
+	var brect: Rect2 = rects[1]
+	var subj: Texture2D = _room._power_subject_cached(g)
+	var subj_star: int = -1
+	if subj != null:
+		var simg: Image = subj.get_image()
+		if simg != null:
+			subj_star = _xpress_count_starish(simg, Rect2i(simg.get_width() - 110, 0, 110, 110))
+	print("XPRESS TRACE %s class=%s game=\"%s\" art_file=\"%s\" fkey=\"%s\" fav=%s power(panel=%s phase=%d mode=%d overlays=%d) quad_star=%d subject_star=%d rendered_star=%d" % [
+		tag, cls, g.title, g.face_path_ready(),
+		str(_room._panel_face_key.get(g.game_id, "")),
+		str(_state.is_favorite(g.game_id)),
+		str(_room.power_panel() == _room._panels[idx]),
+		_room.power_phase(), _room.power_mode(), _room.power_overlay_count(),
+		_xpress_count_starish(quad_img, Rect2i(quad_img.get_width() - 110, 0, 110, 110)) if quad_img != null else -1,
+		subj_star,
+		_xpress_count_starish(grab, Rect2i(brect)) if grab != null else -1])
+
+
+func _xpress_run_async() -> void:
+	# Fetcher drain first (the grad driver's law): shots
+	# must have landed before any face is judged.
+	var t0: int = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 240000:
+		if _shot_fetcher != null and not _shot_fetcher.is_fetching():
+			break
+		await get_tree().process_frame
+	await get_tree().create_timer(2.0).timeout
+	var pair_id: String = str(_xpress_manifest.get("pair_id", ""))
+	var b2s_ids: Array = _xpress_manifest.get("b2s_ids", [])
+	var classes: Array = []
+	var bride: GameEntry = _xpress_game_by_id(pair_id)
+	if bride != null:
+		classes.append({"key": "shotpair", "game": bride, "styled": false})
+	var big: GameEntry = _xpress_game_by_title("Big Chain Glass")
+	if big != null:
+		classes.append({"key": "pairchain", "game": big, "styled": false})
+	if b2s_ids.size() > 0:
+		var taxi: GameEntry = _xpress_game_by_id(str(b2s_ids[0]))
+		if taxi != null:
+			classes.append({"key": "plainb2s", "game": taxi, "styled": false})
+	var krull: GameEntry = _xpress_game_by_id(str(_xpress_manifest.get("titlecard_id", "")))
+	if krull != null:
+		classes.append({"key": "styled", "game": krull, "styled": true})
+	_xpress_expect(classes.size() == 4,
+		"x-press census: all four fixture classes resolve (got %d)" % classes.size())
+	for entry_v: Variant in classes:
+		var entry: Dictionary = entry_v as Dictionary
+		await _xpress_class_async(entry)
+	if _state != null:
+		_state.save_to_disk()
+	if _xpress_failures == 0:
+		print("PVLDS XPRESS SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS XPRESS SMOKE: FAIL (%d)" % _xpress_failures)
+		get_tree().quit(1)
+
+
+func _xpress_class_async(entry: Dictionary) -> void:
+	var cls: String = str(entry.get("key", "?"))
+	var g: GameEntry = entry.get("game") as GameEntry
+	var styled: bool = bool(entry.get("styled", false))
+	var idx: int = _xpress_panel_index(g)
+	_xpress_expect(idx >= 0, "x-press census: %s is on the shelf" % cls)
+	if idx < 0:
+		return
+	if _state.is_favorite(g.game_id):
+		_state.set_favorite(g.game_id, false)
+		_state.save_to_disk()
+	# ---- stand the face + settle the performance ----
+	_room._set_centre(idx, true)
+	_room._set_focused(_room._panels[idx])
+	var centred: bool = await _xpress_wait_centre(idx, 30.0)
+	_xpress_expect(centred, "x-press census: %s centres" % cls)
+	var want_path: String = "" if styled else g.face_path_ready()
+	if not styled:
+		# Chain art may still be extracting: wait for the
+		# ready probe, then for the stamped face.
+		var wt0: int = Time.get_ticks_msec()
+		while g.face_path_ready() == "" and Time.get_ticks_msec() - wt0 < 180000:
+			await get_tree().process_frame
+		want_path = g.face_path_ready()
+		if cls == "shotpair" or cls == "pairchain":
+			var wp0: int = Time.get_ticks_msec()
+			while g.pair_on_art() == "" and Time.get_ticks_msec() - wp0 < 120000:
+				await get_tree().process_frame
+	var face_ok: bool = await _xpress_wait_face(idx, g, want_path, 120.0)
+	_xpress_expect(face_ok, "x-press census: %s face stands (want '%s')" % [cls, want_path])
+	var settled: bool = await _xpress_wait_settled(idx, 90.0)
+	_xpress_expect(settled, "x-press census: %s power performance settles before the press (phase %d)" % [cls, _room.power_phase()])
+	var badge_face: Rect2 = Rect2(386.0, 0.0, 110.0, 110.0)
+	if styled:
+		badge_face = Rect2(0.0, 150.0, 496.0, 150.0) ## the styled face's badge is its FAVORITE chip row band
+	var quad_before: Image = _room._panels[idx].current_texture().get_image()
+	var grab_before: Image = await _xpress_grab()
+	_xpress_trace("before", cls, idx, g, quad_before, grab_before)
+	var rects_before: Array = _xpress_panel_screen_rects(idx, badge_face)
+	var crop_before: Rect2i = Rect2i(rects_before[0]).intersection(Rect2i(0, 0, grab_before.get_width(), grab_before.get_height()))
+	# ---- press X through the real poll path ----
+	await _nav_feed_button(JOY_BUTTON_X)
+	_xpress_expect(_state.is_favorite(g.game_id),
+		"x-press census: %s X press sets the favorite in the store" % cls)
+	var face2_ok: bool = await _xpress_wait_face(idx, g, want_path, 60.0)
+	_xpress_expect(face2_ok, "x-press art: %s face re-stands after the press" % cls)
+	var settled2: bool = await _xpress_wait_settled(idx, 90.0)
+	_xpress_expect(settled2, "x-press census: %s power performance re-settles after the press (phase %d)" % [cls, _room.power_phase()])
+	# Heal/warm survival: real time passes (the heal ticks
+	# on its 600 ms cadence the whole while).
+	await get_tree().create_timer(3.0).timeout
+	var quad_after: Image = _room._panels[idx].current_texture().get_image()
+	var grab_after: Image = await _xpress_grab()
+	_xpress_trace("after", cls, idx, g, quad_after, grab_after)
+	if cls == "pairchain":
+		grab_before.save_png(OS.get_environment("PVLDS_GRAB_DIR").path_join("xpress_pairchain_before.png"))
+		grab_after.save_png(OS.get_environment("PVLDS_GRAB_DIR").path_join("xpress_pairchain_after.png"))
+	var badge_recti: Rect2i = Rect2i(badge_face)
+	var qd: Array = _xpress_diff(quad_before, quad_after, badge_recti, 0.02)
+	print("XPRESS DIFF %s quad outside=%d/%d inside=%d bbox=%s" % [cls, int(qd[0]), int(qd[1]), int(qd[2]), str(qd[3])])
+	_xpress_expect(int(qd[0]) == 0,
+		"x-press art: %s quad art outside the badge region is identical after X (%d px moved)" % [cls, int(qd[0])])
+	# Rendered crop comparison (panel crop, badge excluded).
+	var rects_after: Array = _xpress_panel_screen_rects(idx, badge_face)
+	var crop_after: Rect2i = Rect2i(rects_after[0]).intersection(Rect2i(0, 0, grab_after.get_width(), grab_after.get_height()))
+	var crop_same: bool = crop_before.size == crop_after.size and crop_before.size.x > 40 and crop_before.size.y > 40
+	_xpress_expect(crop_same, "x-press census: %s rendered crop is measurable" % cls)
+	if crop_same:
+		var cb: Image = grab_before.get_region(crop_before)
+		var ca: Image = grab_after.get_region(crop_after)
+		var badge_local: Rect2i = Rect2i(Rect2(rects_after[1]).position - Vector2(crop_after.position), Rect2(rects_after[1]).size)
+		var rd: Array = _xpress_diff(cb, ca, badge_local, 0.05)
+		var frac: float = float(int(rd[0])) / maxf(1.0, float(int(rd[1])))
+		print("XPRESS DIFF %s rendered outside=%d/%d (%.4f) inside=%d" % [cls, int(rd[0]), int(rd[1]), frac, int(rd[2])])
+		_xpress_expect(frac <= 0.02,
+			"x-press art: %s rendered art outside the badge region is identical after X (%.4f moved)" % [cls, frac])
+	# Badge in the rendered grab.
+	var star_before: int = _xpress_count_starish(grab_before, Rect2i(rects_before[1]))
+	var star_after: int = _xpress_count_starish(grab_after, Rect2i(rects_after[1]))
+	if styled:
+		var chip: Color = Color(0.55, 0.38, 0.08)
+		var chip_q: int = _xpress_count_colour(quad_after, badge_recti, chip, 0.05)
+		_xpress_expect(chip_q > 100,
+			"x-press star: %s styled face carries its FAVORITE chip after X (%d px)" % [cls, chip_q])
+		_xpress_expect(int(qd[2]) > 20,
+			"x-press star: %s chip region changed with the press (%d px)" % [cls, int(qd[2])])
+	else:
+		_xpress_expect(star_after > 12 and star_after > star_before,
+			"x-press star: %s star present in the rendered grab after X and the power settle (before %d, after %d)" % [cls, star_before, star_after])
+	# ---- focus-leave / return cycle: the badge survives ----
+	var other: int = mini(idx + 1, _room._panels.size() - 1)
+	if other == idx:
+		other = maxi(0, idx - 1)
+	_room._set_focused(_room._panels[other])
+	await _xpress_wait_centre(other, 30.0)
+	await get_tree().create_timer(1.0).timeout
+	_room._set_centre(idx, true)
+	_room._set_focused(_room._panels[idx])
+	await _xpress_wait_centre(idx, 30.0)
+	var settled3: bool = await _xpress_wait_settled(idx, 90.0)
+	_xpress_expect(settled3, "x-press census: %s performance re-settles after the return" % cls)
+	await get_tree().create_timer(2.0).timeout
+	var grab_back: Image = await _xpress_grab()
+	_xpress_trace("returned", cls, idx, g, _room._panels[idx].current_texture().get_image(), grab_back)
+	var rects_back: Array = _xpress_panel_screen_rects(idx, badge_face)
+	if not styled:
+		var star_back: int = _xpress_count_starish(grab_back, Rect2i(rects_back[1]))
+		_xpress_expect(star_back > 12,
+			"x-press star: %s star still present after heal/warm time and the focus return (got %d)" % [cls, star_back])
+	# ---- second press: badge off, art still unchanged ----
+	await _nav_feed_button(JOY_BUTTON_X)
+	_xpress_expect(not _state.is_favorite(g.game_id),
+		"x-press census: %s second X press clears the favorite" % cls)
+	await _xpress_wait_face(idx, g, want_path, 60.0)
+	await _xpress_wait_settled(idx, 90.0)
+	await get_tree().create_timer(2.0).timeout
+	var quad_off: Image = _room._panels[idx].current_texture().get_image()
+	var grab_off: Image = await _xpress_grab()
+	_xpress_trace("off", cls, idx, g, quad_off, grab_off)
+	var qd2: Array = _xpress_diff(quad_before, quad_off, badge_recti, 0.02)
+	_xpress_expect(int(qd2[0]) == 0,
+		"x-press art: %s second press changes no art outside the badge region (%d px moved)" % [cls, int(qd2[0])])
+	if not styled:
+		var rects_off: Array = _xpress_panel_screen_rects(idx, badge_face)
+		var star_off: int = _xpress_count_starish(grab_off, Rect2i(rects_off[1]))
+		_xpress_expect(star_off <= star_before + 4,
+			"x-press star: %s second press removes the star from the rendered grab (before %d, off %d)" % [cls, star_before, star_off])
+	if cls == "pairchain":
+		grab_off.save_png(OS.get_environment("PVLDS_GRAB_DIR").path_join("xpress_pairchain_off.png"))
 
 
 # ---------------------------------------------------- nav smoke
