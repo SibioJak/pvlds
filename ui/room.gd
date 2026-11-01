@@ -3181,6 +3181,10 @@ func _build_rail(placeholder: Texture2D) -> void:
 		for d3: Variant in defs:
 			d3[1] = float(d3[1]) * scale
 		gap = 0.0
+	if strip_mode:
+		# The bar stands FIRST: the sections take its plane
+		# (below), so it must exist before they seat.
+		_build_rail_bar(total, tile_h, y, z)
 	var x: float = -total * 0.5
 	for d: Variant in defs:
 		var key: String = str(d[0])
@@ -3200,15 +3204,25 @@ func _build_rail(placeholder: Texture2D) -> void:
 			# is the highlight) and remember their flush
 			# seat + lift direction for _update_rail_lift.
 			q.suppress_frame = true
+			# ONE PLANE (the machined law): a section seats
+			# COPLANAR with the backing bar - the bar's own
+			# basis, not _make_quad's per-quad face_point.
+			# Individually eye-facing sections shingle over
+			# each other from any viewpoint but the eye point
+			# itself, eating each other's label ink at the
+			# seams (convicted on the first strip grabs: AL /
+			# RECEN / XIT truncations in the desk view); one
+			# flat bar tiles exactly from everywhere, and its
+			# lift direction is the bar's own normal for
+			# every section.
+			q.transform = Transform3D(_rail_bar.transform.basis, q.position)
 			_rail_base_pos[key] = q.position
-			_rail_pop_dir[key] = (EYE - q.position).normalized()
+			_rail_pop_dir[key] = _rail_bar.transform.basis.z.normalized()
 			_rail_pop[key] = 0.0
 			_rail_pop_vel[key] = 0.0
 			_rail_pop_applied[key] = 0.0
 			_rail_tex_lifted[key] = false
 		x += w + gap
-	if strip_mode:
-		_build_rail_bar(total, tile_h, y, z)
 
 
 ## The machined strip's ONE backing bar (GRADFIX14 item 1):
