@@ -2855,7 +2855,7 @@ func _drive_placard_smoke() -> void:
 					if q.pick_enabled:
 						inert = false
 				for q: ClickableQuad in _room._panel_launches:
-					if q.pick_enabled:
+					if q != null and q.pick_enabled:
 						inert = false
 				for k: Variant in _room._rail_quads.keys():
 					var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
@@ -3179,7 +3179,9 @@ func _setup_panel_smoke_snapshot_wall() -> void:
 	_setup_panel_smoke_tex_before.clear()
 	var quads: Array[ClickableQuad] = []
 	quads.append_array(_room._panels)
-	quads.append_array(_room._panel_launches)
+	for lq: ClickableQuad in _room._panel_launches:
+		if lq != null:
+			quads.append(lq)
 	for k: Variant in _room._rail_quads.keys():
 		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
 		if rq != null:
@@ -3194,7 +3196,9 @@ func _setup_panel_smoke_snapshot_wall() -> void:
 func _setup_panel_smoke_wall_untouched() -> bool:
 	var now: Array[ClickableQuad] = []
 	now.append_array(_room._panels)
-	now.append_array(_room._panel_launches)
+	for lq: ClickableQuad in _room._panel_launches:
+		if lq != null:
+			now.append(lq)
 	for k: Variant in _room._rail_quads.keys():
 		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
 		if rq != null:
@@ -3225,7 +3229,9 @@ func _setup_panel_smoke_panel_holders() -> int:
 func _setup_panel_smoke_orphan_highlight() -> bool:
 	var quads: Array[ClickableQuad] = []
 	quads.append_array(_room._panels)
-	quads.append_array(_room._panel_launches)
+	for lq: ClickableQuad in _room._panel_launches:
+		if lq != null:
+			quads.append(lq)
 	for k: Variant in _room._rail_quads.keys():
 		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
 		if rq != null:
@@ -3289,7 +3295,7 @@ func _setup_panel_surface_assertions() -> void:
 		if q.pick_enabled:
 			inert = false
 	for q: ClickableQuad in _room._panel_launches:
-		if q.pick_enabled:
+		if q != null and q.pick_enabled:
 			inert = false
 	for k: Variant in _room._rail_quads.keys():
 		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
@@ -3577,7 +3583,7 @@ var _grad_gf8_frames: int = 0 ## driver frames counted in the current gf8 stage 
 var _grad_gf7_seen: Dictionary = {} ## panel idx -> true, every panel the census judged
 var _grad_gf7_art_ok: int = 0 ## visible-panel observations standing as art where art was expected
 var _grad_gf7_fallback_ok: int = 0 ## visible-panel observations standing styled where fallback was expected
-var _grad_gf7_seat_viol: int = 0 ## Launch-seat law violations across the census
+var _grad_gf7_seat_viol: int = 0 ## Launch-seat law violations across the census (GRADFIX13: retired with the seat law - the census print keeps the field, always 0 now; plinth violations count under "launchcount")
 var _grad_gf7_viol: Dictionary = {}
 var _grad_gf7_viol_first: Dictionary = {}
 var _grad_gf8_done: bool = false ## GRADFIX8 (item 3): the board-pairing legs run once, on the grad run's last phase (phase 6, before the verdict)
@@ -3886,29 +3892,30 @@ func _grad_gf7_census_centre(c: int) -> void:
 				_grad_gf7_fallback_ok += 1
 		var front: ClickableQuad = _room._panel_launches[idx] if idx < _room._panel_launches.size() else null
 		var back: ClickableQuad = _room._panel_back_launches[idx] if idx < _room._panel_back_launches.size() else null
-		# Exactly one visible Launch, counted the standing
-		# way: the front button's own flag plus the back
-		# HOLDER's (the back button's own flag rides its
-		# holder's turn - a hidden holder's button is not a
-		# visible Launch however its flag stands).
-		var back_holder: Node3D = back.get_parent() as Node3D if back != null else null
-		var vis_count: int = (1 if front != null and front.visible else 0) + (1 if back_holder != null and back_holder.visible else 0)
-		if vis_count != 1:
-			_grad_gf7_count("launchcount", "centre %d: '%s' shows %d visible Launch buttons" % [c, g.title, vis_count])
+		# GRADFIX13 (item 2): the census's Launch law is
+		# inverted - the plinths are stripped, so a card
+		# shows ZERO Launch quads: the front and back
+		# entries are null (never minted), and any minted
+		# quad standing visible or pickable at rest is a
+		# violation counted under "launchcount". The back
+		# HOLDER's visibility is judged the standing way
+		# (a hidden holder's button is not visible however
+		# its flag stands) - read off the panel pool's back
+		# holder, since the button itself no longer exists
+		# to parent-read. Under PVLDS_GF13_NC=plinth the
+		# buttons are minted again and every centre counts
+		# violations here; the verdict leg below is named
+		# "no launch:" so the harness NC fails by name.
+		var nodes7: Dictionary = _room._panel_pool.get(g.game_id, {}) as Dictionary
+		var back_holder: Node3D = nodes7.get("back") as Node3D if not nodes7.is_empty() else null
+		var vis_count: int = (1 if front != null and front.visible else 0) + (1 if back != null and back_holder != null and back_holder.visible else 0)
+		if front != null or back != null or vis_count != 0:
+			_grad_gf7_count("launchcount", "centre %d: '%s' carries a Launch plinth (front %s, back %s, visible %d)" % [
+				c, g.title, str(front != null), str(back != null), vis_count])
 		if back_holder != null and back_holder.visible:
 			_grad_gf7_count("backvis", "centre %d: '%s' shows its back at rest" % [c, g.title])
 		if idx < _room._panels.size() and absf(_room._panels[idx].flip_angle()) > 0.01:
 			_grad_gf7_count("pivot", "centre %d: '%s' pivot stands at %.3f rad" % [c, g.title, _room._panels[idx].flip_angle()])
-		if front != null:
-			var want_y: float = RoomView.PANEL_LAUNCH_Y
-			if from_art:
-				var plate2: MeshInstance3D = _room._panel_plates[idx] if idx < _room._panel_plates.size() else null
-				if plate2 != null and plate2.mesh is QuadMesh:
-					var pb: float = plate2.position.y - (plate2.mesh as QuadMesh).size.y * 0.5
-					want_y = RoomView.PANEL_LAUNCH_Y_TOP if pb < -0.40 else RoomView.PANEL_LAUNCH_Y
-			if absf(front.position.y - want_y) > 0.001:
-				_grad_gf7_seat_viol += 1
-				_grad_gf7_count("seat", "centre %d: '%s' Launch seats at %.3f (law: %.3f, from_art %s)" % [c, g.title, front.position.y, want_y, str(from_art)])
 
 
 ## The census sweep (GRADFIX7 item 1): every panel becomes
@@ -3952,7 +3959,7 @@ func _grad_gf7_census_step() -> void:
 	_grad_gf7_census_settle = 0
 	_grad_gf7_census_wait = 0
 	if _grad_gf7_census_i >= n:
-		print("GRADFIX7 CENSUS: %d panels swept, %d art-standing observations, %d fallback-standing observations, %d Launch-seat violations"
+		print("GRADFIX7 CENSUS (GRADFIX13 restatement): %d panels swept, %d art-standing observations, %d fallback-standing observations, %d Launch-plinth violations"
 			% [_grad_gf7_seen.size(), _grad_gf7_art_ok, _grad_gf7_fallback_ok, _grad_gf7_seat_viol])
 		_grad_expect(_grad_gf7_seen.size() == n,
 			"at-rest census: every panel was swept (%d of %d)" % [_grad_gf7_seen.size(), n])
@@ -3961,12 +3968,11 @@ func _grad_gf7_census_step() -> void:
 			["fallback", "at-rest census: styled faces stand only where fallback is deliberate"],
 			["plate", "at-rest census: every art face stands with its plate+label up"],
 			["tex", "at-rest census: every visible texture is real, none the placeholder"],
-			["launchcount", "at-rest census: exactly one visible Launch per card"],
+			["launchcount", "no launch: at-rest census: no card carries a Launch plinth, front or back (GRADFIX13 item 2 - the strip)"],
 			["backvis", "at-rest census: no back visible at rest"],
 			["pivot", "at-rest census: every pivot angle is 0 at rest"],
 			["flip", "at-rest census: no flip stands at rest"],
 			["settle", "at-rest census: every visible face settled at its centre"],
-			["seat", "at-rest census: the Launch seat law holds (styled at -0.47; art at its plate's seat)"],
 		]
 		for pair: Variant in kinds:
 			var kk: String = str((pair as Array)[0])
@@ -6053,6 +6059,15 @@ func _grad_measure_centre(c: int) -> void:
 		# the block's last line - invisible to every leg that
 		# judged the plate's presence or the label's world
 		# position instead of the three rectangles' relation.
+		# GRADFIX13 (item 2): the plinth is stripped - the
+		# plinth-clearance count below stands vacuous in the
+		# shipped build (no quad exists to run under), and
+		# the platecover / cardbounds counts are the name
+		# law now: a long multi-line block must stand whole
+		# on its grown plate, inside its card, with nothing
+		# left for it to collide with. The staleplate NC
+		# (seat-time-only derivation) still fails them, and
+		# the plinth NC re-arms the clearance count.
 		var la2: AABB = label.get_aabb()
 		if la2.size.y > 0.0:
 			var block: Rect2 = Rect2(
@@ -6229,7 +6244,7 @@ func _grad_census_verdicts() -> void:
 		["status", "census: no label touches the status plate at any centre"],
 		["pop", "census: the popped centre's label never drapes a neighbour's art (fringe bound 512 px)"],
 		["flipsweep", "card flip: the turning card's swept volume adds no coverage over any neighbour at any centre"],
-		["plinth", "plinth: no name block under its Launch plinth at any centre"],
+		["plinth", "plinth: no name block under its Launch plinth at any centre (GRADFIX13: the plinth is stripped - the count stands vacuous unless an NC restores the button)"],
 		["platecover", "nameplate cover: every name block stands wholly on its plate at any centre"],
 		["cardbounds", "nameplate bounds: every name block stands inside its own card at any centre"],
 	]
@@ -6546,8 +6561,33 @@ func _grad_tournament_step() -> void:
 					"card flip: the tournament table's card is the one turned (key %s)" % str(fs.get("standing_key", "")))
 				_grad_expect(bool(fs.get("texture_real", false)) and bool(fs.get("back_visible", false)),
 					"card flip: the back stands with the live board rendered on it")
-				_grad_expect(bool(fs.get("back_launch_pickable", false)),
-					"card flip: the back carries its own live Launch")
+				_grad_expect(not bool(fs.get("back_launch_pickable", true)),
+					"no launch: the flipped back carries no Launch plinth (GRADFIX13 item 2 - the strip; the back's own Launch stood here through GRADFIX12)")
+				# GRADFIX13 (item 1): the seated proof for
+				# the back - this card's back is a board +
+				# data composition (the tournament table's
+				# own challenge), standing flipped in the
+				# room. Its ink extent is judged against the
+				# back FRAME's bounding box in this grab (the
+				# frame, 0.68x1.10, is the back assembly's
+				# full extent - concentric with the face, so
+				# its centre is the object's centre). With
+				# the plinth + its 140 px reservation gone
+				# (item 2) the composition centres on the
+				# whole card; through GRADFIX12 it centred
+				# over the area above the footer and rode
+				# ~70 px high.
+				var flip_img: Image = get_viewport().get_texture().get_image()
+				var flip_cam: Camera3D = get_viewport().get_camera_3d()
+				var fnodes: Dictionary = _room._flip_nodes(idx)
+				var fframe: MeshInstance3D = fnodes.get("back_frame") as MeshInstance3D if not fnodes.is_empty() else null
+				var fres: Dictionary = _gf13_seated_extent(fframe.global_transform, RoomView.CARD_FRAME_SIZE, flip_img, flip_cam) if fframe != null else {"ok": false, "delta": 0.0, "why": "no back frame"}
+				var fdelta: float = float(fres.get("delta", 0.0))
+				print("GRADFIX13 SEATED back (tournament board + data): extent delta %.2f%% of frame height%s"
+					% [100.0 * fdelta, "" if bool(fres.get("ok", false)) else " - " + str(fres.get("why", ""))])
+				_grad_expect(bool(fres.get("ok", false)) and absf(fdelta) <= 0.02,
+					"seated centre: the flipped back's composition centres on its card in the room grab (delta %.2f%% of frame height, tolerance 2%%)%s"
+						% [100.0 * fdelta, "" if bool(fres.get("ok", false)) else " - " + str(fres.get("why", ""))])
 				_grad_expect(mono and in_flight >= 2,
 					"card flip: the turn is one clean climb - %d frames sampled on this box, %d in flight, monotonic %s (first %.1f, last %.1f deg; the turn is 0.30 s of game time - about 3 frames at this harness box's rate, about 27 at the Quest's 90 Hz, where the density claim lives)"
 						% [_grad_flip_angles.size(), in_flight, str(mono),
@@ -7956,6 +7996,23 @@ func _nav_leg_clearance(popped_only: bool) -> void:
 	if cam == null:
 		_nav_smoke_fail("clearance: no desk camera")
 		return
+	# GRADFIX13 (item 2): the Launch-clearance legs below
+	# stand vacuous in the shipped build - the plinth is
+	# stripped, there is no button left to clear the
+	# nameplate or the rail. The strip itself is the leg
+	# here: no panel carries a Launch quad at all. (Under
+	# the plinth NC the buttons return and the clearance
+	# legs below re-arm; this leg then fails by name.)
+	if not popped_only:
+		var plinths: int = 0
+		for lq9: ClickableQuad in _room._panel_launches:
+			if lq9 != null:
+				plinths += 1
+		for blq9: ClickableQuad in _room._panel_back_launches:
+			if blq9 != null:
+				plinths += 1
+		_nav_expect(plinths == 0,
+			"no launch: no card carries a Launch plinth, front or back (found %d minted)" % plinths)
 	var rail_rects: Array[Rect2] = []
 	for k: Variant in _room._rail_quads.keys():
 		var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
@@ -8334,8 +8391,11 @@ func _nav_feed_button(btn: JoyButton) -> void:
 ## assignment (Chris's swap ruling, 2026-10-26; the Y side
 ## REBOUND by GRADFIX6, 2026-10-31: Y FLIPS the focused
 ## card) and the marquee leak. A on the pad launches the
-## focused card's default build through the Launch
-## button's own path; Y turns the focused card over to
+## focused card's default build (through GRADFIX12 via the
+## Launch button's own path; since GRADFIX13 item 2 the
+## plinth is stripped and A does the button's work
+## directly - this leg is the strip's A-law proof); Y
+## turns the focused card over to
 ## its data back and back again. The detail view now
 ## stands behind the pointer's click on a card (driven
 ## here through the room's real select path). The
@@ -8379,8 +8439,28 @@ func _nav_leg_ay_swap_async() -> void:
 		fguard += 1
 	_nav_expect(bool(_room.flip_state().get("texture_real", false)) and bool(_room.flip_state().get("back_visible", false)),
 		"flip: the back stands with its data texture rendered")
-	_nav_expect(bool(_room.flip_state().get("back_launch_pickable", false)),
-		"flip: the back's own Launch is live")
+	_nav_expect(not bool(_room.flip_state().get("back_launch_pickable", true)),
+		"no launch: the flipped back carries no Launch plinth (GRADFIX13 item 2 - the strip)")
+	# GRADFIX13 (item 1): the seated proof for the TABLE
+	# DATA back - this library card's back is the Buck
+	# Rogers shape from Chris's capture (band + title +
+	# maker/design/version lines). Its ink extent is
+	# judged against the back frame's bounding box in a
+	# grab of the standing room.
+	var bimg: Image = get_viewport().get_texture().get_image()
+	var bcam: Camera3D = get_viewport().get_camera_3d()
+	var bgrab_dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if bgrab_dir != "" and bimg != null and not bimg.is_empty():
+		bimg.save_png(bgrab_dir.path_join("gf13_back_nav.png"))
+	var bnodes: Dictionary = _room._flip_nodes(2)
+	var bframe: MeshInstance3D = bnodes.get("back_frame") as MeshInstance3D if not bnodes.is_empty() else null
+	var bres: Dictionary = _gf13_seated_extent(bframe.global_transform, RoomView.CARD_FRAME_SIZE, bimg, bcam) if bframe != null else {"ok": false, "delta": 0.0, "why": "no back frame"}
+	var bdelta: float = float(bres.get("delta", 0.0))
+	print("GRADFIX13 SEATED back (table data): extent delta %.2f%% of frame height%s"
+		% [100.0 * bdelta, "" if bool(bres.get("ok", false)) else " - " + str(bres.get("why", ""))])
+	_nav_expect(bool(bres.get("ok", false)) and absf(bdelta) <= 0.02,
+		"seated centre: the flipped TABLE DATA back's composition centres on its card in the room grab (delta %.2f%% of frame height, tolerance 2%%)%s"
+			% [100.0 * bdelta, "" if bool(bres.get("ok", false)) else " - " + str(bres.get("why", ""))])
 	# A second Y turns it home.
 	await _nav_feed_button(JOY_BUTTON_Y)
 	fguard = 0
@@ -11260,11 +11340,15 @@ func _drive_tournament_full() -> void:
 			# The standing pair (GRADFIX7 item 2 - the
 			# redesign's core law, restated for open boards):
 			# each card stands beside its OWN board, on the
-			# outward side. Centring the not-owned challenge
-			# shows its board with no Launch anywhere on it
-			# (and none on its card's front either); centring
-			# the first challenge shows its board beside a
-			# card whose front carries the pair's one Launch.
+			# outward side. GRADFIX13 (item 2): the plinth is
+			# stripped everywhere, so centring either
+			# challenge - owned or not - shows NO Launch
+			# anywhere: none on the card's front, none on its
+			# board. (Through GRADFIX12 the owned card's
+			# front carried the pair's one Launch; ownership
+			# no longer changes the furniture - A launches
+			# the focused card, and the tournament A-gate
+			# keeps not-owned challenges inert.)
 			# The phase ends front-up and board-open, so the
 			# selection walk starts clean.
 			var rows13: Array = _room.tournament_rows()
@@ -11293,8 +11377,8 @@ func _drive_tournament_full() -> void:
 					var p4: Dictionary = _tournament_board_entry(4)
 					if bool(p4.get("texture_real", false)) and _tournament_smoke_wait >= 6:
 						_tournament_expect_board_side(4, rows13[4] as Dictionary)
-						_tournament_expect(not _room._panel_launches[4].visible and not _room._panel_launches[4].pick_enabled,
-							"pairing: the not-owned challenge stands with no Launch - none on its card's front, and its board carries none")
+						_tournament_expect(_room._panel_launches[4] == null or (not _room._panel_launches[4].visible and not _room._panel_launches[4].pick_enabled),
+							"no launch: the not-owned challenge stands with no Launch - none on its card's front, and its board carries none (GRADFIX13 item 2)")
 						_tournament_pairing_stage = 3
 						_tournament_smoke_wait = 0
 					elif _tournament_smoke_wait > 900:
@@ -11325,8 +11409,8 @@ func _drive_tournament_full() -> void:
 					var p0e: Dictionary = _tournament_board_entry(0)
 					if bool(p0e.get("texture_real", false)) and _tournament_smoke_wait >= 6:
 						_tournament_expect_board_side(0, rows13[0] as Dictionary)
-						_tournament_expect(_room._panel_launches[0].visible and _room._panel_launches[0].pick_enabled,
-							"pairing: the first challenge's pair carries exactly one Launch - its card's front")
+						_tournament_expect(_room._panel_launches[0] == null or (not _room._panel_launches[0].visible and not _room._panel_launches[0].pick_enabled),
+							"no launch: even the owned first challenge's card carries no Launch - the strip is total (GRADFIX13 item 2)")
 						_tournament_pairing_stage = 4
 						_tournament_smoke_wait = 0
 					elif _tournament_smoke_wait > 900:
@@ -11775,9 +11859,15 @@ func _tournament_walk_judge_centre(i: int, row: Dictionary) -> void:
 	_tournament_expect(btex != null and btex.get_width() == RoomSpecs.BOARD_FACE_PX.x
 			and btex.get_height() == RoomSpecs.BOARD_FACE_PX.y and bink > 0.02,
 		"blank board: '%s' standing board face is a real rendered board (size %s, ink stdev %.3f)" % [tname, str(btex.get_size()) if btex != null else "none", bink])
-	var front_launch: bool = i < _room._panel_launches.size() and _room._panel_launches[i].visible and _room._panel_launches[i].pick_enabled
-	_tournament_expect(front_launch == owned,
-		"selection walk: '%s' card front carries the pair's one Launch exactly when the challenge is his (owned %s)" % [tname, str(owned)])
+	# GRADFIX13 (item 2): the strip is total - the front
+	# carries NO Launch whatever the ownership (through
+	# GRADFIX12 this leg asserted the front carried the
+	# pair's one Launch exactly when the challenge was
+	# his). The pair's launch path is A, gated on
+	# ownership in the room's A-law.
+	var front_launch: bool = i < _room._panel_launches.size() and _room._panel_launches[i] != null and _room._panel_launches[i].visible and _room._panel_launches[i].pick_enabled
+	_tournament_expect(not front_launch,
+		"no launch: selection walk: '%s' card front carries no Launch plinth (owned %s - the strip is total, GRADFIX13 item 2)" % [tname, str(owned)])
 	_tournament_expect(_room.bookend_fin_count() == 0,
 		"pairing ends: no bookend fin stands in the Tournament view at '%s' (GRADFIX8: fins removed entirely, both views)" % tname)
 	# GRADFIX13 (item 1): the seated-centre proof for this
@@ -12124,24 +12214,26 @@ func _tournament_leg_rendered() -> void:
 							accent_px += 1
 		_tournament_expect(accent_px >= 60,
 			"his row: the rendered season board carries his row on the accent ground (%d accent samples)" % accent_px)
-		# The Launch law (GRADFIX7 item 2): exactly one
-		# visible+pickable Launch per owned challenge - its
-		# card's FRONT - none for a not-owned challenge, and
-		# none on any board (a board is a plain mesh, not a
-		# quad: it has no Launch to carry).
+		# The Launch law (GRADFIX7 item 2, RESTATED by
+		# GRADFIX13 item 2): the plinth is stripped - NO
+		# challenge's front carries a Launch, owned or not,
+		# and no board carries one either (a board is a
+		# plain mesh, not a quad). A launches the focused
+		# owned card directly; the not-owned A-leg below is
+		# the gate's proof.
 		var launch_bad: String = ""
 		for li: int in range(rows.size()):
 			var lowned: bool = bool((rows[li] as Dictionary).get("owned", false))
-			var lfront: bool = _room._panel_launches[li].visible and _room._panel_launches[li].pick_enabled
-			if lfront != lowned:
-				launch_bad = "challenge %d front Launch stands %s, owned %s" % [li, str(lfront), str(lowned)]
+			var lfront: bool = li < _room._panel_launches.size() and _room._panel_launches[li] != null and _room._panel_launches[li].visible and _room._panel_launches[li].pick_enabled
+			if lfront:
+				launch_bad = "challenge %d front carries a Launch plinth (owned %s)" % [li, str(lowned)]
 				break
 			var lbn: Node = _room._board_nodes[li] as Node if li < _room._board_nodes.size() else null
 			if lbn != null and lbn is ClickableQuad:
 				launch_bad = "challenge %d's board is a pickable quad" % li
 				break
 		_tournament_expect(launch_bad == "",
-			"boards: exactly one Launch per owned challenge (its card's front), none for not-owned, none on any board%s" % ("" if launch_bad == "" else " - " + launch_bad))
+			"no launch: no challenge's front carries a Launch plinth, owned or not, and no board carries one (GRADFIX13 item 2)%s" % ("" if launch_bad == "" else " - " + launch_bad))
 		# A on the not-owned card: nothing starts, nothing
 		# opens - the card is information, not a door.
 		_room._set_focused(_room._panels[4])
@@ -12219,8 +12311,8 @@ func _drive_tournament_state_mode(expect_failure: bool) -> void:
 						"state: the no-key state says to add the key in SETUP, plainly")
 					_tournament_expect(_room._banner_line().contains("no WoVP key yet"),
 						"state: the banner names the no-key state")
-				_tournament_expect(_room._panels.size() == 1 and not _room._panel_launches[0].visible,
-					"state: the state panel carries no Launch button")
+				_tournament_expect(_room._panels.size() == 1 and (_room._panel_launches[0] == null or not _room._panel_launches[0].visible),
+					"no launch: the state panel carries no Launch button (GRADFIX13 item 2)")
 				_finish_tournament_smoke()
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
 				_tournament_fail("the state never settled (mode %s)" % _tournament_smoke_mode)

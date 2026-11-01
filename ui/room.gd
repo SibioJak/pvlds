@@ -543,6 +543,10 @@ const BG_STAR_NEAR_RADIUS: float = 12.0 ## the near star shell's distance (the f
 ## button moves to the card's top instead (PANEL_LAUNCH_Y_TOP)
 ## - the plate never shares ground with the button, on any
 ## card, by construction (see _make_card_nodes).
+## GRADFIX13 (item 2): the Launch plinth is STRIPPED - these
+## constants now serve only the plinth NC seam, which mints
+## the buttons on their old seats so the strip's census can
+## convict them. No shipped code seats a button by them.
 const PANEL_SIZE: Vector2 = CARD_SIZE
 const PANEL_LAUNCH_SIZE: Vector2 = Vector2(0.36, 0.115)
 const PANEL_LAUNCH_Y: float = -0.47
@@ -581,8 +585,8 @@ var _xr_camera: Camera3D
 var _desk_rig: Node3D
 var _desk_camera: Camera3D
 var _panels: Array[ClickableQuad] = []
-var _panel_launches: Array[ClickableQuad] = [] ## per-panel Launch button, parallel to _panels
-var _panel_back_launches: Array[ClickableQuad] = [] ## per-panel BACK Launch button (GRADFIX6 item 1: the flipped card's own Launch, on its back), parallel to _panels; null where a panel has no back
+var _panel_launches: Array[ClickableQuad] = [] ## per-panel Launch button, parallel to _panels - GRADFIX13 (item 2): the plinths are stripped, so every entry is null in the shipped build; the plinth NC (PVLDS_GF13_NC=plinth) mints the buttons again and the entries go live
+var _panel_back_launches: Array[ClickableQuad] = [] ## per-panel BACK Launch button (GRADFIX6 item 1: the flipped card's own Launch, on its back), parallel to _panels; null where a panel has no back - and, since GRADFIX13 item 2, null everywhere in the shipped build (the plinth NC mints it again)
 var _panel_base_pos: Array[Vector3] = [] ## wall-flush position per panel, parallel to _panels
 var _panel_pop_dir: Array[Vector3] = [] ## unit vector from the panel toward the viewer (its wall normal)
 var _panel_pop: Array[float] = [] ## current pop amount per panel, 0 flush .. 1 popped
@@ -804,7 +808,7 @@ var _rail_quads: Dictionary = {} ## key -> ClickableQuad
 var _rail_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: every rail button face ever rendered, so a rebuild re-dresses the rail in its own frame
 var _strip_quads: Dictionary = {} ## letter key ("A".."Z", "THE", "#") -> ClickableQuad: the alphabet strip, built once with the rail
 var _strip_tex_cache: Dictionary = {} ## "key|state" -> Texture2D: every strip slot face ever rendered (the rail cache's pattern)
-var _btn_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: the panels' Launch/Failed button faces - two textures in existence, once rendered per panel per rebuild before the pick-latency fix
+var _btn_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: the panels' Launch/Failed button faces - two textures in existence, once rendered per panel per rebuild before the pick-latency fix. GRADFIX13 (item 2): dormant in the shipped build (no plinth is dressed); the plinth NC's minted buttons use it as before
 var _face_tex_cache: Dictionary = {} ## "game_id|art_path|fav" -> [Texture2D, art_aspect]: rendered panel faces (the pick-latency fix - a revisit re-rendered every face from scratch)
 var _face_cache_order: Array[String] = [] ## the face cache's LRU order (oldest first)
 const FACE_CACHE_MAX: int = 96 ## the drawn window is 63 faces; the cache holds it plus a swing's worth of margin
@@ -2050,14 +2054,16 @@ func _make_card_label(parent: Node, text: String) -> Label3D:
 ## the panel ClickableQuad the whole room already speaks
 ## (payload = game_id); riding on its flip pivot in card mode:
 ## the frame quad behind, the nameplate plate + title label
-## in front, the Launch button - and the card's BACK (a
-## holder turned PI on the pivot: its own frame, its info
-## face, its own Launch button), which the flip shows
+## in front - and the card's BACK (a holder turned PI on the
+## pivot: its own frame, its info face), which the flip shows
 ## instead of the front past the turn's midpoint (GRADFIX6
-## item 1). Board mode mints the bare board panel at the
-## board's own size (its face carries its own text; no
-## plate, no label, no frame, no back - the state row has
-## nothing to flip to).
+## item 1). GRADFIX13 (item 2) strips the Launch plinths the
+## front and back used to carry: no Launch quad is minted
+## (nodes["launch"] / nodes["back_launch"] are null; the
+## plinth NC seam mints them again). Board mode mints the
+## bare board panel at the board's own size (its face
+## carries its own text; no plate, no label, no frame, no
+## back - the state row has nothing to flip to).
 func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 	var size: Vector2 = RoomSpecs.board_panel_size() if mode == "board" else CARD_SIZE
 	var q: ClickableQuad = ClickableQuad.new()
@@ -2104,11 +2110,14 @@ func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 		# to the player. Its local frame is the front's mirror:
 		# frame behind (-0.007), face at +0.001 (a breath proud
 		# of the front face's plane, so the two never z-fight
-		# at the turn's edge-on instant), Launch at +0.020 on
-		# the board face's reserved plinth (RoomSpecs.
-		# board_launch_y - the back IS a board-sized face).
-		# Hidden and unpickable until the flip's midpoint swap
-		# (see _apply_flip_side).
+		# at the turn's edge-on instant). Hidden until the
+		# flip's midpoint swap (see _apply_flip_side).
+		# GRADFIX13 (item 2): the back carries NO Launch
+		# button - the plinth is stripped everywhere (Chris:
+		# "they all launch, we know they launch, you press A
+		# to launch, its not necessary"). The NC seam
+		# PVLDS_GF13_NC=plinth mints the button again, on its
+		# old seat, so the strip's census legs fail by name.
 		var back: Node3D = Node3D.new()
 		back.name = "CardBack"
 		back.rotation.y = PI
@@ -2127,18 +2136,29 @@ func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 		back.add_child(bface)
 		nodes["back"] = back
 		nodes["back_mat"] = bmat
-		var blq: ClickableQuad = ClickableQuad.new()
-		blq.setup("panel_launch", game.game_id, _placeholder_tex, PANEL_LAUNCH_SIZE)
-		blq.position = Vector3(0.0, RoomSpecs.board_launch_y(), 0.020)
-		blq.pick_enabled = false
-		back.add_child(blq)
-		nodes["back_launch"] = blq
+		if _plinth_nc():
+			var blq: ClickableQuad = ClickableQuad.new()
+			blq.setup("panel_launch", game.game_id, _placeholder_tex, PANEL_LAUNCH_SIZE)
+			blq.position = Vector3(0.0, RoomSpecs.board_launch_y(), 0.020)
+			blq.pick_enabled = false
+			back.add_child(blq)
+			nodes["back_launch"] = blq
+		else:
+			nodes["back_launch"] = null
 		nodes["back_key"] = "" ## the content key this card's back texture was rendered for ("" = never)
 		nodes["back_tex_real"] = false ## the back's standing texture is a real capture, not the fallback solid
-	var lq: ClickableQuad = ClickableQuad.new()
-	lq.setup("panel_launch", game.game_id, _placeholder_tex, PANEL_LAUNCH_SIZE)
-	lq.position = Vector3(0.0, RoomSpecs.board_launch_y() if mode == "board" else PANEL_LAUNCH_Y, 0.020)
-	pivot.add_child(lq)
+	# GRADFIX13 (item 2): the front Launch plinth is stripped
+	# with the back's - no quad is minted, and every consumer
+	# of nodes["launch"] / _panel_launches treats the null as
+	# the standing law (the arrays stay parallel, null-filled,
+	# exactly as back_launch entries always could be). Only
+	# the plinth NC mints the button, on its old seats.
+	var lq: ClickableQuad = null
+	if _plinth_nc():
+		lq = ClickableQuad.new()
+		lq.setup("panel_launch", game.game_id, _placeholder_tex, PANEL_LAUNCH_SIZE)
+		lq.position = Vector3(0.0, RoomSpecs.board_launch_y() if mode == "board" else PANEL_LAUNCH_Y, 0.020)
+		pivot.add_child(lq)
 	nodes["launch"] = lq
 	# The card's layer stack, declared (the GRAD FIX round):
 	# at equal render priority the transparent sort could seat
@@ -2148,12 +2168,22 @@ func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 	# first, the face next, then the plate (its material's
 	# priority, in _plate_mat), the power overlay above the
 	# face (-1, in _build_power_overlay), the label at the
-	# default 0, and the Launch pair on top. The NC seam
-	# PVLDS_GRAD_NC=nofaceorder restores the undeclared stack.
+	# default 0, and (plinth NC only) the Launch pair on top.
+	# The NC seam PVLDS_GRAD_NC=nofaceorder restores the
+	# undeclared stack.
 	if OS.get_environment("PVLDS_GRAD_NC") != "nofaceorder":
 		q.set_stack_order(-4, -3)
-		lq.set_stack_order(0, 1)
+		if lq != null:
+			lq.set_stack_order(0, 1)
 	return nodes
+
+
+## GRADFIX13 (item 2): the Launch-plinth negative control -
+## true only when the harness asks for the stripped plinths
+## back (PVLDS_GF13_NC=plinth), so the strip's census legs
+## can fail against the restored furniture by name.
+func _plinth_nc() -> bool:
+	return OS.get_environment("PVLDS_GF13_NC") == "plinth"
 
 
 ## Get a game's card nodes from the pool, minting them if this
@@ -2261,18 +2291,23 @@ func _apply_card_plate(nodes: Dictionary, aabb: AABB) -> void:
 	if pq != null:
 		pq.size = Vector2(LABEL_STRIP_SIZE.x, block_h)
 	plate.position = Vector3(0.0, block_cy, 0.005)
-	var lq: ClickableQuad = nodes["launch"] as ClickableQuad
-	var plate_bottom: float = block_cy - block_h * 0.5
-	# The top seat is an ART face's remedy only (GRADFIX7
-	# item 1): it exists for a standing nameplate whose grown
-	# block would reach the low seat. A styled title card's
-	# plate/label are hidden - there is no block standing over
-	# the low seat - yet the old law derived the seat from the
-	# hidden label's AABB anyway, so a long-title data card
-	# seated its one Launch at the card's top, over the styled
-	# face's own band/title. Styled faces always seat low.
-	var top_seat: bool = plate_bottom < -0.40 and _nodes_face_is_art(nodes)
-	lq.position = Vector3(0.0, PANEL_LAUNCH_Y_TOP if top_seat else PANEL_LAUNCH_Y, 0.020)
+	# GRADFIX13 (item 2): the plate derivation used to also
+	# seat the card's Launch button - low, or at the card's
+	# top (PANEL_LAUNCH_Y_TOP) when a long title's grown
+	# plate would reach the low seat (the GRADFIX2/GRADFIX7
+	# seat law). The plinth is stripped, so the seat law
+	# dies with it: the plate derives from the live label
+	# AABB alone, and a long multi-line name's block now
+	# answers to nothing below it - the card's face bottom
+	# is the only bound (the census's name legs re-prove
+	# the block standing whole on its plate). Under the
+	# plinth NC the button is minted again and the old seat
+	# law re-applies, so the NC's census can convict it.
+	var lq: ClickableQuad = nodes.get("launch") as ClickableQuad
+	if lq != null:
+		var plate_bottom: float = block_cy - block_h * 0.5
+		var top_seat: bool = plate_bottom < -0.40 and _nodes_face_is_art(nodes)
+		lq.position = Vector3(0.0, PANEL_LAUNCH_Y_TOP if top_seat else PANEL_LAUNCH_Y, 0.020)
 
 
 ## The GRADFIX2 item 1 fix: the nameplate derivation runs
@@ -2580,7 +2615,7 @@ func _refresh_window() -> void:
 		_panels[idx].visible = vis
 		if browsing:
 			_panels[idx].pick_enabled = vis
-			if idx < _panel_launches.size():
+			if idx < _panel_launches.size() and _panel_launches[idx] != null:
 				_panel_launches[idx].pick_enabled = vis and not (_tournament and not _tournament_launchable(idx))
 	for bi: int in range(_board_nodes.size()):
 		var bnode2: MeshInstance3D = _board_nodes[bi] as MeshInstance3D
@@ -3549,10 +3584,17 @@ func _fill_one_face(idx: int, gen: int) -> void:
 		# face streamed in): force the pop transform to
 		# re-apply next frame.
 		_panel_pop_applied[idx] = -1.0
-	if idx < _panel_launches.size():
+	# GRADFIX13 (item 2): this tail used to dress the card's
+	# Launch plinth (LAUNCH, or FAILED for the last failed
+	# game - the two cached button faces). The plinth is
+	# stripped; under the plinth NC the minted button is
+	# dressed exactly as before, tournament visibility law
+	# included (a challenge card he does not own carries no
+	# Launch: there is nothing on it to press - the
+	# pick-side of the same law lives in _refresh_window
+	# via _tournament_launchable).
+	if idx < _panel_launches.size() and _panel_launches[idx] != null:
 		var failed: bool = game.game_id == _failed_game_id
-		# The Launch/Failed button has exactly two faces in
-		# existence; they are cached like the rail's.
 		var blabel: String = "FAILED" if failed else "LAUNCH"
 		var baccent: bool = not failed
 		var bkey: String = blabel + "|" + ("a" if baccent else "p")
@@ -3566,10 +3608,6 @@ func _fill_one_face(idx: int, gen: int) -> void:
 				_btn_tex_cache[bkey] = ltex
 		_panel_launches[idx].set_texture(ltex)
 		if _tournament:
-			# A challenge card he does not own carries no
-			# Launch: there is nothing on it to press (the
-			# pick-side of the same law lives in
-			# _refresh_window via _tournament_launchable).
 			var launchable: bool = _tournament_launchable(idx)
 			_panel_launches[idx].visible = launchable
 			_panel_launches[idx].pick_enabled = launchable and _mode == "wall"
@@ -3728,7 +3766,7 @@ func _fill_tournament_state_faces(gen: int) -> void:
 			return
 		quad.set_texture(tex)
 		_panel_art_aspect[i] = 0.0
-		if i < _panel_launches.size():
+		if i < _panel_launches.size() and _panel_launches[i] != null:
 			var lq: ClickableQuad = _panel_launches[i]
 			var owned: bool = str(row.get("kind", "")) == "challenge" and bool(row.get("owned", false))
 			lq.visible = owned
@@ -4154,7 +4192,9 @@ func _refresh_quad_states() -> void:
 	var hovered: ClickableQuad = _rig.hovered if _rig != null else null
 	var all: Array[ClickableQuad] = []
 	all.append_array(_panels)
-	all.append_array(_panel_launches)
+	for lq2: ClickableQuad in _panel_launches:
+		if lq2 != null:
+			all.append(lq2)
 	for blq: ClickableQuad in _panel_back_launches:
 		if blq != null:
 			all.append(blq)
@@ -4522,9 +4562,19 @@ func _card_back_key(idx: int) -> String:
 ## for a challenge card in the Tournament Room, the wing
 ## spec (table data, or board + data) in the library -
 ## with the book's dressing retired: the spine key goes
-## (a card's back joins nothing) and the footer plinth the
-## wing waived is restored, because the back carries its
-## own Launch button where the board's always sat.
+## (a card's back joins nothing). Through GRADFIX12 the
+## footer plinth the wing waived was restored here, because
+## the back carried its own Launch button where the board's
+## always sat - and the composition centred over the area
+## ABOVE that 140 px reservation, so on the standing card
+## it rode 70 px high with the button squatting at its base
+## (the Buck Rogers back in Chris's capture 20261101-124532:
+## extent centre -65 px against the card). GRADFIX13
+## (items 1+2): the plinth is stripped, the reservation
+## dies with it, the freed height goes to the composition,
+## and the back takes the factory's extent correction like
+## a standing board (ink_centre) - it centres on the card's
+## full extent. Only the plinth NC restores the footer.
 func _card_back_spec(idx: int) -> Dictionary:
 	var game: GameEntry = _visible_games[idx]
 	var now_unix: int = int(Time.get_unix_time_from_system())
@@ -4536,7 +4586,8 @@ func _card_back_spec(idx: int) -> Dictionary:
 			break
 	var spec: Dictionary = RoomSpecs.wing_spec(game, ch2, _wovp_user_id, now_unix)
 	spec["spine_side"] = ""
-	spec["footer_px"] = RoomSpecs.BOARD_FOOTER_PX
+	spec["footer_px"] = RoomSpecs.BOARD_FOOTER_PX if _plinth_nc() else 0
+	spec["ink_centre"] = not _plinth_nc()
 	return spec
 
 
@@ -4622,11 +4673,13 @@ func _render_card_back(idx: int, key: String) -> void:
 	nodes["back_tex_real"] = real
 	_flip_tex_key = key
 	_flip_tex_real = real
-	# The back's Launch wears the same two faces as the
-	# front's (the shared button cache), seated on the
-	# spec's plinth; in the Tournament Room it stands only
-	# for a challenge he owns - the board spec's own law,
-	# the pick-side of which _apply_flip_side enforces.
+	# GRADFIX13 (item 2): no back Launch exists to dress -
+	# this tail runs only under the plinth NC, where the
+	# minted button wears the same two faces as the front's
+	# (the shared button cache), seated on the spec's
+	# plinth; in the Tournament Room it stands only for a
+	# challenge he owns - the board spec's own law, the
+	# pick-side of which _apply_flip_side enforces.
 	var blq: ClickableQuad = nodes["back_launch"] as ClickableQuad
 	if blq != null:
 		var failed: bool = _visible_games[idx].game_id == _failed_game_id
@@ -4884,26 +4937,42 @@ func _activate(quad: ClickableQuad) -> void:
 			_jump_to_letter(quad.payload)
 
 
-## Launch the focused card's default build. This is the pad's
-## answer to the Launch button now that the button is no longer
-## a focus stop - the press routes through _activate on the
-## card's own Launch quad, so the path is literally the
-## button's: the button pulses, the default build resolves,
-## the selection persists, and launch_requested fires. Only a
-## PANEL focused in plain wall mode counts: rail focus, the
-## detail view, and the SETUP placard all leave it inert, and
-## the load wait refuses twice over - the poll's deaf gate at
-## the call site, then _activate's own refusal. A press that
-## lands mid page-slide fires the card focus still sits on
-## (the page on screen); the slide's pending travel then
-## drops whole at its far point, by its own rule.
+## Launch the focused card's default build. Through
+## GRADFIX12 this press routed through _activate on the
+## card's own Launch quad - the path was literally the
+## button's. GRADFIX13 (item 2) strips the plinth, so the
+## press now does the button's work directly: the default
+## build resolves, the selection persists, and
+## launch_requested fires - the same outcome the button's
+## "panel_launch" branch of _activate produced, minus the
+## quad. (That branch survives for the plinth NC's minted
+## buttons, whose pointer clicks still land on it.) The
+## tournament law the button's visibility carried is
+## applied here instead: a challenge he does not own does
+## not launch. Only a PANEL focused in plain wall mode
+## counts: rail focus, the detail view, and the SETUP
+## placard all leave it inert, and the load wait refuses at
+## the poll's deaf gate. A press that lands mid page-slide
+## fires the card focus still sits on (the page on screen);
+## the slide's pending travel then drops whole at its far
+## point, by its own rule.
 func _launch_focused_card() -> void:
 	if _mode != "wall" or _placard_up or _setup_panel_up or _focused == null:
 		return
 	var idx: int = _panels.find(_focused)
-	if idx < 0 or idx >= _panel_launches.size():
+	if idx < 0 or idx >= _visible_games.size():
 		return
-	_activate(_panel_launches[idx])
+	if _tournament and not _tournament_launchable(idx):
+		return
+	var game: GameEntry = _visible_games[idx]
+	if game == null:
+		return
+	var build: TableBuild = game.resolve_default_build(_store)
+	if build == null:
+		return
+	_selected_game_id = game.game_id
+	_persist_view()
+	launch_requested.emit(game, build)
 
 
 ## A on the pad (and Enter/Space on the keyboard, A's
@@ -5397,7 +5466,8 @@ func _open_detail(game: GameEntry) -> void:
 	for q: ClickableQuad in _panels:
 		q.pick_enabled = false
 	for q: ClickableQuad in _panel_launches:
-		q.pick_enabled = false
+		if q != null:
+			q.pick_enabled = false
 	for q: ClickableQuad in _panel_back_launches:
 		if q != null:
 			q.pick_enabled = false
@@ -5529,7 +5599,9 @@ func _fill_placard_textures(gen: int, message: String) -> void:
 func _room_pickables() -> Array[ClickableQuad]:
 	var out: Array[ClickableQuad] = []
 	out.append_array(_panels)
-	out.append_array(_panel_launches)
+	for lq3: ClickableQuad in _panel_launches:
+		if lq3 != null:
+			out.append(lq3)
 	for k: Variant in _rail_quads.keys():
 		var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
 		if rq != null:
@@ -5570,7 +5642,7 @@ func _restore_room_pick_states() -> void:
 		if not handled.has(q):
 			q.pick_enabled = not launching
 	for q: ClickableQuad in _panel_launches:
-		if not handled.has(q):
+		if q != null and not handled.has(q):
 			q.pick_enabled = not launching
 	for k: Variant in _rail_quads.keys():
 		var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
@@ -6003,7 +6075,8 @@ func begin_launch(game: GameEntry) -> void:
 	for q: ClickableQuad in _panels:
 		q.pick_enabled = false
 	for q: ClickableQuad in _panel_launches:
-		q.pick_enabled = false
+		if q != null:
+			q.pick_enabled = false
 	for k: Variant in _rail_quads.keys():
 		_rail_quads[k].pick_enabled = false
 	var detail_open: bool = _detail != null and _detail.is_open()
@@ -6011,7 +6084,14 @@ func begin_launch(game: GameEntry) -> void:
 		_detail.set_launching(true)
 	_set_focused(null)
 	_refresh_focusables()
-	_swap_launch_textures()
+	# GRADFIX13 (item 2): the wait's LOADING state used to
+	# also swap the launching card's plinth texture to
+	# "LOADING..." (_swap_launch_textures, deleted with the
+	# plinths). The state's standing surfaces are the ones
+	# begin_launch already raises: the marquee (wall
+	# launches), the status banner's note above, and the
+	# detail view's own Play quad (detail launches, via
+	# set_launching just above) - the strip drops no state.
 	_refresh_banner()
 	# The marquee is the WALL's loading display: it stands at
 	# the wall's settle depth, behind where the detail panel
@@ -6026,10 +6106,18 @@ func begin_launch(game: GameEntry) -> void:
 
 
 ## VPX died during the load, with the launcher still resident to
-## say so: the failure lands on the wall (FAILED button, banner
-## note) and browsing resumes. In detail mode the detail view is
+## say so: the failure lands on the wall (banner note, below)
+## and browsing resumes. In detail mode the detail view is
 ## the visible surface - its Play button is restored and the wall
 ## rebuilds when it closes, as usual.
+## GRADFIX13 (item 2): the failed card's plinth used to be
+## re-dressed FAILED here (via _failed_game_id's texture
+## swaps in the fill paths). With the plinths stripped, the
+## failure's standing surface is the banner note -
+## _status_note names the game and the reason, and stands
+## until the player browses on (the standing clear points).
+## _failed_game_id is kept as the record the note derives
+## from, no longer as a texture key.
 func end_launch_failed(game: GameEntry, reason: String) -> void:
 	_dismiss_marquee()
 	_launching_game_id = ""
@@ -6166,7 +6254,8 @@ func _apply_wall_alpha(a: float) -> void:
 	for i: int in range(_panels.size()):
 		_panels[i].set_content_alpha(a * _haze_for(i))
 	for i2: int in range(_panel_launches.size()):
-		_panel_launches[i2].set_content_alpha(a * _haze_for(i2))
+		if _panel_launches[i2] != null:
+			_panel_launches[i2].set_content_alpha(a * _haze_for(i2))
 	for bi2: int in range(_board_nodes.size()):
 		var bnode3: MeshInstance3D = _board_nodes[bi2] as MeshInstance3D
 		if bnode3 != null and bi2 < _board_nodes.size():
@@ -6901,20 +6990,6 @@ func board_pop_offset(idx: int) -> Vector3:
 	if node == null:
 		return Vector3.ZERO
 	return node.position - (_board_base_pos[idx] as Vector3)
-
-
-func _swap_launch_textures() -> void:
-	var gen: int = _gen
-	for i: int in range(_panel_launches.size()):
-		if i >= _visible_games.size():
-			break
-		var game: GameEntry = _visible_games[i]
-		var is_this: bool = game.game_id == _launching_game_id
-		var tex: Texture2D = await _factory.render_texture(
-			RoomSpecs.button_spec("LOADING..." if is_this else "LAUNCH", is_this), Vector2i(512, 164))
-		if gen != _gen:
-			return
-		_panel_launches[i].set_texture(tex)
 
 
 func _on_detail_closed() -> void:

@@ -3,7 +3,10 @@ extends Node3D
 
 ## The detail view: standing at the machine - the More Info surface
 ## (Chris, 2026-10-21: launching lives on the card; nobody passes
-## through here to play, but Play works here too). Big art (or title
+## through here to play, but Play works here too. GRADFIX13
+## item 2: the card's Launch plinth is stripped - on the wall
+## A launches the focused card; this view's Play remains the
+## pointer's launch path, and its LOADING state stands). Big art (or title
 ## card), the facts, every build listed with CURRENT / DEFAULT chips,
 ## a favorite toggle, build selection with play-once / make-default,
 ## and the Play quad. Play always targets the default build unless a

@@ -91,7 +91,7 @@ const BOARD_FACE_PX: Vector2i = Vector2i(720, 1080)
 const BACK_FACE_PX: Vector2i = Vector2i(620, 1080)
 const SHORT_BOARD_PANEL_SIZE: Vector2 = Vector2(0.62, 1.00) ## the GRADFIX3/4 page (the shortpage NC's restore)
 const SHORT_BOARD_FACE_PX: Vector2i = Vector2i(620, 1000)
-const BOARD_FOOTER_PX: int = 140 ## the flip BACK's bottom band: its own Launch button's home. The standing board's plinth died in GRADFIX10 (item 1): a standing board has carried no Launch since GRADFIX7 (the button lives on its card), so the band was a dead dark plank the content centred above - see tournament_board_spec. The deadplank NC restores the reservation on standing boards.
+const BOARD_FOOTER_PX: int = 140 ## the flip BACK's old bottom band: its own Launch button's home, through GRADFIX12. The standing board's plinth died in GRADFIX10 (item 1); GRADFIX13 (item 2) strips the back's too - the reservation now stands only behind negative controls: the deadplank NC restores it on standing boards, and PVLDS_GF13_NC=plinth restores it (with the button) on the back, so both strips' legs can fail by name.
 const LEGACY_BOARD_PANEL_SIZE: Vector2 = Vector2(0.54, 0.64) ## == RoomView.PANEL_SIZE at the TR1/TR2 rounds
 const LEGACY_BOARD_FACE_PX: Vector2i = Vector2i(512, 640)
 const LEGACY_BOARD_LAUNCH_Y: float = -0.155 ## == RoomView.PANEL_LAUNCH_Y
@@ -120,8 +120,10 @@ static func board_face_px() -> Vector2i:
 ## derive from, so the button can never drift back over the
 ## text. (Through TR3 this seated a standing board's Launch;
 ## since GRADFIX7 the standing board carries no button and
-## since GRADFIX10 reserves no band - the back, which does
-## carry its own Launch, is this derivation's live user.)
+## since GRADFIX10 reserves no band; through GRADFIX12 the
+## back was this derivation's live user - GRADFIX13 item 2
+## strips the back's button too, and the derivation now
+## serves only the plinth NC's restored button.)
 static func board_launch_y() -> float:
 	if board_nc_old:
 		return LEGACY_BOARD_LAUNCH_Y

@@ -52,17 +52,18 @@ const FACE_MARGIN_BOTTOM_PX: int = 22 ## the shared face layout's bottom margin 
 const PANEL_CONTENT_RAISE_PX: int = 22
 
 ## The art face's name strip: a fixed-height band across the
-## texture's bottom edge. Named because the room's Launch-button
-## placement (ui/room.gd, PANEL_LAUNCH_Y) is derived from it - the
-## button must clear this strip, never cover the name it carries.
+## texture's bottom edge. Named because the room's nameplate
+## seating derives from it - the plate must back this strip,
+## never cover the name it carries. (Through GRADFIX12 the
+## Launch button's placement derived from it too; the plinth
+## is stripped, GRADFIX13 item 2.)
 const ART_STRIP_HEIGHT_PX: int = 92
 
 ## The art face's favorite mark: a star badge in the face's top
 ## right corner (the panel face carries the same fact as a
 ## FAVORITE chip). Marquee amber so the mark reads as one family
 ## with the chips; the top corner keeps it clear of the name
-## strip (bottom edge) and the card's Launch button (lower
-## third) at wall distance.
+## strip (bottom edge) at wall distance.
 const FAVORITE_STAR_COLOR: Color = Color(1.0, 0.78, 0.25)
 
 ## The art face's PuP mark (GRADFIX6 item 5): a badge in the
