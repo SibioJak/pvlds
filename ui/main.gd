@@ -654,6 +654,13 @@ func _ready() -> void:
 	# machined-strip legs fail by name. (The same env var
 	# carries item 3's grammar values - a distinct set.)
 	# Set here, before any room exists.
+	# GRADFIX14 item 3's negative-control seams
+	# (PVLDS_GF14_NC=stripanchor | railwall | bartriginert):
+	# stripanchor restores the strip's bumper anchor-hops,
+	# railwall restores rail-focus bumpers driving the wall,
+	# bartriginert restores inert triggers under bar focus -
+	# each so the input smoke's gf14 grammar legs fail by
+	# name. Set here, before any room exists.
 	RoomView.debug_gf14_nc = OS.get_environment("PVLDS_GF14_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
