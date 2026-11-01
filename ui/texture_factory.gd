@@ -70,27 +70,35 @@ func _render_now(spec: Dictionary, px_size: Vector2i) -> Texture2D:
 	var img: Image = tex.get_image()
 	if img == null or img.is_empty():
 		return make_solid(Color(0.08, 0.08, 0.12))
-	# GRADFIX10 (item 1): the standing board's ink correction.
-	# The centring spacers centre the content block's BOX on
-	# the frame, but the block's ink mass sits off its box
-	# centre - solid band/rows/chips below, sparse title and
-	# deadline text above (measured on the first corrected
-	# round: +2.16% of frame height on a full board, -2.34%
-	# on a no-score board, box centre dead on) - and the
-	# field judges the mass ("tournie text still not
-	# centered on frame"). A spec that asks ("ink_centre":
-	# the standing board's, at its own face size, reserving
-	# no footer) is measured once and, when its ink centroid
-	# misses the frame centre by more than a pixel, rendered
-	# ONCE more with the whole block shifted by the miss
-	# ("ink_bias_px" - a rigid translation: no reflow, so
-	# the second capture's centroid lands on the centre).
-	# The biased spec carries the bias key, so the pass can
-	# never loop; the face the factory leaves standing wears
-	# the corrected spec, and board_metrics reads it.
+	# GRADFIX10 (item 1) introduced this measure-and-correct
+	# pass; GRADFIX13 (item 1) convicts its ruler and replaces
+	# it. GF10 centred the ink MASS: the spacers centre the
+	# content block's BOX on the frame, the block's ink mass
+	# sits off its box centre (solid score-row panels below,
+	# sparse title/deadline glyphs above), so the pass shifted
+	# the whole block until the MASS centred - and parked the
+	# visible composition high: on the shipped full board the
+	# ink mass measured +0.44% of frame height while the ink
+	# EXTENT (the band's top edge to the last row's bottom
+	# edge - the composition the eye actually judges) measured
+	# -2.41%, over the 2% tolerance, with the void pooled
+	# below (Chris's GRADFIX12 field captures: boards riding
+	# high, dark slab at the base). The field judges extent,
+	# not mass. The pass now measures the ink EXTENT
+	# (ink_extent) and shifts the block by the extent's miss;
+	# the biased spec carries the bias key, so the pass can
+	# never loop, and the face the factory leaves standing
+	# wears the corrected spec. The NC seam
+	# PVLDS_GF13_NC=inkmass restores the GF10 mass ruler so
+	# the extent legs fail against it by name. A spec that
+	# asks ("ink_centre": the standing board's, and - since
+	# GRADFIX13 item 2 - the card back's) and reserves no
+	# footer is corrected, at its own face size.
 	if bool(spec.get("ink_centre", false)) and not spec.has("ink_bias_px") \
-			and int(spec.get("footer_px", 0)) == 0 and px_size == RoomSpecs.board_face_px():
-		var ink: Vector2 = ink_centroid(img, Rect2())
+			and int(spec.get("footer_px", 0)) == 0:
+		var ink: Vector2 = ink_centroid(img, Rect2()) \
+			if OS.get_environment("PVLDS_GF13_NC") == "inkmass" \
+			else ink_extent(img, Rect2())
 		if ink.y > 0.0:
 			var delta: float = ink.x - float(px_size.y) * 0.5
 			if absf(delta) > 1.0:
@@ -173,6 +181,84 @@ static func ink_centroid(img: Image, exclude_face_rect: Rect2) -> Vector2:
 	if ink_n <= 0:
 		return Vector2(-1.0, 0.0)
 	return Vector2((sum_y / float(ink_n)) / sy, float(ink_n))
+
+
+## A rendered board face's content-ink EXTENT centre, in
+## face pixels (GRADFIX13 item 1 - the ruler that replaced
+## GRADFIX10's ink-mass centroid above): the midpoint of
+## the first and last ink rows, ink judged exactly as
+## ink_centroid judges it (a pixel whose colour leaves its
+## column's modal background bucket). The eye reads a
+## composition by its edges - the band's top, the last
+## row's bottom - not by where its mass pools, and the
+## score rows' solid panels pool the mass low: on the
+## shipped full board mass and extent disagreed by 27 px.
+## The face's outer 12 px rows are excluded (the cover
+## border and the page inset live there; content never
+## legitimately does - the face's own margins start at
+## 14 px), and a row counts as ink only with at least 4
+## sampled ink pixels on it, so a stray spine-column or
+## antialiasing row cannot set the edge. The footer
+## plinth, when a spec reserves one, is furniture, not
+## content: exclude_face_rect cuts it out, as the centroid
+## measure does. Returns Vector2(centre_y, ink_pixels);
+## centre_y is -1 when no ink was found.
+static func ink_extent(img: Image, exclude_face_rect: Rect2) -> Vector2:
+	if img == null or img.is_empty():
+		return Vector2(-1.0, 0.0)
+	var work: Image = img.duplicate() as Image
+	if work.get_format() != Image.FORMAT_RGBA8:
+		work.convert(Image.FORMAT_RGBA8)
+	if work.get_height() >= 400:
+		work.resize(maxi(1, work.get_width() / 2), work.get_height() / 2, Image.INTERPOLATE_NEAREST)
+	var sx: float = float(work.get_width()) / float(img.get_width())
+	var sy: float = float(work.get_height()) / float(img.get_height())
+	exclude_face_rect = Rect2(exclude_face_rect.position * Vector2(sx, sy),
+		exclude_face_rect.size * Vector2(sx, sy))
+	var w: int = work.get_width()
+	var h: int = work.get_height()
+	var data: PackedByteArray = work.get_data()
+	var bg_bucket: Array[int] = []
+	bg_bucket.resize(w)
+	for x: int in range(w):
+		var counts: Dictionary = {}
+		var best_key: int = -1
+		var best_n: int = -1
+		for y: int in range(h):
+			var o: int = (y * w + x) * 4
+			var key: int = ((int(data[o]) >> 3) << 10) | ((int(data[o + 1]) >> 3) << 5) | (int(data[o + 2]) >> 3)
+			var n: int = int(counts.get(key, 0)) + 1
+			counts[key] = n
+			if n > best_n:
+				best_n = n
+				best_key = key
+		bg_bucket[x] = best_key
+	var has_ex: bool = exclude_face_rect.size.x > 0.0 and exclude_face_rect.size.y > 0.0
+	var ex_x0: int = int(floor(exclude_face_rect.position.x))
+	var ex_y0: int = int(floor(exclude_face_rect.position.y))
+	var ex_x1: int = int(ceil(exclude_face_rect.end.x))
+	var ex_y1: int = int(ceil(exclude_face_rect.end.y))
+	var edge: int = maxi(1, int(round(12.0 * sy)))
+	var first_row: int = -1
+	var last_row: int = -1
+	var ink_n: int = 0
+	for y2: int in range(edge, maxi(edge, h - edge)):
+		var row_ink: int = 0
+		for x2: int in range(w):
+			if has_ex and x2 >= ex_x0 and x2 < ex_x1 and y2 >= ex_y0 and y2 < ex_y1:
+				continue
+			var o2: int = (y2 * w + x2) * 4
+			var key2: int = ((int(data[o2]) >> 3) << 10) | ((int(data[o2 + 1]) >> 3) << 5) | (int(data[o2 + 2]) >> 3)
+			if key2 != bg_bucket[x2]:
+				row_ink += 1
+		ink_n += row_ink
+		if row_ink >= 4:
+			if first_row < 0:
+				first_row = y2
+			last_row = y2
+	if first_row < 0 or ink_n <= 0:
+		return Vector2(-1.0, 0.0)
+	return Vector2((float(first_row + last_row + 1) * 0.5) / sy, float(ink_n))
 
 
 static func make_solid(color: Color) -> Texture2D:

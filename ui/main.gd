@@ -4382,6 +4382,23 @@ func _board_ink_centroid(tex: Texture2D, exclude_face_rect: Rect2) -> Vector2:
 	return TextureFactory.ink_centroid(tex.get_image(), exclude_face_rect)
 
 
+## GRADFIX13 (item 1): the extent ruler - the midpoint of a
+## rendered face's first and last ink rows, judged against
+## the face's own FRAME. GF10's legs judged the ink MASS
+## (the centroid above) and passed a shipped board whose
+## visible composition - band top to last-row bottom -
+## rode 2.41% of frame height high, because the score
+## rows' solid panels pool the mass below the extent's
+## centre and the factory's correction chased the mass.
+## The legs below read the extent now (the factory's
+## correction pass uses the same measure); the centroid
+## helper stays for the record prints.
+func _board_ink_extent(tex: Texture2D, exclude_face_rect: Rect2) -> Vector2:
+	if tex == null:
+		return Vector2(-1.0, 0.0)
+	return TextureFactory.ink_extent(tex.get_image(), exclude_face_rect)
+
+
 func _grad_gf8_run_probes() -> void:
 	var now_unix: int = int(Time.get_unix_time_from_system())
 	# The board: the layout fixture's season challenge with
@@ -4471,22 +4488,33 @@ func _grad_gf8_legs() -> void:
 	# PVLDS_GRADFIX10_NC=deadplank the reservation returns,
 	# the content rides high again, and these legs fail by
 	# name.
+	# GRADFIX13 (item 1) restates the ruler: the field
+	# convicted the MASS centroid - it passed the shipped
+	# board at +0.44% while the composition's EXTENT rode
+	# -2.41% high (the score panels pool the mass low, so
+	# centring the mass parks the edges high). These legs
+	# now judge the ink EXTENT (first-to-last ink row)
+	# against the frame, same names, same 2% tolerance;
+	# under PVLDS_GF13_NC=inkmass the factory's correction
+	# chases the mass again and they fail by name. The
+	# seated-grab legs (the tournament smoke's "seated
+	# centre:") judge the same extent through the room.
 	var bex: Rect2 = bm.get("footer", Rect2())
-	var bink: Vector2 = _board_ink_centroid(_grad_gf10_board_tex, bex)
+	var bink: Vector2 = _board_ink_extent(_grad_gf10_board_tex, bex)
 	var bink_delta: float = bink.x - bface.y * 0.5
-	print("GRADFIX10 BOARD INK: centroid %.1f, frame centre %.1f, delta %.1f px (%.2f%% of frame height), ink %d px"
+	print("GRADFIX13 BOARD EXTENT: centre %.1f, frame centre %.1f, delta %.1f px (%.2f%% of frame height), ink %d px (the GF10 mass centroid on this face is the record print in the factory's history: it passed at +0.44%% while the extent rode -2.41%%)"
 		% [bink.x, bface.y * 0.5, bink_delta, 100.0 * bink_delta / maxf(1.0, bface.y), int(bink.y)])
 	_grad_expect(bink.y > 0.0 and absf(bink_delta) <= bface.y * 0.02,
-		"board centred: the many-rows board's content ink centres on its FRAME (ink centroid %.1f vs frame centre %.1f, delta %.1f px = %.2f%% of frame height, tolerance 2%%; GRADFIX8's above-plinth box ruler passed a board the field read 66 px high)"
+		"board centred: the many-rows board's content ink EXTENT centres on its FRAME (extent centre %.1f vs frame centre %.1f, delta %.1f px = %.2f%% of frame height, tolerance 2%%; GRADFIX10's ink-mass ruler passed this board while its composition rode 26 px high)"
 			% [bink.x, bface.y * 0.5, bink_delta, 100.0 * bink_delta / maxf(1.0, bface.y)])
 	var fface: Vector2 = _grad_gf10_few_m.get("face_size", Vector2.ZERO)
 	var fex: Rect2 = _grad_gf10_few_m.get("footer", Rect2())
-	var fink: Vector2 = _board_ink_centroid(_grad_gf10_few_tex, fex)
+	var fink: Vector2 = _board_ink_extent(_grad_gf10_few_tex, fex)
 	var fink_delta: float = fink.x - fface.y * 0.5
-	print("GRADFIX10 FEW INK: centroid %.1f, frame centre %.1f, delta %.1f px (%.2f%% of frame height), ink %d px"
+	print("GRADFIX13 FEW EXTENT: centre %.1f, frame centre %.1f, delta %.1f px (%.2f%% of frame height), ink %d px"
 		% [fink.x, fface.y * 0.5, fink_delta, 100.0 * fink_delta / maxf(1.0, fface.y), int(fink.y)])
 	_grad_expect(fink.y > 0.0 and absf(fink_delta) <= fface.y * 0.02,
-		"board frame-centred: the few-rows board's content ink centres on its FRAME (ink centroid %.1f vs frame centre %.1f, delta %.1f px = %.2f%% of frame height, tolerance 2%%)"
+		"board frame-centred: the few-rows board's content ink EXTENT centres on its FRAME (extent centre %.1f vs frame centre %.1f, delta %.1f px = %.2f%% of frame height, tolerance 2%%)"
 			% [fink.x, fface.y * 0.5, fink_delta, 100.0 * fink_delta / maxf(1.0, fface.y)])
 	# Item 1b: the library flip back's whole composition -
 	# TABLE DATA band, title, data rows - centred on the
@@ -10979,6 +11007,9 @@ func _tournament_leg_layout() -> void:
 	# so under PVLDS_GRADFIX10_NC=deadplank the high-riding
 	# content fails this leg by name, not masked by its own
 	# dead band.
+	# GRADFIX13 (item 1) restates it on the EXTENT ruler,
+	# like the grad legs: the mass centroid passed boards
+	# whose visible composition rode high.
 	var fc_ok: bool = true
 	var fc_why: String = ""
 	var fc_worst: float = 0.0
@@ -10990,19 +11021,28 @@ func _tournament_leg_layout() -> void:
 			fc_why = "probe %d has no texture" % idx2
 			break
 		var ex2: Rect2 = p2.get("footer_face_rect", Rect2())
-		var ink2: Vector2 = _board_ink_centroid(tex2, ex2)
+		var ink2: Vector2 = _board_ink_extent(tex2, ex2)
 		var fh2: float = float(tex2.get_height())
 		var d2: float = ink2.x - fh2 * 0.5
 		fc_worst = maxf(fc_worst, absf(d2))
-		print("GRADFIX10 LAYOUT INK board %d: centroid %.1f, frame centre %.1f, delta %.1f px (%.2f%% of frame height), ink %d px, rows %d"
+		print("GRADFIX13 LAYOUT EXTENT board %d: centre %.1f, frame centre %.1f, delta %.1f px (%.2f%% of frame height), ink %d px, rows %d"
 			% [idx2, ink2.x, fh2 * 0.5, d2, 100.0 * d2 / maxf(1.0, fh2), int(ink2.y), (p2.get("rows", []) as Array).size()])
 		if ink2.y <= 0.0 or absf(d2) > fh2 * 0.02:
 			fc_ok = false
-			fc_why = "board %d's ink centroid rides %.1f px from its frame centre (tolerance %.1f px)" % [idx2, d2, fh2 * 0.02]
+			fc_why = "board %d's ink extent rides %.1f px from its frame centre (tolerance %.1f px)" % [idx2, d2, fh2 * 0.02]
 			break
 	_tournament_expect(fc_ok,
-		"layout frame-centred: both boards' content ink centres on the FRAME (worst delta %.1f px, tolerance 2%% of frame height)%s"
+		"layout frame-centred: both boards' content ink EXTENT centres on the FRAME (worst delta %.1f px, tolerance 2%% of frame height)%s"
 			% [fc_worst, "" if fc_ok else " - " + fc_why])
+	# GRADFIX13 (item 1): the seated leg - the same extent
+	# judged on a rendered grab OF THE SEATED BOARD through
+	# the room path (the centred challenge's board, standing
+	# beside its card), not on a factory texture. The
+	# texture legs above are the record; this is the proof
+	# shape the field judges.
+	var sc_idx: int = _room.centre_index()
+	if sc_idx >= 0 and sc_idx < _room._board_nodes.size():
+		_gf13_seated_board_leg(sc_idx, "layout centre")
 
 
 ## Rendered-ink check for the layout score leg: within the
@@ -11740,6 +11780,140 @@ func _tournament_walk_judge_centre(i: int, row: Dictionary) -> void:
 		"selection walk: '%s' card front carries the pair's one Launch exactly when the challenge is his (owned %s)" % [tname, str(owned)])
 	_tournament_expect(_room.bookend_fin_count() == 0,
 		"pairing ends: no bookend fin stands in the Tournament view at '%s' (GRADFIX8: fins removed entirely, both views)" % tname)
+	# GRADFIX13 (item 1): the seated-centre proof for this
+	# board, on this grab - the pair stands centred and
+	# settled here, which is exactly the field's view.
+	_gf13_seated_board_leg(i, "selection walk")
+
+## GRADFIX13 (item 1): the seated-extent measure - the
+## centring proof the field actually judges. Given a
+## standing object's global transform and size, a rendered
+## grab of the room, and the room's camera, it walks
+## vertical profile lines across the object's own face in
+## the grab (projected from the object's 3D extent, so
+## perspective is the room's own), calls a sample ink when
+## its colour leaves the line's modal colour (the face's
+## page, which is constant down a column - the same ruling
+## as TextureFactory.ink_extent), and returns the ink
+## EXTENT's centre as a fraction of the object's height:
+## delta 0.0 is dead centre, -0.02 is 2% of the object's
+## height high. The outer 3% of each line is ignored (the
+## cover border / a card's frame lip lives there). This
+## replaces texture-space proof as the headline evidence:
+## GF8 measured the content's own box, GF10 its mass, and
+## the field convicted both - the seated object is the
+## only honest frame.
+func _gf13_seated_extent(gt: Transform3D, size: Vector2, img: Image, cam: Camera3D) -> Dictionary:
+	if img == null or img.is_empty() or cam == null:
+		return {"ok": false, "delta": 0.0, "why": "no grab or camera"}
+	var iw: float = float(img.get_width())
+	var ih: float = float(img.get_height())
+	for cx: float in [-0.5, 0.5]:
+		for cy: float in [-0.5, 0.5]:
+			var c3: Vector3 = gt * Vector3(size.x * cx, size.y * cy, 0.0)
+			if cam.is_position_behind(c3):
+				return {"ok": false, "delta": 0.0, "why": "a corner stands behind the camera"}
+			var sp: Vector2 = cam.unproject_position(c3)
+			if sp.x < 2.0 or sp.y < 2.0 or sp.x > iw - 3.0 or sp.y > ih - 3.0:
+				return {"ok": false, "delta": 0.0, "why": "a corner stands outside the grab"}
+	var fracs: Array[float] = [0.18, 0.30, 0.42, 0.58, 0.70, 0.82]
+	var samples: int = 240
+	var margin: int = int(float(samples) * 0.03)
+	var lines_hit: int = 0
+	var top_t: float = 1.0
+	var bot_t: float = 0.0
+	for fx: float in fracs:
+		var lx: float = lerpf(-size.x * 0.5, size.x * 0.5, fx)
+		var top3: Vector3 = gt * Vector3(lx, size.y * 0.5, 0.0)
+		var bot3: Vector3 = gt * Vector3(lx, -size.y * 0.5, 0.0)
+		var sp_top: Vector2 = cam.unproject_position(top3)
+		var sp_bot: Vector2 = cam.unproject_position(bot3)
+		var buckets: Array[int] = []
+		buckets.resize(samples)
+		var counts: Dictionary = {}
+		var best_key: int = -1
+		var best_n: int = -1
+		for si: int in range(samples):
+			var t: float = float(si) / float(samples - 1)
+			var p: Vector2 = sp_top.lerp(sp_bot, t)
+			var px: Color = img.get_pixel(
+				clampi(int(round(p.x)), 0, int(iw) - 1),
+				clampi(int(round(p.y)), 0, int(ih) - 1))
+			var key: int = ((int(px.r * 255.0) >> 3) << 10) | ((int(px.g * 255.0) >> 3) << 5) | (int(px.b * 255.0) >> 3)
+			buckets[si] = key
+			var n: int = int(counts.get(key, 0)) + 1
+			counts[key] = n
+			if n > best_n:
+				best_n = n
+				best_key = key
+		var first_i: int = -1
+		var last_i: int = -1
+		for sj: int in range(margin, samples - margin):
+			if buckets[sj] != best_key:
+				if first_i < 0:
+					first_i = sj
+				last_i = sj
+		if first_i >= 0:
+			lines_hit += 1
+			top_t = minf(top_t, float(first_i) / float(samples - 1))
+			bot_t = maxf(bot_t, float(last_i) / float(samples - 1))
+	if lines_hit < 3:
+		return {"ok": false, "delta": 0.0, "why": "only %d of %d profile lines found ink" % [lines_hit, fracs.size()]}
+	return {"ok": true, "delta": (top_t + bot_t) * 0.5 - 0.5, "why": "", "lines": lines_hit}
+
+
+## GRADFIX13 (item 1): one standing board's seated-centre
+## leg - grab the room as it stands (the caller has centred
+## the board's pair card and let the drum settle), save the
+## grab beside the boot, and judge the board's ink extent
+## against its standing quad's bounding box in the grab.
+## Tolerance adopted: 2% of the quad's height - the same
+## 2% the texture legs have always carried, now on the
+## object the player sees.
+func _gf13_seated_board_leg(i: int, tag: String) -> void:
+	var rows: Array = _room.tournament_rows()
+	var tname: String = _tournament_row_table_name(rows[i] as Dictionary) if i >= 0 and i < rows.size() else "?"
+	var node: MeshInstance3D = _room._board_nodes[i] as MeshInstance3D if i >= 0 and i < _room._board_nodes.size() else null
+	if node == null:
+		_tournament_expect(false, "seated centre: '%s' (%s) has a standing board node to grab" % [tname, tag])
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	var grab_dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if grab_dir != "" and img != null and not img.is_empty():
+		img.save_png(grab_dir.path_join("gf13_board_%d.png" % i))
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	var res: Dictionary = _gf13_seated_extent(node.global_transform, RoomSpecs.board_panel_size(), img, cam)
+	var shape: String = "shape unread"
+	if i >= 0 and i < rows.size():
+		var rd: Dictionary = rows[i] as Dictionary
+		var ch: WovpChallenge = rd.get("challenge") as WovpChallenge
+		if ch != null:
+			var spec: Dictionary = RoomSpecs.tournament_board_spec(
+				ch, bool(rd.get("owned", false)), _wovp_user_id,
+				int(Time.get_unix_time_from_system()), bool(rd.get("build_owned", false)))
+			var srows: int = 0
+			var notes: int = 0
+			var his: bool = false
+			for rv: Variant in (spec.get("rows", []) as Array):
+				if rv is Dictionary:
+					var rk: String = str((rv as Dictionary).get("kind", ""))
+					if rk == "score":
+						srows += 1
+						if bool((rv as Dictionary).get("accent", false)):
+							his = true
+					elif rk == "note":
+						notes += 1
+			shape = "%d score rows, his row %s, %d notes, %d chips" % [
+				srows, str(his), notes, (spec.get("chips", []) as Array).size()]
+	var delta: float = float(res.get("delta", 0.0))
+	print("GRADFIX13 SEATED board %d '%s' (%s): extent delta %.2f%% of quad height%s, shape %s"
+		% [i, tname, tag, 100.0 * delta,
+			"" if bool(res.get("ok", false)) else " - " + str(res.get("why", "")), shape])
+	_tournament_expect(bool(res.get("ok", false)) and absf(delta) <= 0.02,
+		"seated centre: '%s' board's ink extent centres on its STANDING QUAD in the room grab (delta %.2f%% of quad height, tolerance 2%%; shape: %s)%s"
+			% [tname, 100.0 * delta, shape,
+				"" if bool(res.get("ok", false)) else " - " + str(res.get("why", ""))])
+
 
 ## The wing-sized board probe (layout mode, GRADFIX2
 ## item 2): the field's own board - the Phantom extra from
