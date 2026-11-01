@@ -711,6 +711,19 @@ static var debug_gf10_nc: String = ""
 ## (see _wall_driver_mode), so the motion smoke's live
 ## toggle leg fails by name. Empty in every real run.
 static var debug_gf12_nc: String = ""
+## Negative-control seams for GRADFIX13 items 3+4 (the
+## harness env PVLDS_GF13_NC, set by Main before any room
+## exists): "steprepeat" restores the convicted held-stick
+## shape - every auto-repeat tick of the pad poll feeds a
+## fresh discrete step into the SMOOTH driver and no
+## hold-cruise ever arms (item 3) - so the motion smoke's
+## held-cruise leg fails by name; "oldascent" restores the
+## shipped rail->rows ascent - UP from the rail falls
+## through to the screen-projection walk instead of taking
+## the deterministic ascent edge (item 4) - so the nav
+## smoke's vertical-wall-law legs fail by name. Empty in
+## every real run.
+static var debug_gf13_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
@@ -7363,6 +7376,83 @@ func _descend_to_bar() -> void:
 		_set_focused(best)
 
 
+## The panel standing in a column whose band is nearest a
+## preferred band, or -1 when the column holds no panel
+## (the trigger anchors' landing shape, shared): at a
+## partial column the nearest band takes the landing -
+## never a neighbouring column.
+func _panel_in_column(col: int, pref_band: int) -> int:
+	var best: int = -1
+	var best_d: int = 999999
+	for i: int in range(_panels.size()):
+		var c: Vector2i = _grid_coord(i)
+		if c.x != col:
+			continue
+		var d: int = absi(c.y - pref_band)
+		if d < best_d:
+			best_d = d
+			best = i
+	return best
+
+
+## THE VERTICAL WALL LAW (GRADFIX13 item 4 - the mirror of
+## the standing focus law "picks move the wall, never the
+## focus"): a purely vertical focus change between the rail
+## and the card rows - either direction - NEVER changes the
+## drum's seated column. Chris's field report: "when down
+## in filter bar, and you bump straight up to table rows,
+## it advances the wall one slot to right."
+##
+## The convicted mechanism: the DESCENT (rows -> rail) has
+## been a deterministic graph edge since GRADFIX3
+## (_descend_to_bar), but the ASCENT (rail -> rows) had no
+## edge of its own - UP from a rail stop fell through to
+## the screen-projection walk at the bottom of _move_focus,
+## which scores every focusable by its unprojected screen
+## position. The rail's stops are spread ~80 degrees of
+## azimuth at their near seat while the wall's columns
+## pitch 13.5 degrees on the far drum, so a stop's screen
+## projection commonly sits under the card one column off
+## the seated centre (a stop right of screen centre scores
+## the centre+1 column's bottom card best). Focus landed
+## there, and _follow_centre - doing exactly its job -
+## re-seated the drum on the focused card's column: the
+## wall advanced one slot right, on a press that asked
+## only to go up. The descent never did this because it
+## never passes through the projection walk; the ascent
+## was asymmetric with it.
+##
+## THE ASCENT LANDING RULE (deterministic, projection-
+## free, the descent's mirror): UP from any rail stop
+## lands on the CENTRE column's card on the centre band -
+## the column is the drum's seated centre column (the
+## column of _centre_index, the centre the bookkeeping
+## committed, even mid-swing) and the band is that centre
+## card's own band. There is no remembered "last band":
+## the row landed on is the band the wall currently
+## declares as its centre, which is the band focus stood
+## on when it descended (focus moves the centre), and a
+## strip -> rail -> rows climb after other browsing lands
+## on the standing centre's band for the same reason. At a
+## shelf edge, where the centre column stands PARTIAL and
+## holds no card on the centre band, the landing is that
+## column's card nearest the centre band (_panel_in_
+## column) - the column never yields to a neighbour.
+## Because the landing IS the centre card (or its partial-
+## column stand-in in the same column), _follow_centre
+## finds the centre already standing where focus landed:
+## the drum does not move, in either dial position, at
+## any pacing. The NC value "oldascent" skips this edge
+## and restores the projection ascent for the harness.
+func _ascend_to_rows() -> void:
+	if _panels.is_empty() or _centre_index < 0 or _centre_index >= _panels.size():
+		return
+	var centre_coord: Vector2i = _grid_coord(_centre_index)
+	var idx: int = _panel_in_column(centre_coord.x, centre_coord.y)
+	if idx >= 0:
+		_set_focused(_panels[idx])
+
+
 ## A sideways step in the Tournament Room (GRADFIX7 item
 ## 2): land on the NEAREST CARD COLUMN in that direction -
 ## board columns are skipped, the ends clamp (no card that
@@ -7477,6 +7567,18 @@ func _move_focus(dir: Vector2) -> void:
 			# and the one the field convicted ("cant't
 			# exit tournie screen, cant get back down to
 			# bar once up top").
+	# The ascent to the rows (GRADFIX13 item 4): UP from a
+	# rail stop is a graph edge of its own - the vertical
+	# wall law's edge (see _ascend_to_rows) - never a fall
+	# through to the projection walk below, whose scoring
+	# lands one column off centre and drags the drum with
+	# it. The strip's UP is a different edge (strip -> rail,
+	# one rung only) and keeps the walk below, whose country
+	# rules already bar it from reaching the grid.
+	if absf(dir.y) > 0.5 and dir.y < 0.0 and _is_rail_quad(_focused) and _mode == "wall" \
+			and debug_gf13_nc != "oldascent":
+		_ascend_to_rows()
+		return
 	# The rail is its own navigation country (Chris's field
 	# report, 2026-10-24): a sideways step along the control rail
 	# used to be scored against every quad in the room, and the

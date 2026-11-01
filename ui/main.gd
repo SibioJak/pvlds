@@ -274,6 +274,8 @@ var _nav_fav_started: bool = false ## the X-favorites leg runs async (feeds + re
 var _nav_fav_done: bool = false ## the X-favorites leg (async) has reported
 var _nav_b_started: bool = false ## the B-exit leg (GRADFIX4 item 4) runs async; kicked off once
 var _nav_b_done: bool = false ## the B-exit leg has reported
+var _nav_vertical_started: bool = false ## the GRADFIX13 vertical-law leg runs async (it lets frames pass so _follow_centre can act); kicked off once
+var _nav_vertical_done: bool = false ## the GRADFIX13 vertical-law leg has reported
 var _shot_slide_path: String = "" ## --pvlds-shot-slide P: capture the drum mid-swing
 var _shot_slide_phase: int = -1
 var _shot_slide_frames: int = 0
@@ -610,6 +612,14 @@ func _ready() -> void:
 	# leg fails against it by name. Set here, before any
 	# room exists.
 	RoomView.debug_gf12_nc = OS.get_environment("PVLDS_GRADFIX12_NC")
+	# GRADFIX13's negative-control seams (PVLDS_GF13_NC=
+	# steprepeat | oldascent): steprepeat restores the
+	# per-repeat discrete stepping under SMOOTH (item 3, the
+	# held-cruise leg fails by name); oldascent restores the
+	# projection-walk rail->rows ascent (item 4, the
+	# vertical-wall-law legs fail by name). Set here, before
+	# any room exists.
+	RoomView.debug_gf13_nc = OS.get_environment("PVLDS_GF13_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -7282,6 +7292,22 @@ func _xpress_class_async(entry: Dictionary) -> void:
 ##          the stated landing - the panel that took its slot,
 ##          or the ALL fallback's first panel when the set
 ##          empties.
+##   leg 9: THE VERTICAL WALL LAW (GRADFIX13 item 4): from
+##          EVERY stop in RAIL_FOCUS_ORDER (wovp_refresh
+##          inside the Tournament view, the only view where
+##          it is pickable), UP lands on the centre column's
+##          card on the centre band - the centre panel
+##          itself - and DOWN returns to the rail, with the
+##          drum's seated column and the swing's target yaw
+##          asserted identical across both moves; seat
+##          variants cover the bottom band and the partial
+##          last column, and the strip path (strip -> rail
+##          -> rows and back) rides the same assertions.
+##          The leg is async: it lets frames pass after each
+##          press so _follow_centre can act on the landing -
+##          under PVLDS_GF13_NC=oldascent the ascent falls
+##          back to the projection walk and these legs fail
+##          by name on those frames.
 ## The driver forces the ALL filter through the room's own rail
 ## handler so the wall always holds a full bottom row. Leg 5
 ## needs more pages than the dummy library's ten games give, so
@@ -7390,7 +7416,8 @@ func _drive_nav_smoke() -> void:
 				_nav_leg_favorites_async()
 		8:
 			if _nav_b_done:
-				_finish_nav_smoke()
+				_nav_smoke_wait = 0
+				_nav_smoke_phase = 9
 				return
 			_nav_smoke_wait += 1
 			if _nav_smoke_wait > 7200:
@@ -7399,6 +7426,17 @@ func _drive_nav_smoke() -> void:
 			elif not _nav_b_started and _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
 				_nav_b_started = true
 				_nav_leg_b_exit_async()
+		9:
+			if _nav_vertical_done:
+				_finish_nav_smoke()
+				return
+			_nav_smoke_wait += 1
+			if _nav_smoke_wait > 7200:
+				_nav_smoke_fail("the vertical-law leg never finished")
+				_finish_nav_smoke()
+			elif not _nav_vertical_started and _room != null and _room.wall_ready and _nav_smoke_wait >= 4:
+				_nav_vertical_started = true
+				_nav_leg_vertical_async()
 
 
 func _nav_expect(cond: bool, label: String) -> void:
@@ -8387,6 +8425,175 @@ func _nav_leg_b_exit_async() -> void:
 	_nav_b_done = true
 
 
+## Leg 9 (GRADFIX13 item 4): THE VERTICAL WALL LAW - a
+## purely vertical focus change between the rail and the
+## card rows, either direction, NEVER changes the drum's
+## seated column (the room states the law and the ascent
+## landing rule at RoomView._ascend_to_rows). The leg is
+## async by necessity: the convicted wall move is not the
+## press itself but _follow_centre acting on the landing
+## over the frames AFTER it, so every press here is
+## followed by real frames before the verdict - a
+## synchronous assert would pass trivially even under the
+## NC. From every rail stop: UP must land exactly on the
+## centre panel (the centre column's card on the centre
+## band) with the centre index and the swing target yaw
+## untouched; DOWN must return to the rail with the seated
+## column and target still untouched. Seat variants: the
+## centre standing on the bottom band, and the centre on
+## the shelf's partial last column (its one card takes the
+## landing - the column never yields to a neighbour). The
+## strip path (strip -> rail -> rows and back down) rides
+## the same assertions. wovp_refresh is pickable only
+## while the Tournament Room stands, so its round trip
+## runs in there. Under PVLDS_GF13_NC=oldascent the ascent
+## falls back to the projection walk, focus lands a column
+## off centre, _follow_centre re-seats the drum - and
+## these legs fail by name.
+func _nav_leg_vertical_async() -> void:
+	# Order note: the Tournament round trips run FIRST and
+	# the partial-last-column seat LAST. This box's GLES3
+	# teardown-class heap aborts strike late in long nav
+	# runs (base d156f42 dies the same death in its phase
+	# 7), and the far-end seat - a full-shelf swing plus the
+	# centred card's power-on mimic starting - is the
+	# heaviest moment in the leg; everything else must have
+	# reported before the leg walks out there.
+	# wovp_refresh, inside the Tournament view (the only
+	# view where it is pickable).
+	_room._handle_rail("tournament")
+	await _nav_await_ready()
+	if not _room.tournament_active() or _room._panels.is_empty():
+		_nav_smoke_fail("vertical wall law: the Tournament view never stood for the wovp_refresh leg")
+	else:
+		_room._set_focused(_room._panels[0])
+		await _nav_await_centre(0)
+		await _nav_vertical_stop("wovp_refresh")
+		await _nav_vertical_stop("tournament")
+	_room._handle_rail("filter:all")
+	await _nav_await_ready()
+	# Seat the centre on a known middle-band panel.
+	var seat_idx: int = _room._index_at(4, 1)
+	_room._set_focused(_room._panels[seat_idx])
+	await _nav_await_centre(seat_idx)
+	for key: String in RoomView.RAIL_FOCUS_ORDER:
+		if key == "wovp_refresh":
+			continue ## judged inside the Tournament view above
+		await _nav_vertical_stop(key)
+	# Seat variant: the centre standing on the bottom band -
+	# the ascent must land on THAT band's card.
+	var low_idx: int = _room._index_at(4, 2)
+	_room._set_focused(_room._panels[low_idx])
+	await _nav_await_centre(low_idx)
+	await _nav_vertical_stop("sort")
+	# The letter strip's path, up and back down.
+	await _nav_vertical_strip()
+	# Seat variant, last: the centre on the partial last
+	# column (the fixture's last column holds a single
+	# card - the landing is that column's card; the column
+	# never yields to a neighbour).
+	var last_idx: int = _room._panels.size() - 1
+	_room._set_focused(_room._panels[last_idx])
+	await _nav_await_centre(last_idx)
+	await _nav_vertical_stop("sort")
+	_nav_vertical_done = true
+
+
+## One rail stop's vertical-law round trip (see
+## _nav_leg_vertical_async): the ascent's landing asserted
+## exactly - the centre panel itself - and the seated
+## column + swing target asserted identical across the
+## ascent and across the whole round trip.
+func _nav_vertical_stop(key: String) -> void:
+	var stop: ClickableQuad = _room.rail_quad(key)
+	if stop == null or not stop.pick_enabled:
+		_nav_smoke_fail("vertical wall law: rail stop %s is not standing/pickable in this view" % key)
+		return
+	var centre_idx: int = _room.centre_index()
+	var centre_panel: ClickableQuad = _room._panels[centre_idx]
+	var centre_col: int = _room._grid_coord(centre_idx).x
+	var target0: float = _room.swing_target_rad()
+	_room._set_focused(stop)
+	for i: int in range(3):
+		await get_tree().process_frame
+	_nav_expect(_room.centre_index() == centre_idx and absf(_room.swing_target_rad() - target0) < 0.0001,
+		"vertical wall law: focusing rail stop %s leaves the wall seated" % key)
+	_room._move_focus(Vector2(0.0, -1.0))
+	for i: int in range(6):
+		await get_tree().process_frame
+	_nav_expect(_room.focused_quad() == centre_panel,
+		"vertical wall law: UP from %s lands on the centre column's card on the centre band" % key)
+	_nav_expect(_room.centre_index() == centre_idx,
+		"vertical wall law: UP from %s leaves the centre index seated" % key)
+	_nav_expect(absf(_room.swing_target_rad() - target0) < 0.0001,
+		"vertical wall law: UP from %s leaves the swing target unmoved" % key)
+	# Back down: within-column band steps first when the
+	# centre band is not the bottom, then the descent edge.
+	var back: bool = false
+	for press: int in range(3):
+		_room._move_focus(Vector2(0.0, 1.0))
+		for i: int in range(4):
+			await get_tree().process_frame
+		if _nav_key_of(_room.focused_quad()) != "":
+			back = true
+			break
+	_nav_expect(back, "vertical wall law: DOWN from the rows returns to the rail (from %s)" % key)
+	_nav_expect(_room._grid_coord(_room.centre_index()).x == centre_col and absf(_room.swing_target_rad() - target0) < 0.0001,
+		"vertical wall law: the round trip from %s leaves the drum's seated column unchanged" % key)
+
+
+## The strip's vertical-law round trip: strip -> rail ->
+## rows, then back down rows -> rail -> strip, with the
+## seated column and the swing target asserted unmoved at
+## every rung (the ascent's landing is the centre card,
+## exactly as from any rail stop).
+func _nav_vertical_strip() -> void:
+	var strip_q: ClickableQuad = null
+	for k: Variant in _room._strip_quads.keys():
+		if _room.strip_slot_pickable(str(k)):
+			strip_q = _room.letter_quad(str(k))
+			break
+	if strip_q == null:
+		_nav_smoke_fail("vertical wall law: no pickable strip slot for the strip path leg")
+		return
+	var centre_idx: int = _room.centre_index()
+	var centre_col: int = _room._grid_coord(centre_idx).x
+	var target0: float = _room.swing_target_rad()
+	_room._set_focused(strip_q)
+	for i: int in range(3):
+		await get_tree().process_frame
+	_room._move_focus(Vector2(0.0, -1.0))
+	for i: int in range(6):
+		await get_tree().process_frame
+	_nav_expect(_nav_key_of(_room.focused_quad()) != "",
+		"vertical wall law: UP from the strip lands on the rail")
+	_nav_expect(_room._grid_coord(_room.centre_index()).x == centre_col and absf(_room.swing_target_rad() - target0) < 0.0001,
+		"vertical wall law: strip -> rail leaves the drum's seated column unchanged")
+	_room._move_focus(Vector2(0.0, -1.0))
+	for i: int in range(6):
+		await get_tree().process_frame
+	_nav_expect(_room.focused_quad() == _room._panels[_room.centre_index()],
+		"vertical wall law: rail -> rows after the strip lands on the centre card")
+	_nav_expect(_room.centre_index() == centre_idx and absf(_room.swing_target_rad() - target0) < 0.0001,
+		"vertical wall law: strip -> rail -> rows leaves the drum's seated column unchanged")
+	var back_rail: bool = false
+	for press: int in range(3):
+		_room._move_focus(Vector2(0.0, 1.0))
+		for i: int in range(4):
+			await get_tree().process_frame
+		if _nav_key_of(_room.focused_quad()) != "":
+			back_rail = true
+			break
+	_nav_expect(back_rail, "vertical wall law: DOWN from the rows returns to the rail (strip path)")
+	_room._move_focus(Vector2(0.0, 1.0))
+	for i: int in range(6):
+		await get_tree().process_frame
+	_nav_expect(_room._is_strip_quad(_room.focused_quad()),
+		"vertical wall law: DOWN from the rail returns to the strip")
+	_nav_expect(_room._grid_coord(_room.centre_index()).x == centre_col and absf(_room.swing_target_rad() - target0) < 0.0001,
+		"vertical wall law: the strip round trip leaves the drum's seated column unchanged")
+
+
 func _nav_feed_button(btn: JoyButton) -> void:
 	var press: InputEventJoypadButton = InputEventJoypadButton.new()
 	press.device = 0
@@ -8875,6 +9082,7 @@ func _drive_letters_smoke() -> void:
 				_letters_leg_jump()
 				_letters_leg_the_net()
 				_letters_leg_number_net()
+				_letters_leg_vertical_wall()
 				_letters_smoke_wait = 0
 				_letters_smoke_phase = 2
 		2:
@@ -9375,6 +9583,38 @@ func _letters_leg_number_net() -> void:
 	_letters_expect(_room.active_letter_net() == "" and _room.focused_quad() == _room.letter_quad("F")
 		and _room._panels.size() > 3 and _room._panels[3].payload == "O1-qbuxg",
 		"# net: picking a letter exits at that letter (focus on F, the wall shows Funhouse)")
+
+
+## THE VERTICAL WALL LAW on the strip's own route
+## (GRADFIX13 item 4): from a strip slot, UP climbs to the
+## rail, and UP again must land on the CENTRE column's
+## card - the centre panel itself - with the centre column
+## exactly where it stood. State-level, like the other
+## phase-1 legs; the nav smoke's leg 9 judges the same law
+## over frames from every rail stop. Under
+## PVLDS_GF13_NC=oldascent the ascent falls back to the
+## projection walk, focus lands a column off centre, and
+## this leg fails by name on the landing itself.
+func _letters_leg_vertical_wall() -> void:
+	var centre_idx: int = _room.centre_index()
+	var centre_col: int = _room._grid_coord(centre_idx).x
+	var slot: String = ""
+	for k: String in ["A", "F", "W", "THE", "#"]:
+		if _room.strip_slot_pickable(k):
+			slot = k
+			break
+	_letters_expect(slot != "", "vertical wall law: a pickable strip slot stands for the climb")
+	if slot == "":
+		return
+	_room._set_focused(_room.letter_quad(slot))
+	_room._move_focus(Vector2(0.0, -1.0))
+	_letters_expect(_nav_key_of(_room.focused_quad()) != "",
+		"vertical wall law: UP from the strip lands on the rail (from slot %s)" % slot)
+	_room._move_focus(Vector2(0.0, -1.0))
+	_letters_expect(_room.focused_quad() == _room._panels[_room.centre_index()],
+		"vertical wall law: UP from the rail lands on the centre column's card (centre %d, focus panel %d)" % [_room.centre_index(), _room._panels.find(_room.focused_quad())])
+	_letters_expect(_room.centre_index() == centre_idx and _room._grid_coord(_room.centre_index()).x == centre_col,
+		"vertical wall law: the strip -> rail -> rows climb leaves the centre column seated")
 
 
 ## Fault 1's legs (Chris, 2026-10-27: the highlight "doesn't
