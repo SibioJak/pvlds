@@ -297,6 +297,35 @@ func is_vr_tagged() -> bool:
 	return false
 
 
+## GRADFIX11 (the NEW filter, Chris's order): how long a
+## game counts as new - thirty days from its newest file
+## fact (see newest_stamp).
+const NEW_WINDOW_SEC: int = 30 * 86400
+
+
+## The game's newest file-age stamp: the max over its
+## builds of max(first seen, last changed), from the
+## StateStore tracker's stamps Main applies when a scan
+## lands. 0 when no build carries a stamp (never tracked).
+func newest_stamp() -> int:
+	var best: int = 0
+	for b: TableBuild in builds:
+		best = maxi(best, maxi(b.first_seen_unix, b.last_changed_unix))
+	return best
+
+
+## Whether this game is NEW: its newest file fact falls
+## inside NEW_WINDOW_SEC of now. Deliberately the
+## any-build rule, mirroring is_vr_tagged's shape: an
+## updated build landing beside the old one is exactly
+## Chris's install flow, so the game is new when its
+## newest file fact is new - an old build standing beside
+## it does not age the game.
+func is_new(now: int) -> bool:
+	var stamp: int = newest_stamp()
+	return stamp > 0 and now - stamp <= NEW_WINDOW_SEC
+
+
 ## PuP-flagged (GRADFIX6 item 5): deliberately NOT the
 ## any-build rule is_vr_tagged uses. The flag describes the
 ## build the wall launches by default and the card's back

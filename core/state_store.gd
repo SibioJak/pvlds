@@ -19,6 +19,21 @@ var view_filter: String = ""
 var view_sort: String = ""
 var view_page: int = 0
 var selected_game_id: String = ""
+# GRADFIX11 (the NEW filter, Chris's order): the file-age
+# tracker. Scan results are not otherwise persisted, so
+# the library's memory of when each .vpx file first
+# appeared - and when its mtime/size signature last
+# changed - lives here, in the library's existing
+# persisted state. path -> {"first": int, "changed": int,
+# "mtime": int, "size": int}: "first"/"changed" are the
+# NEW verdict's stamps (see apply_scan_facts), "mtime"/
+# "size" the last signature those stamps were judged
+# against. file_ages_seeded marks that the one-time
+# seeding pass (first = each file's own mtime, so a
+# library scanned for the first time does not read as
+# all-new) has happened.
+var file_ages: Dictionary = {}
+var file_ages_seeded: bool = false
 
 
 static func state_path() -> String:
@@ -59,6 +74,26 @@ func load_from_disk() -> void:
 	view_sort = str(d.get("view_sort", ""))
 	view_page = int(d.get("view_page", 0))
 	selected_game_id = str(d.get("selected_game_id", ""))
+	# GRADFIX11: the file-age tracker round-trips with the
+	# rest of the state, parsed as tolerantly as the fields
+	# above - a record that is not a dictionary, or a state
+	# file written before the tracker existed, simply
+	# leaves that path (or the whole map) untracked.
+	file_ages.clear()
+	var ages: Variant = d.get("file_ages", {})
+	if ages is Dictionary:
+		var ad: Dictionary = ages
+		for k: Variant in ad.keys():
+			var age_rec: Variant = ad[k]
+			if age_rec is Dictionary:
+				var rd: Dictionary = age_rec
+				file_ages[str(k)] = {
+					"first": int(rd.get("first", 0)),
+					"changed": int(rd.get("changed", 0)),
+					"mtime": int(rd.get("mtime", 0)),
+					"size": int(rd.get("size", 0)),
+				}
+	file_ages_seeded = bool(d.get("file_ages_seeded", false))
 
 
 func save_to_disk() -> void:
@@ -78,6 +113,8 @@ func save_to_disk() -> void:
 	d["view_sort"] = view_sort
 	d["view_page"] = view_page
 	d["selected_game_id"] = selected_game_id
+	d["file_ages"] = file_ages
+	d["file_ages_seeded"] = file_ages_seeded
 	var file: FileAccess = FileAccess.open(StateStore.state_path(), FileAccess.WRITE)
 	if file == null:
 		return
@@ -125,3 +162,77 @@ func set_view_state(filter: String, sort: String, page: int, selected: String) -
 	view_page = page
 	if selected != "":
 		selected_game_id = selected
+
+
+## GRADFIX11 (the NEW filter): fold one landed scan's file
+## facts into the tracker. facts is path -> {"mtime": int,
+## "size": int} - the scanner's raw signature for every
+## .vpx the scan found, built by Main in _finish_scan (the
+## scan itself records the facts on each TableBuild and
+## stays pure; this merge is main-thread, once per landed
+## scan). Rules:
+## - First ever run (not seeded): a file's first-seen is
+##   its own MTIME, not the scan time - the existing
+##   library's ages are its files' real ages, so only
+##   files whose mtimes fall inside the NEW window read
+##   as new, and a first scan never floods the filter.
+## - After seeding: a path with no record is a genuine
+##   arrival - first-seen is the SCAN time (now), however
+##   old the file's mtime is (a table downloaded from an
+##   old zip is new TO THE LIBRARY when it lands).
+## - A recorded path whose mtime or size moved has
+##   changed in place: "changed" becomes now, first-seen
+##   is preserved (the game is new AGAIN, not new-born).
+## - An identical signature leaves the record untouched.
+## - A recorded path absent from facts is forgotten: a
+##   deleted file's record dies with it, so the same path
+##   returning in a later scan is first-seen again.
+## NC seam (the house pattern, cf. LibraryScanner.
+## _referee_survivors): PVLDS_GRADFIX11_NC=notrack makes
+## this a no-op - nothing is ever recorded - so the core
+## test's "new filter:" legs fail against it by name.
+func apply_scan_facts(facts: Dictionary, now: int) -> void:
+	if OS.get_environment("PVLDS_GRADFIX11_NC") == "notrack":
+		return
+	var seeding: bool = not file_ages_seeded
+	for path_v: Variant in facts.keys():
+		var path: String = str(path_v)
+		var fact_v: Variant = facts[path_v]
+		if not (fact_v is Dictionary):
+			continue
+		var fact: Dictionary = fact_v
+		var mtime: int = int(fact.get("mtime", 0))
+		var size: int = int(fact.get("size", 0))
+		var rec_v: Variant = file_ages.get(path, null)
+		if rec_v is Dictionary:
+			var rec: Dictionary = rec_v
+			if int(rec.get("mtime", 0)) != mtime or int(rec.get("size", 0)) != size:
+				rec["changed"] = now
+				rec["mtime"] = mtime
+				rec["size"] = size
+				file_ages[path] = rec
+			# Identical signature: the record stands as is.
+		else:
+			var stamp: int = mtime if seeding else now
+			file_ages[path] = {"first": stamp, "changed": stamp, "mtime": mtime, "size": size}
+	# Forgetting: any recorded path this scan did not see
+	# is gone from the library, and its record goes with it.
+	var gone: Array[String] = []
+	for known_v: Variant in file_ages.keys():
+		var known: String = str(known_v)
+		if not facts.has(known):
+			gone.append(known)
+	for known_path: String in gone:
+		file_ages.erase(known_path)
+	file_ages_seeded = true
+
+
+## A file's recency for the NEW verdict: the later of its
+## first-seen and last-changed stamps, 0 when the tracker
+## holds no record of the path.
+func file_recency(path: String) -> int:
+	var rec_v: Variant = file_ages.get(path, null)
+	if rec_v is Dictionary:
+		var rec: Dictionary = rec_v
+		return maxi(int(rec.get("first", 0)), int(rec.get("changed", 0)))
+	return 0

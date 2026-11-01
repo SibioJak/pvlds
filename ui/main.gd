@@ -890,6 +890,31 @@ func _finish_scan() -> void:
 	_last_db_ok = _worker_db_ok
 	_last_db_path = _worker_db_path
 	_last_db_kind = _worker_db_kind
+	# GRADFIX11 (the NEW filter): the file-age tracker folds
+	# this scan's facts in and stamps every build with its
+	# first-seen / last-changed verdicts - main thread, once
+	# per landed scan, before the room adopts the library
+	# (and before the summary below is built), so every
+	# reader of the new library sees stamped builds. The
+	# scan stayed pure: it only recorded each file's mtime
+	# and size on its TableBuild; the merge and the stamps
+	# are the StateStore's, and the store saves here so the
+	# ages survive the exit/relaunch cycle like the rest of
+	# the state.
+	if _scanner != null and _state != null:
+		var facts: Dictionary = {}
+		for g: GameEntry in _scanner.games:
+			for b: TableBuild in g.builds:
+				facts[b.file_path] = {"mtime": b.file_mtime, "size": b.file_size}
+		_state.apply_scan_facts(facts, int(Time.get_unix_time_from_system()))
+		for g2: GameEntry in _scanner.games:
+			for b2: TableBuild in g2.builds:
+				var rec_v: Variant = _state.file_ages.get(b2.file_path, null)
+				if rec_v is Dictionary:
+					var rec: Dictionary = rec_v
+					b2.first_seen_unix = int(rec.get("first", 0))
+					b2.last_changed_unix = int(rec.get("changed", 0))
+		_state.save_to_disk()
 	var summary: String = build_scan_summary()
 	if _desk != null:
 		_desk.apply_scan_summary(summary)
@@ -6187,8 +6212,8 @@ func _grad_census_verdicts() -> void:
 	var status_sz: Vector2 = bar.get("status_size", Vector2.ZERO)
 	print("GRAD CONSOLE: rail span %.3f m (pre-Console 4.225, pass 1 2.964), strip span %.3f m, %d rail stops, %d strip slots, status plate %s, tile height %.3f m, rail/strip gap %.3f m"
 		% [rail_span, strip_span, int(bar.get("rail_stops", 0)), int(bar.get("strip_slots", 0)), str(status_sz), float(bar.get("rail_tile_h", 0.0)), float(bar.get("rail_strip_gap", 0.0))])
-	_grad_expect(rail_span > 0.0 and rail_span <= 2.75 and int(bar.get("rail_stops", 0)) == 10 and status_sz.x <= 2.0,
-		"console bar: the rail is tightened to the pass-2 Console span and carries 10 stops (span %.3f m of the pre-Console 4.225 - %.0f%% - %d stops, status plate %.2f m wide; GRADFIX8 item 6: the count drops 12 -> 10 on Chris's order - the < > pager stops are removed, the page readout is not a stop and stays)"
+	_grad_expect(rail_span > 0.0 and rail_span <= 2.75 and int(bar.get("rail_stops", 0)) == 11 and status_sz.x <= 2.0,
+		"console bar: the rail is tightened to the pass-2 Console span and carries 11 stops (span %.3f m of the pre-Console 4.225 - %.0f%% - %d stops, status plate %.2f m wide; GRADFIX8 item 6: the count drops 12 -> 10 on Chris's order - the < > pager stops are removed, the page readout is not a stop and stays; GRADFIX11: the count rises 10 -> 11 on Chris's order - the NEW filter tile joins the rail)"
 			% [rail_span, rail_span / 4.225 * 100.0, int(bar.get("rail_stops", 0)), status_sz.x])
 	_grad_expect(strip_span > 0.0 and strip_span <= rail_span and int(bar.get("strip_slots", 0)) >= 27,
 		"console bar: the strip condenses inside the bar's span and keeps every slot (strip %.3f m within rail %.3f m, %d slots)"
@@ -7249,8 +7274,8 @@ func _nav_key_of(q: ClickableQuad) -> String:
 
 func _nav_leg_rail_walk() -> void:
 	var order: Array[String] = [
-		"filter:all", "filter:vr", "filter:favorites", "filter:recents",
-		"sort", "tournament", "desk", "exit"] ## GRADFIX8 (item 6): page_prev/page_next removed with the pager stops (Chris's order)
+		"filter:all", "filter:vr", "filter:favorites", "filter:recents", "filter:new",
+		"sort", "tournament", "desk", "exit"] ## GRADFIX8 (item 6): page_prev/page_next removed with the pager stops (Chris's order). GRADFIX11: filter:new walks with the rail after filter:recents (Chris's order)
 	# The Tournament Room round's stops: TOURNAMENT walks
 	# with the rail always; REFRESH is a stop only while the
 	# Tournament Room stands, so this library-mode walk
@@ -12184,6 +12209,210 @@ func _run_core_test() -> void:
 		"last-played persists across the exit/relaunch cycle", failures)
 	_expect(store3.view_filter == "vr" and store3.view_sort == "year" and store3.view_page == 3 and store3.selected_game_id == "dg-cinder-peak",
 		"room view state persists (filter/sort/page/selection)", failures)
+
+	# --- GRADFIX11: the NEW filter's file-age tracker. Synthetic
+	# facts and injected clocks throughout (ages exact to the
+	# second); only leg (f) touches real files. Every leg is
+	# prefixed "new filter:" - under PVLDS_GRADFIX11_NC=notrack
+	# apply_scan_facts records nothing, so these legs fail by
+	# name and the NC is proven.
+	var nf_day: int = 86400
+	var nf_now: int = 1800000000
+	var nf_p1: String = "/nf/One Day.vpx"
+	var nf_p2: String = "/nf/Ten Days.vpx"
+	var nf_p3: String = "/nf/Twenty Nine.vpx"
+	var nf_p4: String = "/nf/Thirty One.vpx"
+	var nf_p5: String = "/nf/Forty Days.vpx"
+	var nf_p6: String = "/nf/Late Arrival.vpx"
+	# A synthetic game whose one build carries the given stamps.
+	var nf_game: Callable = func(first: int, changed: int) -> GameEntry:
+		var ge: GameEntry = GameEntry.new()
+		var tb: TableBuild = TableBuild.new()
+		tb.first_seen_unix = first
+		tb.last_changed_unix = changed
+		ge.builds.append(tb)
+		return ge
+	# A synthetic game stamped from a store's record of a path
+	# (the same first/changed read Main applies to real builds).
+	var nf_stamped: Callable = func(st: StateStore, path: String) -> GameEntry:
+		var ge2: GameEntry = GameEntry.new()
+		var tb2: TableBuild = TableBuild.new()
+		var rec_v: Variant = st.file_ages.get(path, null)
+		if rec_v is Dictionary:
+			var rec: Dictionary = rec_v
+			tb2.first_seen_unix = int(rec.get("first", 0))
+			tb2.last_changed_unix = int(rec.get("changed", 0))
+		ge2.builds.append(tb2)
+		return ge2
+	var nf_rec: Callable = func(st: StateStore, path: String) -> Dictionary:
+		var rv: Variant = st.file_ages.get(path, {})
+		if rv is Dictionary:
+			var rd: Dictionary = rv
+			return rd
+		return {}
+	# (a) SEEDING: a fresh store's first apply stamps each
+	# file's first-seen from its own mtime.
+	var nf_store: StateStore = StateStore.new()
+	var nf_facts: Dictionary = {}
+	nf_facts[nf_p1] = {"mtime": nf_now - 1 * nf_day, "size": 100}
+	nf_facts[nf_p2] = {"mtime": nf_now - 10 * nf_day, "size": 200}
+	nf_facts[nf_p3] = {"mtime": nf_now - 29 * nf_day, "size": 300}
+	nf_facts[nf_p4] = {"mtime": nf_now - 31 * nf_day, "size": 400}
+	nf_facts[nf_p5] = {"mtime": nf_now - 40 * nf_day, "size": 500}
+	nf_store.apply_scan_facts(nf_facts, nf_now)
+	_expect(nf_store.file_ages_seeded and nf_store.file_ages.size() == 5,
+		"new filter: seeding records every scanned file and marks the store seeded", failures)
+	_expect(int((nf_rec.call(nf_store, nf_p1) as Dictionary).get("first", 0)) == nf_now - 1 * nf_day
+		and int((nf_rec.call(nf_store, nf_p5) as Dictionary).get("first", 0)) == nf_now - 40 * nf_day
+		and int((nf_rec.call(nf_store, nf_p3) as Dictionary).get("changed", 0)) == nf_now - 29 * nf_day,
+		"new filter: seeding stamps first-seen (and changed) from each file's own mtime, not the scan time", failures)
+	var nf_g1: GameEntry = nf_stamped.call(nf_store, nf_p1) as GameEntry
+	var nf_g2: GameEntry = nf_stamped.call(nf_store, nf_p2) as GameEntry
+	var nf_g3: GameEntry = nf_stamped.call(nf_store, nf_p3) as GameEntry
+	_expect(nf_g1.is_new(nf_now) and nf_g2.is_new(nf_now) and nf_g3.is_new(nf_now),
+		"new filter: seeded files 1, 10 and 29 days old are IN", failures)
+	var nf_g4: GameEntry = nf_stamped.call(nf_store, nf_p4) as GameEntry
+	var nf_g5: GameEntry = nf_stamped.call(nf_store, nf_p5) as GameEntry
+	_expect(not nf_g4.is_new(nf_now) and not nf_g5.is_new(nf_now),
+		"new filter: seeded files 31 and 40 days old are OUT", failures)
+	var nf_edge_in: GameEntry = nf_game.call(nf_now - 30 * nf_day, nf_now - 30 * nf_day) as GameEntry
+	var nf_edge_out: GameEntry = nf_game.call(nf_now - 30 * nf_day - 1, nf_now - 30 * nf_day - 1) as GameEntry
+	_expect(nf_edge_in.is_new(nf_now) and not nf_edge_out.is_new(nf_now),
+		"new filter: the window's edge is exact - 30 days in, 30 days and a second out", failures)
+	# (b) POST-SEED ARRIVAL: a path first seen by a later scan
+	# is stamped with that scan's time, however old its mtime.
+	var nf_facts_b: Dictionary = {}
+	for nf_k: Variant in nf_facts.keys():
+		nf_facts_b[nf_k] = nf_facts[nf_k]
+	nf_facts_b[nf_p6] = {"mtime": nf_now - 100 * nf_day, "size": 50}
+	nf_store.apply_scan_facts(nf_facts_b, nf_now + 3600)
+	_expect(int((nf_rec.call(nf_store, nf_p6) as Dictionary).get("first", 0)) == nf_now + 3600
+		and int((nf_rec.call(nf_store, nf_p6) as Dictionary).get("changed", 0)) == nf_now + 3600,
+		"new filter: a post-seed arrival is stamped with the scan time, not its old mtime", failures)
+	var nf_g6: GameEntry = nf_stamped.call(nf_store, nf_p6) as GameEntry
+	_expect(nf_g6.is_new(nf_now + 3600),
+		"new filter: a post-seed arrival with a 100-day-old mtime is IN", failures)
+	# (c) CHANGED-IN-PLACE: the 40-day file's size moves - its
+	# first-seen is preserved, its changed stamp is the scan.
+	var nf_facts_c: Dictionary = {}
+	for nf_k2: Variant in nf_facts_b.keys():
+		nf_facts_c[nf_k2] = nf_facts_b[nf_k2]
+	nf_facts_c[nf_p5] = {"mtime": nf_now - 40 * nf_day, "size": 555}
+	nf_store.apply_scan_facts(nf_facts_c, nf_now + 7200)
+	_expect(int((nf_rec.call(nf_store, nf_p5) as Dictionary).get("first", 0)) == nf_now - 40 * nf_day,
+		"new filter: a changed-in-place file keeps its first-seen", failures)
+	var nf_g5b: GameEntry = nf_stamped.call(nf_store, nf_p5) as GameEntry
+	_expect(int((nf_rec.call(nf_store, nf_p5) as Dictionary).get("changed", 0)) == nf_now + 7200
+		and nf_g5b.is_new(nf_now + 7200),
+		"new filter: a changed-in-place file is IN again on its change stamp", failures)
+	# The twin: a change that is itself 40 days old at the
+	# judging instant reads OUT - the window runs from the
+	# change, not from the file's birth.
+	var nf_twin: StateStore = StateStore.new()
+	var nf_twin_path: String = "/nf/Twin.vpx"
+	var nf_twin_f1: Dictionary = {}
+	nf_twin_f1[nf_twin_path] = {"mtime": nf_now - 50 * nf_day, "size": 10}
+	nf_twin.apply_scan_facts(nf_twin_f1, nf_now)
+	var nf_twin_f2: Dictionary = {}
+	nf_twin_f2[nf_twin_path] = {"mtime": nf_now - 49 * nf_day, "size": 20}
+	nf_twin.apply_scan_facts(nf_twin_f2, nf_now)
+	var nf_gtwin: GameEntry = nf_stamped.call(nf_twin, nf_twin_path) as GameEntry
+	_expect(int((nf_rec.call(nf_twin, nf_twin_path) as Dictionary).get("first", 0)) == nf_now - 50 * nf_day
+		and not nf_gtwin.is_new(nf_now + 40 * nf_day),
+		"new filter: a file whose change is 40 days old at the judging instant is OUT", failures)
+	# (d) STABILITY: identical facts re-applied later move
+	# nothing - first/changed stand byte-identical.
+	var nf_snapshot: Dictionary = nf_store.file_ages.duplicate(true)
+	nf_store.apply_scan_facts(nf_facts_c, nf_now + 99999)
+	_expect(nf_store.file_ages == nf_snapshot
+		and nf_store.file_recency(nf_p5) == nf_now + 7200
+		and nf_store.file_recency(nf_p1) == nf_now - 1 * nf_day,
+		"new filter: re-applying identical facts at a later time moves no record", failures)
+	# (e) FORGETTING: a path dropped from the facts is erased;
+	# its return in a later scan is first-seen again, then.
+	var nf_facts_e: Dictionary = {}
+	for nf_k3: Variant in nf_facts_c.keys():
+		if str(nf_k3) != nf_p2:
+			nf_facts_e[nf_k3] = nf_facts_c[nf_k3]
+	nf_store.apply_scan_facts(nf_facts_e, nf_now + 100000)
+	_expect(not nf_store.file_ages.has(nf_p2) and nf_store.file_recency(nf_p2) == 0,
+		"new filter: a path missing from a scan is forgotten", failures)
+	var nf_facts_e2: Dictionary = {}
+	for nf_k4: Variant in nf_facts_e.keys():
+		nf_facts_e2[nf_k4] = nf_facts_e[nf_k4]
+	nf_facts_e2[nf_p2] = {"mtime": nf_now - 5 * nf_day, "size": 200}
+	nf_store.apply_scan_facts(nf_facts_e2, nf_now + 100100)
+	_expect(int((nf_rec.call(nf_store, nf_p2) as Dictionary).get("first", 0)) == nf_now + 100100,
+		"new filter: a forgotten path returning later is first-seen again at that scan", failures)
+	# (f) REAL-FILE SCANNER FACTS: dummy .vpx files on disk,
+	# scanned with no db - every build carries its file's real
+	# mtime and byte size, and the facts -> tracker -> stamps
+	# chain reads the games as new.
+	var nf_root_user: String = "user://core_test_newfilter"
+	var nf_root: String = ProjectSettings.globalize_path(nf_root_user)
+	_wipe_tree(nf_root)
+	var nf_user_dir: DirAccess = DirAccess.open("user://")
+	if nf_user_dir != null and not nf_user_dir.dir_exists("core_test_newfilter"):
+		nf_user_dir.make_dir("core_test_newfilter")
+	var nf_c1: String = "alpha"
+	var nf_c2: String = "beta-beta-beta"
+	var nf_c3: String = "g"
+	var nf_writes_ok: bool = _write_text_file(nf_root_user.path_join("Newfilter Alpha (Maker 2001).vpx"), nf_c1)
+	nf_writes_ok = _write_text_file(nf_root_user.path_join("Newfilter Beta (Maker 2002).vpx"), nf_c2) and nf_writes_ok
+	nf_writes_ok = _write_text_file(nf_root_user.path_join("Newfilter Gamma (Maker 2003).vpx"), nf_c3) and nf_writes_ok
+	_expect(nf_writes_ok, "new filter: scanner fixture files written", failures)
+	var nf_sizes: Dictionary = {}
+	nf_sizes["Newfilter Alpha (Maker 2001).vpx"] = nf_c1.length()
+	nf_sizes["Newfilter Beta (Maker 2002).vpx"] = nf_c2.length()
+	nf_sizes["Newfilter Gamma (Maker 2003).vpx"] = nf_c3.length()
+	var nf_scan: LibraryScanner = LibraryScanner.new()
+	var nf_folders: Array[String] = [nf_root_user]
+	nf_scan.scan(nf_folders, null)
+	_expect(nf_scan.total_files == 3 and nf_scan.games.size() == 3,
+		"new filter: the scanner finds the 3 fixture files as 3 games", failures)
+	var nf_fact_bad: int = 0
+	for nf_g: GameEntry in nf_scan.games:
+		for nf_b: TableBuild in nf_g.builds:
+			if nf_b.file_mtime != int(FileAccess.get_modified_time(nf_b.file_path)):
+				nf_fact_bad += 1
+			if nf_b.file_size != int(nf_sizes.get(nf_b.file_name, -1)):
+				nf_fact_bad += 1
+	_expect(nf_fact_bad == 0,
+		"new filter: every scanned build carries its file's real mtime and byte size", failures)
+	var nf_facts_real: Dictionary = {}
+	for nf_g7: GameEntry in nf_scan.games:
+		for nf_b7: TableBuild in nf_g7.builds:
+			nf_facts_real[nf_b7.file_path] = {"mtime": nf_b7.file_mtime, "size": nf_b7.file_size}
+	var nf_store_real: StateStore = StateStore.new()
+	var nf_real_now: int = int(Time.get_unix_time_from_system())
+	nf_store_real.apply_scan_facts(nf_facts_real, nf_real_now)
+	for nf_g8: GameEntry in nf_scan.games:
+		for nf_b8: TableBuild in nf_g8.builds:
+			var nf_rec8: Dictionary = nf_rec.call(nf_store_real, nf_b8.file_path) as Dictionary
+			nf_b8.first_seen_unix = int(nf_rec8.get("first", 0))
+			nf_b8.last_changed_unix = int(nf_rec8.get("changed", 0))
+	var nf_all_new: bool = nf_scan.games.size() == 3
+	for nf_g9: GameEntry in nf_scan.games:
+		if not nf_g9.is_new(nf_real_now):
+			nf_all_new = false
+	_expect(nf_all_new,
+		"new filter: freshly scanned real files stamp and read as new", failures)
+	_wipe_tree(nf_root)
+	# (g) PERSISTENCE: records and the seeded flag round-trip
+	# through the state file (inside the state legs' own
+	# backup/restore envelope above, so the real state file
+	# is put back by the restore that follows).
+	var nf_persist: StateStore = StateStore.new()
+	var nf_persist_facts: Dictionary = {}
+	nf_persist_facts[nf_p1] = {"mtime": nf_now - 2 * nf_day, "size": 42}
+	nf_persist_facts[nf_p5] = {"mtime": nf_now - 40 * nf_day, "size": 500}
+	nf_persist.apply_scan_facts(nf_persist_facts, nf_now)
+	nf_persist.save_to_disk()
+	var nf_loaded: StateStore = StateStore.new()
+	nf_loaded.load_from_disk()
+	_expect(nf_loaded.file_ages_seeded and nf_loaded.file_ages == nf_persist.file_ages
+		and nf_loaded.file_recency(nf_p1) == nf_now - 2 * nf_day,
+		"new filter: file ages and the seeded flag survive save/load", failures)
 	if backup != "":
 		var f: FileAccess = FileAccess.open(state_file, FileAccess.WRITE)
 		if f != null:

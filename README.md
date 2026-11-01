@@ -617,7 +617,11 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   color band, big name, year/designer; the band sits flush with the
   card's top edge, registering with the full-bleed art faces -
   `PANEL_CONTENT_RAISE_PX` in `ui/card_face.gd`). Filters: All / VR / Favorites /
-  Recents (VR is the default view). Sorts: name, year, manufacturer,
+  Recents / New (VR is the default view). New shows the games whose files
+  arrived or changed within the last 30 days, newest first — the file ages
+  are tracked per scan in the state file (`file_ages` in
+  `user://pvlds_state.json`; a library's first tracked scan seeds each
+  file's age from its own modification time). Sorts: name, year, manufacturer,
   designer. An art card's name strip owns the card's bottom edge and
   the Launch button rides clear above it (`PANEL_LAUNCH_Y` in
   `ui/room.gd`) - the name is never under the button. The wall's

@@ -12,6 +12,22 @@ var img_url: String = "" ## The db tableFile's imgUrl: the author's screenshot o
 var version: String = "" ## e.g. "1.2.0"; "" when unknown.
 var authors: PackedStringArray = PackedStringArray()
 var date_unix: int = 0 ## Release date from the db when matched, else file mtime.
+## GRADFIX11 (the NEW filter, Chris's order): the file's own
+## facts, recorded by the scan and never overwritten by db
+## data - date_unix above starts as the mtime but a matched
+## build's db release date REPLACES it (see LibraryScanner.
+## _apply_table_file), so the raw stat needs its own fields.
+## file_mtime + file_size are the change signature the
+## StateStore's file-age tracker keys on (see StateStore.
+## apply_scan_facts); first_seen_unix / last_changed_unix
+## are that tracker's verdicts for this file, stamped onto
+## the build by Main when a scan lands (post-merge, main
+## thread - the scan itself stays pure data and stamps
+## nothing). 0 = never stamped.
+var file_mtime: int = 0 ## Raw stat mtime of the .vpx file, exactly as scanned.
+var file_size: int = 0 ## The .vpx file's byte size, exactly as scanned.
+var first_seen_unix: int = 0 ## When this file first appeared in a scan (seeded from its mtime on the tracker's first run).
+var last_changed_unix: int = 0 ## When this file's mtime/size signature last changed between scans.
 var features: PackedStringArray = PackedStringArray()
 var matched_db: bool = false ## True when this exact build exists in the VPS db.
 var match_tier: String = "" ## How the scan identified this build's game: "slug" (the db's download-page slug for the build) | "name" (title) | "scrubbed" (cleaned title) | "edition" (full name, edition words included) | "local" (db does not know it). "" until matched.

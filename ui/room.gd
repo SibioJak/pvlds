@@ -33,8 +33,8 @@ const PAGE_SIZE: int = PAGE_COLS * PAGE_ROWS
 static var WALL_RADIUS: float = 3.40 ## GRADFIX5 (item 4): the wall pushed back a step from the dome's 3.05 (the user's ask: "push back a bit, fit a few more cards into your central vision"). +0.35 m (+11%): the census's wall measure reads the centre card at 10.72 degrees across against 11.98 on the old radius (same arithmetic both sides), the air between columns grows from ~1.5 to ~2.8 degrees, and every drawn column's frame overflow shrinks - while the column CENTRES stay pitch-fixed at 13.5 degrees, so the step buys size and air, not new columns. The step is also item 1's headroom: the flush book floats 0.30 proud of a 3.40 wall - 3.10 from the eye, the old wall's own distance - so the full-height page spans inside its band pitch. Cards keep their physical size; everything seated on the wall (book, fins, tournament block, pop) derives from this one value and re-seats with it. A static, not a const, so the harness's oldwall NC can restore the shipped geometry wholesale.
 static var WALL_LIFT: float = 0.06 ## GRADFIX5 (item 4): the wall's rise with its push-back - the seats ride a sphere around the eye, so the farther wall's bottom band hangs lower; the lift keeps its labels and nameplates on the heights the field-passed build held them at (the census's floor datum is the retired floor slab's old surface).
 const EYE: Vector3 = Vector3(0.0, 1.25, 0.0)
-const FILTERS: Array[String] = ["all", "vr", "favorites", "recents"]
-const FILTER_LABELS: Dictionary = {"all": "ALL", "vr": "VR", "favorites": "FAVORITES", "recents": "RECENTS"}
+const FILTERS: Array[String] = ["all", "vr", "favorites", "recents", "new"]
+const FILTER_LABELS: Dictionary = {"all": "ALL", "vr": "VR", "favorites": "FAVORITES", "recents": "RECENTS", "new": "NEW"}
 const SORTS: Array[String] = ["name", "year", "manufacturer", "designer"]
 const SORT_LABELS: Dictionary = {"name": "NAME", "year": "YEAR", "manufacturer": "MAKER", "designer": "DESIGNER"}
 
@@ -203,6 +203,9 @@ const STRIP_Z: float = -1.62 ## the rail's depth: the strip is rail furniture
 ## stops from the rail: TEN entries stand from here
 ## (bar_state's rail_stops reads 10), span 2.417 m; the
 ## page readout stays (see _build_rail).
+## GRADFIX11 (Chris's order): ELEVEN entries stand from
+## here (bar_state's rail_stops reads 11), span 2.591 m -
+## the NEW filter tile joins the rail beside RECENTS.
 const STRIP_LETTER_SIZE: Vector2 = Vector2(0.076, 0.085) ## GRADFIX8 (item 6): letters 0.078 -> 0.076 and STRIP_GAP 0.010 -> 0.006 - the pager removal shortens the rail to 2.417 m, and the strip condenses the last hair (span 2.546 -> 2.384 m) so the Console law - the strip sits WITHIN the rail's span - survives the tightening instead of being amended away
 const STRIP_THE_SIZE: Vector2 = Vector2(0.170, 0.085)
 const STRIP_GAP: float = 0.006
@@ -1341,6 +1344,10 @@ func _collect_filtered() -> Array[GameEntry]:
 			if g != null:
 				source.append(g)
 	else:
+		# GRADFIX11: the NEW filter's judging instant,
+		# taken once per collection so every game in the
+		# set is judged against the same clock.
+		var now: int = int(Time.get_unix_time_from_system())
 		for g: GameEntry in _scanner.games:
 			match _filter:
 				"all":
@@ -1350,6 +1357,9 @@ func _collect_filtered() -> Array[GameEntry]:
 						source.append(g)
 				"favorites":
 					if _store.is_favorite(g.game_id):
+						source.append(g)
+				"new":
+					if g.is_new(now):
 						source.append(g)
 	return source
 
@@ -1383,6 +1393,15 @@ func _collect_visible() -> void:
 	_visible_games = source
 	if _letter_net != "":
 		_sort_by_name()
+	elif _filter == "new":
+		# GRADFIX11: the NEW filter's standing order is
+		# recency - newest first - not the SORT stop's
+		# order. The letter net above still name-sorts
+		# (a letter pick stays inside NEW, as it does in
+		# favorites), and recents below still keeps its
+		# store order; the SORT stop keeps governing the
+		# other filters exactly as before.
+		_sort_by_newness()
 	elif _filter != "recents":
 		_sort_visible()
 
@@ -1731,6 +1750,19 @@ func _title_less(a: GameEntry, b: GameEntry) -> bool:
 
 func _sort_by_name() -> void:
 	_visible_games.sort_custom(_title_less)
+
+
+## GRADFIX11: the NEW filter's order - newest file fact
+## first (GameEntry.newest_stamp, descending); ties break
+## on the same title key _sort_by_name uses, so equal-age
+## games stand in the wall's one title order.
+func _sort_by_newness() -> void:
+	_visible_games.sort_custom(func(a: GameEntry, b: GameEntry) -> bool:
+		var as_: int = a.newest_stamp()
+		var bs: int = b.newest_stamp()
+		if as_ != bs:
+			return as_ > bs
+		return _title_less(a, b))
 
 
 func _sort_visible() -> void:
@@ -2729,7 +2761,9 @@ func _build_rail(placeholder: Texture2D) -> void:
 	# row wholesale. GRADFIX8 (item 6) then drops the two
 	# pager stops from both rows: the standing span is
 	# 2.417 m over ten entries (see the GRADFIX8 note on the
-	# defs below).
+	# defs below). GRADFIX11 (Chris's order) seats the NEW
+	# filter tile after RECENTS in both rows: the standing
+	# Console span is 2.591 m over eleven entries.
 	var defs: Array = []
 	# GRADFIX8 (item 6, Chris's order): the < > pager stops
 	# are REMOVED from both bars' defs - unused, with the
@@ -2743,13 +2777,13 @@ func _build_rail(placeholder: Texture2D) -> void:
 	# branches remain the travel engine.
 	if _console_wide():
 		defs = [
-			["filter:all", 0.30], ["filter:vr", 0.24], ["filter:favorites", 0.44], ["filter:recents", 0.40],
+			["filter:all", 0.30], ["filter:vr", 0.24], ["filter:favorites", 0.44], ["filter:recents", 0.40], ["filter:new", 0.24],
 			["sort", 0.46], ["tournament", 0.44], ["page_label", 0.28],
 			["wovp_refresh", 0.32], ["desk", 0.32], ["exit", 0.28],
 		]
 	else:
 		defs = [
-			["filter:all", 0.194], ["filter:vr", 0.156], ["filter:favorites", 0.285], ["filter:recents", 0.259],
+			["filter:all", 0.194], ["filter:vr", 0.156], ["filter:favorites", 0.285], ["filter:recents", 0.259], ["filter:new", 0.156],
 			["sort", 0.298], ["tournament", 0.285], ["page_label", 0.182],
 			["wovp_refresh", 0.207], ["desk", 0.207], ["exit", 0.182],
 		]
@@ -2791,6 +2825,19 @@ func _banner_line() -> String:
 	var line: String = "%d files - %d games - filter %s - sort %s" % [
 		_scanner.total_files, _scanner.games.size(),
 		str(FILTER_LABELS[_filter]), str(SORT_LABELS[_sort])]
+	if _filter == "new":
+		# GRADFIX11: the NEW banner carries the filter's
+		# whole membership - how many games in the library
+		# are new right now, counted over the scanner's
+		# full set (net or no net: a standing letter net
+		# narrows the wall, never this count) - after the
+		# sort segment, before the letter-net suffix.
+		var new_now: int = int(Time.get_unix_time_from_system())
+		var new_count: int = 0
+		for g: GameEntry in _scanner.games:
+			if g.is_new(new_now):
+				new_count += 1
+		line += " - %d new" % new_count
 	if _letter_net == "THE":
 		line += " - THE tables"
 	elif _letter_net == "#":
@@ -6906,9 +6953,9 @@ func _cycle_focus(step: int) -> void:
 ## not pickable, so it is not a stop. Sideways travel along the
 ## rail walks THIS order and nothing else.
 const RAIL_FOCUS_ORDER: Array[String] = [
-	"filter:all", "filter:vr", "filter:favorites", "filter:recents",
+	"filter:all", "filter:vr", "filter:favorites", "filter:recents", "filter:new",
 	"sort", "tournament", "wovp_refresh", "desk", "exit",
-] ## GRADFIX8 (item 6): no page_prev/page_next - the pager stops are removed (Chris's order); the readout between them was never a stop and stays a readout
+] ## GRADFIX8 (item 6): no page_prev/page_next - the pager stops are removed (Chris's order); the readout between them was never a stop and stays a readout. GRADFIX11: filter:new joins the walk after filter:recents, matching its seat in _build_rail's defs (Chris's order).
 
 
 func _is_rail_quad(q: ClickableQuad) -> bool:

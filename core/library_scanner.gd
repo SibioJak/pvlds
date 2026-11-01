@@ -203,6 +203,24 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 	b.file_path = path
 	b.file_name = path.get_file()
 	b.date_unix = int(FileAccess.get_modified_time(path))
+	# GRADFIX11 (the NEW filter): the file's raw facts,
+	# recorded beside date_unix because _apply_table_file
+	# may overwrite date_unix with the db's release date -
+	# the NEW filter's tracker (StateStore.apply_scan_facts)
+	# needs the file's OWN mtime, not the release's.
+	# mtime + size is the change signature: two cheap stats,
+	# no content reads, so the scan's purity contract holds
+	# (facts only, worker-thread safe). A rewrite that keeps
+	# both the same size and the same mtime is
+	# indistinguishable from untouched - which is fine,
+	# because a file identical in those facts IS the same
+	# table for the player's purpose.
+	b.file_mtime = int(FileAccess.get_modified_time(path))
+	b.file_size = 0
+	var size_probe: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if size_probe != null:
+		b.file_size = int(size_probe.get_length())
+		size_probe.close()
 	b.match_tier = "local"
 	var title_guess: String = _guess_title(b.file_name)
 	var version_guess: String = _guess_version(b.file_name)
