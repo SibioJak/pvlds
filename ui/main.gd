@@ -9298,6 +9298,13 @@ func _drive_motion_smoke() -> void:
 				_motion_perf_mode = "stepped"
 				_motion_yaw_trace.clear()
 				_motion_t0_msec = Time.get_ticks_msec()
+				# The six-column trace's yaw anchors from the
+				# known columns: at a slow box's pacing the
+				# first sample lands mid-travel (the spring is
+				# fast), so the trace's own first sample cannot
+				# anchor its span.
+				_motion_tr_y0 = float(_room._grid_coord(_motion_travel_start()).x) * 13.5
+				_motion_tr_y1 = _motion_tr_y0 + 81.0
 				_room._set_focused(_room._panels[_motion_travel_target()])
 				_motion_phase = 4
 				_motion_wait = 0
@@ -9309,8 +9316,7 @@ func _drive_motion_smoke() -> void:
 			_motion_yaw_trace.append([Time.get_ticks_msec() - _motion_t0_msec, rad_to_deg(_room.drum_node().rotation.y), _room.swing_velocity_deg_s()])
 			if (_motion_wait >= 3 and not _room.page_slide_active()) or _motion_wait > 1800:
 				_motion_record_perf("stepped")
-				var y0_4: float = float((_motion_yaw_trace[0] as Array)[1]) if not _motion_yaw_trace.is_empty() else 0.0
-				var stats_4: Dictionary = _motion_trace_stats(_motion_yaw_trace, y0_4, y0_4 + 81.0)
+				var stats_4: Dictionary = _motion_trace_stats(_motion_yaw_trace, _motion_tr_y0, _motion_tr_y1)
 				_motion_tr_stats["six_stepped"] = stats_4
 				_motion_print_stats("six_stepped", stats_4)
 				_motion_expect(_room.centre_index() == _motion_travel_target(),
@@ -9607,25 +9613,30 @@ func _motion_store_trace(key: String) -> void:
 ## The live-toggle verdict (GRADFIX12 item 1, leg i): the
 ## panel flipped the mode string, the driver the trace
 ## measured actually changed with it - same session, same
-## room, no re-entry. Boot is SMOOTH, the flip lands on
-## STEPPED, so the flipped trace must settle far faster and
-## peak far harder than the boot trace. Under the nolive NC
-## the driver keeps the boot mode and both trace expects
-## fail here, by this leg's name.
+## room, no re-entry. The harness boots SMOOTH and the flip
+## lands on STEPPED, but the trace expects are symmetric in
+## the two drivers (STEPPED settles fast and peaks hard,
+## SMOOTH rolls), so they judge the change itself, not the
+## direction it happened to run. Under the nolive NC the
+## driver keeps the boot mode and both trace expects fail
+## here, by this leg's name.
 func _motion_judge_live_toggle() -> void:
 	_motion_expect(_motion_live_flip_mode != "" and _motion_live_flip_mode != _motion_live_boot_mode,
 		"live wall motion toggle: the SETUP panel action flipped the mode (%s -> %s)" % [_motion_live_boot_mode, _motion_live_flip_mode])
 	_motion_expect(_room.wall_driver_mode() == _room.wall_motion_mode(),
 		"live wall motion toggle: the swing driver obeys the flipped mode in the same session (driver %s, dial %s)" % [_room.wall_driver_mode(), _room.wall_motion_mode()])
-	var boot: Dictionary = _motion_tr_stats.get("single_" + _motion_live_boot_mode, {}) as Dictionary
-	var flip: Dictionary = _motion_tr_stats.get("single_" + _motion_live_flip_mode, {}) as Dictionary
-	if boot.is_empty() or flip.is_empty():
+	var smooth: Dictionary = _motion_tr_stats.get("single_smooth", {}) as Dictionary
+	var stepped: Dictionary = _motion_tr_stats.get("single_stepped", {}) as Dictionary
+	if smooth.is_empty() or stepped.is_empty():
 		_motion_fail("live wall motion toggle: a single-column trace is missing (boot %s, flip %s)" % [_motion_live_boot_mode, _motion_live_flip_mode])
 		return
-	_motion_expect(int(flip.get("settle_ms", 0)) <= int(float(int(boot.get("settle_ms", 0))) * 0.65),
-		"live wall motion toggle: the flipped mode's single-column settle (%d ms) is a different driver from the boot mode's (%d ms) - the dial changed the wall in the hand, same session" % [int(flip.get("settle_ms", 0)), int(boot.get("settle_ms", 0))])
-	_motion_expect(float(flip.get("peak_deg_s", 0.0)) >= 1.8 * float(boot.get("peak_deg_s", 0.0)),
-		"live wall motion toggle: the flipped mode's single-column peak velocity (%.1f deg/s) is the other driver's character, not the boot mode's (%.1f deg/s)" % [float(flip.get("peak_deg_s", 0.0)), float(boot.get("peak_deg_s", 0.0))])
+	# Whichever way the flip ran, the two traces measured in
+	# this one session must be the two different drivers:
+	# STEPPED settles fast and peaks hard, SMOOTH rolls.
+	_motion_expect(int(stepped.get("settle_ms", 0)) <= int(float(int(smooth.get("settle_ms", 0))) * 0.65),
+		"live wall motion toggle: the two modes measured in one session are different drivers - STEPPED single-column settle %d ms vs SMOOTH %d ms (the dial changed the wall in the hand, no re-entry)" % [int(stepped.get("settle_ms", 0)), int(smooth.get("settle_ms", 0))])
+	_motion_expect(float(stepped.get("peak_deg_s", 0.0)) >= 1.8 * float(smooth.get("peak_deg_s", 0.0)),
+		"live wall motion toggle: the two modes' single-column peak velocities differ as the drivers do - STEPPED %.1f deg/s vs SMOOTH %.1f deg/s" % [float(stepped.get("peak_deg_s", 0.0)), float(smooth.get("peak_deg_s", 0.0))])
 
 
 ## The feel verdict (GRADFIX12 item 1, leg ii): SMOOTH must
