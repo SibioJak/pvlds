@@ -214,6 +214,31 @@ const STRIP_THE_SIZE_WIDE: Vector2 = Vector2(0.21, 0.13)
 const STRIP_GAP_WIDE: float = 0.014
 const RAIL_TILE_H: float = 0.115 ## the Console rail's tile height, pass 2 (GRADFIX5 0.135, pre-Console 0.15)
 const RAIL_GAP: float = 0.018 ## the Console rail's inter-tile gap (pre-Console 0.035)
+## GRADFIX14 (item 1, Chris's order): the rail's per-tile
+## boxes are REPLACED by one machined graphite strip - "no
+## individual boxes, it looks like a mess. One long strip
+## with the category sections, made to look like buttons.
+## when you highlight one, it pops up 3d and sinks back down
+## when you move on by." Chris's mock pick: Machined Strip,
+## GRAPHITE (see RoomSpecs' STRIP_* palette, hex for hex
+## from the chosen mock). The strip keeps the shipped rail's
+## exact sections, order, relative widths, labels, seat,
+## span (2.591 m) and height: the sections sit CONTIGUOUS
+## (no gaps - the old 0.018 m gaps are absorbed into the
+## sections at their shipped proportions), seams are ETCHED
+## into the bar's face between sections, and ONE continuous
+## backing bar (the same graphite, a hair behind the faces)
+## guarantees the bar reads whole even while a section is
+## lifted off it. Focus lifts exactly one section toward
+## the viewer on the pop spring's discipline (see
+## _update_rail_lift). The tileboxes NC
+## (PVLDS_GF14_NC=tileboxes - the same env var as item 3's
+## grammar seams, a distinct value) restores the shipped
+## per-tile boxes wholesale - gaps, button faces, frames, no
+## bar, no lift - so the machined-strip census legs fail
+## by name.
+const RAIL_STRIP_LIFT: float = 0.032 ## the focused section's rise toward the viewer, metres (the mock's ~5 px lift at its bar's scale, translated: ~28% of the bar's height, in the pop spring's character - proud enough to read as the bar's own material rising, far short of the cards' 0.15 pop)
+const RAIL_STRIP_PX_PER_M: float = 1800.0 ## the strip faces' render density: each section renders at its own aspect (no stretch - the shipped tiles stretched one 512x150 canvas over every width), 207 px tall for the 0.115 bar
 
 ## ------------------------------------------------------------ the drum
 ## The dome's geometry, ported from the field-approved
@@ -732,6 +757,13 @@ static var debug_gf13_nc: String = ""
 ## that lands while a launch wait stands - so the scanwall
 ## smoke's focus and launch-wait legs fail by name. Empty in
 ## every real run.
+## Negative-control seam for GRADFIX14 item 1 (the harness
+## env PVLDS_GF14_NC, set by Main before any room exists):
+## "tileboxes" restores the shipped per-tile rail boxes
+## wholesale (see the RAIL_STRIP_LIFT block), so the grad
+## census's machined-strip legs fail by name. The same env
+## var carries item 3's grammar values (a distinct set);
+## empty in every real run.
 static var debug_gf14_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
@@ -828,6 +860,16 @@ var _pending_library: LibraryScanner = null ## a scan that landed while the SETU
 var _pick_snapshot: Dictionary = {} ## ClickableQuad -> pick_enabled, taken as the placard rises
 var _rail_quads: Dictionary = {} ## key -> ClickableQuad
 var _rail_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: every rail button face ever rendered, so a rebuild re-dresses the rail in its own frame
+var _rail_bar: MeshInstance3D = null ## GRADFIX14 (item 1): the machined strip's ONE continuous backing bar (null in tileboxes NC mode)
+var _rail_def_w: Dictionary = {} ## GRADFIX14 (item 1): key -> the section's laid-out width, metres (the strip faces render at each section's own aspect from it)
+var _rail_last_key: String = "" ## GRADFIX14 (item 1): the rightmost section's key (it carries no etched seam)
+var _rail_base_pos: Dictionary = {} ## GRADFIX14 (item 1): key -> the section's flush position (its lift rides from here)
+var _rail_pop_dir: Dictionary = {} ## GRADFIX14 (item 1): key -> unit vector from the section toward the viewer (its lift direction)
+var _rail_pop: Dictionary = {} ## GRADFIX14 (item 1): key -> current lift amount, 0 flush .. 1 lifted (the pop spring's discipline, see _update_rail_lift)
+var _rail_pop_vel: Dictionary = {} ## GRADFIX14 (item 1): key -> lift spring velocity, carried across retargets
+var _rail_pop_applied: Dictionary = {} ## GRADFIX14 (item 1): key -> last lift amount written to the section's transform (write guard)
+var _rail_tex_lifted: Dictionary = {} ## GRADFIX14 (item 1): key -> whether the section's face currently wears the lifted gradient (swaps at the lift's half-rise, so the material change rides the motion, never jumps ahead of it)
+var _rail_applied_key: Dictionary = {} ## GRADFIX14 (item 1): key -> the strip cache key last applied to the section (change guard)
 var _strip_quads: Dictionary = {} ## letter key ("A".."Z", "THE", "#") -> ClickableQuad: the alphabet strip, built once with the rail
 var _strip_tex_cache: Dictionary = {} ## "key|state" -> Texture2D: every strip slot face ever rendered (the rail cache's pattern)
 var _btn_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: the panels' Launch/Failed button faces - two textures in existence, once rendered per panel per rebuild before the pick-latency fix. GRADFIX13 (item 2): dormant in the shipped build (no plinth is dressed); the plinth NC's minted buttons use it as before
@@ -3194,6 +3236,22 @@ func _build_rail(placeholder: Texture2D) -> void:
 	for d: Variant in defs:
 		total += float(d[1]) + gap
 	total -= gap
+	# GRADFIX14 (item 1): in strip mode the sections sit
+	# CONTIGUOUS - the gaps close to zero and their span is
+	# absorbed into the sections at the shipped proportions,
+	# so the bar's total span, seat and height are the
+	# shipped rail's exactly, with no gaps between boxes
+	# because there are no boxes. The widebar NC and the
+	# tileboxes NC both keep the shipped gapped row.
+	var strip_mode: bool = _strip_mode()
+	if strip_mode:
+		var sum_w: float = 0.0
+		for d2: Variant in defs:
+			sum_w += float(d2[1])
+		var scale: float = total / sum_w
+		for d3: Variant in defs:
+			d3[1] = float(d3[1]) * scale
+		gap = 0.0
 	var x: float = -total * 0.5
 	for d: Variant in defs:
 		var key: String = str(d[0])
@@ -3206,7 +3264,66 @@ func _build_rail(placeholder: Texture2D) -> void:
 			# looking at is not a rail job.
 			q.pick_enabled = false
 		_rail_quads[key] = q
+		_rail_def_w[key] = w
+		_rail_last_key = key
+		if strip_mode:
+			# The strip's sections carry no frame (the lift
+			# is the highlight) and remember their flush
+			# seat + lift direction for _update_rail_lift.
+			q.suppress_frame = true
+			_rail_base_pos[key] = q.position
+			_rail_pop_dir[key] = (EYE - q.position).normalized()
+			_rail_pop[key] = 0.0
+			_rail_pop_vel[key] = 0.0
+			_rail_pop_applied[key] = 0.0
+			_rail_tex_lifted[key] = false
 		x += w + gap
+	if strip_mode:
+		_build_rail_bar(total, tile_h, y, z)
+
+
+## The machined strip's ONE backing bar (GRADFIX14 item 1):
+## a single quad spanning the whole rail, wearing the bar's
+## resting graphite gradient, seated a hair behind the
+## section faces. It is what a lifted section lifts OFF -
+## the recess it leaves is bar material, never a hole - and
+## it makes the one-piece read structural, not a texture
+## trick: bar_state counts it, and the tileboxes NC (no
+## bar, gapped tiles) fails that count by name. Not a
+## ClickableQuad: it is never pickable, focusable or a stop.
+func _build_rail_bar(total: float, tile_h: float, y: float, z: float) -> void:
+	var grad: Gradient = Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.45, 0.55, 1.0])
+	grad.colors = PackedColorArray(RoomSpecs.STRIP_GRAD_REST)
+	var gtex: GradientTexture2D = GradientTexture2D.new()
+	gtex.gradient = grad
+	gtex.fill_from = Vector2(0.5, 0.0)
+	gtex.fill_to = Vector2(0.5, 1.0)
+	gtex.width = 4
+	gtex.height = 256
+	var mat: StandardMaterial3D = StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_texture = gtex
+	_rail_bar = MeshInstance3D.new()
+	_rail_bar.name = "RailStripBar"
+	var qm: QuadMesh = QuadMesh.new()
+	qm.size = Vector2(total, tile_h)
+	_rail_bar.mesh = qm
+	_rail_bar.material_override = mat
+	_rail_bar.position = Vector3(0.0, y, z)
+	_rail.add_child(_rail_bar)
+	ClickableQuad.face_point(_rail_bar, EYE)
+	# A hair behind the section faces, along its own normal.
+	_rail_bar.position += (_rail_bar.position - EYE).normalized() * 0.006
+
+
+## True while the rail stands as the machined strip
+## (GRADFIX14 item 1): the shipped build, minus the two
+## wholesale-restore NCs (the pre-Console widebar and this
+## item's own tileboxes).
+func _strip_mode() -> bool:
+	return debug_gf14_nc != "tileboxes" and not _console_wide()
 
 
 func _make_quad(parent: Node3D, action: String, payload: String, tex: Texture2D, size: Vector2, pos: Vector3) -> ClickableQuad:
@@ -3291,6 +3408,33 @@ func _rail_cache_key(label: String, accent: bool) -> String:
 	return label + ("|a" if accent else "|p")
 
 
+## A strip section face's cache key (GRADFIX14 item 1): the
+## label, its accent state and its lift state - both lift
+## variants of every standing label render once and cache,
+## so a focus move never waits on a render.
+func _rail_strip_cache_key(label: String, accent: bool, lifted: bool) -> String:
+	return label + "|s" + ("a" if accent else "p") + ("l" if lifted else "r")
+
+
+## Dress ONE rail section from the strip cache (GRADFIX14
+## item 1): the face it wears follows its lift state
+## (_rail_tex_lifted, driven by the lift spring's half-rise)
+## as well as its label/accent. Change-guarded: a section
+## already wearing the right face is untouched.
+func _apply_rail_texture_for(key: String) -> void:
+	var quad: ClickableQuad = _rail_quads.get(key) as ClickableQuad
+	if quad == null:
+		return
+	var la: Array = _rail_label_accent(key)
+	var lifted: bool = bool(_rail_tex_lifted.get(key, false))
+	var ck: String = _rail_strip_cache_key(str(la[0]), bool(la[1]), lifted)
+	if str(_rail_applied_key.get(key, "")) == ck:
+		return
+	if _rail_tex_cache.has(ck):
+		quad.set_texture(_rail_tex_cache[ck] as Texture2D)
+		_rail_applied_key[key] = ck
+
+
 ## Dress every rail quad from the texture cache, in this call -
 ## no awaits. A cache hit is the button's real rendered face,
 ## so the rail is fully dressed in the rebuild's own frame. A
@@ -3298,6 +3442,10 @@ func _rail_cache_key(label: String, accent: bool) -> String:
 ## standing rail never falls back to the placeholder again)
 ## until the async fill renders that label - once, ever.
 func _apply_rail_textures() -> void:
+	if _strip_mode():
+		for k2: Variant in _rail_quads.keys():
+			_apply_rail_texture_for(str(k2))
+		return
 	for k: Variant in _rail_quads.keys():
 		var la: Array = _rail_label_accent(str(k))
 		var ck: String = _rail_cache_key(str(la[0]), bool(la[1]))
@@ -3571,6 +3719,26 @@ func _fill_wall_textures(gen: int) -> void:
 		var la: Array = _rail_label_accent(k)
 		var label: String = str(la[0])
 		var accent: bool = bool(la[1])
+		if _strip_mode():
+			# GRADFIX14 (item 1): the section's strip faces -
+			# rest and lifted variants, each rendered at the
+			# section's own aspect, cached like every rail
+			# face before them. The page readout never lifts.
+			var variants: Array[bool] = [false, true]
+			for lifted_v: bool in variants:
+				if lifted_v and k == "page_label":
+					continue
+				var sck: String = _rail_strip_cache_key(label, accent, lifted_v)
+				if _rail_tex_cache.has(sck):
+					continue
+				bench_renders += 1
+				var spx: Vector2i = Vector2i(maxi(96, int(round(float(_rail_def_w.get(k, 0.2)) * RAIL_STRIP_PX_PER_M))), int(round(RAIL_TILE_H * RAIL_STRIP_PX_PER_M)))
+				var stex: Texture2D = await _factory.render_texture(RoomSpecs.strip_section_spec(label, accent, lifted_v, k != _rail_last_key), spx)
+				if gen != _gen:
+					return
+				_rail_tex_cache[sck] = stex
+			_apply_rail_texture_for(k)
+			continue
 		var ck: String = _rail_cache_key(label, accent)
 		if _rail_tex_cache.has(ck):
 			quad.set_texture(_rail_tex_cache[ck] as Texture2D)
@@ -4727,6 +4895,74 @@ func _update_pop(delta: float) -> void:
 	_update_flip(delta)
 	_heal_panel_faces()
 	_heal_tournament_boards()
+
+
+## The machined strip's lift (GRADFIX14 item 1), driven
+## from _process beside the pop: exactly ONE section - the
+## focused rail stop - rises toward the viewer, and sinks
+## back flush as focus moves on. The motion is the pop's
+## own discipline, verbatim in miniature (GRADFIX10 item
+## 2): a critically damped spring (POP_SPRING_TAU) with
+## velocity carried across retargets, its step clamped to
+## POP_MAX_STEP_SEC so a hitch frame slows the lift instead
+## of skipping its poses, landing by exact snap inside a
+## hair of its target. No linear ramp, no second system.
+## The lifted GRADIENT swaps at the lift's half-rise (and
+## back at its half-fall), so the material change rides the
+## motion - the section reads as the bar's own graphite
+## rising on a bevel, never as a separate box appearing.
+## The page readout is not a stop and never lifts; a card
+## or strip focus lifts nothing. Unfocused sections stay
+## flush and still: the transform is written only while a
+## section's amount is actually moving.
+func _update_rail_lift(delta: float) -> void:
+	if not _strip_mode() or _rail_quads.is_empty():
+		return
+	var pdelta: float = minf(delta, POP_MAX_STEP_SEC)
+	var omega: float = 2.0 / POP_SPRING_TAU
+	var x: float = omega * pdelta
+	var ex: float = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
+	for k: Variant in _rail_quads.keys():
+		var key: String = str(k)
+		var quad: ClickableQuad = _rail_quads[k] as ClickableQuad
+		if quad == null or not _rail_pop.has(key):
+			continue
+		var want: float = 1.0 if quad == _focused and key != "page_label" else 0.0
+		var cur: float = float(_rail_pop[key])
+		var vel: float = float(_rail_pop_vel[key])
+		var change: float = cur - want
+		var temp: float = (vel + omega * change) * pdelta
+		vel = (vel - omega * temp) * ex
+		var amt: float = want + (change + temp) * ex
+		if absf(amt - want) < 0.004 and absf(vel) < 0.08:
+			amt = want
+			vel = 0.0
+		_rail_pop[key] = amt
+		_rail_pop_vel[key] = vel
+		var lifted_tex: bool = amt > 0.5
+		if lifted_tex != bool(_rail_tex_lifted.get(key, false)):
+			_rail_tex_lifted[key] = lifted_tex
+			_apply_rail_texture_for(key)
+		var applied: float = float(_rail_pop_applied[key])
+		if absf(amt - applied) < 0.001:
+			continue
+		_rail_pop_applied[key] = amt
+		quad.position = (_rail_base_pos[key] as Vector3) + (_rail_pop_dir[key] as Vector3) * (RAIL_STRIP_LIFT * amt)
+
+
+## Strip lift queries (the strip shot hook reads the room
+## the way the pop shot reads its subject): a section's
+## current lift amount and how far it sits off its flush
+## seat.
+func rail_lift_amount(key: String) -> float:
+	return float(_rail_pop.get(key, 0.0))
+
+
+func rail_lift_offset(key: String) -> Vector3:
+	var quad: ClickableQuad = _rail_quads.get(key) as ClickableQuad
+	if quad == null or not _rail_base_pos.has(key):
+		return Vector3.ZERO
+	return quad.position - (_rail_base_pos[key] as Vector3)
 
 
 ## ------------------------------------------------------ the card flip
@@ -7206,10 +7442,52 @@ func bar_state() -> Dictionary:
 		strip_lo = minf(strip_lo, sq.position.x - shalf)
 		strip_hi = maxf(strip_hi, sq.position.x + shalf)
 		strip_top = maxf(strip_top, sq.position.y + sq.quad_size().y * 0.5)
+	# GRADFIX14 (item 1): the machined strip's census - the
+	# backing bar's count (1 shipped, 0 under tileboxes),
+	# the widest gap between neighbouring sections (0
+	# shipped, RAIL_GAP under tileboxes), the sections'
+	# order + widths read left to right off the laid-out
+	# quads, and the lift census (how many sections stand
+	# lifted, the greatest lift, and the focused stop's key).
+	var rail_sorted: Array = []
+	for k3: Variant in _rail_quads.keys():
+		var q3: ClickableQuad = _rail_quads[k3] as ClickableQuad
+		if q3 != null:
+			rail_sorted.append([q3.position.x, str(k3), q3.quad_size().x])
+	rail_sorted.sort_custom(func(a: Array, b: Array) -> bool: return float(a[0]) < float(b[0]))
+	var rail_keys: Array[String] = []
+	var rail_widths: Array[float] = []
+	var rail_gap_max: float = 0.0
+	for i3: int in range(rail_sorted.size()):
+		rail_keys.append(str(rail_sorted[i3][1]))
+		rail_widths.append(float(rail_sorted[i3][2]))
+		if i3 > 0:
+			var prev_right: float = float(rail_sorted[i3 - 1][0]) + float(rail_sorted[i3 - 1][2]) * 0.5
+			var this_left: float = float(rail_sorted[i3][0]) - float(rail_sorted[i3][2]) * 0.5
+			rail_gap_max = maxf(rail_gap_max, this_left - prev_right)
+	var rail_lifted: int = 0
+	var rail_lift_max: float = 0.0
+	for k4: Variant in _rail_base_pos.keys():
+		var off: float = rail_lift_offset(str(k4)).length()
+		rail_lift_max = maxf(rail_lift_max, off)
+		if off > RAIL_STRIP_LIFT * 0.5:
+			rail_lifted += 1
+	var rail_lift_target: String = ""
+	if _focused != null:
+		for k5: Variant in _rail_quads.keys():
+			if _rail_quads[k5] == _focused:
+				rail_lift_target = str(k5)
 	return {
 		"rail_span": rail_hi - rail_lo if rail_hi > rail_lo else 0.0,
 		"strip_span": strip_hi - strip_lo if strip_hi > strip_lo else 0.0,
 		"rail_stops": _rail_quads.size(),
+		"rail_bar_count": 1 if _rail_bar != null else 0,
+		"rail_gap_max": rail_gap_max,
+		"rail_keys": rail_keys,
+		"rail_widths": rail_widths,
+		"rail_lifted": rail_lifted,
+		"rail_lift_max": rail_lift_max,
+		"rail_lift_target": rail_lift_target,
 		"strip_slots": strip_count,
 		# Console pass 2 (GRADFIX6 item 4): the tile height
 		# and the vertical air between the rows, read off the
@@ -7392,6 +7670,7 @@ func _process(delta: float) -> void:
 		# inside _request_setup_panel_render still applies).
 		_request_setup_panel_render(false)
 	_update_pop(delta)
+	_update_rail_lift(delta)
 	_update_swing(delta)
 	_update_power(delta)
 	var deaf: bool = _launching_game_id != ""

@@ -413,6 +413,10 @@ var _shot_pop_phase: int = -1
 var _shot_pop_frames: int = 0
 var _shot_pop_panel: ClickableQuad = null
 var _shot_pop_since_msec: int = 0
+var _shot_strip_prefix: String = "" ## --pvlds-shot-strip PREFIX: machined-strip room shots (GRADFIX14 item 1) - the bar at rest, one mid-strip section lifted, then focus moved on (the lifted section sunk flush, exactly one lift)
+var _shot_strip_phase: int = -1
+var _shot_strip_frames: int = 0
+var _shot_strip_since_msec: int = 0
 var _shot_mimic_prefix: String = "" ## --pvlds-shot-mimic PREFIX: the power-on mimic's QA hook (the swap round) - fixture assertion suite by default, real-table stills under PVLDS_MIMIC_REAL=1
 var _shot_mimic_phase: int = -1
 var _shot_mimic_stage: int = 0 ## sub-state inside the current phase
@@ -470,6 +474,10 @@ func _ready() -> void:
 	if shot_pop_idx >= 0 and shot_pop_idx + 1 < user_args.size():
 		_shot_pop_prefix = user_args[shot_pop_idx + 1]
 		_shot_pop_phase = 0
+	var shot_strip_idx: int = user_args.find("--pvlds-shot-strip")
+	if shot_strip_idx >= 0 and shot_strip_idx + 1 < user_args.size():
+		_shot_strip_prefix = user_args[shot_strip_idx + 1]
+		_shot_strip_phase = 0
 	var shot_slide_idx: int = user_args.find("--pvlds-shot-slide")
 	if shot_slide_idx >= 0 and shot_slide_idx + 1 < user_args.size():
 		_shot_slide_path = user_args[shot_slide_idx + 1]
@@ -640,6 +648,12 @@ func _ready() -> void:
 	# at the guard below - so the scanwall smoke's focus
 	# and launch-wait legs fail by name. Set here, before
 	# any room exists.
+	# GRADFIX14 item 1's negative-control seam
+	# (PVLDS_GF14_NC=tileboxes): restores the shipped
+	# per-tile rail boxes wholesale, so the grad census's
+	# machined-strip legs fail by name. (The same env var
+	# carries item 3's grammar values - a distinct set.)
+	# Set here, before any room exists.
 	RoomView.debug_gf14_nc = OS.get_environment("PVLDS_GF14_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
@@ -675,7 +689,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -861,6 +875,8 @@ func _process(_delta: float) -> void:
 		_drive_art_bench(_delta)
 	if _shot_pop_phase >= 0:
 		_drive_shot_pop()
+	if _shot_strip_phase >= 0:
+		_drive_shot_strip()
 	if _shot_slide_phase >= 0:
 		_drive_shot_slide()
 	if _shot_mimic_phase >= 0:
@@ -1648,6 +1664,86 @@ func _drive_shot_pop() -> void:
 				get_tree().quit(0)
 			else:
 				printerr("PVLDS POP SHOT: FAIL - ", "; ".join(PackedStringArray(problems)))
+				get_tree().quit(1)
+
+
+## The machined strip's shot hook (GRADFIX14 item 1, the pop
+## shot's sibling): boots the room, saves PREFIX_rest.png
+## with nothing lifted, focuses a MID-STRIP section
+## (filter:favorites) through the room's own focus path,
+## waits for its lift spring to settle, asserts exactly one
+## section stands lifted at the full RAIL_STRIP_LIFT and
+## saves PREFIX_lift.png; then moves focus on (exit), waits
+## for the first section to sink flush and the new one to
+## rise, asserts exactly one lift again, saves
+## PREFIX_moved.png, prints the verdict, quits.
+func _drive_shot_strip() -> void:
+	match _shot_strip_phase:
+		0:
+			if _room == null or not _room.visible or not _room.wall_ready:
+				return
+			_room._set_focused(null)
+			_shot_strip_frames += 1
+			if _shot_strip_frames < 12:
+				return
+			var rest_err: Error = _save_shot_png(_shot_strip_prefix + "_rest.png")
+			if rest_err != OK:
+				printerr("PVLDS STRIP SHOT: FAIL - rest shot err=", rest_err)
+				get_tree().quit(1)
+				return
+			_room._set_focused(_room.rail_quad("filter:favorites"))
+			_shot_strip_since_msec = Time.get_ticks_msec()
+			_shot_strip_phase = 1
+		1:
+			var amt: float = _room.rail_lift_amount("filter:favorites")
+			var waited: int = Time.get_ticks_msec() - _shot_strip_since_msec
+			if amt < 0.999 and waited < 3000:
+				return
+			var problems: Array[String] = []
+			if amt < 0.999:
+				problems.append("lift amount %.3f after %dms" % [amt, waited])
+			var off: Vector3 = _room.rail_lift_offset("filter:favorites")
+			if absf(off.length() - RoomView.RAIL_STRIP_LIFT) > 0.004:
+				problems.append("lift offset %.4f, want %.3f" % [off.length(), RoomView.RAIL_STRIP_LIFT])
+			var bar1: Dictionary = _room.bar_state()
+			if int(bar1.get("rail_lifted", 0)) != 1:
+				problems.append("lifted sections %d, want exactly 1" % int(bar1.get("rail_lifted", 0)))
+			if int(bar1.get("rail_bar_count", 0)) != 1:
+				problems.append("backing bars %d, want 1" % int(bar1.get("rail_bar_count", 0)))
+			var lift_err: Error = _save_shot_png(_shot_strip_prefix + "_lift.png")
+			if lift_err != OK:
+				problems.append("lift shot err=%d" % lift_err)
+			if not problems.is_empty():
+				printerr("PVLDS STRIP SHOT: FAIL - ", "; ".join(PackedStringArray(problems)))
+				get_tree().quit(1)
+				return
+			_room._set_focused(_room.rail_quad("exit"))
+			_shot_strip_since_msec = Time.get_ticks_msec()
+			_shot_strip_phase = 2
+		2:
+			var sunk: float = _room.rail_lift_amount("filter:favorites")
+			var risen: float = _room.rail_lift_amount("exit")
+			var waited2: int = Time.get_ticks_msec() - _shot_strip_since_msec
+			if (sunk > 0.001 or risen < 0.999) and waited2 < 3000:
+				return
+			var problems2: Array[String] = []
+			if sunk > 0.001:
+				problems2.append("the moved-on section did not sink flush (amount %.3f)" % sunk)
+			if _room.rail_lift_offset("filter:favorites").length() > 0.001:
+				problems2.append("the moved-on section still stands off its seat")
+			if risen < 0.999:
+				problems2.append("the newly focused section did not lift (amount %.3f)" % risen)
+			var bar2: Dictionary = _room.bar_state()
+			if int(bar2.get("rail_lifted", 0)) != 1:
+				problems2.append("lifted sections %d after the move, want exactly 1" % int(bar2.get("rail_lifted", 0)))
+			var moved_err: Error = _save_shot_png(_shot_strip_prefix + "_moved.png")
+			if moved_err != OK:
+				problems2.append("moved shot err=%d" % moved_err)
+			if problems2.is_empty():
+				print("PVLDS STRIP SHOT: PASS risen=%.3f moved-on sunk flush, exactly one lift at each rest" % risen)
+				get_tree().quit(0)
+			else:
+				printerr("PVLDS STRIP SHOT: FAIL - ", "; ".join(PackedStringArray(problems2)))
 				get_tree().quit(1)
 
 
@@ -6751,6 +6847,39 @@ func _grad_census_verdicts() -> void:
 	_grad_expect(float(bar.get("rail_strip_gap", 0.0)) >= 0.050 and float(bar.get("rail_tile_h", 0.0)) > 0.0 and float(bar.get("rail_tile_h", 0.0)) <= 0.120,
 		"console bar: pass 2 gives the rows their air and slims the tiles (rail/strip gap %.3f m against pass 1's 0.025 - at least doubled - tile height %.3f m against pass 1's 0.135)"
 			% [float(bar.get("rail_strip_gap", 0.0)), float(bar.get("rail_tile_h", 0.0))])
+	# GRADFIX14 (item 1): the machined strip's verdicts - the
+	# rail is ONE continuous graphite bar (a backing bar
+	# stands, and no gap opens between neighbouring
+	# sections), carrying the shipped sections in the
+	# shipped order at the shipped proportions. Under
+	# PVLDS_GF14_NC=tileboxes (per-tile boxes, 0.018 m gaps,
+	# no bar) the one-piece leg fails by name.
+	var want_keys: Array[String] = ["filter:all", "filter:vr", "filter:favorites", "filter:recents", "filter:new", "sort", "tournament", "page_label", "wovp_refresh", "desk", "exit"]
+	var got_keys: Array = bar.get("rail_keys", []) as Array
+	var keys_ok: bool = got_keys.size() == want_keys.size()
+	if keys_ok:
+		for ki: int in range(want_keys.size()):
+			if str(got_keys[ki]) != want_keys[ki]:
+				keys_ok = false
+	var want_w: Array[float] = [0.194, 0.156, 0.285, 0.259, 0.156, 0.298, 0.285, 0.182, 0.207, 0.207, 0.182]
+	var got_w: Array = bar.get("rail_widths", []) as Array
+	var wsum: float = 0.0
+	for wv: Variant in got_w:
+		wsum += float(wv)
+	var widths_ok: bool = got_w.size() == want_w.size() and wsum > 0.0
+	if widths_ok:
+		for wi: int in range(want_w.size()):
+			if absf(float(got_w[wi]) / wsum - want_w[wi] / 2.411) > 0.01:
+				widths_ok = false
+	print("GRAD STRIP: bar pieces %d, widest section gap %.4f m, sections %s, lift target '%s', lifted %d"
+		% [int(bar.get("rail_bar_count", 0)), float(bar.get("rail_gap_max", 0.0)), str(got_keys), str(bar.get("rail_lift_target", "")), int(bar.get("rail_lifted", 0))])
+	_grad_expect(int(bar.get("rail_bar_count", 0)) == 1 and float(bar.get("rail_gap_max", 0.0)) <= 0.002,
+		"machined strip: the rail is one continuous graphite bar - one backing bar, no gaps between sections (bar pieces %d, widest gap %.4f m against the shipped tiles' 0.018 m)"
+			% [int(bar.get("rail_bar_count", 0)), float(bar.get("rail_gap_max", 0.0))])
+	_grad_expect(keys_ok,
+		"machined strip: the bar carries the shipped sections in the shipped order (%s)" % str(got_keys))
+	_grad_expect(widths_ok,
+		"machined strip: the sections keep the shipped proportions (widths %s)" % str(got_w))
 	# GRADFIX5 (item 4): the wall verdict - the pushed-back
 	# wall keeps its columns and the centre card reads
 	# smaller. On the old 3.05 radius the card measure reads
