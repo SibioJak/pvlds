@@ -307,9 +307,10 @@ const SWING_MAX_SEC: float = 0.72
 ## Stage B - the background stack (all WORLD-LOCKED; see
 ## _build_background) and the focused card's flip.
 const BG_STAR_RADIUS: float = 30.0 ## the starfield shell's radius around the eye
-const BG_WIRE_RADIUS: float = 14.0 ## the lat/long wireframe shell's radius
 ## (The orbit ring's radius const went with the ring -
-## GRADFIX4 item 5e removed it; see _build_background.)
+## GRADFIX4 item 5e removed it, and the wireframe shell's
+## radius const went with the shell - GRADFIX9 removed it;
+## see _build_background.)
 const HAZE_FLOOR: float = 0.45 ## the far window columns' dim floor (see _haze_for)
 ## The card flip (GRADFIX6 item 1 - Chris's design, back to
 ## the original concept after the wing/book line died in the
@@ -386,7 +387,8 @@ void fragment() {
 ## through between its nearer, brighter, sparser pinpoints -
 ## the two shells at 30 m and 12 m are the starfield's depth:
 ## under any head motion the layers parallax against each
-## other and against the wireframe shell (14 m), and under
+## other (the wireframe shell that used to sit between
+## them at 14 m was removed in GRADFIX9), and under
 ## the LAYERED dial both shells
 ## DRIFT on their own world-space rotations (see
 ## _update_background) - near faster than far, so a head turn
@@ -648,7 +650,6 @@ var _bg_root: Node3D = null ## the background stack's holder (a Room child - wor
 var _bg_starfield: MeshInstance3D = null
 var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD FIX round's depth layer)
 var _starfield_mode: String = "layered" ## the SETUP dial: "layered" | "flat" | "off" (see set_starfield_mode)
-var _bg_wireframe: MeshInstance3D = null
 var _bg_ring: MeshInstance3D = null ## always null since GRADFIX4 removed the orbit ring (item 5e); background_layers() skips it
 ## The card flip's standing state (GRADFIX6 item 1): one
 ## card at a time wears the turn - the one the player
@@ -1061,9 +1062,12 @@ func _build_environment() -> void:
 
 
 ## The room's background stack (the graduation's Stage B,
-## banked by the user 2026-10-29): a far starfield shell, a
-## faint latitude/longitude wireframe shell, and ONE tilted
-## orbit ring - plus the haze the far window columns wear
+## banked by the user 2026-10-29): a far starfield shell and
+## a near starfield shell - plus the haze the far window
+## columns wear. (The stack once also carried a faint
+## latitude/longitude wireframe shell and ONE tilted orbit
+## ring; the ring was removed in GRADFIX4 and the wireframe
+## shell in GRADFIX9, both on the user's order.)
 ## (see _haze_for). COMFORT LAW: every layer is WORLD-LOCKED
 ## - the stack hangs on the Room, never on the drum, and no
 ## layer animates, drifts, or breathes, ever; only the drum
@@ -1075,9 +1079,9 @@ func _build_environment() -> void:
 ## shows both star shells AND drifts them (each on its own
 ## slow world-space rotation about the viewer - the floating
 ## parallax the user specced), "flat" shows the far shell
-## alone, static, "off" no stars. The wireframe shell and
-## the orbit ring are structure, not stars - the dial never
-## touches them. Every layer stays parented to the room
+## alone, static, "off" no stars. The dial touches nothing
+## else - since GRADFIX9 the two star shells are the whole
+## stack. Every layer stays parented to the room
 ## (world space, centred on the eye): the drift is a
 ## rotation about the viewer, never a slide with the view.
 func set_starfield_mode(mode: String) -> void:
@@ -1176,20 +1180,17 @@ func _build_background() -> void:
 	near_stars.position = EYE
 	_bg_root.add_child(near_stars)
 	_bg_starfield_near = near_stars
-	# The wireframe shell: latitude/longitude lines drawn
-	# as line geometry on a nearer sphere - the dome's own
-	# ghost, faint enough to read as depth, not structure.
-	var wire: MeshInstance3D = MeshInstance3D.new()
-	wire.name = "WireframeShell"
-	wire.mesh = _wireframe_mesh()
-	var wm: StandardMaterial3D = StandardMaterial3D.new()
-	wm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	wm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	wm.albedo_color = Color(0.38, 0.48, 0.72, 0.13)
-	wire.material_override = wm
-	wire.position = EYE
-	_bg_root.add_child(wire)
-	_bg_wireframe = wire
+	# GRADFIX9: the wireframe shell is REMOVED (Chris's
+	# order, 2026-10-31 - "drop the wireframe shell
+	# entirely, like the ring and the fins"). The dome's
+	# faint latitude/longitude line shell read, looking
+	# straight down, as lines converging at a central point
+	# and radiating outward over the whole globe - the
+	# nadir pole pinch his capture showed. No builder, no
+	# mesh, no field remains; wireframe_shell_count() is
+	# the standing census and the smokes assert zero.
+	# Nothing replaces it: the stack is the two star
+	# shells alone.
 	# GRADFIX4 (item 5e): the orbit ring is REMOVED. The old
 	# 63/17 tilt read as a straight scratch line across the
 	# sky from below (his capture), and the reworked 32/7
@@ -1202,39 +1203,6 @@ func _build_background() -> void:
 	# now; _bg_ring stays null and background_layers() omits
 	# it.
 	_apply_starfield_mode()
-
-
-## The wireframe shell's line geometry: meridians every 15
-## degrees, parallels every 15 from -75 to +75, on
-## BG_WIRE_RADIUS around the eye.
-func _wireframe_mesh() -> ArrayMesh:
-	var verts: PackedVector3Array = PackedVector3Array()
-	for mi: int in range(24):
-		var lon: float = deg_to_rad(float(mi) * 15.0)
-		var prev: Vector3 = Vector3.ZERO
-		for si: int in range(65):
-			var lat: float = deg_to_rad(-90.0 + float(si) * (180.0 / 64.0))
-			var p: Vector3 = Vector3(cos(lat) * sin(lon), sin(lat), -cos(lat) * cos(lon)) * BG_WIRE_RADIUS
-			if si > 0:
-				verts.append(prev)
-				verts.append(p)
-			prev = p
-	for li: int in range(11):
-		var lat2: float = deg_to_rad(-75.0 + float(li) * 15.0)
-		var prev2: Vector3 = Vector3.ZERO
-		for si2: int in range(65):
-			var lon2: float = deg_to_rad(float(si2) * (360.0 / 64.0))
-			var p2: Vector3 = Vector3(cos(lat2) * sin(lon2), sin(lat2), -cos(lat2) * cos(lon2)) * BG_WIRE_RADIUS
-			if si2 > 0:
-				verts.append(prev2)
-				verts.append(p2)
-			prev2 = p2
-	var arrays: Array = []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	var mesh: ArrayMesh = ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_LINES, arrays)
-	return mesh
 
 
 ## The haze a card wears by its column's distance from the
@@ -6134,7 +6102,7 @@ func drum_node() -> Node3D:
 
 func background_layers() -> Array:
 	var out: Array = []
-	for n: Node in [_bg_starfield, _bg_starfield_near, _bg_wireframe, _bg_ring]:
+	for n: Node in [_bg_starfield, _bg_starfield_near, _bg_ring]:
 		if n != null:
 			out.append(n)
 	return out
@@ -6152,6 +6120,21 @@ func bookend_fin_count() -> int:
 	var n: int = 0
 	for node: Node in find_children("*", "Node", true, false):
 		if node.name == "BookendStart" or node.name == "BookendEnd":
+			n += 1
+	return n
+
+
+## The wireframe-shell census (GRADFIX9): how many
+## wireframe shell nodes stand anywhere in the room's
+## subtree, counted by the builder's own node name. The
+## shell is REMOVED (Chris's order, 2026-10-31 - no
+## builder, no mesh, no field remains), so the honest
+## count is zero in both views; the grad and tournament
+## smokes assert exactly that.
+func wireframe_shell_count() -> int:
+	var n: int = 0
+	for node: Node in find_children("*", "Node", true, false):
+		if node.name == "WireframeShell":
 			n += 1
 	return n
 

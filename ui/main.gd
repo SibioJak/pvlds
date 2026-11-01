@@ -4798,10 +4798,15 @@ func _grad_audit_labels(tag: String) -> void:
 
 func _grad_leg_background_static() -> void:
 	var layers: Array = _room.background_layers()
-	# Three layers since GRADFIX4 removed the orbit ring
-	# (item 5e): starfield far, starfield near, wireframe.
-	_grad_expect(layers.size() == 3,
-		"background world-lock: the stack stands (starfield, starfield near, wireframe - %d layers)" % layers.size())
+	# Two layers since GRADFIX9 removed the wireframe shell
+	# (Chris's order, 2026-10-31 - "drop the wireframe shell
+	# entirely, like the ring and the fins"; GRADFIX4 had
+	# already removed the orbit ring, item 5e): starfield
+	# far, starfield near - nothing else stands.
+	_grad_expect(layers.size() == 2,
+		"background world-lock: the stack stands (starfield, starfield near - %d layers)" % layers.size())
+	_grad_expect(_room.wireframe_shell_count() == 0,
+		"wireframe shell: zero wireframe shell nodes stand in the room (library view; got %d - GRADFIX9: the shell is removed entirely, Chris's 2026-10-31 order)" % _room.wireframe_shell_count())
 	var drum: Node3D = _room.drum_node()
 	_grad_bg_before.clear()
 	for layer: Variant in layers:
@@ -4820,7 +4825,7 @@ func _grad_leg_background_static() -> void:
 	# The starfield dial (the GRAD FIX round): layered stands
 	# both shells, flat the far one alone, off neither - and
 	# the drum's parentage never moves under any setting.
-	if layers.size() == 3:
+	if layers.size() == 2:
 		var far_shell: Node3D = layers[0] as Node3D
 		var near_shell: Node3D = layers[1] as Node3D
 		_room.set_starfield_mode("flat")
@@ -5038,6 +5043,44 @@ func _grad_sky_density(img: Image) -> Vector2:
 	return Vector2(cov, cnt)
 
 
+## One sky grab's DIM-LINE density truth (GRADFIX9): the
+## wireframe shell's lines were faint - alpha 0.13 of a
+## mid-blue, far under the bright-star threshold the
+## density legs read - so its signature lives in the dim
+## band (luminance 0.04..0.25, stars and sky glow excluded
+## as far as the band allows). Where the shell stood, its
+## meridians CONVERGED on the pole at the frame's centre:
+## the centre disc's dim-line density stood well clear of
+## the ring's. With the shell removed (Chris's order,
+## 2026-10-31) the two densities sit even - stars only.
+## Returns the centre/ring dim-line density ratio on the
+## density legs' own rings.
+func _grad_sky_line_ratio(img: Image) -> float:
+	var uw: int = img.get_width()
+	var uh: int = img.get_height()
+	var cx: float = float(uw) * 0.5
+	var cy: float = float(uh) * 0.5
+	var rmax: float = float(mini(uw, uh))
+	var c_in: int = 0
+	var c_tot: int = 0
+	var r_in: int = 0
+	var r_tot: int = 0
+	for yy: int in range(0, uh, 3):
+		for xx: int in range(0, uw, 3):
+			var rr: float = Vector2(float(xx) - cx, float(yy) - cy).length() / rmax
+			var lum: float = img.get_pixel(xx, yy).get_luminance()
+			var ink: bool = lum > 0.04 and lum < 0.25
+			if rr < 0.25:
+				c_tot += 1
+				if ink:
+					c_in += 1
+			elif rr > 0.55 and rr < 0.75:
+				r_tot += 1
+				if ink:
+					r_in += 1
+	return (float(c_in) / float(maxi(c_tot, 1))) / maxf(float(r_in) / float(maxi(r_tot, 1)), 0.0001)
+
+
 ## The sky pass proofs (GRADFIX4 item 5, phase 13): the
 ## drift's world-space truth read off the room's own state,
 ## the parallax read off RENDERED pairs (each layer isolated,
@@ -5053,20 +5096,18 @@ func _grad_sky_density(img: Image) -> Vector2:
 ## and the zenith + pinpoint legs fail by name.
 func _grad_sky_step() -> void:
 	var layers: Array = _room.background_layers()
-	if layers.size() != 3:
+	if layers.size() != 2:
 		_grad_fail("sky: the background stack is missing")
 		_grad_phase = 3
 		_grad_wait = 0
 		return
 	var far_shell: Node3D = layers[0] as Node3D
 	var near_shell: Node3D = layers[1] as Node3D
-	var wire: Node3D = layers[2] as Node3D
 	var cam: Camera3D = _room._active_camera()
 	_grad_wait += 1
 	match _grad_sky_stage:
 		0:
 			_room.drum_node().visible = false
-			wire.visible = false
 			_room.set_starfield_mode("layered")
 			far_shell.visible = false
 			near_shell.visible = true
@@ -5222,6 +5263,14 @@ func _grad_sky_step() -> void:
 				print("GRAD SKY: zenith star counts - centre %d blobs, ring %d blobs, count-density ratio %.2f" % [zc, zr, zratio])
 				_grad_expect(zratio > 0.35 and zratio < 4.0,
 					"sky zenith: the star count does not explode at the pole the way a converging UV grid's does (count-density centre/ring %.2f; the UV field reads 7.71)" % zratio)
+				# GRADFIX9: the wireframe shell is GONE - the
+				# zenith grab must show stars only, no radial
+				# line convergence at the pole (Chris's
+				# 2026-10-31 order: drop the shell entirely).
+				var zline: float = _grad_sky_line_ratio(up)
+				print("GRAD SKY: zenith dim-line densities - centre/ring ratio %.2f" % zline)
+				_grad_expect(zline > 0.40 and zline < 2.50,
+					"sky zenith: no wireframe lines converge at the pole - stars only (dim-line centre/ring %.2f; GRADFIX9: shell removed, Chris's 2026-10-31 order)" % zline)
 				# Pinpoint: the NEAR layer's median blob size.
 				# A pinpoint star is a couple of pixels across
 				# even pooled; the old UV field's soft discs
@@ -5255,6 +5304,17 @@ func _grad_sky_step() -> void:
 					"sky nadir: looking straight down, the stars are still there - density even, no bare lower half (coverage centre/ring %.2f)" % dd.x)
 				_grad_expect(dd.y > 0.35 and dd.y < 4.0,
 					"sky nadir: the star count stays even at the nadir (count-density centre/ring %.2f)" % dd.y)
+				# GRADFIX9: the nadir is where Chris SAW the
+				# shell - "very feint lines that converge at a
+				# central point... radiate outward and cover
+				# the entire globe." The grab must now show
+				# stars only: no dim-line convergence at the
+				# centre (his 2026-10-31 order: drop the
+				# wireframe shell entirely).
+				var dline: float = _grad_sky_line_ratio(down)
+				print("GRAD SKY: nadir dim-line densities - centre/ring ratio %.2f" % dline)
+				_grad_expect(dline > 0.40 and dline < 2.50,
+					"sky nadir: no wireframe lines converge at the centre point - stars only (dim-line centre/ring %.2f; GRADFIX9: shell removed, Chris's 2026-10-31 order)" % dline)
 				cam.rotation_degrees = Vector3(-35.0, 0.0, 0.0) ## down-forward: the desk view's sky
 				_grad_sky_stage = 13
 				_grad_wait = 0
@@ -5279,7 +5339,6 @@ func _grad_sky_step() -> void:
 				_grad_save_grab("gradfix4_sky_below.png")
 				cam.rotation_degrees = Vector3.ZERO
 				_room.drum_node().visible = true
-				wire.visible = true
 				_room.set_starfield_mode("layered")
 				_grad_phase = 3
 				_grad_wait = 0
@@ -8668,18 +8727,18 @@ func _drive_tournament_layout() -> void:
 
 
 ## The GRADFIX5 sky-nadir stage's setup (layout phase 3):
-## the drum and the wireframe shell step out, the camera
-## pitches to the nadir - the Tournament Room's down view,
-## judged on the same density measures as the library's.
+## the drum steps out, the camera pitches to the nadir -
+## the Tournament Room's down view, judged on the same
+## density measures as the library's. (GRADFIX9: the
+## wireframe shell that used to step out here no longer
+## exists - Chris's 2026-10-31 order dropped it entirely,
+## so there is nothing to hide and nothing to restore.)
 func _tournament_sky_begin() -> void:
 	var cam: Camera3D = _room._active_camera()
 	if cam != null:
 		cam.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
 	if _room.drum_node() != null:
 		_room.drum_node().visible = false
-	var layers: Array = _room.background_layers()
-	if layers.size() >= 3:
-		(layers[2] as Node3D).visible = false
 	_tournament_smoke_wait = 0
 	_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 30000
 	_tournament_smoke_phase = 3
@@ -8702,14 +8761,22 @@ func _tournament_leg_sky_nadir() -> void:
 		"layout sky: looking straight down in the Tournament Room, the stars are still there - no bare lower half (coverage centre/ring %.2f)" % dd.x)
 	_tournament_expect(dd.y > 0.35 and dd.y < 4.0,
 		"layout sky: the Tournament Room's nadir star count stays even (count-density centre/ring %.2f)" % dd.y)
+	# GRADFIX9: the wireframe shell is GONE from this view
+	# too (one room, one environment - the Tournament Room
+	# is the same Room re-dressed): zero shell nodes by
+	# census, and the nadir grab shows stars only, no
+	# dim-line convergence at the centre (Chris's
+	# 2026-10-31 order: drop the shell entirely).
+	_tournament_expect(_room.wireframe_shell_count() == 0,
+		"layout sky: zero wireframe shell nodes stand in the room (Tournament view; got %d - GRADFIX9: the shell is removed entirely, Chris's 2026-10-31 order)" % _room.wireframe_shell_count())
+	var tline: float = _grad_sky_line_ratio(img)
+	_tournament_expect(tline > 0.40 and tline < 2.50,
+		"layout sky: no wireframe lines converge at the Tournament Room's nadir - stars only (dim-line centre/ring %.2f; GRADFIX9: shell removed, Chris's 2026-10-31 order)" % tline)
 	var cam: Camera3D = _room._active_camera()
 	if cam != null:
 		cam.rotation_degrees = Vector3.ZERO
 	if _room.drum_node() != null:
 		_room.drum_node().visible = true
-	var layers: Array = _room.background_layers()
-	if layers.size() >= 3:
-		(layers[2] as Node3D).visible = true
 
 
 ## GRADFIX7 item 2 helpers: the standing boards' state for
