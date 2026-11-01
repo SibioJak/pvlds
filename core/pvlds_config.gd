@@ -42,6 +42,13 @@ var wovp_api_key: String = ""
 ## config file is simply no longer read.)
 var starfield_mode: String = "layered" ## "layered" | "flat" | "off"
 const STARFIELD_MODES: Array[String] = ["layered", "flat", "off"]
+## Display dial (GRADFIX10 item 3, ridden from the same
+## SETUP panel): how the drum wall travels. "smooth" (the
+## default - Chris's pick) rolls continuously to its target;
+## "stepped" is the shipped swing/spring cadence, slot by
+## slot in feel. Mirrors starfield_mode exactly.
+var wall_motion_mode: String = "smooth" ## "smooth" | "stepped"
+const WALL_MOTION_MODES: Array[String] = ["smooth", "stepped"]
 ## Deliberately absent: any close-duty or hold-to-exit setting.
 ## The exit model was simplified by the player's ruling
 ## (2026-10-22): the watchdog's session-close duty is
@@ -100,6 +107,9 @@ func load_from_disk() -> bool:
 	starfield_mode = str(d.get("starfield_mode", "layered"))
 	if not STARFIELD_MODES.has(starfield_mode):
 		starfield_mode = "layered"
+	wall_motion_mode = str(d.get("wall_motion_mode", "smooth"))
+	if not WALL_MOTION_MODES.has(wall_motion_mode):
+		wall_motion_mode = "smooth"
 	table_folders.clear()
 	var folders: Variant = d.get("table_folders", [])
 	if folders is Array:
@@ -119,6 +129,7 @@ func save_to_disk() -> bool:
 	d["focus_herding"] = focus_herding
 	d["wovp_api_key"] = wovp_api_key
 	d["starfield_mode"] = starfield_mode
+	d["wall_motion_mode"] = wall_motion_mode
 	var folders: Array = []
 	for f: String in table_folders:
 		folders.append(f)

@@ -70,7 +70,9 @@ const MARQUEE_OUTLINE_SIZE: int = 24
 ## is ever popped; focus loss settles it back flush.
 const POP_OUT_DISTANCE: float = 0.15 ## metres off the shelf at full pop
 const POP_OUT_SCALE: float = 1.04 ## card scale at full pop (DOME5's trim: 1.08 -> 1.04 so the popped frame's top clears the label above - see the dome constants below)
-const POP_OUT_SEC: float = 0.15 ## pop in/out travel time, seconds
+const POP_OUT_SEC: float = 0.15 ## the pop's core travel time, seconds: the spring below reaches ~90% home in this span (its soft landing tail runs a little longer - GRADFIX10 item 2)
+const POP_SPRING_TAU: float = 0.055 ## the pop spring's time constant (GRADFIX10 item 2 - see _update_pop): the critically damped spring that replaced the fixed linear ramp whose visible frame count collapsed with frame pacing
+const POP_MAX_STEP_SEC: float = 1.0 / 30.0 ## the pop's per-frame step clamp (GRADFIX10 item 2): a hitch frame may slow the pop, never skip its poses - the spring integrates at most this much time per frame
 
 ## Card proportions (the graduation round): the drum's cards
 ## stand at the prototype's proven size - CARD_SIZE below,
@@ -304,6 +306,17 @@ const LABEL_WIDTH_PX: float = 246.0 ## wrapped-title width: a long name takes up
 ## drum's current angle (the prototype's speed-gate law).
 const SWING_MIN_SEC: float = 0.16
 const SWING_MAX_SEC: float = 0.72
+## The SMOOTH wall-motion dial (GRADFIX10 item 3): the drum
+## rolls CONTINUOUSLY - a velocity-commanded cruise with an
+## exponential approach, calibrated so a multi-column travel
+## is one unbroken roll at up to SWING_SMOOTH_CRUISE_DEG and
+## the last stretch eases in over SWING_SMOOTH_TAU. The
+## duration law (in _swing_smooth_retarget) replaces the
+## stepped spring's recalibration for this mode only; the
+## STEPPED dial keeps the spring above, byte-for-byte.
+const SWING_SMOOTH_CRUISE_DEG: float = 155.0 ## the smooth roll's cruise speed, degrees per second (~11.5 columns/s)
+const SWING_SMOOTH_MIN_SEC: float = 0.30 ## the smooth travel's shortest calibrated duration (one column)
+const SWING_SMOOTH_TAU: float = 0.14 ## the smooth approach's distance constant, seconds: desired speed = remaining / tau, capped at cruise
 ## Stage B - the background stack (all WORLD-LOCKED; see
 ## _build_background) and the focused card's flip.
 const BG_STAR_RADIUS: float = 30.0 ## the starfield shell's radius around the eye
@@ -552,6 +565,7 @@ var _panel_base_pos: Array[Vector3] = [] ## wall-flush position per panel, paral
 var _panel_pop_dir: Array[Vector3] = [] ## unit vector from the panel toward the viewer (its wall normal)
 var _panel_pop: Array[float] = [] ## current pop amount per panel, 0 flush .. 1 popped
 var _panel_pop_applied: Array[float] = [] ## last pop amount written to a panel's transform (write guard)
+var _panel_pop_vel: Array[float] = [] ## pop spring velocity per panel (GRADFIX10 item 2), carried across retargets
 var _panel_size: Vector2 = PANEL_SIZE ## the standing view's card size: CARD_SIZE, or the Tournament board size
 var _panel_face_px: Vector2i = CARD_FACE_PX ## the panel faces' render size (CARD_FACE_PX, or the board's)
 var _panel_art_aspect: Array[float] = [] ## per panel: its art's aspect (w/h) once its face lands, 0 = no art (title card)
@@ -652,12 +666,24 @@ static var debug_gf8_nc: String = ""
 ## the input smoke's matching legs fail by name. Empty in
 ## every real run.
 static var debug_input_nc: String = ""
+## Negative-control seams for GRADFIX10 items 2+3 (the
+## harness env PVLDS_GRADFIX10_NC, set by Main before any
+## room exists): "steppop" restores the convicted pop
+## stepping (the pop amount quantised to coarse steps -
+## see _update_pop), so the motion smoke's pop-smoothness
+## leg fails by name; "stepswing" restores slot-stepping
+## under the SMOOTH wall-motion dial (the drum re-seats on
+## each column boundary instead of rolling continuously),
+## so the smooth-travel leg fails by name. Empty in every
+## real run.
+static var debug_gf10_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
 var _bg_starfield: MeshInstance3D = null
 var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD FIX round's depth layer)
 var _starfield_mode: String = "layered" ## the SETUP dial: "layered" | "flat" | "off" (see set_starfield_mode)
+var _wall_motion_mode: String = "smooth" ## the SETUP dial (GRADFIX10 item 3): "smooth" | "stepped" (see set_wall_motion_mode)
 var _bg_ring: MeshInstance3D = null ## always null since GRADFIX4 removed the orbit ring (item 5e); background_layers() skips it
 ## The card flip's standing state (GRADFIX6 item 1): one
 ## card at a time wears the turn - the one the player
@@ -689,7 +715,10 @@ var _flip_retry_msec: int = 0
 ## Boards are pooled nodes keyed by CHALLENGE_ID (never
 ## game_id - the panel pool's mode-mismatch path would
 ## free/re-mint them), never seated in _panels/_focusables,
-## never pickable, and take no pop. Their per-board
+## never pickable, and take no pop of their own - since
+## GRADFIX10 item 2 a board RIDES its pair card's pop (see
+## _update_pop), so the highlighted pair travels as one.
+## Their per-board
 ## bookkeeping mirrors the flip's heal discipline: standing
 ## key, applied texture's key, real-or-fallback are separate
 ## facts per board (a single shared slot would starve all
@@ -697,6 +726,8 @@ var _flip_retry_msec: int = 0
 var _board_pool: Dictionary = {} ## challenge_id -> {root: MeshInstance3D, mat: StandardMaterial3D}
 var _board_book: Dictionary = {} ## challenge_id -> {key, tex_key, tex_real, render_key, retry_key, retries, retry_msec}
 var _board_nodes: Array = [] ## standing board node per _visible_games index (null for the state row / library)
+var _board_base_pos: Array = [] ## GRADFIX10 item 2: standing board's wall-flush position per index (its pair card's pop rides it from here)
+var _board_pop_dir: Array = [] ## GRADFIX10 item 2: standing board's pop direction per index (its pair card's wall normal)
 var _board_tex_cache: Dictionary = {} ## standing key -> Texture2D: real board captures, kept across rebuilds so a REFRESH does not re-render unchanged boards
 var _board_heal_msec: int = 0 ## the board heal's throttle stamp (one sweep per BOARD_TEX_RETRY_MS)
 var _board_fill_busy: bool = false ## a tournament board fill pass is running (request coalescing, like the window fill)
@@ -726,6 +757,7 @@ var _setup_panel_dl_btn: ClickableQuad = null
 var _setup_panel_wovp_paste_btn: ClickableQuad = null ## PASTE KEY: reads the WoVP key off the PC clipboard (VR has no keyboard - the paste IS the field)
 var _setup_panel_wovp_test_btn: ClickableQuad = null ## TEST KEY: Main validates the saved key and names whose it is
 var _setup_panel_stars_btn: ClickableQuad = null ## STARS: LAYERED/FLAT/OFF - the display dial (the GRAD FIX round)
+var _setup_panel_wall_btn: ClickableQuad = null ## WALL MOTION: SMOOTH/STEPPED - the wall-motion dial (GRADFIX10 item 3)
 var _setup_panel_back_btn: ClickableQuad = null
 var _setup_panel_up: bool = false
 var _setup_panel_gen: int = 0
@@ -764,6 +796,8 @@ var _swing_vel: float = 0.0 ## drum yaw velocity (rad/s), carried across retarge
 var _swing_cols: float = 1.0 ## the live swing's remaining travel in columns (the spring stiffens with distance: its settle tail grows logarithmically, the duration law only as a square root)
 var _swing_journey: bool = false ## a retarget arrived mid-travel in the travel's own direction: the spring softens to the stepping cadence so a held scroll builds to a cruise instead of settling between steps
 var _swing_active: bool = false
+var _swing_from: float = 0.0 ## the smooth travel's anchor yaw (GRADFIX10 item 3): where the standing continuous travel began, re-anchored at every retarget
+var _swing_cruise_sign: float = 1.0 ## the smooth travel's direction from its anchor toward its target
 var _drum_yaw: float = 0.0 ## the drum's current yaw, radians (== _swing_to at rest)
 var _panel_pool: Dictionary = {} ## game_id -> {root, launch, frame, plate, label, mode, plate_done}: card nodes built once per library adoption and re-seated per view (a rebuild that freed and rebuilt 300+ cards would tax every letter pick - the pick-latency law)
 var _plates_pending: bool = false ## a rebuild stood new cards: their nameplates re-derive from the labels' live AABBs until every one settles (see _refresh_card_plate)
@@ -896,6 +930,8 @@ func _free_panel_pool() -> void:
 	_board_pool.clear()
 	_board_book.clear()
 	_board_nodes.clear()
+	_board_base_pos.clear()
+	_board_pop_dir.clear()
 	_board_tex_cache.clear()
 
 
@@ -1101,6 +1137,34 @@ func set_starfield_mode(mode: String) -> void:
 
 func starfield_mode() -> String:
 	return _starfield_mode
+
+
+## The wall-motion dial (GRADFIX10 item 3 - Chris: "can we
+## make the wall actually roll smoothly instead of advancing
+## one slot at a time?"): "smooth" rolls the drum
+## CONTINUOUSLY to its target (see _update_swing's smooth
+## branch - one travel, no slot cadence); "stepped" is the
+## shipped swing/spring exactly as field-approved. The dial
+## never gates input either way: a press mid-travel retargets
+## from the drum's current angle in both modes (the planetarium
+## speed-gate law). Default "smooth" (Chris's pick).
+func set_wall_motion_mode(mode: String) -> void:
+	_wall_motion_mode = mode if ["smooth", "stepped"].has(mode) else "smooth"
+	# A dial turn mid-travel hands the standing travel to the
+	# newly chosen driver from the drum's current angle and
+	# velocity - no snap, no restart.
+	if _swing_active:
+		_swing_smooth_retarget()
+
+
+func wall_motion_mode() -> String:
+	return _wall_motion_mode
+
+
+## Hand the standing travel to the (possibly newly chosen)
+## wall-motion driver: the smooth driver re-anchors its
+## travel on the drum's current angle and standing target
+## (the real definition stands beside _update_swing).
 
 
 func _apply_starfield_mode() -> void:
@@ -2202,6 +2266,7 @@ func _set_centre(index: int, snap: bool = false) -> void:
 	_page = _centre_index / PAGE_SIZE
 	if snap or _wall == null:
 		_drum_yaw = target
+		_swing_from = target
 		_swing_vel = 0.0
 		_swing_active = false
 		_swing_journey = false
@@ -2210,6 +2275,7 @@ func _set_centre(index: int, snap: bool = false) -> void:
 	elif target != _swing_to or not _swing_active:
 		if absf(target - _drum_yaw) < 0.0001 and absf(_swing_vel) < 0.001:
 			_drum_yaw = target
+			_swing_from = target
 			_swing_vel = 0.0
 			_swing_active = false
 			_swing_journey = false
@@ -2234,6 +2300,12 @@ func _set_centre(index: int, snap: bool = false) -> void:
 			_swing_cols = cols
 			_swing_duration = clampf(0.14 + 0.055 * sqrt(maxf(cols, 1.0)), SWING_MIN_SEC, SWING_MAX_SEC)
 			_swing_active = true
+			if _wall_motion_mode == "smooth":
+				# The SMOOTH dial's travel re-anchors here:
+				# its duration law and cruise replace the
+				# spring's recalibration above (which the
+				# STEPPED dial keeps, untouched).
+				_swing_smooth_retarget()
 	if changed:
 		_refresh_window()
 		_refresh_card_frames()
@@ -2244,7 +2316,12 @@ func _set_centre(index: int, snap: bool = false) -> void:
 		# reads it per frame - no hook needed here.
 
 
-## Per-frame swing drive, from _process: a critically damped
+## Per-frame swing drive, from _process. TWO drivers stand
+## behind the wall-motion dial (GRADFIX10 item 3): SMOOTH
+## (the default) is the continuous roll in
+## _update_swing_smooth above; STEPPED is the shipped spring
+## below, untouched. What follows describes the STEPPED
+## driver: a critically damped
 ## spring (the classic smooth-damp form) carries the drum to
 ## its target, velocity included. The prototype's per-step
 ## cubic ease-out restarted its curve at every retarget, so a
@@ -2259,8 +2336,86 @@ func _set_centre(index: int, snap: bool = false) -> void:
 ## input and no journey takes longer than it used to - and
 ## the landing is exact: inside a hair of the target the drum
 ## snaps onto it, at rest, like it always did.
+## The SMOOTH dial's retarget (GRADFIX10 item 3): anchor the
+## continuous travel at the drum's current angle, name its
+## direction, and calibrate its duration from the distance
+## left - a lower bound only (the cruise + approach below
+## is what actually paces the roll; the bound keeps the
+## standing duration bookkeeping honest for any reader).
+## The drum's velocity is NOT reset: a retarget bends the
+## roll, exactly as the spring's retarget bends its glide.
+func _swing_smooth_retarget() -> void:
+	_swing_from = _drum_yaw
+	_swing_cruise_sign = signf(_swing_to - _drum_yaw)
+	if _swing_cruise_sign == 0.0:
+		_swing_cruise_sign = 1.0
+	var cols: float = absf(_swing_to - _drum_yaw) / deg_to_rad(ANGLE_STEP_DEG)
+	_swing_cols = cols
+	_swing_duration = clampf(0.30 + 0.16 * cols, SWING_SMOOTH_MIN_SEC, 2.8)
+
+
+## The SMOOTH dial's per-frame drive: a velocity-commanded
+## roll. The commanded speed is the remaining distance over
+## SWING_SMOOTH_TAU, capped at the cruise - so far from the
+## target the drum rolls at one steady cruise (no per-slot
+## cadence, no pauses at column boundaries), and inside the
+## last ~tau of travel the command itself decays
+## exponentially into the landing. The drum's velocity
+## relaxes toward the command (a ~0.09 s lag), so setting
+## off and arriving are both eased without any ease curve
+## ever restarting: a retarget - same direction, farther
+## column, or a full reversal from a mid-roll press - just
+## changes the command, and the roll bends. Input is never
+## gated: _set_centre retargets this drive the frame a
+## press lands (the planetarium speed-gate law). The NC
+## seam (PVLDS_GRADFIX10_NC=stepswing) quantises the
+## APPLIED rotation to whole slots, restoring the
+## slot-stepping under SMOOTH so the motion smoke's
+## smooth-travel leg fails by name; the travel state itself
+## stays continuous, exactly like the pop's NC.
+func _update_swing_smooth(delta: float) -> void:
+	var remaining: float = _swing_to - _drum_yaw
+	var dist: float = absf(remaining)
+	if dist < 0.00035 and absf(_swing_vel) < 0.05:
+		_drum_yaw = _swing_to
+		_swing_vel = 0.0
+		_swing_active = false
+		_swing_journey = false
+		_wall.rotation.y = _swing_to
+		return
+	var cruise: float = deg_to_rad(SWING_SMOOTH_CRUISE_DEG)
+	var cap: float = cruise
+	if signf(_swing_vel) == -signf(remaining) and absf(_swing_vel) > cruise:
+		# A reversal in flight: the approach law keeps full
+		# authority while the drum swings back through zero.
+		cap = absf(_swing_vel)
+	var desired: float = signf(remaining) * minf(dist / SWING_SMOOTH_TAU, cap)
+	var blend: float = 1.0 - exp(-delta / 0.09)
+	_swing_vel += (desired - _swing_vel) * blend
+	var step: float = _swing_vel * delta
+	if absf(step) >= dist:
+		_drum_yaw = _swing_to
+		_swing_vel *= 0.25 ## the landing absorbs the roll's speed
+	else:
+		_drum_yaw += step
+	if absf(_swing_to - _drum_yaw) < 0.00035 and absf(_swing_vel) < 0.35:
+		_drum_yaw = _swing_to
+		_swing_vel = 0.0
+		_swing_active = false
+		_swing_journey = false
+	var applied_yaw: float = _drum_yaw
+	if debug_gf10_nc == "stepswing":
+		applied_yaw = snappedf(_drum_yaw, deg_to_rad(ANGLE_STEP_DEG))
+		if not _swing_active:
+			applied_yaw = _swing_to
+	_wall.rotation.y = applied_yaw
+
+
 func _update_swing(delta: float) -> void:
 	if not _swing_active or _wall == null:
+		return
+	if _wall_motion_mode == "smooth":
+		_update_swing_smooth(delta)
 		return
 	var tau: float = maxf(_swing_duration / (3.5 + 0.55 * log(maxf(_swing_cols, 1.0))), 0.02)
 	if _swing_journey:
@@ -2380,12 +2535,15 @@ func _rebuild_wall() -> void:
 		if bnode != null and is_instance_valid(bnode) and bnode.get_parent() == _wall:
 			_wall.remove_child(bnode)
 	_board_nodes.clear()
+	_board_base_pos.clear()
+	_board_pop_dir.clear()
 	_panels.clear()
 	_panel_launches.clear()
 	_panel_back_launches.clear()
 	_panel_base_pos.clear()
 	_panel_pop_dir.clear()
 	_panel_pop.clear()
+	_panel_pop_vel.clear()
 	_panel_pop_applied.clear()
 	_panel_art_aspect.clear()
 	_panel_frames.clear()
@@ -2417,6 +2575,7 @@ func _rebuild_wall() -> void:
 		_panel_base_pos.append(Vector3.ZERO)
 		_panel_pop_dir.append(Vector3.ZERO)
 		_panel_pop.append(0.0)
+		_panel_pop_vel.append(0.0)
 		_panel_pop_applied.append(0.0)
 		_panel_art_aspect.append(0.0)
 		_panel_frames.append(nodes.get("frame") as MeshInstance3D)
@@ -3523,11 +3682,15 @@ func _seat_tournament_boards() -> void:
 	for idx: int in range(_visible_games.size()):
 		if _tourn_state_idx(idx):
 			_board_nodes.append(null)
+			_board_base_pos.append(Vector3.ZERO)
+			_board_pop_dir.append(Vector3.ZERO)
 			continue
 		var row: Dictionary = _tournament_rows[idx] as Dictionary
 		var ch: WovpChallenge = row["challenge"] as WovpChallenge
 		if ch == null:
 			_board_nodes.append(null)
+			_board_base_pos.append(Vector3.ZERO)
+			_board_pop_dir.append(Vector3.ZERO)
 			continue
 		var cid: String = ch.challenge_id
 		var entry: Dictionary = _board_pool.get(cid, {}) as Dictionary
@@ -3551,6 +3714,8 @@ func _seat_tournament_boards() -> void:
 			_wall.add_child(root)
 		var bc: Vector2i = _board_coord(idx)
 		root.transform = _card_transform_at(bc.x, bc.y)
+		_board_base_pos.append(root.transform.origin)
+		_board_pop_dir.append(root.transform.basis.z.normalized())
 		root.visible = true
 		var key: String = _tournament_board_key(idx)
 		var book: Dictionary = _board_book.get(cid, {}) as Dictionary
@@ -3817,6 +3982,8 @@ func _refresh_focusables() -> void:
 			_focusables.append(_setup_panel_wovp_test_btn)
 		if _setup_panel_stars_btn != null:
 			_focusables.append(_setup_panel_stars_btn)
+		if _setup_panel_wall_btn != null:
+			_focusables.append(_setup_panel_wall_btn)
 		if _setup_panel_back_btn != null:
 			_focusables.append(_setup_panel_back_btn)
 	elif _mode == "detail" and _detail != null:
@@ -3897,6 +4064,8 @@ func _refresh_quad_states() -> void:
 		all.append(_setup_panel_wovp_test_btn)
 	if _setup_panel_stars_btn != null:
 		all.append(_setup_panel_stars_btn)
+	if _setup_panel_wall_btn != null:
+		all.append(_setup_panel_wall_btn)
 	if _setup_panel_back_btn != null:
 		all.append(_setup_panel_back_btn)
 	for q: ClickableQuad in all:
@@ -3983,34 +4152,117 @@ func _follow_centre() -> void:
 			_set_centre(idx)
 
 
-## Per-frame pop animation, driven from _process: each panel's
-## amount walks toward 1 (the centred card) or 0 at POP_OUT_SEC
-## pace, and the transform is written only while the amount is
+## Per-frame pop animation, driven from _process.
+##
+## GRADFIX10 item 2 - the jitter conviction and the fix.
+## Chris: "when you highlight a board and it pops up a bit,
+## it feels like 2 or 3 frames, kinda jittery. I'd like that
+## motion butter smooth." Convicted from the code plus a
+## dense trace on the shipped build: the pop was a FIXED
+## 0.15 s wall-clock LINEAR ramp - move_toward(amount, want,
+## delta / POP_OUT_SEC) - so its visible frame count was
+## never a property of the motion, only of the frame pacing
+## during those 150 ms: 0.15 x fps-at-that-moment. And the
+## pacing during exactly that window is the worst the room
+## ever runs, because the same centre change that starts
+## the pop also starts the window fill (the new column's
+## faces render through the serial factory, one GPU
+## readback apiece), the board heal's renders in the
+## Tournament view, and the swing. The harness-box trace of
+## the shipped pop (motion smoke, base build): frames of
+## 106-186 ms inside the pop window, the amount landing in
+## TWO steps - [1 ms 0.000] [112 ms 0.652] [298 ms 1.000].
+## At a locked 90 Hz the same ramp spans ~13 frames; at any
+## hitch it collapses to the 2-3 Chris counted. A linear
+## ramp also starts and stops at full speed, so every one
+## of those few steps reads as a jump, not a glide.
+##
+## The fix: the amount now rides a critically damped spring
+## (the swing's own smooth-damp form) with velocity carried
+## across retargets - a pop interrupted mid-travel bends
+## back instead of reversing at full speed - and lands by
+## exact snap inside a hair of its target. Its step is
+## also CLAMPED (POP_MAX_STEP_SEC): a spring that
+## integrates a hitch frame's whole delta faithfully
+## fast-forwards through its middle poses (measured: one
+## 71 ms fill frame carried the amount to 0.639), so the
+## pop integrates at most 1/30 s per frame - under a hitch
+## it slows down instead of skipping. The spring's
+## core is as quick as the old ramp (90% home in ~POP_OUT_
+## SEC) but its ease-in/ease-out tail means a sparse frame
+## still lands BETWEEN poses instead of ON the next step:
+## no frame ever carries a coarse quantum of the travel.
+## The NC seam (PVLDS_GRADFIX10_NC=steppop) restores the
+## convicted shape - the applied amount quantised to
+## thirds - so the motion smoke's pop-smoothness leg fails
+## against it by name.
+##
+## The Tournament pair (same item): a challenge's standing
+## board now rides its card's pop - same amount, same
+## spring, offset along the board's own wall normal without
+## scaling (the board's text must not grow) - so the pair
+## the player highlighted travels as one object instead of
+## the card lunging off its board. Boards took no pop at
+## all before this round (see the standing-boards section);
+## the library has no boards and is untouched by that half.
+##
+## The transform is written only while the amount is
 ## actually moving - a resting panel is never touched, so a
-## Launch button's activation pulse (a scale tween) never fights
-## this. The pop is UNIFORM (DOME5): scale POP_OUT_SCALE and a
-## POP_OUT_DISTANCE pull along the card's own normal - the
-## true-aspect grow the flat wall used is retired (the dome's
-## clearance proof was measured on the uniform pop). The Launch
-## button rides its panel (it is a child), so it stays glued to
-## the card face and clickable while popped.
+## Launch button's activation pulse (a scale tween) never
+## fights this. The pop is UNIFORM (DOME5): scale
+## POP_OUT_SCALE and a POP_OUT_DISTANCE pull along the
+## card's own normal - the true-aspect grow the flat wall
+## used is retired (the dome's clearance proof was measured
+## on the uniform pop). The Launch button rides its panel
+## (it is a child), so it stays glued to the card face and
+## clickable while popped.
 func _update_pop(delta: float) -> void:
 	_follow_centre()
 	if _panels.is_empty():
 		return
 	var target: ClickableQuad = _pop_target_panel()
-	var step: float = delta / POP_OUT_SEC
+	# The step clamp: the spring integrates at most
+	# POP_MAX_STEP_SEC per frame, so a hitch frame (the fill
+	# work a centre change starts - the convicted window)
+	# stretches the pop's wall time instead of teleporting
+	# it past its middle poses.
+	var pdelta: float = minf(delta, POP_MAX_STEP_SEC)
+	var omega: float = 2.0 / POP_SPRING_TAU
+	var x: float = omega * pdelta
+	var ex: float = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
+	while _panel_pop_vel.size() < _panels.size():
+		_panel_pop_vel.append(0.0)
 	for i: int in range(_panels.size()):
 		var want: float = 1.0 if _panels[i] == target else 0.0
-		var amt: float = move_toward(_panel_pop[i], want, step)
+		var change: float = _panel_pop[i] - want
+		var temp: float = (_panel_pop_vel[i] + omega * change) * pdelta
+		_panel_pop_vel[i] = (_panel_pop_vel[i] - omega * temp) * ex
+		var amt: float = want + (change + temp) * ex
+		if absf(amt - want) < 0.004 and absf(_panel_pop_vel[i]) < 0.08:
+			amt = want
+			_panel_pop_vel[i] = 0.0
 		_panel_pop[i] = amt
-		if absf(amt - _panel_pop_applied[i]) < 0.001:
+		var applied: float = amt
+		if debug_gf10_nc == "steppop":
+			# NC: the convicted stepping, restored - the
+			# applied amount quantised to coarse thirds, so
+			# the rendered pop advances in 2-3 jumps.
+			applied = clampf(roundf(amt * 3.0) / 3.0, 0.0, 1.0)
+		if absf(applied - _panel_pop_applied[i]) < 0.001:
 			continue
-		_panel_pop_applied[i] = amt
+		_panel_pop_applied[i] = applied
 		var q: ClickableQuad = _panels[i]
-		q.position = _panel_base_pos[i] + _panel_pop_dir[i] * (POP_OUT_DISTANCE * amt)
-		var s: float = lerpf(1.0, POP_OUT_SCALE, amt)
+		q.position = _panel_base_pos[i] + _panel_pop_dir[i] * (POP_OUT_DISTANCE * applied)
+		var s: float = lerpf(1.0, POP_OUT_SCALE, applied)
 		q.scale = Vector3(s, s, s)
+		# The pair ride: this card's standing board (the
+		# Tournament view) takes the same offset along its
+		# own normal, at the same applied amount.
+		if i < _board_nodes.size():
+			var bnode: MeshInstance3D = _board_nodes[i] as MeshInstance3D
+			if bnode != null and i < _board_base_pos.size():
+				bnode.position = (_board_base_pos[i] as Vector3) \
+					+ (_board_pop_dir[i] as Vector3) * (POP_OUT_DISTANCE * applied)
 	_update_flip(delta)
 	_heal_panel_faces()
 	_heal_tournament_boards()
@@ -4453,6 +4705,11 @@ func _activate(quad: ClickableQuad) -> void:
 				var modes: Array[String] = ["layered", "flat", "off"]
 				var next: String = modes[(modes.find(_starfield_mode) + 1) % modes.size()]
 				set_starfield_mode(next)
+				display_settings_changed.emit()
+				_request_setup_panel_render(true)
+			"setup_setting_wall_motion":
+				quad.pulse()
+				set_wall_motion_mode("stepped" if _wall_motion_mode == "smooth" else "smooth")
 				display_settings_changed.emit()
 				_request_setup_panel_render(true)
 		return
@@ -5353,6 +5610,10 @@ func setup_panel_stars_quad() -> ClickableQuad:
 	return _setup_panel_stars_btn
 
 
+func setup_panel_wall_quad() -> ClickableQuad:
+	return _setup_panel_wall_btn
+
+
 ## PASTE KEY: the room's paste field. VR has no keyboard,
 ## so the field is the clipboard itself - the player copies
 ## the key on the PC (it is one line in his WoVP profile),
@@ -5482,6 +5743,15 @@ func _build_setup_panel() -> void:
 	_setup_panel_stars_btn.setup("setup_setting_stars", "", placeholder, Vector2(0.66, 0.16))
 	_setup_panel_stars_btn.position = Vector3(-0.375, -0.76, 0.0)
 	_setup_panel.add_child(_setup_panel_stars_btn)
+	# The wall-motion dial (GRADFIX10 item 3) shares the
+	# display row with STARS: WALL MOTION cycles SMOOTH /
+	# STEPPED. Same terms as STARS - the label states the
+	# standing value, a press applies it in the room at once
+	# and Main persists it (display_settings_changed).
+	_setup_panel_wall_btn = ClickableQuad.new()
+	_setup_panel_wall_btn.setup("setup_setting_wall_motion", "", placeholder, Vector2(0.66, 0.16))
+	_setup_panel_wall_btn.position = Vector3(0.375, -0.76, 0.0)
+	_setup_panel.add_child(_setup_panel_wall_btn)
 	_setup_panel_back_btn = ClickableQuad.new()
 	_setup_panel_back_btn.setup("setup_panel_back", "", placeholder, Vector2(0.5, 0.16))
 	_setup_panel_back_btn.position = Vector3(0.0, -1.02, 0.0)
@@ -5563,6 +5833,12 @@ func _fill_setup_panel_textures(gen: int) -> void:
 		_after_setup_render()
 		return
 	_setup_panel_stars_btn.set_texture(stars_tex)
+	var wall_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.button_spec("WALL MOTION: " + _wall_motion_mode.to_upper(), false), Vector2i(512, 124))
+	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_wall_btn == null:
+		_after_setup_render()
+		return
+	_setup_panel_wall_btn.set_texture(wall_tex)
 	var back_tex: Texture2D = await _factory.render_texture(
 		RoomSpecs.button_spec("BACK", true), Vector2i(512, 164))
 	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_back_btn == null:
@@ -6364,6 +6640,29 @@ func page_slide_yaw_deg() -> float:
 
 func page_slide_active() -> bool:
 	return _swing_active
+
+
+## Motion queries (GRADFIX10 items 2+3, the motion smoke
+## reads the travel the way the nav smoke reads its
+## subjects): the drum's current yaw and its standing
+## target, in radians, and one standing board's current
+## pop offset (its pair card's pop amount drives it - see
+## _update_pop).
+func drum_yaw_rad() -> float:
+	return _drum_yaw
+
+
+func swing_target_rad() -> float:
+	return _swing_to
+
+
+func board_pop_offset(idx: int) -> Vector3:
+	if idx < 0 or idx >= _board_nodes.size() or idx >= _board_base_pos.size():
+		return Vector3.ZERO
+	var node: MeshInstance3D = _board_nodes[idx] as MeshInstance3D
+	if node == null:
+		return Vector3.ZERO
+	return node.position - (_board_base_pos[idx] as Vector3)
 
 
 func _swap_launch_textures() -> void:

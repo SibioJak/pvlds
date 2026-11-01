@@ -290,6 +290,26 @@ var _bootfocus_phase: int = 0
 var _bootfocus_wait: int = 0
 var _bootfocus_failures: int = 0
 var _bootfocus_game: String = "" ## env PVLDS_BOOTFOCUS_GAME: the seeded last-played game id the boot must focus
+var _smoke_motion: bool = false ## --pvlds-smoke-motion: GRADFIX10 items 2+3 - the pop's dense-frame smoothness trace, the wall-motion dial, SMOOTH continuous travel, input-during-roll, and a stepped-vs-smooth frame-time note
+var _motion_phase: int = 0
+var _motion_wait: int = 0
+var _motion_failures: int = 0
+var _motion_from_idx: int = -1 ## the pop trace's origin panel (same column as the target)
+var _motion_to_idx: int = -1 ## the pop trace's target panel
+var _motion_trace: Array = [] ## per-frame [msec, pop_to, pop_from, drum_yaw_deg] across the pop
+var _motion_grabs: Array = [] ## per-frame rendered grabs (Image) across the pop, for the moving-edge trace
+var _motion_grab_msec: Array = [] ## msec stamp per grab in _motion_grabs
+var _motion_pacing_ms: float = 16.0 ## median frame interval measured while the origin pop settled (the legs judge the traces against the pacing the box actually ran)
+var _motion_pace_stamps: Array = [] ## frame stamps collected during the settle (the pacing measure)
+var _motion_t0_msec: int = 0
+var _motion_yaw_trace: Array = [] ## per-frame [msec, drum_yaw_deg] across a multi-column travel
+var _motion_input_at_msec: int = 0 ## when the mid-roll press landed
+var _motion_input_centre: int = -1 ## the centre the mid-roll press asked for
+var _motion_input_frame_msec: int = 0 ## the first frame the centre answered the press
+var _motion_press_i: int = -1 ## the yaw-trace index the press landed on
+var _motion_answer_i: int = -1 ## the yaw-trace index the centre first answered on
+var _motion_perf: Dictionary = {} ## mode -> [frames, total_usec] over an identical travel (the perf note)
+var _motion_perf_mode: String = ""
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -485,6 +505,8 @@ func _ready() -> void:
 	if user_args.has("--pvlds-smoke-bootfocus"):
 		_smoke_bootfocus = true
 		_bootfocus_game = OS.get_environment("PVLDS_BOOTFOCUS_GAME")
+	if user_args.has("--pvlds-smoke-motion"):
+		_smoke_motion = true
 	if user_args.has("--pvlds-smoke-jumpbench"):
 		_smoke_jumpbench = true
 		_jumpbench_boot_msec = Time.get_ticks_msec()
@@ -562,6 +584,13 @@ func _ready() -> void:
 	# applied, so the census's tourney-border legs fail
 	# by name. Set here, before any room exists.
 	RoomView.debug_gf8_nc = OS.get_environment("PVLDS_GRADFIX8_NC")
+	# GRADFIX10's negative-control seams (PVLDS_GRADFIX10_NC=
+	# steppop | stepswing): steppop restores the convicted pop
+	# stepping, stepswing restores slot-stepping under the
+	# SMOOTH wall-motion dial - the motion smoke's smoothness
+	# legs fail against them by name. Set here, before any
+	# room exists.
+	RoomView.debug_gf10_nc = OS.get_environment("PVLDS_GRADFIX10_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -596,7 +625,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -768,6 +797,8 @@ func _process(_delta: float) -> void:
 		_drive_tournament_smoke()
 	if _smoke_bootfocus:
 		_drive_bootfocus_smoke()
+	if _smoke_motion:
+		_drive_motion_smoke()
 	if _smoke_jumpbench:
 		_drive_jumpbench_smoke()
 	if _smoke_quitwarm:
@@ -1143,6 +1174,7 @@ func _on_display_settings_changed() -> void:
 	if _config == null or _room == null:
 		return
 	_config.starfield_mode = _room.starfield_mode()
+	_config.wall_motion_mode = _room.wall_motion_mode()
 	_config.save_to_disk()
 
 
@@ -1287,6 +1319,7 @@ func _enter_room() -> void:
 		_room.wovp_key_test_requested.connect(_on_room_wovp_key_test)
 		_room.display_settings_changed.connect(_on_display_settings_changed)
 		_room.set_starfield_mode(_config.starfield_mode)
+		_room.set_wall_motion_mode(_config.wall_motion_mode)
 		_room.launch_requested.connect(_on_launch_requested)
 		_room.exit_requested.connect(_on_exit_requested)
 		_room.art_prefetch_requested.connect(_on_art_prefetch)
@@ -2975,7 +3008,7 @@ func _drive_setup_panel_smoke() -> void:
 				# with the wing in GRADFIX6).
 				_setup_panel_expect(f == _room.setup_panel_scan_quad() or f == _room.setup_panel_download_quad() or f == _room.setup_panel_back_quad()
 					or f == _room.setup_panel_wovp_paste_quad() or f == _room.setup_panel_wovp_test_quad()
-					or f == _room.setup_panel_stars_quad(),
+					or f == _room.setup_panel_stars_quad() or f == _room.setup_panel_wall_quad(),
 					"scan leg: focus stayed on the panel through the landing")
 				# The download leg: the harness's stub database
 				# over local HTTP (PVLDS_VPSDB_URL).
@@ -3182,6 +3215,22 @@ func _setup_panel_surface_assertions() -> void:
 	_setup_panel_expect(_room.setup_panel_wovp_paste_quad() != null, "XR setup: the panel has PASTE KEY (the WoVP row)")
 	_setup_panel_expect(_room.setup_panel_wovp_test_quad() != null, "XR setup: the panel has TEST KEY (the WoVP row)")
 	_setup_panel_expect(_room.setup_panel_stars_quad() != null, "XR setup: the panel has STARS (the display dial row, the GRAD FIX round; the WING dial retired with the wing in GRADFIX6)")
+	_setup_panel_expect(_room.setup_panel_wall_quad() != null, "wall motion dial: the panel has WALL MOTION (the display dial row, GRADFIX10 item 3)")
+	# The dial leg (GRADFIX10 item 3): the standing default is
+	# SMOOTH (Chris's pick); a press turns it to STEPPED in the
+	# room at once and Main persists it to the config; a second
+	# press returns it to SMOOTH (the smoke leaves the dial as
+	# it found it).
+	_setup_panel_expect(_room.wall_motion_mode() == "smooth",
+		"wall motion dial: the standing mode is SMOOTH (the default)")
+	_room._activate(_room.setup_panel_wall_quad())
+	_setup_panel_expect(_room.wall_motion_mode() == "stepped",
+		"wall motion dial: a press turns the dial to STEPPED in the room")
+	_setup_panel_expect(_config != null and _config.wall_motion_mode == "stepped",
+		"wall motion dial: Main persisted STEPPED to the config")
+	_room._activate(_room.setup_panel_wall_quad())
+	_setup_panel_expect(_room.wall_motion_mode() == "smooth" and _config != null and _config.wall_motion_mode == "smooth",
+		"wall motion dial: a second press returns the dial to SMOOTH (room + config)")
 	_setup_panel_expect(_room.setup_panel_back_quad() != null, "XR setup: the panel has BACK")
 	_setup_panel_expect(_room.visible, "XR setup: the room stays visible")
 	_setup_panel_expect(not _room.is_setup_placard_up(), "XR setup: no placard - the desktop route is retired")
@@ -3206,16 +3255,18 @@ func _setup_panel_surface_assertions() -> void:
 		and _room.setup_panel_wovp_paste_quad().pick_enabled
 		and _room.setup_panel_wovp_test_quad().pick_enabled
 		and _room.setup_panel_stars_quad().pick_enabled
+		and _room.setup_panel_wall_quad().pick_enabled
 		and _room.setup_panel_back_quad().pick_enabled,
 		"XR setup: the panel's own buttons are live")
-	_setup_panel_expect(_room._focusables.size() == 6
+	_setup_panel_expect(_room._focusables.size() == 7
 		and _room._focusables.has(_room.setup_panel_scan_quad())
 		and _room._focusables.has(_room.setup_panel_download_quad())
 		and _room._focusables.has(_room.setup_panel_wovp_paste_quad())
 		and _room._focusables.has(_room.setup_panel_wovp_test_quad())
 		and _room._focusables.has(_room.setup_panel_stars_quad())
+		and _room._focusables.has(_room.setup_panel_wall_quad())
 		and _room._focusables.has(_room.setup_panel_back_quad()),
-		"XR setup: focus navigation is confined to the panel's six buttons")
+		"XR setup: focus navigation is confined to the panel's seven buttons")
 	_setup_panel_expect(_room._focused == _room.setup_panel_scan_quad(),
 		"XR setup: focus opens on SCAN LIBRARY")
 	# Confinement under travel: TAB around the stops and
@@ -9021,6 +9072,484 @@ func _finish_jumpbench_smoke() -> void:
 ## face, carry the standing power performance ON that face,
 ## and render art (pixel variance) in a grab, all with zero
 ## input.
+## --pvlds-smoke-motion (GRADFIX10 items 2+3): the pop's
+## dense-frame smoothness trace (per-frame pop amounts PLUS
+## rendered grabs whose amber centre-frame edge is measured
+## frame to frame), the wall-motion dial's plumbing, the
+## SMOOTH dial's continuous multi-column travel trace, an
+## input-during-roll leg (a focus press mid-roll must answer
+## within a few frames and retarget the drum with no stop),
+## and a stepped-vs-smooth frame-time note measured on this
+## box over identical travels. Leg names: "pop smoothness:",
+## "wall motion dial:", "smooth wall travel:", "input
+## during roll:". The NC seams (PVLDS_GRADFIX10_NC=steppop /
+## stepswing) restore the convicted steppings so the named
+## legs fail by name.
+func _drive_motion_smoke() -> void:
+	match _motion_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				# Park the pointer in the bottom-left corner,
+				# off every card: the room's follow law gives
+				# the pointer's hover precedence over pad
+				# focus, and this smoke's presses are pad
+				# presses - they must not fight a resting ray
+				# the player never aimed.
+				Input.warp_mouse(Vector2(4, 372))
+				_motion_phase = 1
+				_motion_wait = 0
+			else:
+				_motion_wait += 1
+				if _motion_wait > 7200:
+					_motion_fail("pop smoothness: the room never came up")
+					_finish_motion_smoke()
+		1:
+			_motion_wait += 1
+			_motion_pace_stamps.append(Time.get_ticks_msec())
+			if _motion_pace_stamps.size() > 40:
+				_motion_pace_stamps.pop_front()
+			if _motion_wait == 1:
+				var c: int = _room.centre_index()
+				var col: int = _room._grid_coord(c).x
+				var other: int = -1
+				for cand: int in [c + 1, c - 1, c + 2, c - 2]:
+					if cand >= 0 and cand < _room._panels.size() and _room._grid_coord(cand).x == col:
+						other = cand
+						break
+				if other < 0:
+					_motion_fail("pop smoothness: no same-column neighbour panel for the pop trace")
+					_finish_motion_smoke()
+					return
+				_motion_from_idx = c
+				_motion_to_idx = other
+				_room._set_centre(c, true)
+				_room._set_focused(_room._panels[c])
+			if _motion_wait > 20 and _room.panel_pop_amount(_room._panels[_motion_from_idx]) >= 0.999:
+				# The pacing this box actually ran at, from
+				# the settle's own frame stamps (median
+				# interval): the pop legs judge the travel
+				# against it, so a contended llvmpipe box and
+				# a clean 90 Hz rig are held to the same
+				# SHAPE, not the same frame count.
+				if _motion_pace_stamps.size() >= 6:
+					var ivals: Array[int] = []
+					for si: int in range(1, _motion_pace_stamps.size()):
+						ivals.append(int(_motion_pace_stamps[si]) - int(_motion_pace_stamps[si - 1]))
+					ivals.sort()
+					_motion_pacing_ms = float(ivals[ivals.size() / 2])
+				print("MOTION PACING: median frame %.1f ms during the settle" % _motion_pacing_ms)
+				_motion_phase = 2
+				_motion_wait = 0
+				_motion_trace.clear()
+				_motion_grabs.clear()
+			elif _motion_wait > 3600:
+				_motion_fail("pop smoothness: the origin pop never settled")
+				_finish_motion_smoke()
+		2:
+			if _motion_wait == 0:
+				_motion_t0_msec = Time.get_ticks_msec()
+				_room._set_focused(_room._panels[_motion_to_idx])
+			_motion_wait += 1
+			var now2: int = Time.get_ticks_msec()
+			_motion_trace.append([now2 - _motion_t0_msec,
+				_room.panel_pop_amount(_room._panels[_motion_to_idx]),
+				_room.panel_pop_amount(_room._panels[_motion_from_idx]),
+				rad_to_deg(_room.drum_yaw_rad()),
+				_room.panel_pop_offset(_room._panels[_motion_to_idx]).length() / RoomView.POP_OUT_DISTANCE])
+			var amt2: float = _room.panel_pop_amount(_room._panels[_motion_to_idx])
+			if (amt2 >= 0.999 and _motion_wait >= 6) or _motion_wait > 900:
+				_motion_judge_pop()
+				# The grab trace pops BACK to the origin panel:
+				# a second, independent pop, sampled on the
+				# rendered output itself.
+				_motion_grabs.clear()
+				_motion_phase = 7
+				_motion_wait = 0
+		7:
+			if _motion_wait == 0:
+				_motion_t0_msec = Time.get_ticks_msec()
+				_room._set_focused(_room._panels[_motion_from_idx])
+			_motion_wait += 1
+			_motion_grabs.append(get_viewport().get_texture().get_image())
+			_motion_grab_msec.append(Time.get_ticks_msec() - _motion_t0_msec)
+			var amt7: float = _room.panel_pop_amount(_room._panels[_motion_from_idx])
+			if (amt7 >= 0.999 and _motion_wait >= 4) or _motion_wait > 900:
+				_motion_judge_pop_grabs()
+				_motion_phase = 3
+				_motion_wait = 0
+		3:
+			# Dial legs, then the STEPPED travel (perf + arrival).
+			_motion_wait += 1
+			if _motion_wait == 1:
+				_motion_leg_dial()
+				_room.set_wall_motion_mode("stepped")
+				_motion_snap_to_travel_start()
+			if _motion_wait > 10 and not _room.page_slide_active():
+				_motion_perf_mode = "stepped"
+				_motion_yaw_trace.clear()
+				_motion_t0_msec = Time.get_ticks_msec()
+				_room._set_focused(_room._panels[_motion_travel_target()])
+				_motion_phase = 4
+				_motion_wait = 0
+			elif _motion_wait > 3600:
+				_motion_fail("smooth wall travel: the stepped travel never armed (the drum never settled)")
+				_finish_motion_smoke()
+		4:
+			_motion_wait += 1
+			_motion_yaw_trace.append([Time.get_ticks_msec() - _motion_t0_msec, rad_to_deg(_room.drum_node().rotation.y)])
+			if (_motion_wait >= 3 and not _room.page_slide_active()) or _motion_wait > 1800:
+				_motion_record_perf("stepped")
+				_motion_expect(_room.centre_index() == _motion_travel_target(),
+					"smooth wall travel: the stepped travel landed on its centre (arrival is mode-independent)")
+				_motion_expect(absf(rad_to_deg(_room.drum_yaw_rad() - _room.swing_target_rad())) < 0.05,
+					"smooth wall travel: the stepped travel landed on its yaw target")
+				# Hand over to SMOOTH: same start, same target.
+				_room.set_wall_motion_mode("smooth")
+				_motion_snap_to_travel_start()
+				_motion_phase = 5
+				_motion_wait = 0
+		5:
+			_motion_wait += 1
+			if _motion_wait > 10 and not _room.page_slide_active():
+				_motion_perf_mode = "smooth"
+				_motion_yaw_trace.clear()
+				_motion_input_at_msec = 0
+				_motion_input_frame_msec = 0
+				_motion_t0_msec = Time.get_ticks_msec()
+				_room._set_focused(_room._panels[_motion_travel_target()])
+				_motion_phase = 6
+				_motion_wait = 0
+			elif _motion_wait > 3600:
+				_motion_fail("smooth wall travel: the smooth travel never armed (the drum never settled)")
+				_finish_motion_smoke()
+		6:
+			_motion_wait += 1
+			var now6: int = Time.get_ticks_msec() - _motion_t0_msec
+			_motion_yaw_trace.append([now6, rad_to_deg(_room.drum_node().rotation.y)])
+			# The mid-roll press: once the drum has covered a
+			# third of the travel, a focus press back to the
+			# start panel must answer at once.
+			if _motion_input_at_msec == 0 and _motion_yaw_trace.size() > 3:
+				var y0: float = float((_motion_yaw_trace[0] as Array)[1])
+				var span: float = absf(rad_to_deg(_room.swing_target_rad()) - y0)
+				var done: float = absf(rad_to_deg(_room.drum_node().rotation.y) - y0)
+				if span > 1.0 and done >= 0.50 * span:
+					_motion_input_at_msec = now6
+					_motion_press_i = _motion_yaw_trace.size() - 1
+					_motion_input_centre = _motion_travel_start()
+					_room._set_focused(_room._panels[_motion_travel_start()])
+			if _motion_input_at_msec > 0 and _motion_input_frame_msec == 0 and _room.centre_index() == _motion_input_centre:
+				_motion_input_frame_msec = now6
+				_motion_answer_i = _motion_yaw_trace.size() - 1
+			if _motion_input_at_msec > 0 and _motion_wait >= 3 and not _room.page_slide_active():
+				_motion_record_perf("smooth")
+				_motion_judge_smooth_travel()
+				_motion_judge_input_during_roll()
+				_motion_print_perf()
+				_finish_motion_smoke()
+			elif _motion_wait > 3600:
+				_motion_fail("smooth wall travel: the smooth travel never settled after the mid-roll press")
+				_finish_motion_smoke()
+
+
+## The travel legs' shared start: a panel six columns left of
+## the shelf's middle band area - snapped to, drum at rest.
+func _motion_travel_start() -> int:
+	var mid: int = _room._panels.size() / 2
+	var col: int = _room._grid_coord(mid).x
+	var want_col: int = maxi(0, col - 3)
+	for i: int in range(_room._panels.size()):
+		if _room._grid_coord(i).x == want_col and _room._grid_coord(i).y == _room._grid_coord(mid).y:
+			return i
+	return mid
+
+
+func _motion_travel_target() -> int:
+	var start: int = _motion_travel_start()
+	var col: int = _room._grid_coord(start).x
+	var want_col: int = col + 6
+	for i: int in range(_room._panels.size()):
+		if _room._grid_coord(i).x == want_col and _room._grid_coord(i).y == _room._grid_coord(start).y:
+			return i
+	return start
+
+
+func _motion_snap_to_travel_start() -> void:
+	var start: int = _motion_travel_start()
+	_room._set_centre(start, true)
+	_room._set_focused(_room._panels[start])
+
+
+func _motion_record_perf(mode: String) -> void:
+	var frames: int = _motion_yaw_trace.size()
+	var total: int = 0
+	if frames > 1:
+		total = int((_motion_yaw_trace[frames - 1] as Array)[0]) - int((_motion_yaw_trace[0] as Array)[0])
+	_motion_perf[mode] = [frames, total]
+
+
+func _motion_print_perf() -> void:
+	for mode: String in ["stepped", "smooth"]:
+		if _motion_perf.has(mode):
+			var rec: Array = _motion_perf[mode] as Array
+			var frames: int = int(rec[0])
+			var total: int = int(rec[1])
+			print("MOTION PERF (%s): %d frames over %d ms, mean frame %.2f ms (harness box, llvmpipe - relative numbers only)"
+				% [mode, frames, total, float(total) / float(maxi(1, frames - 1))])
+
+
+func _motion_judge_pop() -> void:
+	var n: int = _motion_trace.size()
+	var first_move: int = -1
+	var complete_ms: int = -1
+	var prev_amt: float = 0.0
+	var prev_applied: float = 0.0
+	var applied_stalls: int = 0
+	var reversals: int = 0
+	var max_step: float = 0.0
+	var moving: int = 0
+	for i: int in range(n):
+		var amt: float = float((_motion_trace[i] as Array)[1])
+		var applied: float = float((_motion_trace[i] as Array)[4])
+		if amt > 0.001 and first_move < 0:
+			first_move = i
+		if i > 0 and applied - prev_applied > 0.002 and complete_ms < 0:
+			moving += 1
+		if amt >= 0.999 and complete_ms < 0:
+			complete_ms = int((_motion_trace[i] as Array)[0])
+		if amt > 0.001 and amt < 0.999:
+			max_step = maxf(max_step, applied - prev_applied)
+			if applied - prev_applied < -0.005:
+				reversals += 1
+			elif applied - prev_applied < 0.0005 and amt - prev_amt > 0.01 and prev_amt > 0.02:
+				# The amount travelled but the APPLIED
+				# transform stood still: a quantised step
+				# is being held back (the NC's shape - and
+				# the write-guard failure class generally).
+				applied_stalls += 1
+		prev_amt = amt
+		prev_applied = applied
+	print("MOTION POP TRACE: %d frames sampled, %d moving, complete at %d ms (pacing %.1f ms), max applied step %.3f, applied stalls %d, reversals %d"
+		% [n, moving, complete_ms, _motion_pacing_ms, max_step, applied_stalls, reversals])
+	var raw: String = ""
+	for i2: int in range(n):
+		raw += " [%dms %.3f/%.3f]" % [int((_motion_trace[i2] as Array)[0]), float((_motion_trace[i2] as Array)[1]), float((_motion_trace[i2] as Array)[4])]
+	print("MOTION POP RAW (ms amount/applied):", raw)
+	# The travel-time leg: the fixed spring's travel lasts
+	# ~0.41 s of wall time at ANY pacing (its tail is the
+	# butter); the convicted fixed 0.15 s linear ramp is over
+	# by 0.15 s + at most one frame of sampling slop. The
+	# bound charges the trace's own largest frame gap as
+	# that slop, so the shape, not the box, is judged.
+	var max_gap: int = 0
+	for gi: int in range(n):
+		var tprev: int = 0 if gi == 0 else int((_motion_trace[gi - 1] as Array)[0])
+		max_gap = maxi(max_gap, int((_motion_trace[gi] as Array)[0]) - tprev)
+	_motion_expect(complete_ms >= 180 + max_gap,
+		"pop smoothness: the pop's travel lasts at least %d ms (got %d ms - a fixed 0.15 s ramp ending within one frame of 150 ms is the convicted jitter)"
+		% [180 + max_gap, complete_ms])
+	_motion_expect(moving >= 3,
+		"pop smoothness: the applied pop changes on at least 3 frames at the measured pacing (got %d - a pop that lands in 1-2 applied steps is the convicted jitter)" % moving)
+	_motion_expect(applied_stalls == 0,
+		"pop smoothness: the applied pop never stalls while the amount travels (got %d - a quantised applied step is the convicted jitter)" % applied_stalls)
+	_motion_expect(reversals == 0,
+		"pop smoothness: the applied pop never reverses (got %d)" % reversals)
+	_motion_expect(absf(float((_motion_trace[n - 1] as Array)[1]) - 1.0) < 0.002,
+		"pop smoothness: the pop completed (final amount %.3f)" % float((_motion_trace[n - 1] as Array)[1]))
+	# The old centre's card settles back flush in the same window.
+	_motion_expect(float((_motion_trace[n - 1] as Array)[2]) < 0.002,
+		"pop smoothness: the previous card settled flush as the new one popped")
+
+
+## The rendered-edge half of the pop proof: the amber centre
+## frame's pixel width inside a window around the popping
+## card (the origin panel, popping back in during the grab
+## phase), measured on the actual grabs - the edge travels,
+## never jumps backwards, over at least 4 measured frames.
+## (The centre frame, not the blue focus ring: the card's
+## own frame quad stands in front of the ClickableQuad
+## highlight ring and covers it - the amber frame is the
+## ring the renderer actually shows for the centred card,
+## and it rides the card's pop.)
+func _motion_judge_pop_grabs() -> void:
+	var cam: Camera3D = _room._active_camera()
+	var panel: ClickableQuad = _room._panels[_motion_from_idx]
+	if cam == null or panel == null or _motion_grabs.is_empty():
+		_motion_fail("pop smoothness: no rendered grabs to judge")
+		return
+	var centre2d: Vector2 = cam.unproject_position(panel.global_position)
+	var corner2d: Vector2 = cam.unproject_position(panel.global_position + Vector3(0.45, 0.65, 0.0))
+	var grab_dir: String = OS.get_environment("PVLDS_MOTION_GRAB_DIR")
+	if grab_dir != "" and not _motion_grabs.is_empty():
+		var last_img: Image = _motion_grabs[_motion_grabs.size() - 1] as Image
+		var amber_n: int = 0
+		var amber_lo: Vector2i = Vector2i(100000, 100000)
+		var amber_hi: Vector2i = Vector2i(-1, -1)
+		for yy: int in range(last_img.get_height()):
+			for xx: int in range(last_img.get_width()):
+				var pp: Color = last_img.get_pixel(xx, yy)
+				if pp.r > 0.72 and pp.g > 0.42 and pp.g < 0.85 and pp.b < 0.38:
+					amber_n += 1
+					amber_lo.x = mini(amber_lo.x, xx)
+					amber_lo.y = mini(amber_lo.y, yy)
+					amber_hi.x = maxi(amber_hi.x, xx)
+					amber_hi.y = maxi(amber_hi.y, yy)
+		print("MOTION GRAB DEBUG: centre2d=%s corner2d=%s panel_global=%s focused=%s highlight=%s amber_px=%d amber_bbox=%s..%s img=%s"
+			% [str(centre2d), str(corner2d), str(panel.global_position),
+				str(_room.focused_quad() == panel), str(panel.highlight_visible()),
+				amber_n, str(amber_lo), str(amber_hi), str(last_img.get_size())])
+	var half_w: float = maxf(absf(corner2d.x - centre2d.x), 30.0)
+	var half_h: float = maxf(absf(corner2d.y - centre2d.y), 40.0)
+	var roi: Rect2i = Rect2i(
+		int(centre2d.x - half_w * 1.6), int(centre2d.y - half_h * 1.3),
+		int(half_w * 3.2), int(half_h * 2.6))
+	var widths: Array[int] = []
+	for gv: Variant in _motion_grabs:
+		var img: Image = gv as Image
+		if img == null:
+			continue
+		var lo_x: int = img.get_width()
+		var hi_x: int = -1
+		var y: int = maxi(0, roi.position.y)
+		while y < mini(img.get_height(), roi.position.y + roi.size.y):
+			var x: int = maxi(0, roi.position.x)
+			while x < mini(img.get_width(), roi.position.x + roi.size.x):
+				var px: Color = img.get_pixel(x, y)
+				if px.r > 0.72 and px.g > 0.42 and px.g < 0.85 and px.b < 0.38:
+					lo_x = mini(lo_x, x)
+					hi_x = maxi(hi_x, x)
+				x += 1
+			y += 1
+		widths.append(hi_x - lo_x if hi_x >= 0 else -1)
+	var found: Array[int] = []
+	for w: int in widths:
+		if w > 0:
+			found.append(w)
+	print("MOTION POP GRABS: %d grabs at %s ms, %d with the focus frame measured, widths %s"
+		% [widths.size(), str(_motion_grab_msec), found.size(), str(found)])
+	_motion_expect(found.size() >= 4,
+		"pop smoothness: the rendered centre frame is measurable on at least 4 dense grabs (got %d)" % found.size())
+	if found.size() >= 3:
+		var growth: float = float(found[found.size() - 1] - found[0])
+		_motion_expect(growth >= 3.0,
+			"pop smoothness: the rendered edge travelled over the pop (width grew %.0f px)" % growth)
+		var back: int = 0
+		for i: int in range(1, found.size()):
+			if found[i] < found[i - 1] - 3:
+				back += 1
+		_motion_expect(back == 0,
+			"pop smoothness: the rendered edge never jumped backwards (got %d)" % back)
+
+
+func _motion_judge_smooth_travel() -> void:
+	var n: int = _motion_yaw_trace.size()
+	# Judge only the outbound travel (up to the mid-roll press).
+	var end_i: int = n - 1
+	for i: int in range(n):
+		if _motion_input_at_msec > 0 and int((_motion_yaw_trace[i] as Array)[0]) >= _motion_input_at_msec:
+			end_i = i
+			break
+	var stalls: int = 0
+	var reversals: int = 0
+	var slot_pauses: int = 0
+	var prev_yaw: float = 0.0
+	var prev_step: float = 0.0
+	var moving_frames: int = 0
+	var col_step: float = 13.5 ## ANGLE_STEP_DEG: one slot of drum travel
+	var near_slot_frames: int = 0
+	for i: int in range(end_i + 1):
+		var yaw: float = float((_motion_yaw_trace[i] as Array)[1])
+		if i > 0:
+			var d: float = yaw - prev_yaw
+			if absf(d) > 0.005:
+				moving_frames += 1
+				if signf(d) != signf(prev_step) and absf(prev_step) > 0.005:
+					reversals += 1
+				# A pause at a slot boundary: the travel
+				# stalls while the yaw sits within 0.4 deg
+				# of a whole column.
+				var col_pos: float = fmod(absf(yaw), col_step)
+				if absf(d) < 0.02 and (col_pos < 0.4 or col_pos > col_step - 0.4):
+					near_slot_frames += 1
+			elif moving_frames > 0:
+				stalls += 1
+				var col_pos2: float = fmod(absf(yaw), col_step)
+				if col_pos2 < 0.4 or col_pos2 > col_step - 0.4:
+					slot_pauses += 1
+			prev_step = d
+		prev_yaw = yaw
+	print("MOTION SMOOTH TRACE: %d frames to the press, %d moving, stalls %d, slot pauses %d, reversals %d"
+		% [end_i + 1, moving_frames, stalls, slot_pauses, reversals])
+	var move_floor: int = clampi(int(0.45 * float(maxi(1, _motion_input_at_msec)) / maxf(_motion_pacing_ms, 1.0)), 3, 10)
+	_motion_expect(moving_frames >= move_floor and moving_frames * 2 >= end_i + 1,
+		"smooth wall travel: the multi-column roll moves on most sampled frames (got %d of %d, floor %d at the measured pacing - a roll that stands still between slots is the convicted chop)" % [moving_frames, end_i + 1, move_floor])
+	_motion_expect(slot_pauses == 0,
+		"smooth wall travel: no pauses at slot boundaries during the roll (got %d - slot-stepping under SMOOTH is the convicted chop)" % slot_pauses)
+	_motion_expect(reversals == 0,
+		"smooth wall travel: the roll never reverses before the press (got %d)" % reversals)
+	_motion_expect(near_slot_frames <= 2,
+		"smooth wall travel: the roll does not crawl at slot boundaries (got %d slow slot frames)" % near_slot_frames)
+
+
+func _motion_judge_input_during_roll() -> void:
+	_motion_expect(_motion_input_at_msec > 0,
+		"input during roll: the mid-roll press actually landed during the roll")
+	if _motion_input_at_msec > 0:
+		# The answer latency is counted in FRAMES (the press
+		# lands in one frame; the room's follow law answers
+		# in its next _process): a ms bound would convict
+		# the box's pacing, not the input path.
+		_motion_expect(_motion_answer_i >= 0 and _motion_press_i >= 0 and _motion_answer_i - _motion_press_i <= 2,
+			"input during roll: the centre answered the press within 2 frames mid-roll (press frame %d, answer frame %d; %d ms -> %d ms - motion never gates input)"
+			% [_motion_press_i, _motion_answer_i, _motion_input_at_msec, _motion_input_frame_msec])
+	_motion_expect(_room.centre_index() == _motion_travel_start(),
+		"input during roll: the drum retargeted to the pressed card's column")
+	_motion_expect(absf(rad_to_deg(_room.drum_yaw_rad() - _room.swing_target_rad())) < 0.05,
+		"input during roll: the drum settled exactly on the retargeted yaw (no stop-and-restart scar)")
+
+
+func _motion_leg_dial() -> void:
+	_motion_expect(_room.wall_motion_mode() == "smooth",
+		"wall motion dial: the room's standing mode is SMOOTH (the default, Chris's pick)")
+	_room.set_wall_motion_mode("stepped")
+	_motion_expect(_room.wall_motion_mode() == "stepped",
+		"wall motion dial: STEPPED stands when set")
+	_room.set_wall_motion_mode("bogus")
+	_motion_expect(_room.wall_motion_mode() == "smooth",
+		"wall motion dial: an invalid value validates back to SMOOTH")
+	_room.set_wall_motion_mode("smooth")
+	if _config != null:
+		_config.wall_motion_mode = "stepped"
+		_config.save_to_disk()
+		var reloaded: PvldsConfig = PvldsConfig.new()
+		var ok: bool = reloaded.load_from_disk()
+		_motion_expect(ok and reloaded.wall_motion_mode == "stepped",
+			"wall motion dial: the config persists STEPPED across a reload")
+		_config.wall_motion_mode = "smooth"
+		_config.save_to_disk()
+
+
+func _motion_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - motion smoke: ", label)
+	else:
+		_motion_fail(label)
+
+
+func _motion_fail(label: String) -> void:
+	_motion_failures += 1
+	printerr("  FAIL - motion smoke: ", label)
+
+
+func _finish_motion_smoke() -> void:
+	if _motion_failures == 0:
+		print("PVLDS MOTION SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS MOTION SMOKE: FAIL (%d)" % _motion_failures)
+		get_tree().quit(1)
+
+
 func _drive_bootfocus_smoke() -> void:
 	match _bootfocus_phase:
 		0:
