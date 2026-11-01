@@ -11,6 +11,7 @@ extends Area3D
 var action_id: String = ""
 var payload: String = ""
 var pick_enabled: bool = true
+var suppress_frame: bool = false ## GRADFIX14 (item 1): the machined strip's sections carry no hover/focus frame - the focused section's lift IS the highlight (see RoomView._update_rail_lift); the room sets this on rail quads in strip mode
 var _size: Vector2 = Vector2.ZERO ## the quad's face size, as set up (the tournament smoke reads board panels')
 
 var _mat: StandardMaterial3D
@@ -191,7 +192,7 @@ func set_visual_state(hovered: bool, focused: bool) -> void:
 func _apply_frame_state() -> void:
 	if _frame == null or _frame_mat == null:
 		return
-	var show: bool = (_hovered or _focused) and _content_alpha > 0.01 and is_visible_in_tree()
+	var show: bool = (_hovered or _focused) and _content_alpha > 0.01 and is_visible_in_tree() and not suppress_frame
 	_frame.visible = show
 	if _focused:
 		_frame_mat.albedo_color = Color(FOCUS_COLOR, _content_alpha)

@@ -89,6 +89,14 @@ var _page_tex: GradientTexture2D ## board kind: the page gradient, aimed per spe
 var _page_rect: TextureRect ## board kind: the One Book's page gradient (lit at the free edge, darkening toward the spine)
 var _spine_line: ColorRect ## board kind: the spine ridge's highlight hairline, just inside the spine edge
 var _spine_shade: ColorRect ## board kind: the dark fall past the spine hairline, to the spine edge
+var _strip_grad_rect: TextureRect ## strip_section kind (GRADFIX14 item 1): the section's graphite gradient, drawn over the ground and under the type
+var _strip_grad_tex: GradientTexture2D ## strip_section kind: the gradient's texture (its Gradient is rebuilt per spec)
+var _strip_seam_dark: ColorRect ## strip_section kind: the etched seam's dark line at the section's right edge
+var _strip_seam_light: ColorRect ## strip_section kind: the etched seam's hairline highlight, just inside the dark line
+var _strip_top_edge: ColorRect ## strip_section kind: the bar's border line along the top edge (continuous across sections by construction)
+var _strip_top_hi: ColorRect ## strip_section kind: the machined highlight just under the top edge (brighter on a lifted section)
+var _strip_bot_edge: ColorRect ## strip_section kind: the bar's dark bottom edge (a lifted section's cast shade pools here)
+var _strip_accent_bar: ColorRect ## strip_section kind: the standing view's light underline (accent sections at rest)
 var _margin: MarginContainer
 var _vbox: VBoxContainer
 var _band_panel: PanelContainer
@@ -161,6 +169,47 @@ func _init() -> void:
 	_spine_shade.color = Color(0.008, 0.012, 0.028, 0.6)
 	_spine_shade.visible = false
 	add_child(_spine_shade)
+
+	# The machined strip's section furniture (GRADFIX14 item
+	# 1): gradient, etched seam, edge lines - asserted per
+	# spec like the One Book's page above, standing only for
+	# strip_section faces.
+	_strip_grad_tex = GradientTexture2D.new()
+	_strip_grad_tex.fill_from = Vector2(0.5, 0.0)
+	_strip_grad_tex.fill_to = Vector2(0.5, 1.0)
+	_strip_grad_tex.width = 4
+	_strip_grad_tex.height = 256
+	_strip_grad_rect = TextureRect.new()
+	_strip_grad_rect.texture = _strip_grad_tex
+	_strip_grad_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_strip_grad_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_strip_grad_rect.stretch_mode = TextureRect.STRETCH_SCALE
+	_strip_grad_rect.visible = false
+	add_child(_strip_grad_rect)
+	_strip_seam_dark = ColorRect.new()
+	_strip_seam_dark.color = Color(0.0, 0.0, 0.0, 0.55)
+	_strip_seam_dark.visible = false
+	add_child(_strip_seam_dark)
+	_strip_seam_light = ColorRect.new()
+	_strip_seam_light.color = Color(1.0, 1.0, 1.0, 0.08)
+	_strip_seam_light.visible = false
+	add_child(_strip_seam_light)
+	_strip_top_edge = ColorRect.new()
+	_strip_top_edge.color = Color8(76, 81, 90)
+	_strip_top_edge.visible = false
+	add_child(_strip_top_edge)
+	_strip_top_hi = ColorRect.new()
+	_strip_top_hi.color = Color(1.0, 1.0, 1.0, 0.10)
+	_strip_top_hi.visible = false
+	add_child(_strip_top_hi)
+	_strip_bot_edge = ColorRect.new()
+	_strip_bot_edge.color = Color(0.0, 0.0, 0.0, 0.6)
+	_strip_bot_edge.visible = false
+	add_child(_strip_bot_edge)
+	_strip_accent_bar = ColorRect.new()
+	_strip_accent_bar.color = Color(0.85, 0.87, 0.92, 0.9)
+	_strip_accent_bar.visible = false
+	add_child(_strip_accent_bar)
 
 	_art_rect = TextureRect.new()
 	_art_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -354,7 +403,7 @@ func apply_spec(spec: Dictionary) -> void:
 	# Re-asserted on every spec, like the margins above -
 	# one CardFace serves all renders, so the centring can
 	# never leak into a top-anchored kind (or out of one).
-	_vbox.alignment = BoxContainer.ALIGNMENT_CENTER if kind == "button" or kind == "banner" else BoxContainer.ALIGNMENT_BEGIN
+	_vbox.alignment = BoxContainer.ALIGNMENT_CENTER if kind == "button" or kind == "banner" or kind == "strip_section" else BoxContainer.ALIGNMENT_BEGIN
 	var bg: Color = _color_of(spec, "bg", Color(0.05, 0.05, 0.09))
 	var band: Color = _color_of(spec, "band", Color(0.25, 0.25, 0.38))
 	_bg.color = bg
@@ -382,6 +431,48 @@ func apply_spec(spec: Dictionary) -> void:
 			_spine_line.size = Vector2(3.0, size.y - 20.0)
 			_spine_shade.position = Vector2(size.x - 41.0, 10.0)
 			_spine_shade.size = Vector2(31.0, size.y - 20.0)
+	# The machined strip's section furniture (GRADFIX14 item
+	# 1): stands only for strip_section faces. The gradient
+	# carries the mock's four stops; the seam is etched at
+	# the right edge (dark line + hairline highlight in the
+	# bar's own material); the top/bottom edge lines are the
+	# bar's border, drawn identically on every section so
+	# the row of sections reads as ONE bar; a lifted section
+	# brightens its top highlight and pools shade at its
+	# bottom edge (its cast shadow on the bar it rose from).
+	var is_strip: bool = kind == "strip_section"
+	_strip_grad_rect.visible = is_strip
+	_strip_seam_dark.visible = is_strip and bool(spec.get("seam_right", false))
+	_strip_seam_light.visible = _strip_seam_dark.visible
+	_strip_top_edge.visible = is_strip
+	_strip_top_hi.visible = is_strip
+	_strip_bot_edge.visible = is_strip
+	_strip_accent_bar.visible = is_strip and bool(spec.get("accent_bar", false))
+	if is_strip and size.x > 0.0:
+		var grad_cols: Array = spec.get("grad", []) as Array
+		if grad_cols.size() == 4:
+			var g: Gradient = Gradient.new()
+			g.offsets = PackedFloat32Array([0.0, 0.45, 0.55, 1.0])
+			var cols: PackedColorArray = PackedColorArray()
+			for cv: Variant in grad_cols:
+				cols.append(Color(cv))
+			g.colors = cols
+			_strip_grad_tex.gradient = g
+		var lifted_s: bool = bool(spec.get("lifted", false))
+		_strip_seam_dark.position = Vector2(size.x - 2.0, 0.0)
+		_strip_seam_dark.size = Vector2(2.0, size.y)
+		_strip_seam_light.position = Vector2(size.x - 3.0, 0.0)
+		_strip_seam_light.size = Vector2(1.0, size.y)
+		_strip_top_edge.position = Vector2(0.0, 0.0)
+		_strip_top_edge.size = Vector2(size.x, 2.0)
+		_strip_top_hi.position = Vector2(0.0, 2.0)
+		_strip_top_hi.size = Vector2(size.x, 1.0)
+		_strip_top_hi.color = Color(1.0, 1.0, 1.0, 0.28 if lifted_s else 0.10)
+		_strip_bot_edge.position = Vector2(0.0, size.y - (8.0 if lifted_s else 2.0))
+		_strip_bot_edge.size = Vector2(size.x, 8.0 if lifted_s else 2.0)
+		_strip_bot_edge.color = Color(0.0, 0.0, 0.0, 0.45 if lifted_s else 0.6)
+		_strip_accent_bar.position = Vector2(size.x * 0.18, size.y - 6.0)
+		_strip_accent_bar.size = Vector2(size.x * 0.64, 3.0)
 	_art_rect.visible = kind == "art"
 	# The name strip rides art faces by default; a spec may
 	# suppress it ("strip": false) when the surface carries
@@ -432,7 +523,7 @@ func apply_spec(spec: Dictionary) -> void:
 				band_px = maxi(18, int(floor(float(band_px) * avail / need)))
 		_band_label.add_theme_font_size_override("font_size", band_px)
 
-	var centered: bool = kind == "button" or kind == "banner" or kind == "board"
+	var centered: bool = kind == "button" or kind == "banner" or kind == "board" or kind == "strip_section"
 	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
 	_sub_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
 	_body_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
@@ -454,6 +545,17 @@ func apply_spec(spec: Dictionary) -> void:
 		var t_need: float = _text_w(_measure_font(), _title_label.text, title_px)
 		if t_need > t_avail and t_need > 0.0:
 			title_px = maxi(20, int(floor(float(title_px) * t_avail / t_need)))
+	if kind == "strip_section" and size.x > 0.0 and _title_label.text != "":
+		# A strip section's label never clips (GRADFIX14 item
+		# 1, the board fit's sibling law): the longest standing
+		# label ("SORT: MANUFACTURER") scales down until the
+		# whole line fits its section, floor 24.
+		var st_avail: float = size.x - 28.0
+		var st_need: float = _text_w(_measure_font(), _title_label.text, title_px)
+		if st_need > st_avail and st_need > 0.0:
+			title_px = maxi(24, int(floor(float(title_px) * st_avail / st_need)))
+			while title_px > 24 and _text_w(_measure_font(), _title_label.text, title_px) > st_avail:
+				title_px -= 1
 	_title_label.add_theme_font_size_override("font_size", title_px)
 	# A spec may dim its own title ("title_color") - the letter
 	# strip's greyed slots render through it. Re-asserted on

@@ -288,6 +288,56 @@ static func button_spec(text: String, accent: bool) -> Dictionary:
 	}
 
 
+## ---- The machined strip (GRADFIX14 item 1, Chris's pick
+## from the strip mocks: "Machined Strip - nice and crisp",
+## colour GRAPHITE). One continuous brushed-gunmetal bar
+## carries the rail's sections; the mock's .graphite palette
+## is the law, hex for hex:
+##   bar gradient   #333740 -> #21242a (45%) -> #1a1c20 (55%) -> #282b31
+##   border         #4c515a
+##   resting labels #a8adb8
+##   focused        gradient #4c525e -> #31353d, text white
+## An ACCENT section (the standing filter / the Tournament
+## Room) rests a step brighter than its neighbours and
+## carries a light underline, so the active view still reads
+## at a glance without leaving the graphite family.
+const STRIP_GRAD_REST: Array[Color] = [Color8(51, 55, 64), Color8(33, 36, 42), Color8(26, 28, 32), Color8(40, 43, 49)]
+const STRIP_GRAD_ACCENT: Array[Color] = [Color8(62, 67, 76), Color8(42, 45, 52), Color8(34, 37, 43), Color8(48, 51, 58)]
+const STRIP_GRAD_LIFTED: Array[Color] = [Color8(76, 82, 94), Color8(62, 67, 77), Color8(49, 53, 61), Color8(49, 53, 61)]
+const STRIP_BORDER: Color = Color8(76, 81, 90)
+const STRIP_LABEL_REST: Color = Color8(168, 173, 184)
+const STRIP_LABEL_ACCENT: Color = Color8(216, 221, 232)
+
+
+## One section of the machined strip: its label on the bar's
+## own graphite, an etched seam at its right edge (every
+## section but the last), and - when lifted - the raised
+## gradient with white text. seam_right is the caller's
+## geography (the room knows the order); the face only draws.
+static func strip_section_spec(text: String, accent: bool, lifted: bool, seam_right: bool) -> Dictionary:
+	var grad: Array[Color] = STRIP_GRAD_REST
+	if lifted:
+		grad = STRIP_GRAD_LIFTED
+	elif accent:
+		grad = STRIP_GRAD_ACCENT
+	var fg: Color = STRIP_LABEL_REST
+	if lifted:
+		fg = Color(1.0, 1.0, 1.0)
+	elif accent:
+		fg = STRIP_LABEL_ACCENT
+	return {
+		"kind": "strip_section",
+		"bg": grad[2],
+		"grad": grad,
+		"title": text,
+		"title_size": 55,
+		"title_color": fg,
+		"seam_right": seam_right,
+		"accent_bar": accent and not lifted,
+		"lifted": lifted,
+	}
+
+
 ## One alphabet-strip slot's face (the letter-jump round): a
 ## single big glyph on the button family, in one of three
 ## states - "plain" (a pickable letter), "accent" (the net
