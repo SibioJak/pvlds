@@ -116,10 +116,26 @@ func _render_now(spec: Dictionary, px_size: Vector2i) -> Texture2D:
 static func ink_centroid(img: Image, exclude_face_rect: Rect2) -> Vector2:
 	if img == null or img.is_empty():
 		return Vector2(-1.0, 0.0)
-	var work: Image = img
+	# The measure runs on a half-size nearest-sampled copy
+	# (the resize is the engine's C++, the sampling drops
+	# three pixels in four): the ruling it feeds is 2% of
+	# frame height, and the full-size pass cost ~1 s of
+	# main thread per board - enough to break the
+	# tournament entry's 500 ms frame-gap budget when the
+	# standing boards fill (the GF10 full boot's worst gap
+	# was 1406 ms against a sub-500 base). The copy is a
+	# duplicate: the caller's image still has a texture to
+	# become. Coordinates are mapped back to the source's
+	# space before returning.
+	var work: Image = img.duplicate() as Image
 	if work.get_format() != Image.FORMAT_RGBA8:
-		work = img.duplicate() as Image
 		work.convert(Image.FORMAT_RGBA8)
+	if work.get_height() >= 400:
+		work.resize(maxi(1, work.get_width() / 2), work.get_height() / 2, Image.INTERPOLATE_NEAREST)
+	var sx: float = float(work.get_width()) / float(img.get_width())
+	var sy: float = float(work.get_height()) / float(img.get_height())
+	exclude_face_rect = Rect2(exclude_face_rect.position * Vector2(sx, sy),
+		exclude_face_rect.size * Vector2(sx, sy))
 	var w: int = work.get_width()
 	var h: int = work.get_height()
 	var data: PackedByteArray = work.get_data()
@@ -156,7 +172,7 @@ static func ink_centroid(img: Image, exclude_face_rect: Rect2) -> Vector2:
 				ink_n += 1
 	if ink_n <= 0:
 		return Vector2(-1.0, 0.0)
-	return Vector2(sum_y / float(ink_n), float(ink_n))
+	return Vector2((sum_y / float(ink_n)) / sy, float(ink_n))
 
 
 static func make_solid(color: Color) -> Texture2D:
