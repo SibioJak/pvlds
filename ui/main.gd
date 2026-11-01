@@ -6784,6 +6784,45 @@ func _xpress_wait_face(idx: int, g: GameEntry, want_path: String, timeout_sec: f
 	return false
 
 
+## Wait until the panel's stamped face key carries (or
+## drops) the favorite flag - the re-render the X press
+## asked for has actually landed (the base trace showed a
+## path-only wait passing on the STALE key while the fav
+## render was still in the factory queue).
+func _xpress_wait_favkey(g: GameEntry, want_fav: bool, timeout_sec: float) -> bool:
+	var t0: int = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < int(timeout_sec * 1000.0):
+		var key: String = str(_room._panel_face_key.get(g.game_id, ""))
+		if key != "" and key.contains("|fav") == want_fav:
+			return true
+		await get_tree().process_frame
+	return false
+
+
+## After a face arrival on the performing panel: the
+## arrival restores the performance and the candidate
+## machinery restarts it - wait out the restart window,
+## then for the re-settle. A panel whose performance was
+## missed (no backglass to perform on) settles bare: no
+## panel, phase 0, and that is a settled state too.
+func _xpress_wait_resettle(idx: int, timeout_sec: float) -> bool:
+	var panel: ClickableQuad = _room._panels[idx]
+	var t0: int = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 6000:
+		if _room.power_panel() != panel or _room.power_phase() == 0:
+			break
+		await get_tree().process_frame
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < int(timeout_sec * 1000.0):
+		if _room.power_panel() == panel and _room.power_phase() == 2:
+			return true
+		if _room.power_panel() == null and _room.power_phase() == 0 \
+				and Time.get_ticks_msec() - t0 > 3000:
+			return true
+		await get_tree().process_frame
+	return _room.power_panel() == panel and _room.power_phase() == 2
+
+
 func _xpress_wait_centre(idx: int, timeout_sec: float) -> bool:
 	var t0: int = Time.get_ticks_msec()
 	while Time.get_ticks_msec() - t0 < int(timeout_sec * 1000.0):
@@ -6926,6 +6965,14 @@ func _xpress_run_async() -> void:
 	var bride: GameEntry = _xpress_game_by_id(pair_id)
 	if bride != null:
 		classes.append({"key": "shotpair", "game": bride, "styled": false})
+	# (a2) db-shot standing with a SINGLE backglass present
+	# (the harness lays Taxi's real .directb2s beside Aaron
+	# Spelling's shot fixture): the pure subject seam - its
+	# performance is the mimic grade on the backglass
+	# subject render, no pair crossfade in the way.
+	var aaron: GameEntry = _xpress_game_by_id("7O0Ir6NU")
+	if aaron != null and aaron.backglass_source() != "" and aaron.pair_on_art() == "":
+		classes.append({"key": "shotsubject", "game": aaron, "styled": false})
 	var big: GameEntry = _xpress_game_by_title("Big Chain Glass")
 	if big != null:
 		classes.append({"key": "pairchain", "game": big, "styled": false})
@@ -6936,8 +6983,8 @@ func _xpress_run_async() -> void:
 	var krull: GameEntry = _xpress_game_by_id(str(_xpress_manifest.get("titlecard_id", "")))
 	if krull != null:
 		classes.append({"key": "styled", "game": krull, "styled": true})
-	_xpress_expect(classes.size() == 4,
-		"x-press census: all four fixture classes resolve (got %d)" % classes.size())
+	_xpress_expect(classes.size() == 5,
+		"x-press census: all five fixture classes resolve (got %d)" % classes.size())
 	for entry_v: Variant in classes:
 		var entry: Dictionary = entry_v as Dictionary
 		await _xpress_class_async(entry)
@@ -6985,7 +7032,7 @@ func _xpress_class_async(entry: Dictionary) -> void:
 	_xpress_expect(settled, "x-press census: %s power performance settles before the press (phase %d)" % [cls, _room.power_phase()])
 	var badge_face: Rect2 = Rect2(386.0, 0.0, 110.0, 110.0)
 	if styled:
-		badge_face = Rect2(0.0, 150.0, 496.0, 150.0) ## the styled face's badge is its FAVORITE chip row band
+		badge_face = Rect2(0.0, 240.0, 496.0, 110.0) ## the styled face's badge is its FAVORITE chip row (base trace: diff bbox (26,263)+(158,50))
 	var quad_before: Image = _room._panels[idx].current_texture().get_image()
 	var grab_before: Image = await _xpress_grab()
 	_xpress_trace("before", cls, idx, g, quad_before, grab_before)
@@ -6995,9 +7042,9 @@ func _xpress_class_async(entry: Dictionary) -> void:
 	await _nav_feed_button(JOY_BUTTON_X)
 	_xpress_expect(_state.is_favorite(g.game_id),
 		"x-press census: %s X press sets the favorite in the store" % cls)
-	var face2_ok: bool = await _xpress_wait_face(idx, g, want_path, 60.0)
-	_xpress_expect(face2_ok, "x-press art: %s face re-stands after the press" % cls)
-	var settled2: bool = await _xpress_wait_settled(idx, 90.0)
+	var favkey_ok: bool = await _xpress_wait_favkey(g, true, 60.0)
+	_xpress_expect(favkey_ok, "x-press art: %s fav face re-stands after the press" % cls)
+	var settled2: bool = await _xpress_wait_resettle(idx, 90.0)
 	_xpress_expect(settled2, "x-press census: %s power performance re-settles after the press (phase %d)" % [cls, _room.power_phase()])
 	# Heal/warm survival: real time passes (the heal ticks
 	# on its 600 ms cadence the whole while).
@@ -7064,8 +7111,8 @@ func _xpress_class_async(entry: Dictionary) -> void:
 	await _nav_feed_button(JOY_BUTTON_X)
 	_xpress_expect(not _state.is_favorite(g.game_id),
 		"x-press census: %s second X press clears the favorite" % cls)
-	await _xpress_wait_face(idx, g, want_path, 60.0)
-	await _xpress_wait_settled(idx, 90.0)
+	await _xpress_wait_favkey(g, false, 60.0)
+	await _xpress_wait_resettle(idx, 90.0)
 	await get_tree().create_timer(2.0).timeout
 	var quad_off: Image = _room._panels[idx].current_texture().get_image()
 	var grab_off: Image = await _xpress_grab()

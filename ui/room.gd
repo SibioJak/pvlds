@@ -837,7 +837,9 @@ var _plates_pending: bool = false ## a rebuild stood new cards: their nameplates
 var _panel_face_key: Dictionary = {} ## game_id -> the face key its standing texture was filled for ("" = never filled)
 var _panel_window_lo: int = -1 ## the drawn window's first COLUMN (visibility + face fill range), -1 = none yet
 var _panel_window_hi: int = -1 ## the drawn window's last COLUMN
-var _power_subject_cache: Dictionary = {} ## game_id -> [backglass path, Texture2D]: rendered power-on subjects (the backglass face, rendered once per game per library)
+var _power_subject_cache: Dictionary = {} ## game_id -> [backglass path, fav, Texture2D]: rendered power-on subjects (the backglass face, rendered once per game per library PER FAVOURITE STATE - GRADFIX12 item 2: the subject is a rendered face, so it carries the favourite badge its render was made under; a cache that ignored the flag served the pre-toggle subject over the new face and the star died under the settled overlay)
+var _power_on_cache: Dictionary = {} ## game_id -> [pair On path, fav, Texture2D]: the pair crossfade's On half rendered AS A FACE (GRADFIX12 item 2 - it used to ride the overlay as the raw art texture, which no badge can ever be composed on, so a favourited pair card's settled overlay was badgeless by construction)
+var _power_on_inflight: Dictionary = {} ## game_id -> true while its rendered pair On face renders
 var _focusables: Array[ClickableQuad] = []
 var _focused: ClickableQuad = null
 var _joy_cooldown: float = 0.0
@@ -932,6 +934,7 @@ func refresh_library() -> void:
 	_face_tex_cache.clear()
 	_face_cache_order.clear()
 	_power_subject_cache.clear()
+	_power_on_cache.clear()
 	_free_panel_pool()
 	_recompute_visible()
 	_page = 0
@@ -6380,10 +6383,27 @@ func _start_power(panel: ClickableQuad) -> void:
 		print("POWER: start game=\"%s\" skipped (face still the placeholder)" % label)
 		return
 	var on_tex: Texture2D = null
+	var on_rendered: bool = false
 	if game != null:
 		var on_path: String = game.pair_on_art()
 		if on_path != "":
-			on_tex = TextureFactory.load_art_texture(on_path)
+			if OS.get_environment("PVLDS_GRADFIX12_NC") == "powerbadge":
+				# NC (GRADFIX12 item 2): the pre-fix binding -
+				# the raw On art rides the overlay, badgeless
+				# by construction, and the subject cache below
+				# ignores the favourite state - so the xpress
+				# smoke's "x-press star:" legs fail by name.
+				on_tex = TextureFactory.load_art_texture(on_path)
+			else:
+				# GRADFIX12 item 2: the crossfade's target is
+				# the On half rendered as a face under the
+				# CURRENT favourite state (the badge composed
+				# on it), cached per state - never the raw art.
+				on_tex = _power_on_cached(game)
+				if on_tex == null:
+					_prepare_power_on(panel, game)
+					return
+				on_rendered = true
 	if on_tex != null and game != null and not game.has_shot_face():
 		# GRADFIX8 item 2: a pair card's STANDING face is now
 		# its lit On half (GameEntry._standing_face), so the
@@ -6421,7 +6441,7 @@ func _start_power(panel: ClickableQuad) -> void:
 	_power_phase = 1
 	_power_pair = on_tex != null
 	_power_mode = 3 if _power_pair else 2
-	_build_power_overlay(panel, face_tex, on_tex)
+	_build_power_overlay(panel, face_tex, on_tex, on_rendered)
 	print("POWER: start game=\"%s\" mode=%d %s" % [
 		label, _power_mode,
 		"pair-crossfade" if _power_pair else "mimic"])
@@ -6429,16 +6449,79 @@ func _start_power(panel: ClickableQuad) -> void:
 	_apply_power()
 
 
+## The favourite state a power render must be composed
+## under right now (GRADFIX12 item 2): the badge is part of
+## a rendered face, so every cached power render is keyed
+## by it - a favourite toggle changes the key, the stale
+## render stops serving, and the performance re-prepares
+## under the new state instead of standing a badgeless (or
+## wrongly badged) performance over the toggled face. The
+## powerbadge NC collapses the key to false: the pre-fix
+## caches that ignored the flag altogether.
+func _power_fav_key(game: GameEntry) -> bool:
+	if OS.get_environment("PVLDS_GRADFIX12_NC") == "powerbadge":
+		return false
+	return _store != null and _store.is_favorite(game.game_id)
+
+
 ## The power-on's subject for a shot-faced game: its
 ## backglass rendered as a face (the same art render the
 ## card itself would wear without a shot - strip suppressed,
 ## the nameplate carries the name), cached per game for the
-## library adoption. Null while unrendered.
+## library adoption. Null while unrendered - or while the
+## cached render wears the OTHER favourite state (it was
+## composed before a toggle; the performance must not
+## stand it over the face the toggle just made).
 func _power_subject_cached(game: GameEntry) -> Texture2D:
 	var ent: Variant = _power_subject_cache.get(game.game_id, null)
 	if ent == null:
 		return null
-	return (ent as Array)[1] as Texture2D
+	var arr: Array = ent as Array
+	if arr.size() >= 3 and bool(arr[1]) != _power_fav_key(game):
+		return null
+	return arr[arr.size() - 1] as Texture2D
+
+
+## The pair crossfade's On half, rendered as a face under
+## the current favourite state (GRADFIX12 item 2) - the
+## settled overlay of a pair card IS this texture, so the
+## badge the player toggled must be composed on it, exactly
+## as it is composed on the standing face. Null while
+## unrendered or while the cache wears the other state.
+func _power_on_cached(game: GameEntry) -> Texture2D:
+	var ent: Variant = _power_on_cache.get(game.game_id, null)
+	if ent == null:
+		return null
+	var arr: Array = ent as Array
+	if arr.size() >= 3 and bool(arr[1]) != _power_fav_key(game):
+		return null
+	return arr[arr.size() - 1] as Texture2D
+
+
+## Render a game's pair On face off the frame path and,
+## if its card still holds the settle when the render
+## lands, start the performance then (the subject
+## preparation's shape, for the crossfade's target).
+func _prepare_power_on(panel: ClickableQuad, game: GameEntry) -> void:
+	if bool(_power_on_inflight.get(game.game_id, false)):
+		return
+	var on_path: String = game.pair_on_art()
+	if on_path == "":
+		return
+	_power_on_inflight[game.game_id] = true
+	var gen: int = _gen
+	var fav: bool = _power_fav_key(game)
+	var tex: Texture2D = null
+	var src: Texture2D = TextureFactory.load_art_texture(on_path)
+	if src != null:
+		tex = await _factory.render_texture(RoomSpecs.art_spec(game, src, _store, false), _panel_face_px)
+	_power_on_inflight.erase(game.game_id)
+	if tex != null and _power_fav_key(game) == fav:
+		_power_on_cache[game.game_id] = [on_path, fav, tex]
+	if gen != _gen:
+		return
+	if tex != null and _power_panel == null and _power_candidate == panel and panel != _power_missed:
+		_start_power(panel)
 
 
 ## Render a game's power-on subject off the frame path and,
@@ -6466,14 +6549,18 @@ func _prepare_power_subject(panel: ClickableQuad, game: GameEntry) -> void:
 		return
 	if path != "":
 		_power_prefetch_asked.erase(game.game_id)
+	var fav: bool = _power_fav_key(game)
 	var tex: Texture2D = null
 	if path != "":
 		var src: Texture2D = TextureFactory.load_art_texture(path)
 		if src != null:
 			tex = await _factory.render_texture(RoomSpecs.art_spec(game, src, _store, false), _panel_face_px)
 	_power_subject_inflight.erase(game.game_id)
-	if tex != null:
-		_power_subject_cache[game.game_id] = [path, tex]
+	if tex != null and _power_fav_key(game) == fav:
+		# GRADFIX12 item 2: the cache entry carries the
+		# favourite state it was composed under (a toggle
+		# mid-render must not let a stale badge state land).
+		_power_subject_cache[game.game_id] = [path, fav, tex]
 	if gen != _gen:
 		return
 	if tex != null and _power_panel == null and _power_candidate == panel and panel != _power_missed:
@@ -6489,7 +6576,7 @@ func _prepare_power_subject(panel: ClickableQuad, game: GameEntry) -> void:
 ## source, windowed by the same centered cover rule
 ## CardFace draws the face with, so the crossfade's two
 ## pictures register pixel for pixel.
-func _build_power_overlay(panel: ClickableQuad, face_tex: Texture2D, on_tex: Texture2D) -> void:
+func _build_power_overlay(panel: ClickableQuad, face_tex: Texture2D, on_tex: Texture2D, on_rendered: bool = false) -> void:
 	var art_rect: Rect2 = Rect2(0.0, 0.0, float(_panel_face_px.x), float(_panel_face_px.y))
 	var face_atlas: AtlasTexture = AtlasTexture.new()
 	face_atlas.atlas = face_tex
@@ -6512,9 +6599,17 @@ func _build_power_overlay(panel: ClickableQuad, face_tex: Texture2D, on_tex: Tex
 		on_atlas.atlas = on_tex
 		var ow: float = float(on_tex.get_width())
 		var oh: float = float(on_tex.get_height())
-		var cover: float = maxf(art_rect.size.x / ow, art_rect.size.y / oh)
-		var win: Vector2 = art_rect.size / cover
-		on_atlas.region = Rect2((Vector2(ow, oh) - win) * 0.5, win)
+		if on_rendered:
+			# GRADFIX12 item 2: the On source is already a
+			# rendered FACE (CardFace covered it onto the
+			# face canvas and composed the badge on it) -
+			# it rides whole; cover-windowing it again
+			# would crop the badge's corner away.
+			on_atlas.region = Rect2(0.0, 0.0, ow, oh)
+		else:
+			var cover: float = maxf(art_rect.size.x / ow, art_rect.size.y / oh)
+			var win: Vector2 = art_rect.size / cover
+			on_atlas.region = Rect2((Vector2(ow, oh) - win) * 0.5, win)
 		_power_mat.set_shader_parameter("on_tex", on_atlas)
 		_power_mat.set_shader_parameter("has_pair", 1.0)
 		_power_mat.set_shader_parameter("pair_mix", 0.0)
