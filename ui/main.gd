@@ -6564,21 +6564,48 @@ func _grad_tournament_step() -> void:
 				_grad_expect(not bool(fs.get("back_launch_pickable", true)),
 					"no launch: the flipped back carries no Launch plinth (GRADFIX13 item 2 - the strip; the back's own Launch stood here through GRADFIX12)")
 				# GRADFIX13 (item 1): the seated proof for
-				# the back - this card's back is a board +
-				# data composition (the tournament table's
-				# own challenge), standing flipped in the
-				# room. Its ink extent is judged against the
-				# back FRAME's bounding box in this grab (the
-				# frame, 0.68x1.10, is the back assembly's
-				# full extent - concentric with the face, so
-				# its centre is the object's centre). With
-				# the plinth + its 140 px reservation gone
-				# (item 2) the composition centres on the
-				# whole card; through GRADFIX12 it centred
-				# over the area above the footer and rode
-				# ~70 px high.
+				# the back runs in stage 5 below - this
+				# card's back is a board + data composition
+				# (the tournament table's own challenge),
+				# standing flipped in the room.
+				_grad_expect(mono and in_flight >= 2,
+					"card flip: the turn is one clean climb - %d frames sampled on this box, %d in flight, monotonic %s (first %.1f, last %.1f deg; the turn is 0.30 s of game time - about 3 frames at this harness box's rate, about 27 at the Quest's 90 Hz, where the density claim lives)"
+						% [_grad_flip_angles.size(), in_flight, str(mono),
+							float(_grad_flip_angles.front()) if not _grad_flip_angles.is_empty() else -1.0,
+							float(_grad_flip_angles.back()) if not _grad_flip_angles.is_empty() else -1.0])
+				_grad_expect(elapsed2 >= 200 and elapsed2 <= 1500,
+					"card flip: the turn takes its own time - %d ms wall on this box (the animation is delta-driven: 0.30 s of game time; the harness box's frame rate stretches the wall clock, the Quest's 90 Hz does not)" % elapsed2)
+				_grad_save_grab("grad_flip.png")
+				_grad_power_stage = 5
+				_grad_power_since = Time.get_ticks_msec()
+			elif elapsed2 > 20000:
+				_grad_fail("card flip: the card never completed its turn at the tournament table (last angle %.1f deg over %d samples)" % [ang, _grad_flip_angles.size()])
+				_grad_phase = 5
+		5:
+			# GRADFIX13 (item 1): the seated proof for the
+			# flipped back. At the pop distance the desk
+			# camera's frame crops the card frame's top
+			# edge, so the measure pulls the desk rig back
+			# 0.55 m for its grab (the tournament smoke's
+			# own shot seam, _desk_rig.position) and
+			# restores it before the flip home. The extent
+			# math is projection-based - the wider framing
+			# does not bias it. The object is the back
+			# FRAME (0.68x1.10, the back assembly's full
+			# extent, concentric with the face). With the
+			# plinth + its 140 px reservation gone (item
+			# 2) the composition centres on the whole
+			# card; through GRADFIX12 it centred over the
+			# area above the footer and rode ~70 px high.
+			var elapsed5: int = Time.get_ticks_msec() - _grad_power_since
+			if elapsed5 < 50:
+				_room._desk_rig.position = RoomView.EYE + Vector3(0.0, 0.0, -0.55)
+			elif elapsed5 >= 200:
 				var flip_img: Image = get_viewport().get_texture().get_image()
 				var flip_cam: Camera3D = get_viewport().get_camera_3d()
+				var grab_dir5: String = OS.get_environment("PVLDS_GRAB_DIR")
+				if grab_dir5 != "" and flip_img != null and not flip_img.is_empty():
+					flip_img.save_png(grab_dir5.path_join("gf13_back_grad.png"))
 				var fnodes: Dictionary = _room._flip_nodes(idx)
 				var fframe: MeshInstance3D = fnodes.get("back_frame") as MeshInstance3D if not fnodes.is_empty() else null
 				var fres: Dictionary = _gf13_seated_extent(fframe.global_transform, RoomView.CARD_FRAME_SIZE, flip_img, flip_cam) if fframe != null else {"ok": false, "delta": 0.0, "why": "no back frame"}
@@ -6588,19 +6615,9 @@ func _grad_tournament_step() -> void:
 				_grad_expect(bool(fres.get("ok", false)) and absf(fdelta) <= 0.02,
 					"seated centre: the flipped back's composition centres on its card in the room grab (delta %.2f%% of frame height, tolerance 2%%)%s"
 						% [100.0 * fdelta, "" if bool(fres.get("ok", false)) else " - " + str(fres.get("why", ""))])
-				_grad_expect(mono and in_flight >= 2,
-					"card flip: the turn is one clean climb - %d frames sampled on this box, %d in flight, monotonic %s (first %.1f, last %.1f deg; the turn is 0.30 s of game time - about 3 frames at this harness box's rate, about 27 at the Quest's 90 Hz, where the density claim lives)"
-						% [_grad_flip_angles.size(), in_flight, str(mono),
-							float(_grad_flip_angles.front()) if not _grad_flip_angles.is_empty() else -1.0,
-							float(_grad_flip_angles.back()) if not _grad_flip_angles.is_empty() else -1.0])
-				_grad_expect(elapsed2 >= 200 and elapsed2 <= 1500,
-					"card flip: the turn takes its own time - %d ms wall on this box (the animation is delta-driven: 0.30 s of game time; the harness box's frame rate stretches the wall clock, the Quest's 90 Hz does not)" % elapsed2)
-				_grad_save_grab("grad_flip.png")
+				_room._desk_rig.position = RoomView.EYE
 				_grad_power_stage = 3
 				_grad_power_since = Time.get_ticks_msec()
-			elif elapsed2 > 20000:
-				_grad_fail("card flip: the card never completed its turn at the tournament table (last angle %.1f deg over %d samples)" % [ang, _grad_flip_angles.size()])
-				_grad_phase = 5
 		3:
 			_room._info_focused_card()
 			_grad_power_stage = 4
@@ -8446,7 +8463,16 @@ func _nav_leg_ay_swap_async() -> void:
 	# Rogers shape from Chris's capture (band + title +
 	# maker/design/version lines). Its ink extent is
 	# judged against the back frame's bounding box in a
-	# grab of the standing room.
+	# grab of the standing room. At the pop distance the
+	# desk frame crops the card frame's top edge, so the
+	# desk rig pulls back 0.55 m for the grab (the
+	# tournament smoke's shot seam) and restores after;
+	# the extent math is projection-based, so the wider
+	# framing does not bias it.
+	_room._desk_rig.position = RoomView.EYE + Vector3(0.0, 0.0, -0.55)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame
 	var bimg: Image = get_viewport().get_texture().get_image()
 	var bcam: Camera3D = get_viewport().get_camera_3d()
 	var bgrab_dir: String = OS.get_environment("PVLDS_GRAB_DIR")
@@ -8461,6 +8487,7 @@ func _nav_leg_ay_swap_async() -> void:
 	_nav_expect(bool(bres.get("ok", false)) and absf(bdelta) <= 0.02,
 		"seated centre: the flipped TABLE DATA back's composition centres on its card in the room grab (delta %.2f%% of frame height, tolerance 2%%)%s"
 			% [100.0 * bdelta, "" if bool(bres.get("ok", false)) else " - " + str(bres.get("why", ""))])
+	_room._desk_rig.position = RoomView.EYE
 	# A second Y turns it home.
 	await _nav_feed_button(JOY_BUTTON_Y)
 	fguard = 0
@@ -11905,7 +11932,7 @@ func _gf13_seated_extent(gt: Transform3D, size: Vector2, img: Image, cam: Camera
 				return {"ok": false, "delta": 0.0, "why": "a corner stands behind the camera"}
 			var sp: Vector2 = cam.unproject_position(c3)
 			if sp.x < 2.0 or sp.y < 2.0 or sp.x > iw - 3.0 or sp.y > ih - 3.0:
-				return {"ok": false, "delta": 0.0, "why": "a corner stands outside the grab"}
+				return {"ok": false, "delta": 0.0, "why": "a corner stands outside the grab (at %s in a %dx%d grab)" % [str(sp), int(iw), int(ih)]}
 	var fracs: Array[float] = [0.18, 0.30, 0.42, 0.58, 0.70, 0.82]
 	var samples: int = 240
 	var margin: int = int(float(samples) * 0.03)
