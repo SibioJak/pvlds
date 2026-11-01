@@ -395,8 +395,11 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   screen (the room):** a fresh D-pad right press quits the app
   altogether to the desktop — the rail EXIT action (disarm
   "room Exit" + quit) on the pad, in browsing and in the
-  detail view. D-pad up/down/left and the left stick still
-  move focus (the stick moves it rightward too); during the
+  detail view. The left stick moves focus in all four
+  directions; D-pad up/down/left move NOTHING (GRADFIX10
+  item 5: D-pad directional movement is nuked, so the pad
+  never teaches "directional = navigate" on the same pad
+  whose right is the exit); during the
   load wait the room stays deaf and swallows the press like
   everything else, and on the SETUP placard it does nothing —
   BACK remains the only way off the placard. On the SETUP panel

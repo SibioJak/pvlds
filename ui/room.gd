@@ -644,6 +644,14 @@ static var debug_gf4_nc: String = ""
 ## the grad census's tourney-border legs fail by name.
 ## Empty in every real run.
 static var debug_gf8_nc: String = ""
+## Negative-control seam for GRADFIX10 items 4+5 (the
+## harness env PVLDS_INPUT_NC, set by Main before any room
+## exists): "dpadmove" restores the pre-nuke D-pad
+## Left/Up/Down focus movement, "notrig" leaves the
+## triggers unread (their pre-GRADFIX10 state) - each so
+## the input smoke's matching legs fail by name. Empty in
+## every real run.
+static var debug_input_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
@@ -6268,10 +6276,19 @@ func _process(delta: float) -> void:
 	# mouse is a pure pointer there, never a look control. A view that
 	# drifts with the cursor makes every click target swim (field
 	# finding, round 2). XR head tracking owns the view in XR only.
-	# Gamepad: left stick / d-pad moves focus, A starts the
+	# Gamepad: the left stick moves focus, A starts the
 	# focused card (selects everywhere else), B goes back in
 	# the detail view, Y opens the focused card's info, X
 	# toggles the focused card's favorite.
+	# D-pad movement is NUKED (GRADFIX10 item 5, Chris's
+	# order): "the directional pad left can navigate, which
+	# is gonna let the player think they can use right
+	# directional, which ends game. nuke directional
+	# movement." D-pad Left/Up/Down read NOTHING here - the
+	# stick (plus bumpers and the triggers' wall anchors) is
+	# the only directional navigation on the pad. Keyboard
+	# arrows in _unhandled_input are a separate surface and
+	# keep their movement.
 	# D-pad Right is NOT a focus direction: it is the BACK button,
 	# with exactly two meanings in the whole app (the player's
 	# ruling, 2026-10-22 - no hold gesture exists anywhere). In
@@ -6322,14 +6339,26 @@ func _process(delta: float) -> void:
 	var ax: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)
 	var ay: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_Y)
 	var dir: Vector2 = Vector2.ZERO
-	if Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_LEFT) or ax < -0.55:
+	if ax < -0.55:
 		dir = Vector2(-1.0, 0.0)
 	elif ax > 0.55:
 		dir = Vector2(1.0, 0.0)
-	elif Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_UP) or ay < -0.55:
+	elif ay < -0.55:
 		dir = Vector2(0.0, -1.0)
-	elif Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_DOWN) or ay > 0.55:
+	elif ay > 0.55:
 		dir = Vector2(0.0, 1.0)
+	if debug_input_nc == "dpadmove":
+		# The GRADFIX10 negative-control seam (harness env
+		# PVLDS_INPUT_NC=dpadmove): restores the pre-nuke
+		# binding - D-pad Left/Up/Down OR'd into the focus
+		# directions - so the input smoke's dpad-nuke legs
+		# fail by name. Empty in every real run.
+		if Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_LEFT):
+			dir = Vector2(-1.0, 0.0)
+		elif Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_UP):
+			dir = Vector2(0.0, -1.0)
+		elif Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_DOWN):
+			dir = Vector2(0.0, 1.0)
 	if dir != Vector2.ZERO and _joy_cooldown <= 0.0:
 		if not deaf:
 			_move_focus(dir)

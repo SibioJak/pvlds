@@ -134,6 +134,26 @@ extends Node
 ##                       Env PVLDS_LJ_NC=nostrip disables the
 ##                       index's leading-The strip: the
 ##                       canonical-The legs must fail by name.
+##   --pvlds-smoke-input room boot (GRADFIX10 items 4+5); drive
+##                       real InputEventJoypadButton / Motion
+##                       events through the Input singleton into
+##                       the room's real gamepad poll and assert:
+##                       D-pad Left/Up/Down produce NO focus
+##                       movement in the library, rail, letter
+##                       strip, Tournament view, detail view
+##                       and SETUP panel (the D-pad movement
+##                       nuke), D-pad Right still performs BACK
+##                       in each context (the exit path, caught
+##                       by a probe so the boot survives), the
+##                       left stick still moves focus, and the
+##                       triggers cycle the wall anchors
+##                       (left / middle / right of the shelf,
+##                       wrapping, row preserved). Env
+##                       PVLDS_INPUT_NC=dpadmove restores the
+##                       pre-nuke D-pad movement and
+##                       PVLDS_INPUT_NC=notrig leaves the
+##                       triggers unread: the matching legs
+##                       must fail by name under each.
 ##   --pvlds-seated-cam  with --pvlds-shot: take the shot from a
 ##                       seated eye height (RoomView.SEATED_EYE_Y)
 ##                       instead of the standing desk eye
@@ -232,6 +252,13 @@ var _dpadexit_smoke_wait: int = 0
 var _desk_smoke_phase: int = 0
 var _desk_smoke_wait: int = 0
 var _desk_smoke_failures: int = 0
+var _smoke_input: bool = false ## --pvlds-smoke-input: GRADFIX10 items 4+5 - the D-pad nuke + trigger wall anchors, driven through the real pad poll
+var _input_smoke_phase: int = 0
+var _input_smoke_wait: int = 0
+var _input_smoke_failures: int = 0
+var _input_started: bool = false ## the input legs run async (they feed real pad events and wait out frames); kicked off once
+var _input_done: bool = false ## the input legs have reported
+var _input_exit_fired: bool = false ## the D-pad Right BACK probe's witness (exit_requested caught by a test lambda, not the quit handler)
 var _smoke_nav: bool = false ## --pvlds-smoke-nav: the focus graph + seated wall clearance contract
 var _nav_smoke_phase: int = 0
 var _nav_smoke_wait: int = 0
@@ -431,6 +458,8 @@ func _ready() -> void:
 		_smoke_lockout = true
 	if user_args.has("--pvlds-smoke-nav"):
 		_smoke_nav = true
+	if user_args.has("--pvlds-smoke-input"):
+		_smoke_input = true
 	if user_args.has("--pvlds-smoke-tournament"):
 		_smoke_tournament = true
 		_tournament_smoke_mode = OS.get_environment("PVLDS_WOVP_SMOKE_MODE")
@@ -502,6 +531,11 @@ func _ready() -> void:
 	# nobexit): B stays unassigned in the Tournament view, so
 	# the nav smoke's B-exit leg fails against it by name.
 	RoomView.debug_b_nc = OS.get_environment("PVLDS_B_NC")
+	# GRADFIX10's input negative-control seam (PVLDS_INPUT_NC=
+	# dpadmove | notrig): restores the pre-nuke D-pad movement
+	# or the unread triggers, so the input smoke's matching
+	# legs fail by name. Set here, before any room exists.
+	RoomView.debug_input_nc = OS.get_environment("PVLDS_INPUT_NC")
 	# GRADFIX4's blank-board negative-control seam
 	# (PVLDS_GRADFIX4_NC=solidboard): every board render
 	# lands the fallback solid and counts it, so the
@@ -562,7 +596,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_letters or _smoke_bootfocus or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -722,6 +756,8 @@ func _process(_delta: float) -> void:
 		_drive_lockout_smoke()
 	if _smoke_nav:
 		_drive_nav_smoke()
+	if _smoke_input:
+		_drive_input_smoke()
 	if _smoke_letters:
 		_drive_letters_smoke()
 	if _smoke_grad:
@@ -6739,6 +6775,246 @@ func _finish_nav_smoke() -> void:
 	else:
 		printerr("PVLDS NAV SMOKE: FAIL (%d)" % _nav_smoke_failures)
 		get_tree().quit(1)
+
+
+## --pvlds-smoke-input: GRADFIX10 items 4+5 (see the flag's
+## doc at the top of this file). Every press rides the Input
+## singleton (Input.parse_input_event) into the room's real
+## _process gamepad poll - the shipping input path, never a
+## direct _move_focus / _trigger_anchor call. Focus seating
+## between legs (_set_focused) is setup, not assertion path.
+## D-pad Right's BACK is judged through a probe lambda on
+## exit_requested (the tournament descent legs' pattern), so
+## one boot can judge BACK in every context and survive.
+func _drive_input_smoke() -> void:
+	match _input_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				Input.warp_mouse(Vector2(512.0, 764.0))
+				_room._handle_rail("filter:all")
+				_input_smoke_wait = 0
+				_input_smoke_phase = 1
+			else:
+				_input_smoke_wait += 1
+				if _input_smoke_wait > 3600:
+					_input_smoke_fail("the room never came up")
+					_finish_input_smoke()
+		1:
+			if _input_done:
+				_finish_input_smoke()
+				return
+			_input_smoke_wait += 1
+			if _input_smoke_wait > 7200:
+				_input_smoke_fail("the input legs never finished")
+				_finish_input_smoke()
+			elif not _input_started and _room != null and _room.wall_ready and _input_smoke_wait >= 4:
+				_input_started = true
+				_input_legs_async()
+
+
+func _input_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - input smoke: ", label)
+	else:
+		_input_smoke_fail(label)
+
+
+func _input_smoke_fail(label: String) -> void:
+	_input_smoke_failures += 1
+	printerr("  FAIL - input smoke: ", label)
+
+
+func _finish_input_smoke() -> void:
+	if _input_smoke_failures == 0:
+		print("PVLDS INPUT SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS INPUT SMOKE: FAIL (%d)" % _input_smoke_failures)
+		get_tree().quit(1)
+
+
+func _input_wait_frames(n: int) -> void:
+	for i: int in range(n):
+		await get_tree().process_frame
+
+
+## The panel standing at an exact grid place, or null.
+func _input_panel_at(col: int, band: int) -> ClickableQuad:
+	if _room == null:
+		return null
+	for i: int in range(_room._panels.size()):
+		if _room._grid_coord(i) == Vector2i(col, band):
+			return _room._panels[i]
+	return null
+
+
+## The panel in a column whose band is nearest the preferred
+## band (the trigger landing rule's own shape, mirrored for
+## seating and for expected landings).
+func _input_panel_in_column(col: int, pref_band: int) -> ClickableQuad:
+	if _room == null:
+		return null
+	var best: ClickableQuad = null
+	var best_d: int = 999
+	for i: int in range(_room._panels.size()):
+		var c: Vector2i = _room._grid_coord(i)
+		if c.x != col:
+			continue
+		var d: int = absi(c.y - pref_band)
+		if d < best_d:
+			best_d = d
+			best = _room._panels[i]
+	return best
+
+
+## Feed one joypad axis value through the Input singleton
+## (the trigger / stick feeds): set, a few frames, and (for
+## the caller) release is a second call at 0.0.
+func _input_feed_axis(axis: JoyAxis, value: float) -> void:
+	var ev: InputEventJoypadMotion = InputEventJoypadMotion.new()
+	ev.device = 0
+	ev.axis = axis
+	ev.axis_value = value
+	Input.parse_input_event(ev)
+	await _input_wait_frames(3)
+
+
+## D-pad Right in the standing context must perform BACK:
+## in every wall context BACK is the rail EXIT path, so the
+## witness is exit_requested itself, caught by a probe (the
+## boot survives its own proof). The handler is restored
+## before the assertion, whatever it says.
+func _input_expect_dpad_right_back(context: String) -> void:
+	_input_exit_fired = false
+	var probe: Callable = func() -> void: _input_exit_fired = true
+	_room.exit_requested.disconnect(Callable(self, "_on_exit_requested"))
+	_room.exit_requested.connect(probe)
+	await _nav_feed_button(JOY_BUTTON_DPAD_RIGHT)
+	_room.exit_requested.disconnect(probe)
+	_room.exit_requested.connect(Callable(self, "_on_exit_requested"))
+	_input_expect(_input_exit_fired,
+		"dpad-back %s: D-pad Right performs BACK (the exit path fires)" % context)
+
+
+
+## One D-pad press against a held focus: the nuke's leg
+## shape, shared by every context below.
+func _input_expect_no_move(btn: JoyButton, btn_name: String, context: String, held: ClickableQuad) -> void:
+	await _nav_feed_button(btn)
+	_input_expect(_room.focused_quad() == held,
+		"dpad-nuke %s: D-pad %s produces no focus movement" % [context, btn_name])
+
+
+## The D-pad nuke legs (GRADFIX10 item 5): in every view,
+## D-pad Left/Up/Down - fed as real InputEventJoypadButton
+## events - produce NO focus movement, while the stick
+## still moves focus and D-pad Right still performs BACK.
+## Under PVLDS_INPUT_NC=dpadmove the room restores the old
+## binding and these legs fail by name.
+func _input_legs_async() -> void:
+	# ---- library wall ----
+	var cols: int = _room._columns
+	var start: ClickableQuad = _input_panel_at(clampi(1, 0, maxi(0, cols - 1)), 1)
+	if start == null:
+		_input_smoke_fail("dpad-nuke library: no mid-wall start panel to seat")
+		_input_done = true
+		return
+	_room._set_focused(start)
+	await _input_wait_frames(4)
+	await _input_expect_no_move(JOY_BUTTON_DPAD_LEFT, "LEFT", "library", start)
+	await _input_expect_no_move(JOY_BUTTON_DPAD_UP, "UP", "library", start)
+	await _input_expect_no_move(JOY_BUTTON_DPAD_DOWN, "DOWN", "library", start)
+	# The stick is the surviving directional navigation.
+	await _input_wait_frames(20) ## the stick step's cooldown (0.24 s) must not gate the guard leg
+	await _input_feed_axis(JOY_AXIS_LEFT_X, -1.0)
+	_input_expect(_room.focused_quad() == _input_panel_at(0, 1),
+		"stick guard library: the left stick still moves focus (D-pad's replacement lives)")
+	await _input_feed_axis(JOY_AXIS_LEFT_X, 0.0)
+	_room._set_focused(start)
+	await _input_wait_frames(4)
+	await _input_expect_dpad_right_back("library")
+	# ---- control rail ----
+	var rail_stop: ClickableQuad = _room.rail_quad("sort")
+	_room._set_focused(rail_stop)
+	await _input_wait_frames(4)
+	await _input_expect_no_move(JOY_BUTTON_DPAD_LEFT, "LEFT", "rail", rail_stop)
+	await _input_expect_no_move(JOY_BUTTON_DPAD_UP, "UP", "rail", rail_stop)
+	await _input_expect_no_move(JOY_BUTTON_DPAD_DOWN, "DOWN", "rail", rail_stop)
+	await _input_expect_dpad_right_back("rail")
+	# ---- letter strip ----
+	var strip_q: ClickableQuad = null
+	for k: Variant in _room._strip_quads.keys():
+		if _room.strip_slot_pickable(str(k)):
+			strip_q = _room.letter_quad(str(k))
+			break
+	if strip_q == null:
+		_input_smoke_fail("dpad-nuke strip: no pickable strip slot to seat")
+	else:
+		_room._set_focused(strip_q)
+		await _input_wait_frames(4)
+		await _input_expect_no_move(JOY_BUTTON_DPAD_LEFT, "LEFT", "strip", strip_q)
+		await _input_expect_no_move(JOY_BUTTON_DPAD_UP, "UP", "strip", strip_q)
+		await _input_expect_no_move(JOY_BUTTON_DPAD_DOWN, "DOWN", "strip", strip_q)
+		await _input_expect_dpad_right_back("strip")
+	# ---- Tournament view ----
+	_room._handle_rail("tournament")
+	await _input_wait_frames(10)
+	if not _room.tournament_active() or _room._panels.is_empty():
+		_input_smoke_fail("dpad-nuke tournament: the Tournament view never stood with a panel")
+	else:
+		var tpanel: ClickableQuad = _room._panels[0]
+		_room._set_focused(tpanel)
+		await _input_wait_frames(4)
+		await _input_expect_no_move(JOY_BUTTON_DPAD_LEFT, "LEFT", "tournament", tpanel)
+		await _input_expect_no_move(JOY_BUTTON_DPAD_UP, "UP", "tournament", tpanel)
+		await _input_expect_no_move(JOY_BUTTON_DPAD_DOWN, "DOWN", "tournament", tpanel)
+		await _input_expect_dpad_right_back("tournament")
+	_room._handle_rail("filter:all")
+	await _input_wait_frames(10)
+	# ---- detail view ----
+	_room._open_detail(_room._visible_games[0])
+	await _input_wait_frames(4)
+	await _nav_feed_button(JOY_BUTTON_DPAD_LEFT)
+	_input_expect(_room._mode == "detail" and _room.focused_quad() == null,
+		"dpad-nuke detail: D-pad LEFT produces no focus movement")
+	await _nav_feed_button(JOY_BUTTON_DPAD_UP)
+	_input_expect(_room._mode == "detail" and _room.focused_quad() == null,
+		"dpad-nuke detail: D-pad UP produces no focus movement")
+	await _nav_feed_button(JOY_BUTTON_DPAD_DOWN)
+	_input_expect(_room._mode == "detail" and _room.focused_quad() == null,
+		"dpad-nuke detail: D-pad DOWN produces no focus movement")
+	await _input_expect_dpad_right_back("detail")
+	_room._on_detail_closed()
+	await _input_wait_frames(6)
+	# ---- SETUP panel ----
+	_room.show_setup_panel()
+	await _input_wait_frames(6)
+	if not _room.is_setup_panel_up():
+		_input_smoke_fail("dpad-nuke setup panel: the panel never stood")
+	else:
+		var sp_focus: ClickableQuad = _room.focused_quad()
+		await _nav_feed_button(JOY_BUTTON_DPAD_LEFT)
+		_input_expect(_room.focused_quad() == sp_focus and _room.is_setup_panel_up(),
+			"dpad-nuke setup panel: D-pad LEFT produces no focus movement")
+		await _nav_feed_button(JOY_BUTTON_DPAD_UP)
+		_input_expect(_room.focused_quad() == sp_focus and _room.is_setup_panel_up(),
+			"dpad-nuke setup panel: D-pad UP produces no focus movement")
+		await _nav_feed_button(JOY_BUTTON_DPAD_DOWN)
+		_input_expect(_room.focused_quad() == sp_focus and _room.is_setup_panel_up(),
+			"dpad-nuke setup panel: D-pad DOWN produces no focus movement")
+		# BACK on the panel closes it - and never exits.
+		_input_exit_fired = false
+		var probe2: Callable = func() -> void: _input_exit_fired = true
+		_room.exit_requested.disconnect(Callable(self, "_on_exit_requested"))
+		_room.exit_requested.connect(probe2)
+		await _nav_feed_button(JOY_BUTTON_DPAD_RIGHT)
+		_room.exit_requested.disconnect(probe2)
+		_room.exit_requested.connect(Callable(self, "_on_exit_requested"))
+		_input_expect(not _room.is_setup_panel_up() and not _input_exit_fired,
+			"dpad-back setup panel: D-pad Right closes the panel (BACK, not exit)")
+		_input_expect(_room.focused_quad() == _room.rail_quad("desk"),
+			"dpad-back setup panel: focus lands on the rail's SETUP stop")
+	_input_done = true
 
 
 ## The rail key a quad answers to, or "" when it is not a rail
