@@ -626,6 +626,14 @@ func _ready() -> void:
 	# vertical-wall-law legs fail by name). Set here, before
 	# any room exists.
 	RoomView.debug_gf13_nc = OS.get_environment("PVLDS_GF13_NC")
+	# GRADFIX14 item 3's negative-control seams
+	# (PVLDS_GF14_NC=stripanchor | railwall | bartriginert):
+	# stripanchor restores the strip's bumper anchor-hops,
+	# railwall restores rail-focus bumpers driving the wall,
+	# bartriginert restores inert triggers under bar focus -
+	# each so the input smoke's gf14 grammar legs fail by
+	# name. Set here, before any room exists.
+	RoomView.debug_gf14_nc = OS.get_environment("PVLDS_GF14_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):

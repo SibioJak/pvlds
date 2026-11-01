@@ -724,6 +724,17 @@ static var debug_gf12_nc: String = ""
 ## smoke's vertical-wall-law legs fail by name. Empty in
 ## every real run.
 static var debug_gf13_nc: String = ""
+## Negative-control seams for GRADFIX14 item 3 (the unified
+## travel grammar - the harness env PVLDS_GF14_NC, set by
+## Main before any room exists): "stripanchor" restores the
+## strip's bumper anchor-hops (supersession (a)'s pre-fix
+## shape), "railwall" restores rail-focus bumpers driving
+## the wall's page travel (supersession (b)'s pre-fix
+## shape), "bartriginert" leaves the triggers inert under
+## rail/strip focus again (supersession (c)'s pre-fix
+## shape) - each so the input smoke's gf14 grammar legs
+## fail by name. Empty in every real run.
+static var debug_gf14_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
@@ -5449,19 +5460,28 @@ func _strip_pickable_keys() -> Array[String]:
 	return out
 
 
-## A bumper press inside the strip country (the bumper-
-## anchors round, 2026-10-28 - Chris: bumpers on the strip
-## should "move you to middle, then end. One to two taps
-## instead of a bunch"): focus steps to the nearest anchor
-## strictly in the press's direction over the pickable
-## slots - first, middle, last (LetterIndex.anchor_target
-## owns the math, the middle rule included). POSITIONAL,
-## NO MEMORY: the anchors are recomputed from the standing
-## presence on every press, so a filter change between
-## presses is absorbed by the next press without any state
-## to go stale. Only strip focus moves - the wall's page
-## never turns - and a press at the far anchor clamps,
-## spent, focus staying put.
+## A TRIGGER press inside the strip country: focus hops
+## to the nearest anchor strictly in the press's direction
+## over the pickable slots - first, middle, last
+## (LetterIndex.anchor_target owns the math, the middle
+## rule included, THE-as-net and the clamp law with it).
+## POSITIONAL, NO MEMORY: the anchors are recomputed from
+## the standing presence on every press, so a filter
+## change between presses is absorbed by the next press
+## without any state to go stale. Only strip focus moves -
+## the wall never turns - and a press at the far anchor
+## clamps, spent, focus staying put.
+##
+## GRADFIX14 SUPERSESSION (a), stated plainly (Chris,
+## 2026-11-01): this hop USED to live on the strip's
+## BUMPERS (the bumper-anchors round, 2026-10-28, field-
+## passed 2026-10-29 - bumpers on the strip should "move
+## you to middle, then end"). Under the unified travel
+## grammar the hop MOVES to the triggers, unchanged in
+## every other respect; the strip's bumpers become
+## single-slot steps (see _bumper_page). The NC value
+## "stripanchor" (PVLDS_GF14_NC) puts the hop back on the
+## bumpers so the grammar legs fail by name.
 func _strip_anchor_step(step: int) -> void:
 	var current: String = ""
 	for k: Variant in _strip_quads.keys():
@@ -5478,41 +5498,200 @@ func _strip_anchor_step(step: int) -> void:
 		_set_focused(q)
 
 
-## A bumper press's page travel: the centre jumps one page
-## of shelf indices (Chris's clarification, 2026-10-24 - the
-## bumpers flip PAGES, never filters; the filters change only
-## via the rail). CLAMPED at both ends, no wrap, and page
-## state persists exactly as a rail press's does. Inert under
-## the room's standing input law: the load wait is deaf, the
-## SETUP placard owns the room, and the detail view is not
-## the wall.
+## The rail stops focus can actually stand on right now,
+## in RAIL_FOCUS_ORDER order: the same admission the
+## sideways walk uses (pickable and in the focusable set -
+## wovp_refresh stands only while the Tournament Room
+## does). The rail's trigger anchors are computed over
+## THIS live list, recomputed on every press, so a view
+## change between presses is absorbed with no state to go
+## stale (the strip anchors' positional rule, carried to
+## the rail).
+func _rail_focusable_keys() -> Array[String]:
+	var out: Array[String] = []
+	for key: String in RAIL_FOCUS_ORDER:
+		var q: ClickableQuad = _rail_quads.get(key) as ClickableQuad
+		if q != null and q.pick_enabled and _focusables.has(q):
+			out.append(key)
+	return out
+
+
+## The rail's anchors (GRADFIX14 item 3): first, middle
+## and last of the live rail stops - the middle at index
+## (count - 1) / 2 of the list, the wall/strip middle rule
+## carried to the rail. On the library rail (nine live
+## stops) that is filter:all / filter:new / exit; in the
+## Tournament Room (ten live stops, REFRESH standing) the
+## same three keys. Fewer than three live stops degenerate
+## honestly, exactly as the wall's column anchors do.
+func rail_anchor_keys() -> Array[String]:
+	var stops: Array[String] = _rail_focusable_keys()
+	var out: Array[String] = []
+	if stops.is_empty():
+		return out
+	out.append(stops[0])
+	if stops.size() >= 2:
+		var mid: String = stops[(stops.size() - 1) / 2]
+		if not out.has(mid):
+			out.append(mid)
+		var last: String = stops[stops.size() - 1]
+		if not out.has(last):
+			out.append(last)
+	return out
+
+
+## The rail key a quad answers to, or "" when it is not a
+## rail quad.
+func _rail_key_of_quad(q: ClickableQuad) -> String:
+	for k: Variant in _rail_quads.keys():
+		if _rail_quads[k] == q:
+			return str(k)
+	return ""
+
+
+## A TRIGGER press with a rail stop focused (GRADFIX14
+## item 3): focus hops the rail's anchors - first / middle
+## / last of the live stops (rail_anchor_keys). The travel
+## rule MIRRORS THE WALL'S trigger rule exactly: from a
+## non-anchor stop, the nearest anchor STRICTLY in the
+## travel direction, wrapping to the far anchor when none
+## lies that way; a press while ON an anchor advances to
+## the next one, never a no-op, wraps included.
 ##
-## Focus rule (stated for the smoke to assert): focus keeps
-## its PLACE across the flip. A focused panel hands focus to
-## the panel one page over FROM IT (its own index ± PAGE_SIZE,
-## clamped to the shelf's last panel - on the drum a panel IS
-## its shelf place, so "the same place" is the index law, not
-## a slot on a page); a focused rail stop keeps its stop (the
-## rail is persistent furniture - the quad never moves); no
-## focus lands on the first panel of the new centre's window.
-## A clamped press changes nothing at all.
+## THE RAIL ANALOGUE of the wall law's landing rule,
+## stated: the wall's landing preserves the focused ROW
+## (band) and the drum centres the column focus lands in.
+## The rail is a single row, so there is no band to
+## preserve - the landing IS the anchor stop itself, the
+## exact quad - and, the mirror image of the wall's
+## centre-follows rule, NOTHING follows it: rail focus
+## never drives the drum, so the centre index, the swing
+## target and the page stand byte-identical across the
+## hop, and no filter/sort/view state changes (a hop lands
+## ON a stop; it never presses it). With fewer than two
+## anchors standing the press is spent (the wall's
+## single-column rule, carried over).
+func _rail_anchor_step(step: int) -> void:
+	var current: String = _rail_key_of_quad(_focused)
+	if current == "":
+		return
+	var stops: Array[String] = _rail_focusable_keys()
+	var idx: int = stops.find(current)
+	if idx < 0:
+		return ## the focused stop is not standing in this view: spent
+	var anchors: Array[String] = rail_anchor_keys()
+	if anchors.size() < 2:
+		return ## nowhere to cycle to: the press is spent
+	var target: String = ""
+	if step > 0:
+		for a: String in anchors:
+			if stops.find(a) > idx:
+				target = a
+				break
+		if target == "":
+			target = anchors[0] ## wrap: last stop -> first anchor
+	else:
+		for i: int in range(anchors.size() - 1, -1, -1):
+			if stops.find(anchors[i]) < idx:
+				target = anchors[i]
+				break
+		if target == "":
+			target = anchors[anchors.size() - 1] ## wrap: first stop -> last anchor
+	var q: ClickableQuad = _rail_quads.get(target) as ClickableQuad
+	if q != null:
+		_set_focused(q)
+
+
+## A bumper press (GRADFIX14 item 3 - the UNIFIED TRAVEL
+## GRAMMAR, Chris, 2026-11-01: "the right bumpers continue
+## to navigate the wall while you're down there... If you
+## go down to letters, you have to tap-tap-tap through each
+## letter"). Controls follow focus - ONE grammar in every
+## zone:
+## - WALL focus: page travel, UNCHANGED (below): the
+##   centre jumps one page of shelf indices (Chris's
+##   clarification, 2026-10-24 - the bumpers flip PAGES,
+##   never filters; the filters change only via the rail).
+##   CLAMPED at both ends, no wrap; focus keeps its PLACE
+##   across the flip - a focused panel hands focus to the
+##   panel one page over FROM IT (its own index ±
+##   PAGE_SIZE, clamped to the shelf's last panel); no
+##   focus lands on the first panel of the new centre's
+##   window; a clamped press changes nothing at all.
+## - RAIL focus: ONE STOP along the rail (the sideways
+##   walk's own step, clamps at the rail's ends). The wall
+##   does NOT move - no centre, page or filter change.
+## - STRIP focus: ONE SLOT along the strip (the sideways
+##   walk's own step, greyed slots skipped, clamps at the
+##   strip's ends). The wall does NOT move.
+## - TOURNAMENT block focus: ONE CARD COLUMN within the
+##   block (the pair grid's own sideways step - nearest
+##   card column, board columns skipped, band nearest,
+##   ends clamp). See the tournament note in the code.
+## Inert under the room's standing input law, as shipped:
+## the load wait is deaf, the SETUP placard/panel own the
+## room, and the detail view is not the wall.
+##
+## GRADFIX14 SUPERSESSIONS, stated plainly:
+## (a) the strip's bumper anchor-hops (field-passed
+##     2026-10-29) MOVE to the triggers - strip bumpers
+##     are single-slot steps now (NC "stripanchor"
+##     restores the hops here);
+## (b) rail-focus bumpers STOP driving the wall: the
+##     shipped law below kept the rail stop and jumped
+##     the centre a page - that branch is gone (NC
+##     "railwall" restores it);
+## (c) the triggers stop being inert under rail/strip
+##     focus - they hop those zones' anchors now (see
+##     _trigger_anchor; NC "bartriginert" restores the
+##     inertness).
+## NOTHING in the bar zone (rail or strip focus) moves
+## the wall; nothing on the wall reaches the bar.
 func _bumper_page(step: int) -> void:
 	if _launching_game_id != "" or _placard_up or _setup_panel_up or _mode != "wall":
 		return
-	# The strip country spends its bumpers at home (the
-	# bumper-anchors round, 2026-10-28 - see
-	# _strip_anchor_step): while a strip slot holds focus,
-	# LB/RB step between the strip's anchors and the wall
-	# does NOT turn a page. On the wall or the rail the
-	# bumpers keep the page-travel law below, untouched.
+	# The strip country spends its bumpers at home
+	# (GRADFIX14 supersession (a)): one slot along the
+	# strip, the wall untouched. The NC restores the
+	# shipped anchor-hop here.
 	if _focused != null and _is_strip_quad(_focused):
-		_strip_anchor_step(step)
+		if debug_gf14_nc == "stripanchor":
+			_strip_anchor_step(step)
+			return
+		var nq: ClickableQuad = _rail_focus_neighbour(step)
+		if nq != null:
+			_set_focused(nq)
+		return
+	# The rail spends its bumpers at home (GRADFIX14
+	# supersession (b)): one stop along the rail, the wall
+	# untouched. The NC restores the shipped behaviour -
+	# the rail branch of the page-travel law below.
+	if _focused != null and _is_rail_quad(_focused) and debug_gf14_nc != "railwall":
+		var rq: ClickableQuad = _rail_focus_neighbour(step)
+		if rq != null:
+			_set_focused(rq)
 		return
 	if _visible_games.is_empty():
 		return
 	_failed_game_id = ""
 	_status_note = ""
 	if _focused != null and _panels.has(_focused):
+		# TOURNAMENT BUMPERS, stated: today (pre-GRADFIX14)
+		# a bumper on a block card ran the page law below -
+		# index ± PAGE_SIZE clamped to the block, which on a
+		# block smaller than a page is a jump to the far end,
+		# not a step. The grammar's consistent form: bumpers
+		# step WITHIN the block, one card column (the pair
+		# grid's own sideways step, _tourn_side_step), ends
+		# clamped, focus following to the stepped column's
+		# band-nearest card. The library wall below keeps
+		# its page travel untouched.
+		if _tournament:
+			var tpidx: int = _panels.find(_focused)
+			var tnidx: int = _tourn_side_step(tpidx, step)
+			if tnidx != tpidx and tnidx >= 0 and tnidx < _panels.size():
+				_set_focused(_panels[tnidx])
+			return
 		var from: int = _panels.find(_focused)
 		var target: int = clampi(from + step * PAGE_SIZE, 0, _visible_games.size() - 1)
 		if target == from:
@@ -5521,6 +5700,9 @@ func _bumper_page(step: int) -> void:
 		_set_focused(_panels[target])
 		_persist_view()
 	elif _focused != null and _is_rail_quad(_focused):
+		# Reached only under the NC (supersession (b)'s
+		# pre-fix shape): rail focus keeps its stop while
+		# the centre jumps a page.
 		var target_page: int = clampi(_page + step, 0, page_count() - 1)
 		if target_page == _page:
 			return
@@ -5619,30 +5801,60 @@ func wall_anchor_columns() -> Array[int]:
 ## - The load wait is deaf, the SETUP placard/panel own the
 ##   room, and the detail view is not the wall: inert there
 ##   (the bumper law, shared).
-## - Only a CARD focus rides the anchors. With the rail or
-##   a strip slot focused there is no band to preserve and
-##   no wall place to jump FROM, so the press is inert -
-##   the bumpers keep those countries (page travel from the
-##   rail, strip anchors from the strip), untouched.
-## - TOURNAMENT VIEW (the decision): the block's card
-##   columns are few (the crew fixture's cards stand in
-##   three columns; Chris's live set in two), so three
-##   library anchors would degenerate there. The triggers
-##   map to the BLOCK'S OWN anchors instead - first /
-##   middle / last of the card columns actually standing
-##   (two columns: left/right only; one column: no anchors
-##   to cycle, the press is spent). Same cycle, same wrap,
-##   same band rule, over the block's own geometry - never
-##   a fall-through to the library's shelf columns, which
-##   do not exist in this view.
+## - GRADFIX14 (item 3, the unified travel grammar): the
+##   triggers hop the FOCUSED zone's anchors in every
+##   zone. A CARD focus rides the wall anchors (below,
+##   unchanged). A RAIL focus hops the rail's anchors
+##   (first / middle / last of the live rail stops - see
+##   _rail_anchor_step for the travel rule and the rail
+##   analogue of this landing law). A STRIP focus hops
+##   the strip's pickable anchors (see _strip_anchor_
+##   step - the hop the bumpers used to own).
+##   SUPERSESSION (a): the strip's anchor hop moved from
+##   the bumpers to these triggers.
+##   SUPERSESSION (c): the triggers STOP being inert
+##   under rail/strip focus - the shipped scope note here
+##   read "with the rail or a strip slot focused the
+##   press is inert", and that is gone (the NC value
+##   "bartriginert" restores it). NOTHING in the bar zone
+##   moves the wall on a trigger press either: the rail
+##   hop lands on a stop (it never presses it) and the
+##   strip hop lands on a slot, both with the drum
+##   standing byte-identical.
+## - TOURNAMENT VIEW (the decision, unchanged): the
+##   block's card columns are few (the crew fixture's
+##   cards stand in three columns; Chris's live set in
+##   two), so three library anchors would degenerate
+##   there. The triggers map to the BLOCK'S OWN anchors
+##   instead - first / middle / last of the card columns
+##   actually standing (two columns: left/right only; one
+##   column: no anchors to cycle, the press is spent).
+##   Same cycle, same wrap, same band rule, over the
+##   block's own geometry - never a fall-through to the
+##   library's shelf columns, which do not exist in this
+##   view. The grammar reconciles as: anchors = the
+##   focused block's own columns.
 func _trigger_anchor(step: int) -> void:
 	if _launching_game_id != "" or _placard_up or _setup_panel_up or _mode != "wall":
 		return
 	if _focused == null:
 		return
+	# The bar countries spend their triggers at home
+	# (GRADFIX14 supersession (c)): the rail hops its own
+	# anchors, the strip hops its own pickable anchors,
+	# and neither moves the wall. The NC restores the
+	# shipped inertness under bar focus.
+	if _is_rail_quad(_focused):
+		if debug_gf14_nc != "bartriginert":
+			_rail_anchor_step(step)
+		return
+	if _is_strip_quad(_focused):
+		if debug_gf14_nc != "bartriginert":
+			_strip_anchor_step(step)
+		return
 	var pidx: int = _panels.find(_focused)
 	if pidx < 0:
-		return ## rail / strip focus: inert (see the decision above)
+		return ## no country owns this focus (a detail/placard quad): inert
 	var anchors: Array[int] = _wall_anchor_columns()
 	if anchors.size() < 2:
 		return ## a single standing column has nowhere to cycle to
@@ -7419,12 +7631,16 @@ func _process(delta: float) -> void:
 	if x_now and not _joy_prev_x and not deaf:
 		_toggle_focused_favorite()
 	_joy_prev_x = x_now
-	# Bumpers (LB/RB): page travel, the section slide (Chris's
-	# banked note, 2026-10-23; his clarification, 2026-10-24:
-	# "my intention for bumpers was for the entire section to
-	# shift left or right, one page to other"). One page per
-	# fresh press - edge only, no held repeat - and the gating
-	# (load wait, placard, detail view) lives in _bumper_page.
+	# Bumpers (LB/RB): the unified travel grammar's step
+	# (GRADFIX14 item 3): wall focus = page travel, the
+	# section slide (Chris's banked note, 2026-10-23; his
+	# clarification, 2026-10-24: "my intention for bumpers
+	# was for the entire section to shift left or right,
+	# one page to other"); rail focus = one rail stop;
+	# strip focus = one strip slot; tournament block = one
+	# card column. One step per fresh press - edge only, no
+	# held repeat - and the dispatch + gating (load wait,
+	# placard, detail view) lives in _bumper_page.
 	# The prev-state updates run even while gated, so a bumper
 	# held through a gated stretch can't resurface as a phantom
 	# edge on the other side.
@@ -7436,10 +7652,14 @@ func _process(delta: float) -> void:
 		_bumper_page(1)
 	_joy_prev_lb = lb_now
 	_joy_prev_rb = rb_now
-	# Triggers (LT/RT): wall anchors (GRADFIX10 item 4 - Chris:
-	# "the bumpers move left/right one slot. I'm thinking
-	# triggers should cycle between left middle right of the
-	# entire board"). An analog axis has no button edge, so
+	# Triggers (LT/RT): the focused zone's anchors
+	# (GRADFIX10 item 4 - Chris: "the bumpers move left/right
+	# one slot. I'm thinking triggers should cycle between
+	# left middle right of the entire board"; GRADFIX14
+	# item 3 extends the hop to every zone: wall columns,
+	# rail stops, strip pickable slots, the tournament
+	# block's own columns). An analog axis has no button
+	# edge, so
 	# the edge is manufactured: the trigger reads DOWN once
 	# its value crosses TRIGGER_PRESS_THRESHOLD, a step fires
 	# only on the up->down crossing, and it cannot fire again
