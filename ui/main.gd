@@ -7014,7 +7014,175 @@ func _input_legs_async() -> void:
 			"dpad-back setup panel: D-pad Right closes the panel (BACK, not exit)")
 		_input_expect(_room.focused_quad() == _room.rail_quad("desk"),
 			"dpad-back setup panel: focus lands on the rail's SETUP stop")
+	await _input_leg_triggers_async()
 	_input_done = true
+
+
+## The focused panel's grid coord, or (-1, -1) when focus
+## is not on a panel.
+func _input_focus_coord() -> Vector2i:
+	if _room == null or _room.focused_quad() == null:
+		return Vector2i(-1, -1)
+	var idx: int = _room._panels.find(_room.focused_quad())
+	if idx < 0:
+		return Vector2i(-1, -1)
+	return _room._grid_coord(idx)
+
+
+## The smoke's own next-anchor arithmetic (the stated rule,
+## computed here from the anchor list alone): the nearest
+## anchor strictly in the travel direction, wrapping to the
+## far anchor when none lies that way.
+func _input_next_anchor(anchors: Array[int], from_col: int, step: int) -> int:
+	if step > 0:
+		for a: int in anchors:
+			if a > from_col:
+				return a
+		return anchors[0]
+	for i: int in range(anchors.size() - 1, -1, -1):
+		if anchors[i] < from_col:
+			return anchors[i]
+	return anchors[anchors.size() - 1]
+
+
+## One full trigger press (cross the threshold, frames,
+## release below it, frames) with the landing asserted
+## against the panel the stated rule predicts: the target
+## anchor column's card nearest the band focus stood on.
+func _input_trigger_step(axis: JoyAxis, anchors: Array[int], step: int, label: String) -> void:
+	var before: Vector2i = _input_focus_coord()
+	if before.x < 0:
+		_input_smoke_fail(label + " (focus was not on a panel before the press)")
+		return
+	var want_col: int = _input_next_anchor(anchors, before.x, step)
+	var want: ClickableQuad = _input_panel_in_column(want_col, before.y)
+	await _input_feed_axis(axis, 1.0)
+	await _input_feed_axis(axis, 0.0)
+	_input_expect(_room.focused_quad() == want and want != null,
+		"%s (want column %d band-nearest %d, got coord %s)" % [label, want_col, before.y, str(_input_focus_coord())])
+
+
+## The trigger wall-anchor legs (GRADFIX10 item 4): LT/RT
+## cycle the entire shelf's left / middle / right anchors,
+## wrapping both directions, row preserved, edge columns
+## landing on their nearest band; from a non-anchor column
+## the first press goes to the next anchor in its
+## direction; a held trigger steps exactly once; rail and
+## strip focus leave the triggers inert; the Tournament
+## view follows its stated decision (its own card columns'
+## anchors - this fixture stands a single state card, so
+## the press is spent there). Under PVLDS_INPUT_NC=notrig
+## the room never reads the triggers and these legs fail
+## by name.
+func _input_leg_triggers_async() -> void:
+	var cols: int = _room._columns
+	var expected: Array[int] = []
+	if cols >= 1:
+		expected.append(0)
+	if cols >= 2:
+		var mid: int = (cols - 1) / 2
+		if not expected.has(mid):
+			expected.append(mid)
+		if not expected.has(cols - 1):
+			expected.append(cols - 1)
+	var anchors: Array[int] = _room.wall_anchor_columns()
+	_input_expect(anchors == expected,
+		"triggers anchors: the wall anchors are the shelf's left / middle / right columns %s of %d (got %s)" % [str(expected), cols, str(anchors)])
+	if anchors.size() < 3:
+		_input_smoke_fail("triggers: the fixture wall has fewer than three anchors to cycle")
+		return
+	# The forward cycle, row preserved: seat the left anchor
+	# on the bottom band - the middle anchor's column is
+	# full, so band 2 must survive the first hop exactly.
+	var seat: ClickableQuad = _input_panel_at(anchors[0], 2)
+	if seat == null:
+		_input_smoke_fail("triggers: no left-anchor bottom-band panel to seat")
+		return
+	_room._set_focused(seat)
+	await _input_wait_frames(4)
+	await _input_trigger_step(JOY_AXIS_TRIGGER_RIGHT, anchors, 1,
+		"triggers RT: left anchor -> middle anchor")
+	_input_expect(_input_focus_coord() == Vector2i(anchors[1], 2),
+		"triggers RT: the row is preserved - the landing keeps band 2 (got %s)" % str(_input_focus_coord()))
+	await _input_trigger_step(JOY_AXIS_TRIGGER_RIGHT, anchors, 1,
+		"triggers RT: middle anchor -> right-end anchor (the edge column lands on its nearest band)")
+	await _input_trigger_step(JOY_AXIS_TRIGGER_RIGHT, anchors, 1,
+		"triggers RT: right-end anchor wraps to the left anchor")
+	# The backward cycle.
+	await _input_trigger_step(JOY_AXIS_TRIGGER_LEFT, anchors, -1,
+		"triggers LT: left anchor wraps to the right-end anchor")
+	await _input_trigger_step(JOY_AXIS_TRIGGER_LEFT, anchors, -1,
+		"triggers LT: right-end anchor -> middle anchor")
+	await _input_trigger_step(JOY_AXIS_TRIGGER_LEFT, anchors, -1,
+		"triggers LT: middle anchor -> left anchor")
+	# From a non-anchor column, both directions.
+	var non_anchor: int = -1
+	for c: int in range(cols):
+		if not anchors.has(c):
+			non_anchor = c
+			break
+	if non_anchor < 0:
+		_input_smoke_fail("triggers: the fixture wall has no non-anchor column for the from-non-anchor legs")
+	else:
+		var na_seat: ClickableQuad = _input_panel_in_column(non_anchor, 1)
+		_room._set_focused(na_seat)
+		await _input_wait_frames(4)
+		await _input_trigger_step(JOY_AXIS_TRIGGER_RIGHT, anchors, 1,
+			"triggers RT: from non-anchor column %d the first press goes to the next anchor in its direction" % non_anchor)
+		_room._set_focused(na_seat)
+		await _input_wait_frames(4)
+		await _input_trigger_step(JOY_AXIS_TRIGGER_LEFT, anchors, -1,
+			"triggers LT: from non-anchor column %d the first press goes to the next anchor in its direction" % non_anchor)
+	# A held trigger steps exactly once (no auto-repeat).
+	_room._set_focused(_input_panel_at(anchors[0], 1))
+	await _input_wait_frames(4)
+	await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)
+	await _input_wait_frames(30)
+	_input_expect(_input_focus_coord().x == anchors[1],
+		"triggers held: a held RT steps exactly once, to the middle anchor, and never repeats (got column %d)" % _input_focus_coord().x)
+	await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 0.0)
+	# Rail and strip focus: the triggers are inert there.
+	var rail_stop: ClickableQuad = _room.rail_quad("sort")
+	_room._set_focused(rail_stop)
+	await _input_wait_frames(4)
+	await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)
+	await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 0.0)
+	_input_expect(_room.focused_quad() == rail_stop,
+		"triggers rail: RT with the rail focused is inert (the bumpers own the rail's travel)")
+	var strip_q: ClickableQuad = null
+	for k: Variant in _room._strip_quads.keys():
+		if _room.strip_slot_pickable(str(k)):
+			strip_q = _room.letter_quad(str(k))
+			break
+	if strip_q != null:
+		_room._set_focused(strip_q)
+		await _input_wait_frames(4)
+		await _input_feed_axis(JOY_AXIS_TRIGGER_LEFT, 1.0)
+		await _input_feed_axis(JOY_AXIS_TRIGGER_LEFT, 0.0)
+		_input_expect(_room.focused_quad() == strip_q,
+			"triggers strip: LT with a strip slot focused is inert (the bumpers own the strip's anchors)")
+	# Tournament view: the block's own anchors (the stated
+	# decision). This fixture stands one state card in one
+	# column, so the decision's degenerate case applies.
+	_room._handle_rail("tournament")
+	await _input_wait_frames(10)
+	if not _room.tournament_active() or _room._panels.is_empty():
+		_input_smoke_fail("triggers tournament: the Tournament view never stood with a panel")
+	else:
+		var tpanel: ClickableQuad = _room._panels[0]
+		_room._set_focused(tpanel)
+		await _input_wait_frames(4)
+		var tanchors: Array[int] = _room.wall_anchor_columns()
+		if tanchors.size() < 2:
+			await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 1.0)
+			await _input_feed_axis(JOY_AXIS_TRIGGER_RIGHT, 0.0)
+			_input_expect(_room.focused_quad() == tpanel,
+				"triggers tournament: a single standing card column gives the triggers nothing to cycle - the press is spent (anchors %s)" % str(tanchors))
+		else:
+			await _input_trigger_step(JOY_AXIS_TRIGGER_RIGHT, tanchors, 1,
+				"triggers tournament: RT cycles the block's own anchors")
+	_room._handle_rail("filter:all")
+	await _input_wait_frames(10)
 
 
 ## The rail key a quad answers to, or "" when it is not a rail

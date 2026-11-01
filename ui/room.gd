@@ -780,6 +780,8 @@ var _joy_prev_y: bool = false ## Y edge tracking: open the focused card's info (
 var _joy_prev_x: bool = false ## X edge tracking: favorite the focused card (see _process)
 var _joy_prev_lb: bool = false ## bumper edge tracking: the section slide's page travel (see _process)
 var _joy_prev_rb: bool = false
+var _joy_prev_lt: bool = false ## trigger edge tracking (GRADFIX10 item 4): the axis reads "down" past TRIGGER_PRESS_THRESHOLD; a wall-anchor step fires only on the crossing, and the trigger must fall back below the threshold before another can fire (see _process)
+var _joy_prev_rt: bool = false
 var _joy_prev_right: bool = false ## D-pad Right edge tracking: the room's BACK-out press (see _process)
 var _joy_right_armed: bool = false ## baseline-release arming: set once THIS room instance has observed D-pad Right released; until then no right-press edge can exit (see _process)
 
@@ -4859,6 +4861,149 @@ func _bumper_page(step: int) -> void:
 		_persist_view()
 
 
+## The trigger threshold (GRADFIX10 item 4): a joypad
+## trigger axis reads DOWN past this value - the same 0.55
+## the stick's directional deadzone uses, so the pad's
+## analog controls share one "meant it" line.
+const TRIGGER_PRESS_THRESHOLD: float = 0.55
+
+
+## The distinct columns the standing view's CARDS occupy,
+## in shelf order: every column of the shelf in the library
+## (0 .. _columns-1 - the last may stand partial), and in
+## the Tournament view only the pair block's card columns
+## (board columns carry no card and are never columns a
+## focus can land in).
+func _card_columns() -> Array[int]:
+	var out: Array[int] = []
+	if _tournament:
+		var seen: Dictionary = {}
+		for i: int in range(_visible_games.size()):
+			var c: int = _grid_coord(i).x
+			if not seen.has(c):
+				seen[c] = true
+				out.append(c)
+		out.sort()
+		return out
+	for c: int in range(maxi(0, _columns)):
+		out.append(c)
+	return out
+
+
+## The wall anchors over a column list (GRADFIX10 item 4):
+## first, middle and last - the middle at index
+## (count - 1) / 2 of the list, the letter strip's own
+## middle rule (LetterIndex.anchor_keys) carried to the
+## wall. Fewer than three distinct columns degenerate
+## honestly: two columns give two anchors (no centre
+## exists to name), one column gives one.
+func _wall_anchor_columns() -> Array[int]:
+	var cols: Array[int] = _card_columns()
+	var out: Array[int] = []
+	if cols.is_empty():
+		return out
+	out.append(cols[0])
+	if cols.size() >= 2:
+		var mid: int = cols[(cols.size() - 1) / 2]
+		if not out.has(mid):
+			out.append(mid)
+		var last: int = cols[cols.size() - 1]
+		if not out.has(last):
+			out.append(last)
+	return out
+
+
+## The standing view's wall anchors (the input smoke reads
+## the room's anchors the way the other smokes read theirs).
+func wall_anchor_columns() -> Array[int]:
+	return _wall_anchor_columns()
+
+
+## One trigger press's wall-anchor step (GRADFIX10 item 4):
+## focus jumps to the next anchor in the press's direction -
+## RT steps forward (left -> middle -> right -> wraps to
+## left), LT steps backward (right -> middle -> left ->
+## wraps to right). FROM A NON-ANCHOR COLUMN the rule is
+## the nearest anchor STRICTLY in the travel direction,
+## wrapping to the far anchor when none lies that way (the
+## strip anchors' positional rule, with wrap in place of
+## their clamp - a cycle, Chris's word, never dead-ends).
+## A press while ON an anchor advances to the next one,
+## never a no-op, wraps included.
+##
+## LANDING: the focused ROW (band) is kept - the landing
+## panel is the anchor column's card on the same band when
+## the column has one; at the shelf's edge geometry, where
+## the anchor column stands partial (the last column of a
+## shelf whose count is not a multiple of the band count),
+## the landing is that column's card NEAREST the focused
+## band. _set_centre + focus together: per the focus law
+## the drum centres the anchor column the focus lands in.
+##
+## Gating and scope, stated as decisions:
+## - The load wait is deaf, the SETUP placard/panel own the
+##   room, and the detail view is not the wall: inert there
+##   (the bumper law, shared).
+## - Only a CARD focus rides the anchors. With the rail or
+##   a strip slot focused there is no band to preserve and
+##   no wall place to jump FROM, so the press is inert -
+##   the bumpers keep those countries (page travel from the
+##   rail, strip anchors from the strip), untouched.
+## - TOURNAMENT VIEW (the decision): the block's card
+##   columns are few (the crew fixture's cards stand in
+##   three columns; Chris's live set in two), so three
+##   library anchors would degenerate there. The triggers
+##   map to the BLOCK'S OWN anchors instead - first /
+##   middle / last of the card columns actually standing
+##   (two columns: left/right only; one column: no anchors
+##   to cycle, the press is spent). Same cycle, same wrap,
+##   same band rule, over the block's own geometry - never
+##   a fall-through to the library's shelf columns, which
+##   do not exist in this view.
+func _trigger_anchor(step: int) -> void:
+	if _launching_game_id != "" or _placard_up or _setup_panel_up or _mode != "wall":
+		return
+	if _focused == null:
+		return
+	var pidx: int = _panels.find(_focused)
+	if pidx < 0:
+		return ## rail / strip focus: inert (see the decision above)
+	var anchors: Array[int] = _wall_anchor_columns()
+	if anchors.size() < 2:
+		return ## a single standing column has nowhere to cycle to
+	var coord: Vector2i = _grid_coord(pidx)
+	var target_col: int = -1
+	if step > 0:
+		for a: int in anchors:
+			if a > coord.x:
+				target_col = a
+				break
+		if target_col < 0:
+			target_col = anchors[0] ## wrap: right end -> left end
+	else:
+		for i: int in range(anchors.size() - 1, -1, -1):
+			if anchors[i] < coord.x:
+				target_col = anchors[i]
+				break
+		if target_col < 0:
+			target_col = anchors[anchors.size() - 1] ## wrap: left end -> right end
+	var best: int = -1
+	var best_d: int = 999999
+	for i: int in range(_panels.size()):
+		var c2: Vector2i = _grid_coord(i)
+		if c2.x != target_col:
+			continue
+		var d: int = absi(c2.y - coord.y)
+		if d < best_d:
+			best_d = d
+			best = i
+	if best < 0 or best == pidx:
+		return
+	_set_centre(best)
+	_set_focused(_panels[best])
+	_persist_view()
+
+
 func _open_detail(game: GameEntry) -> void:
 	_mode = "detail"
 	_selected_game_id = game.game_id
@@ -6416,6 +6561,28 @@ func _process(delta: float) -> void:
 		_bumper_page(1)
 	_joy_prev_lb = lb_now
 	_joy_prev_rb = rb_now
+	# Triggers (LT/RT): wall anchors (GRADFIX10 item 4 - Chris:
+	# "the bumpers move left/right one slot. I'm thinking
+	# triggers should cycle between left middle right of the
+	# entire board"). An analog axis has no button edge, so
+	# the edge is manufactured: the trigger reads DOWN once
+	# its value crosses TRIGGER_PRESS_THRESHOLD, a step fires
+	# only on the up->down crossing, and it cannot fire again
+	# until the value falls back below the threshold (release
+	# re-arming - a held trigger never auto-repeats). The
+	# prev-state updates run even while deaf, like the
+	# bumpers', so a trigger held through the load wait can't
+	# resurface as a phantom step afterwards. The landing
+	# law lives in _trigger_anchor.
+	var lt_down: bool = Input.get_joy_axis(0, JOY_AXIS_TRIGGER_LEFT) > TRIGGER_PRESS_THRESHOLD
+	var rt_down: bool = Input.get_joy_axis(0, JOY_AXIS_TRIGGER_RIGHT) > TRIGGER_PRESS_THRESHOLD
+	if debug_input_nc != "notrig" and not deaf:
+		if lt_down and not _joy_prev_lt:
+			_trigger_anchor(-1)
+		elif rt_down and not _joy_prev_rt:
+			_trigger_anchor(1)
+	_joy_prev_lt = lt_down
+	_joy_prev_rt = rt_down
 	var right_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_RIGHT)
 	if not right_now:
 		_joy_right_armed = true ## a witnessed released poll: fresh press edges count from here on

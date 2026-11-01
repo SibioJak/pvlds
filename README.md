@@ -399,7 +399,13 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   directions; D-pad up/down/left move NOTHING (GRADFIX10
   item 5: D-pad directional movement is nuked, so the pad
   never teaches "directional = navigate" on the same pad
-  whose right is the exit); during the
+  whose right is the exit). The triggers are wall-scale
+  navigation (GRADFIX10 item 4): with a card focused, RT
+  cycles focus through the entire shelf's left / middle /
+  right anchor columns (wrapping), LT cycles backward,
+  the row is kept (the edge column's nearest band where
+  it stands partial), and in the Tournament view the same
+  cycle runs over the block's own card columns; during the
   load wait the room stays deaf and swallows the press like
   everything else, and on the SETUP placard it does nothing —
   BACK remains the only way off the placard. On the SETUP panel
