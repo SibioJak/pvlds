@@ -91,7 +91,7 @@ const BOARD_FACE_PX: Vector2i = Vector2i(720, 1080)
 const BACK_FACE_PX: Vector2i = Vector2i(620, 1080)
 const SHORT_BOARD_PANEL_SIZE: Vector2 = Vector2(0.62, 1.00) ## the GRADFIX3/4 page (the shortpage NC's restore)
 const SHORT_BOARD_FACE_PX: Vector2i = Vector2i(620, 1000)
-const BOARD_FOOTER_PX: int = 140 ## the owned board face's bottom band: the Launch button's home
+const BOARD_FOOTER_PX: int = 140 ## the flip BACK's bottom band: its own Launch button's home. The standing board's plinth died in GRADFIX10 (item 1): a standing board has carried no Launch since GRADFIX7 (the button lives on its card), so the band was a dead dark plank the content centred above - see tournament_board_spec. The deadplank NC restores the reservation on standing boards.
 const LEGACY_BOARD_PANEL_SIZE: Vector2 = Vector2(0.54, 0.64) ## == RoomView.PANEL_SIZE at the TR1/TR2 rounds
 const LEGACY_BOARD_FACE_PX: Vector2i = Vector2i(512, 640)
 const LEGACY_BOARD_LAUNCH_Y: float = -0.155 ## == RoomView.PANEL_LAUNCH_Y
@@ -99,6 +99,7 @@ const LEGACY_BOARD_LAUNCH_Y: float = -0.155 ## == RoomView.PANEL_LAUNCH_Y
 static var board_nc_old: bool = false ## Main sets this from PVLDS_BOARD_NC before any room exists
 static var board_short_page: bool = false ## Main sets this from PVLDS_GRADFIX5_NC=shortpage before any room exists
 static var pairing_nc_old: bool = false ## Main sets this from PVLDS_GRADFIX8_NC=oldpair before any room exists: the board forgets the build half of the pairing (no DIFFERENT BUILD chip)
+static var board_deadplank_nc: bool = false ## Main sets this from PVLDS_GRADFIX10_NC=deadplank before any room exists: the standing board reserves its dead Launch plinth again, so the frame-centring legs fail by name (GRADFIX10 item 1's negative control)
 
 
 static func board_panel_size() -> Vector2:
@@ -113,10 +114,14 @@ static func board_face_px() -> Vector2i:
 	return SHORT_BOARD_FACE_PX if board_short_page else BOARD_FACE_PX
 
 
-## The board Launch button's centre height on its panel: the
-## middle of the face's footer band, in panel-local metres -
-## the one place room.gd and the face layout both derive
-## from, so the button can never drift back over the text.
+## The flip back's Launch button centre height on its panel:
+## the middle of the back face's footer band, in panel-local
+## metres - the one place room.gd and the face layout both
+## derive from, so the button can never drift back over the
+## text. (Through TR3 this seated a standing board's Launch;
+## since GRADFIX7 the standing board carries no button and
+## since GRADFIX10 reserves no band - the back, which does
+## carry its own Launch, is this derivation's live user.)
 static func board_launch_y() -> float:
 	if board_nc_old:
 		return LEGACY_BOARD_LAUNCH_Y
@@ -457,7 +462,32 @@ static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: Strin
 		"sub_color": sub_color,
 		"chips": chips,
 		"rows": rows,
-		"footer_px": (0 if board_nc_old else BOARD_FOOTER_PX) if owned else 0,
+		# GRADFIX10 (item 1): a standing board reserves NO
+		# footer. The 140 px plinth was the Launch button's
+		# home through TR3, but since GRADFIX7 the standing
+		# board carries no button (it stands open beside its
+		# card; the Launch lives on the card, and on the card's
+		# flip back - whose spec re-adds the band explicitly,
+		# RoomView._card_back_spec). The reservation outlived
+		# its button: CardFace centred the content in the area
+		# ABOVE the plinth, so against the standing FRAME the
+		# block rode 66 px high with a dead dark plank at the
+		# bottom edge (Chris's GRADFIX8 field correction:
+		# "tournie text still not centered on frame"). With no
+		# reservation the centring spacers centre the block on
+		# the full canvas. The deadplank NC restores the old
+		# reservation (owned boards only, as it was).
+		"footer_px": (BOARD_FOOTER_PX if board_deadplank_nc else 0) if owned else 0,
+		# GRADFIX10 (item 1): the standing board's composition
+		# is ink-centred on its frame by the factory's
+		# measure-and-correct pass (TextureFactory) - the
+		# spacers centre the content's bounding box, but the
+		# block's ink mass sits off that centre (solid panels
+		# below, sparse title/deadline text above), and the
+		# field judges the mass. Only a standing-board render
+		# at the board's own face size corrects; the wing
+		# clears this key (its composition is the back's).
+		"ink_centre": true,
 		# GRADFIX4 (One Book): the standing board stands RIGHT
 		# of its card, so its spine - the join with the art
 		# page - is its LEFT edge.
@@ -522,6 +552,7 @@ static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_u
 			rows.append(m)
 		spec["rows"] = rows
 		spec["footer_px"] = 0 ## the wing carries no Launch button: the board's footer band is metadata room instead
+		spec["ink_centre"] = false ## the wing/back composition is not the standing board's: GRADFIX10's ink correction never touches it (the back centres as GRADFIX8 left it)
 		# GRADFIX4 (One Book): the wing stands LEFT of its
 		# card, so its spine - the join with the art page -
 		# is its RIGHT edge (tournament_board_spec defaults

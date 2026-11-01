@@ -516,6 +516,13 @@ func _ready() -> void:
 	# per-game veto - so the grad smoke's board-pairing legs
 	# fail by name.
 	RoomSpecs.pairing_nc_old = OS.get_environment("PVLDS_GRADFIX8_NC") == "oldpair"
+	# GRADFIX10's dead-plank negative-control seam
+	# (PVLDS_GRADFIX10_NC=deadplank): the standing board
+	# reserves its dead Launch plinth again and its content
+	# centres above it, so the frame-centring legs (grad
+	# "board centred:" / "board frame-centred:", tournament
+	# "layout frame-centred:") fail by name.
+	RoomSpecs.board_deadplank_nc = OS.get_environment("PVLDS_GRADFIX10_NC") == "deadplank"
 	# GRADFIX8's tournie-border negative-control seam
 	# (PVLDS_GRADFIX8_NC=noborder): borders are never
 	# applied, so the census's tourney-border legs fail
@@ -3451,6 +3458,10 @@ var _grad_gf8_probes_done: bool = false
 var _grad_gf8_board_m: Dictionary = {}
 var _grad_gf8_board_spec: Dictionary = {}
 var _grad_gf8_back_m: Dictionary = {}
+var _grad_gf10_board_tex: Texture2D ## GRADFIX10 (item 1): the phase-9 board probe's rendered texture, held for the ink-centroid measure
+var _grad_gf10_few_tex: Texture2D ## GRADFIX10 (item 1): the few-rows board probe's rendered texture
+var _grad_gf10_few_m: Dictionary = {} ## GRADFIX10 (item 1): the few-rows board probe's metrics
+var _grad_gf10_few_spec: Dictionary = {} ## GRADFIX10 (item 1): the few-rows board probe's spec
 ## Census violation counters (the sweep counts; the named
 ## verdicts print once, with the first example of each kind).
 var _grad_viol: Dictionary = {}
@@ -4222,6 +4233,18 @@ func _grad_gf9_step() -> void:
 			_grad_wait = 0
 
 
+## GRADFIX10 (item 1): a rendered board face's content-ink
+## vertical centroid, in face pixels, judged against the
+## face's own FRAME - the suites' legs read the one measure
+## the factory's correction pass uses (TextureFactory.
+## ink_centroid; the plinth, when a spec reserves one, is
+## excluded as furniture, not content).
+func _board_ink_centroid(tex: Texture2D, exclude_face_rect: Rect2) -> Vector2:
+	if tex == null:
+		return Vector2(-1.0, 0.0)
+	return TextureFactory.ink_centroid(tex.get_image(), exclude_face_rect)
+
+
 func _grad_gf8_run_probes() -> void:
 	var now_unix: int = int(Time.get_unix_time_from_system())
 	# The board: the layout fixture's season challenge with
@@ -4240,8 +4263,27 @@ func _grad_gf8_run_probes() -> void:
 	if ch != null:
 		ch.end_unix = now_unix + 3 * 3600 + 14 * 60
 		_grad_gf8_board_spec = RoomSpecs.tournament_board_spec(ch, true, "fixture-user-long", now_unix)
-		await _room._factory.render_texture(_grad_gf8_board_spec, RoomSpecs.board_face_px())
+		_grad_gf10_board_tex = await _room._factory.render_texture(_grad_gf8_board_spec, RoomSpecs.board_face_px())
 		_grad_gf8_board_m = _room._factory.face_board_metrics()
+	# GRADFIX10 (item 1): the few-rows board - a fresh extra
+	# board carrying only his own pending row (the smallest
+	# composition the field shows), parsed from a one-row
+	# answer in the layout fixture's own shape, its deadline
+	# re-seated 30h out (the amber warmth band). The frame-
+	# centring ink leg judges this texture beside the full
+	# board's: a composition that only centres when full is
+	# not centred.
+	var few_text: String = "{\"items\": [{\"id\": \"fixture-ch-gf10-few\", \"challengeTypeCode\": \"extra\", \"name\": \"Extra - Week 3\", \"startDateUTC\": \"2026-10-19T19:00:00Z\", \"endDateUTC\": \"2026-11-01T19:00:00Z\", \"pinballTable\": {\"id\": \"pt-twilight-zone\", \"externalId\": \"gf10fewtable\", \"name\": \"Twilight Zone\", \"manufacturer\": \"Bally\", \"year\": 1993}, \"scoreBoard\": {\"items\": [{\"position\": 1, \"values\": {\"Position\": 1, \"ParticipantName\": \"S. Kubrick\", \"Score\": 5785360.0, \"UserId\": \"fixture-user-long\", \"IsPending\": true}}]}}]}"
+	var few_parsed: Dictionary = WovpClient.parse_challenges(few_text)
+	if bool(few_parsed.get("ok", false)):
+		var few_arr: Array = few_parsed.get("challenges", []) as Array
+		if not few_arr.is_empty():
+			var few_ch: WovpChallenge = few_arr[0] as WovpChallenge
+			if few_ch != null:
+				few_ch.end_unix = now_unix + 30 * 3600
+				_grad_gf10_few_spec = RoomSpecs.tournament_board_spec(few_ch, true, "fixture-user-long", now_unix)
+				_grad_gf10_few_tex = await _room._factory.render_texture(_grad_gf10_few_spec, RoomSpecs.board_face_px())
+				_grad_gf10_few_m = _room._factory.face_board_metrics()
 	# The back: the fixture library's longest title, through
 	# the library's own back spec at the back's own size.
 	var g: GameEntry = _grad_game(str(_grad_manifest.get("long_id", "")))
@@ -4253,20 +4295,27 @@ func _grad_gf8_run_probes() -> void:
 
 
 func _grad_gf8_legs() -> void:
-	# Item 1a: the standing board's content block, centred
-	# in the area it owns (the canvas above the footer's
-	# plinth - the plinth keeps the bottom edge by law).
+	# Item 1a, restated by GRADFIX10 (item 1): GRADFIX8
+	# judged the standing board's content BLOCK (its
+	# bounding box) against the area above the footer plinth
+	# and passed it (+4 px) while the field read the board
+	# 66 px high over a dead dark plank. Two ruler faults:
+	# the area was not the frame, and the box is not the
+	# ink - the block's mass (solid panels below, sparse
+	# text above) sits off its box centre by up to ~27 px.
+	# GRADFIX10's legs therefore judge the rendered INK
+	# against the FRAME (below); the box is printed here as
+	# the record, not the verdict. The reservation itself is
+	# gone (the spec carries footer_px 0; the tournament
+	# layout legs convict a reserved band by name), and
+	# under PVLDS_GRADFIX10_NC=deadplank it returns and the
+	# ink legs fail by name.
 	var bm: Dictionary = _grad_gf8_board_m
 	var bface: Vector2 = bm.get("face_size", Vector2.ZERO)
 	var bcr: Rect2 = bm.get("content_rect", Rect2())
-	var bfooter: float = float(int(_grad_gf8_board_spec.get("footer_px", 0)))
 	var bcen: Vector2 = bcr.get_center()
-	var btgt: Vector2 = Vector2(bface.x * 0.5, (bface.y - bfooter) * 0.5)
-	print("GRADFIX8 BOARD: content centroid (%.1f, %.1f), above-footer centre (%.1f, %.1f), delta (%.1f, %.1f) px on a %s face"
-		% [bcen.x, bcen.y, btgt.x, btgt.y, bcen.x - btgt.x, bcen.y - btgt.y, str(bface)])
-	_grad_expect(not bm.is_empty() and bcr.size.y > 0.0 and absf(bcen.x - btgt.x) <= 12.0 and absf(bcen.y - btgt.y) <= 12.0,
-		"board centred: the standing board's content block centres on its canvas (centroid (%.0f, %.0f) vs above-footer centre (%.0f, %.0f), delta (%.0f, %.0f) px; the pre-fix block rode 248 px high)"
-			% [bcen.x, bcen.y, btgt.x, btgt.y, bcen.x - btgt.x, bcen.y - btgt.y])
+	print("GRADFIX10 BOARD: content box centroid (%.1f, %.1f), frame centre (%.1f, %.1f), box delta (%.1f, %.1f) px on a %s face (spec footer_px %d) - the box is the record; the ink legs below are the verdict"
+		% [bcen.x, bcen.y, bface.x * 0.5, bface.y * 0.5, bcen.x - bface.x * 0.5, bcen.y - bface.y * 0.5, str(bface), int(_grad_gf8_board_spec.get("footer_px", 0))])
 	# Item 1a, the width: the longest deadline form renders
 	# WHOLE on the widened board - its measured need fits
 	# its allotment at the rendered font.
@@ -4275,6 +4324,33 @@ func _grad_gf8_legs() -> void:
 	_grad_expect(bneed > 0.0 and bneed <= ballot + 0.5,
 		"board width: the widened board (%.2f m) carries the full deadline whole - '%s' needs %.0f px of its %.0f px (the 0.62 m board allotted 568 and the line ellipsized)"
 			% [RoomSpecs.board_panel_size().x, str(bm.get("sub_text", "")), bneed, ballot])
+	# GRADFIX10 (item 1): the ink ruler - the rendered faces'
+	# content-ink centroid against the FRAME's centre (the
+	# frame located from the face's own size, never from the
+	# content's bounds), tolerance 2% of frame height, on a
+	# many-rows board (the layout season board) and a
+	# few-rows board (his pending row alone). The plinth, if
+	# a spec reserves one, is excluded from the ink - under
+	# PVLDS_GRADFIX10_NC=deadplank the reservation returns,
+	# the content rides high again, and these legs fail by
+	# name.
+	var bex: Rect2 = bm.get("footer", Rect2())
+	var bink: Vector2 = _board_ink_centroid(_grad_gf10_board_tex, bex)
+	var bink_delta: float = bink.x - bface.y * 0.5
+	print("GRADFIX10 BOARD INK: centroid %.1f, frame centre %.1f, delta %.1f px (%.2f%% of frame height), ink %d px"
+		% [bink.x, bface.y * 0.5, bink_delta, 100.0 * bink_delta / maxf(1.0, bface.y), int(bink.y)])
+	_grad_expect(bink.y > 0.0 and absf(bink_delta) <= bface.y * 0.02,
+		"board centred: the many-rows board's content ink centres on its FRAME (ink centroid %.1f vs frame centre %.1f, delta %.1f px = %.2f%% of frame height, tolerance 2%%; GRADFIX8's above-plinth box ruler passed a board the field read 66 px high)"
+			% [bink.x, bface.y * 0.5, bink_delta, 100.0 * bink_delta / maxf(1.0, bface.y)])
+	var fface: Vector2 = _grad_gf10_few_m.get("face_size", Vector2.ZERO)
+	var fex: Rect2 = _grad_gf10_few_m.get("footer", Rect2())
+	var fink: Vector2 = _board_ink_centroid(_grad_gf10_few_tex, fex)
+	var fink_delta: float = fink.x - fface.y * 0.5
+	print("GRADFIX10 FEW INK: centroid %.1f, frame centre %.1f, delta %.1f px (%.2f%% of frame height), ink %d px"
+		% [fink.x, fface.y * 0.5, fink_delta, 100.0 * fink_delta / maxf(1.0, fface.y), int(fink.y)])
+	_grad_expect(fink.y > 0.0 and absf(fink_delta) <= fface.y * 0.02,
+		"board frame-centred: the few-rows board's content ink centres on its FRAME (ink centroid %.1f vs frame centre %.1f, delta %.1f px = %.2f%% of frame height, tolerance 2%%)"
+			% [fink.x, fface.y * 0.5, fink_delta, 100.0 * fink_delta / maxf(1.0, fface.y)])
 	# Item 1b: the library flip back's whole composition -
 	# TABLE DATA band, title, data rows - centred on the
 	# card canvas.
@@ -8657,11 +8733,17 @@ func _bootfocus_region_stdev(img: Image, rect: Rect2i) -> float:
 ##               (a 10-digit score under a 24-character name,
 ##               a promotion line and a cut line): a score
 ##               renders whole - measured, and inked to its
-##               final digit - and the Launch button, parked
-##               in the face's footer band, never covers board
-##               text. PVLDS_BOARD_NC=oldlayout restores the
+##               final digit - no Launch furniture stands on
+##               a standing board (GRADFIX10: the footer band
+##               the TR3 Launch parked in is gone; the button
+##               lives on the card), and each board's content
+##               ink centres on its FRAME.
+##               PVLDS_BOARD_NC=oldlayout restores the
 ##               pre-TR3 presentation and both layout legs
-##               must fail by name.
+##               must fail by name; PVLDS_GRADFIX10_NC=
+##               deadplank restores the dead footer band and
+##               the launch + frame-centred legs must fail
+##               by name.
 ## The honesty and his-row legs double as the negative
 ## controls' targets: PVLDS_WOVP_NC=clientid makes the
 ## client send Studio's id (the honesty leg fails by name);
@@ -8681,10 +8763,12 @@ func _drive_tournament_smoke() -> void:
 			_drive_tournament_full()
 
 
-## layout mode: the TR3 board-presentation contract against
-## the stub's worst-case boards - the score column's law and
-## the Launch footer's law, proven on measured layout and on
-## rendered ink, not on how the code reads.
+## layout mode: the board-presentation contract against the
+## stub's worst-case boards - the score column's law, the
+## no-Launch-furniture law (GRADFIX10: the standing board
+## reserves no footer band) and the frame-centring law,
+## proven on measured layout and on rendered ink, not on
+## how the code reads.
 func _drive_tournament_layout() -> void:
 	match _tournament_smoke_phase:
 		0:
@@ -8877,7 +8961,7 @@ func _tournament_leg_layout_boards() -> void:
 	for r: Variant in rows:
 		owned_flags.append(bool((r as Dictionary).get("owned", false)))
 	_tournament_expect(owned_flags == [true, true],
-		"layout: both seeded boards are his tables (owned - footer and Launch stand on them)")
+		"layout: both seeded boards are his tables (owned - his rows stand on them; GRADFIX10: no footer stands on a standing board)")
 	# The redesign's shape (the GRAD FIX round, amending the
 	# TR3 leg with cause; GRADFIX6 completes it): challenges
 	# stand as full art CARDS at the card size, and the board
@@ -8944,15 +9028,27 @@ func _tournament_leg_layout() -> void:
 			var gimg: Image = gtex.get_image()
 			if gimg != null and not gimg.is_empty():
 				gimg.save_png(grab_dir.path_join("tournament_board_worst.png"))
-	# The launch leg, on both boards: the button's rect
-	# shares no ground with any row's rect, and the footer
-	# band the face reserved contains the button whole.
+	# The launch leg, restated (GRADFIX10 item 1): through
+	# TR3 a standing board's Launch sat in a footer band the
+	# face reserved, and this leg asserted the button inside
+	# that band, clear of the text. Since GRADFIX7 the
+	# standing board carries no Launch (it stands open beside
+	# its card; the button lives on the card) - but the spec
+	# kept reserving the 140 px band, a dead dark plank the
+	# content centred above, which is the composition Chris
+	# convicted ("tournie text still not centered on frame").
+	# GRADFIX10 removes the reservation; the leg now convicts
+	# the reservation itself: no footer band on either
+	# board's face, at the widened board face size.
+	# PVLDS_BOARD_NC=oldlayout fails it by name (the legacy
+	# 512x640 face) and PVLDS_GRADFIX10_NC=deadplank fails it
+	# by name (the band reserved again).
 	if OS.has_environment("PVLDS_LAYOUT_DEBUG"):
 		var dbg: Dictionary = _layout_probe_results.get(0, {})
 		for rv3: Variant in (dbg.get("rows", []) as Array):
 			var rd3: Dictionary = rv3
 			print("LAYOUTDBG row ", str(rd3.get("kind", "")), " rect ", str(rd3.get("rect", Rect2())))
-		print("LAYOUTDBG footer ", str(dbg.get("footer_panel_rect", Rect2())), " launch ", str(dbg.get("launch_rect", Rect2())))
+		print("LAYOUTDBG footer ", str(dbg.get("footer_panel_rect", Rect2())), " (no band may stand)")
 	var launch_ok: bool = true
 	var launch_why: String = ""
 	for idx: int in range(2):
@@ -8961,28 +9057,50 @@ func _tournament_leg_layout() -> void:
 			launch_ok = false
 			launch_why = "probe %d missing" % idx
 			break
-		var launch: Rect2 = p["launch_rect"]
-		if not p.has("footer_panel_rect"):
+		if p.has("footer_panel_rect"):
 			launch_ok = false
-			launch_why = "board %d reserves no footer band" % idx
+			launch_why = "board %d reserves a footer band %s for a Launch it does not carry" % [idx, str(p["footer_panel_rect"])]
 			break
-		var footer: Rect2 = p["footer_panel_rect"]
-		if not (footer.position.x <= launch.position.x + 0.002 and footer.position.y <= launch.position.y + 0.002
-				and footer.end.x >= launch.end.x - 0.002 and footer.end.y >= launch.end.y - 0.002):
+		var ptex: Texture2D = p.get("texture") as Texture2D
+		if ptex == null or ptex.get_size() != Vector2(RoomSpecs.BOARD_FACE_PX):
 			launch_ok = false
-			launch_why = "board %d: the button does not sit inside the footer band (button %s, band %s)" % [idx, str(launch), str(footer)]
-			break
-		for rv2: Variant in (p.get("rows", []) as Array):
-			var rd2: Dictionary = rv2
-			var rr: Rect2 = rd2["panel_rect"]
-			if launch.intersects(rr):
-				launch_ok = false
-				launch_why = "board %d: the button covers a %s row" % [idx, str(rd2.get("kind", ""))]
-				break
-		if not launch_ok:
+			launch_why = "board %d's face is %s, not the widened board face %s" % [idx, str(ptex.get_size()) if ptex != null else "none", str(RoomSpecs.BOARD_FACE_PX)]
 			break
 	_tournament_expect(launch_ok,
-		"layout launch: the LAUNCH footer never covers board text (dividers included), on season and battle-royale boards%s" % ("" if launch_ok else " - " + launch_why))
+		"layout launch: no Launch furniture stands on a standing board - no footer band reserved on season or battle-royale boards, at the widened %dx%d face (the Launch lives on the card)%s"
+			% [RoomSpecs.BOARD_FACE_PX.x, RoomSpecs.BOARD_FACE_PX.y, "" if launch_ok else " - " + launch_why])
+	# The frame-centring leg (GRADFIX10 item 1): each probe
+	# board's rendered content ink, centroided against the
+	# FRAME's centre (the face's own size - never the
+	# content's bounds), tolerance 2% of frame height. The
+	# plinth is excluded from the ink when one is reserved,
+	# so under PVLDS_GRADFIX10_NC=deadplank the high-riding
+	# content fails this leg by name, not masked by its own
+	# dead band.
+	var fc_ok: bool = true
+	var fc_why: String = ""
+	var fc_worst: float = 0.0
+	for idx2: int in range(2):
+		var p2: Dictionary = _layout_probe_results.get(idx2, {})
+		var tex2: Texture2D = p2.get("texture") as Texture2D
+		if tex2 == null:
+			fc_ok = false
+			fc_why = "probe %d has no texture" % idx2
+			break
+		var ex2: Rect2 = p2.get("footer_face_rect", Rect2())
+		var ink2: Vector2 = _board_ink_centroid(tex2, ex2)
+		var fh2: float = float(tex2.get_height())
+		var d2: float = ink2.x - fh2 * 0.5
+		fc_worst = maxf(fc_worst, absf(d2))
+		print("GRADFIX10 LAYOUT INK board %d: centroid %.1f, frame centre %.1f, delta %.1f px (%.2f%% of frame height), ink %d px, rows %d"
+			% [idx2, ink2.x, fh2 * 0.5, d2, 100.0 * d2 / maxf(1.0, fh2), int(ink2.y), (p2.get("rows", []) as Array).size()])
+		if ink2.y <= 0.0 or absf(d2) > fh2 * 0.02:
+			fc_ok = false
+			fc_why = "board %d's ink centroid rides %.1f px from its frame centre (tolerance %.1f px)" % [idx2, d2, fh2 * 0.02]
+			break
+	_tournament_expect(fc_ok,
+		"layout frame-centred: both boards' content ink centres on the FRAME (worst delta %.1f px, tolerance 2%% of frame height)%s"
+			% [fc_worst, "" if fc_ok else " - " + fc_why])
 
 
 ## Rendered-ink check for the layout score leg: within the

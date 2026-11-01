@@ -25,10 +25,13 @@ extends Control
 ##            space the other two leave). A score never
 ##            clips: a row whose block outgrows the page
 ##            scales its font down until the number fits
-##            whole. An owned board reserves a footer band at
-##            the face's bottom (spec "footer_px") for the
-##            room's Launch button: a plinth the text never
-##            flows into.
+##            whole. A board face whose spec reserves a footer
+##            band (spec "footer_px") keeps its text out of
+##            that band: the library flip back's plinth, which
+##            its own Launch button rides. A standing board
+##            reserves none since GRADFIX10 (item 1) - it has
+##            carried no Launch since GRADFIX7, and the dead
+##            band left its content riding high on the frame.
 ## Specs are plain dictionaries built by callers; reads are defensive.
 ## A spec may cap a text slot's lines ("title_max_lines" and friends);
 ## a capped label ellipsizes its overrun instead of wrapping without
@@ -96,7 +99,7 @@ var _chips_row: HBoxContainer
 var _rows_box: VBoxContainer ## the board kind's stacked rows (score / divider / note)
 var _top_spacer: Control ## board kind (GRADFIX8): the centring spacer above the band - shares the face's spare height with _footer_spacer so the content block centres (see apply_spec)
 var _footer_spacer: Control ## board kind: pushes the footer band to the face's bottom edge
-var _footer_panel: PanelContainer ## board kind: the Launch button's plinth (spec "footer_px")
+var _footer_panel: PanelContainer ## board kind: the footer plinth (spec "footer_px") - the flip back's Launch seat; standing boards reserve none since GRADFIX10
 var _art_rect: TextureRect
 var _art_strip: PanelContainer
 var _art_label: Label
@@ -525,31 +528,37 @@ func apply_spec(spec: Dictionary) -> void:
 			for i: int in range(rarr.size()):
 				if rarr[i] is Dictionary:
 					_rows_box.add_child(_make_board_row(rarr[i], layout, i))
-	# The board's footer band: an owned board reserves the
-	# face's bottom for its Launch button (the room parks the
-	# button over this plinth - see RoomSpecs.board_launch_y).
-	# Spacer + band stand only when the spec asks, so a
-	# board without a button uses its full height and no
+	# The board's footer band: a spec that reserves one (the
+	# library flip back - RoomView._card_back_spec re-adds
+	# the band the wing waived, because the back carries its
+	# own Launch button over this plinth, seated by
+	# RoomSpecs.board_launch_y) keeps it at the face's bottom
+	# edge. Spacer + band stand only when the spec asks, so
+	# a board without a button uses its full height and no
 	# other kind ever sees the furniture.
 	var footer_px: int = int(spec.get("footer_px", 0)) if kind == "board" else 0
 	# Vertical centring (GRADFIX8 item 1, Chris's field
 	# verdict on GRADFIX7: the board's info "sits off-centre"
 	# - top-loaded, dead space below the rows; the library
 	# flip back's TABLE DATA composition the same). A board's
-	# content block now CENTRES on its canvas: two expanding
+	# content block CENTRES on the area it owns: two expanding
 	# spacers share the spare height - one above the band,
-	# one below the rows - so the block's centroid lands on
-	# the centre of the area it owns. An owned board's
-	# footer plinth keeps the face's bottom edge (the Launch
-	# seat derives from it, RoomSpecs.board_launch_y): the
-	# spacers centre the block in the area ABOVE the plinth,
-	# and the plinth never moves. Measured before the fix on
-	# the harness proof: board content centroid 318 px above
-	# canvas centre (248 above the above-footer centre),
-	# back 431 px above. The NC seam PVLDS_GRADFIX8_NC=
-	# offcentre hides both spacers and restores the shipped
-	# top-loaded composition, so the centring legs fail by
-	# name against it.
+	# one below the rows. GRADFIX10 (item 1) corrected the
+	# ruler: GRADFIX8 centred a standing board's block in the
+	# area above its footer plinth and proved it against that
+	# area's centre (+4 px), but the field judges against the
+	# standing FRAME - against the full canvas the block rode
+	# 66 px high over a dead dark plank, because the plinth
+	# was a reservation for a Launch the standing board has
+	# not carried since GRADFIX7. Standing boards now reserve
+	# no footer (RoomSpecs.tournament_board_spec), so their
+	# spacers centre the block on the FULL canvas; a footer
+	# spec (the flip back) still centres above its plinth,
+	# whose seat its Launch derives from. The NC seams
+	# PVLDS_GRADFIX8_NC=offcentre (spacers hidden, the shipped
+	# top-loaded composition) and PVLDS_GRADFIX10_NC=
+	# deadplank (the standing board's reservation restored)
+	# each fail the centring legs by name.
 	var centre_board: bool = kind == "board" \
 		and OS.get_environment("PVLDS_GRADFIX8_NC") != "offcentre"
 	_top_spacer.visible = centre_board
@@ -557,6 +566,35 @@ func apply_spec(spec: Dictionary) -> void:
 	_footer_panel.visible = footer_px > 0
 	if footer_px > 0:
 		_footer_panel.custom_minimum_size = Vector2(0.0, float(footer_px))
+	# GRADFIX10 (item 1): the factory's ink-correction bias
+	# ("ink_bias_px", standing boards only): the whole block
+	# shifts by this many pixels - down when positive -
+	# through the two centring spacers' STRETCH RATIOS.
+	# BoxContainer splits the expanders' collective space by
+	# ratio (minimum sizes are floors only - measured in the
+	# GF10 debug runs, a 200/0 minimum split still landed
+	# 310/310, and a margin-pair bias corrupted the
+	# MarginContainer's sizing outright), so the ratio pair
+	# is the one honest lever: with collective space S, a
+	# ratio pair of (S/2 + bias, S/2 - bias) lands the top
+	# spacer at S/2 + bias and the block moves exactly bias.
+	# S is read off the spacers' standing sizes - the
+	# factory's correction re-render always applies its
+	# biased spec to the face still wearing the unbiased
+	# layout of the same content, whose split was S/2 + S/2.
+	# Ratios are re-asserted on every spec (one CardFace
+	# serves all renders): an unbiased spec restores 1:1, so
+	# a bias can never leak into the next face.
+	var ink_bias: int = int(spec.get("ink_bias_px", 0)) if centre_board and footer_px == 0 else 0
+	_top_spacer.size_flags_stretch_ratio = 1.0
+	_footer_spacer.size_flags_stretch_ratio = 1.0
+	if ink_bias != 0:
+		var spare: float = _top_spacer.size.y + _footer_spacer.size.y
+		if spare > 4.0:
+			var half: float = spare * 0.5
+			var fb: float = clampf(float(ink_bias), -half + 1.0, half - 1.0)
+			_top_spacer.size_flags_stretch_ratio = half + fb
+			_footer_spacer.size_flags_stretch_ratio = half - fb
 	# Boards breathe tighter than cards: their section gaps
 	# run 6px, not 12, so a full board (four score rows, the
 	# line, a note) plus its footer band fits the face with
@@ -743,6 +781,21 @@ func _make_board_row(entry: Dictionary, layout: Dictionary, idx: int) -> Control
 	nl.add_theme_font_size_override("font_size", int(entry.get("size", 34)))
 	nl.add_theme_color_override("font_color", Color(0.80, 0.82, 0.90))
 	nl.set_meta("board_kind", "note")
+	# A fresh autowrap label reports its minimum height
+	# shaped at its CURRENT width - zero before its first
+	# sort - which reads as one character per line (the
+	# no-score board's note measured 1447 px against its
+	# standing 47) and poisons the vbox's minimum for the
+	# sort that follows: on any re-render of a note-carrying
+	# board the face ballooned past its own height and the
+	# sizes never recovered (GRADFIX10's debug conviction -
+	# the permanent labels and the panelled rows are immune:
+	# one keeps its standing width, the others' minima are
+	# width-independent). Preset the label's width to the
+	# rows' width so the minimum it reports is the wrapped
+	# height it will actually stand at; the container's
+	# sort assigns the real size regardless.
+	nl.size = Vector2(maxf(1.0, size.x - 52.0), 0.0)
 	return nl
 
 

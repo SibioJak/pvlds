@@ -3471,6 +3471,7 @@ func board_layout_probe(spec: Dictionary) -> Dictionary:
 	var out: Dictionary = {"texture": tex, "rows": rows_out, "panel_size": psize}
 	if m.has("footer"):
 		out["footer_panel_rect"] = _face_rect_to_panel(m["footer"], face_size, psize)
+		out["footer_face_rect"] = m["footer"] ## GRADFIX10: the plinth in face space too - the ink legs exclude it from the content ink (it is furniture, not content)
 	var ly: float = RoomSpecs.board_launch_y()
 	out["launch_rect"] = Rect2(
 		Vector2(-PANEL_LAUNCH_SIZE.x * 0.5, ly - PANEL_LAUNCH_SIZE.y * 0.5), PANEL_LAUNCH_SIZE)

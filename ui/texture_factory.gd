@@ -70,7 +70,93 @@ func _render_now(spec: Dictionary, px_size: Vector2i) -> Texture2D:
 	var img: Image = tex.get_image()
 	if img == null or img.is_empty():
 		return make_solid(Color(0.08, 0.08, 0.12))
+	# GRADFIX10 (item 1): the standing board's ink correction.
+	# The centring spacers centre the content block's BOX on
+	# the frame, but the block's ink mass sits off its box
+	# centre - solid band/rows/chips below, sparse title and
+	# deadline text above (measured on the first corrected
+	# round: +2.16% of frame height on a full board, -2.34%
+	# on a no-score board, box centre dead on) - and the
+	# field judges the mass ("tournie text still not
+	# centered on frame"). A spec that asks ("ink_centre":
+	# the standing board's, at its own face size, reserving
+	# no footer) is measured once and, when its ink centroid
+	# misses the frame centre by more than a pixel, rendered
+	# ONCE more with the whole block shifted by the miss
+	# ("ink_bias_px" - a rigid translation: no reflow, so
+	# the second capture's centroid lands on the centre).
+	# The biased spec carries the bias key, so the pass can
+	# never loop; the face the factory leaves standing wears
+	# the corrected spec, and board_metrics reads it.
+	if bool(spec.get("ink_centre", false)) and not spec.has("ink_bias_px") \
+			and int(spec.get("footer_px", 0)) == 0 and px_size == RoomSpecs.board_face_px():
+		var ink: Vector2 = ink_centroid(img, Rect2())
+		if ink.y > 0.0:
+			var delta: float = ink.x - float(px_size.y) * 0.5
+			if absf(delta) > 1.0:
+				var spec2: Dictionary = spec.duplicate()
+				spec2["ink_bias_px"] = clampi(int(round(-delta)), -px_size.y / 4, px_size.y / 4)
+				return await _render_now(spec2, px_size)
 	return ImageTexture.create_from_image(img)
+
+
+## A rendered board face's content-ink vertical centroid,
+## in face pixels (GRADFIX10 item 1; Main's smoke legs and
+## this factory's correction pass share the one measure).
+## Ink is judged against the face's background, recovered
+## per column: every background element on a board face
+## (the cover stock, the page's horizontal gradient, the
+## spine strips) is constant down a column, so a column's
+## modal colour bucket IS its background, and a pixel is
+## ink when its colour leaves that bucket (5 bits per
+## channel). The footer plinth, when a spec reserves one,
+## is furniture, not content: exclude_face_rect cuts it
+## out of the measure. Returns Vector2(centroid_y,
+## ink_pixels); centroid_y is -1 when no ink was found.
+static func ink_centroid(img: Image, exclude_face_rect: Rect2) -> Vector2:
+	if img == null or img.is_empty():
+		return Vector2(-1.0, 0.0)
+	var work: Image = img
+	if work.get_format() != Image.FORMAT_RGBA8:
+		work = img.duplicate() as Image
+		work.convert(Image.FORMAT_RGBA8)
+	var w: int = work.get_width()
+	var h: int = work.get_height()
+	var data: PackedByteArray = work.get_data()
+	var bg_bucket: Array[int] = []
+	bg_bucket.resize(w)
+	for x: int in range(w):
+		var counts: Dictionary = {}
+		var best_key: int = -1
+		var best_n: int = -1
+		for y: int in range(h):
+			var o: int = (y * w + x) * 4
+			var key: int = ((int(data[o]) >> 3) << 10) | ((int(data[o + 1]) >> 3) << 5) | (int(data[o + 2]) >> 3)
+			var n: int = int(counts.get(key, 0)) + 1
+			counts[key] = n
+			if n > best_n:
+				best_n = n
+				best_key = key
+		bg_bucket[x] = best_key
+	var has_ex: bool = exclude_face_rect.size.x > 0.0 and exclude_face_rect.size.y > 0.0
+	var ex_x0: int = int(floor(exclude_face_rect.position.x))
+	var ex_y0: int = int(floor(exclude_face_rect.position.y))
+	var ex_x1: int = int(ceil(exclude_face_rect.end.x))
+	var ex_y1: int = int(ceil(exclude_face_rect.end.y))
+	var sum_y: float = 0.0
+	var ink_n: int = 0
+	for y2: int in range(h):
+		for x2: int in range(w):
+			if has_ex and x2 >= ex_x0 and x2 < ex_x1 and y2 >= ex_y0 and y2 < ex_y1:
+				continue
+			var o2: int = (y2 * w + x2) * 4
+			var key2: int = ((int(data[o2]) >> 3) << 10) | ((int(data[o2 + 1]) >> 3) << 5) | (int(data[o2 + 2]) >> 3)
+			if key2 != bg_bucket[x2]:
+				sum_y += float(y2) + 0.5
+				ink_n += 1
+	if ink_n <= 0:
+		return Vector2(-1.0, 0.0)
+	return Vector2(sum_y / float(ink_n), float(ink_n))
 
 
 static func make_solid(color: Color) -> Texture2D:
