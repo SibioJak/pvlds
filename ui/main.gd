@@ -573,6 +573,8 @@ func _ready() -> void:
 		_smoke_motion = true
 	if user_args.has("--pvlds-smoke-artstream"):
 		_smoke_artstream = true
+	if user_args.has("--pvlds-smoke-swingprobe"):
+		_smoke_swingprobe = true
 	if user_args.has("--pvlds-smoke-jumpbench"):
 		_smoke_jumpbench = true
 		_jumpbench_boot_msec = Time.get_ticks_msec()
@@ -734,7 +736,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_swingprobe or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -914,6 +916,8 @@ func _process(_delta: float) -> void:
 		_drive_motion_smoke()
 	if _smoke_artstream:
 		_drive_artstream_smoke()
+	if _smoke_swingprobe:
+		_drive_swingprobe_smoke()
 	if _smoke_jumpbench:
 		_drive_jumpbench_smoke()
 	if _smoke_quitwarm:
@@ -11876,6 +11880,169 @@ func _finish_artstream_smoke() -> void:
 	else:
 		printerr("PVLDS ARTSTREAM SMOKE: FAIL (%d)" % _art_failures)
 		get_tree().quit(1)
+
+
+var _smoke_swingprobe: bool = false ## --pvlds-smoke-swingprobe: GRADFIX16 item 2, the swing A/B - one letter pick through the real pad path (focus the strip slot, press A) after the same cold reset the artstream cruise gets, recording the swing's travel frame deltas on the same fixture. A reading, not a verdict: the field evidence says a letter swing travels smoothly on Chris's rig while the held cruise slots, and this probe shows whether the harness reproduces the contrast and which difference it convicts.
+var _swp_phase: int = 0
+var _swp_wait: int = 0
+var _swp_failures: int = 0
+var _swp_settle_frames: int = 0
+var _swp_from_col: int = -1
+var _swp_to_col: int = -1
+var _swp_letter: String = ""
+var _swp_last_usec: int = 0
+var _swp_frames: int = 0
+var _swp_worst_ms: float = 0.0
+var _swp_first_ms: float = 0.0
+var _swp_over50: int = 0
+var _swp_over33: int = 0
+var _swp_spikes: Array = []
+var _swp_col_marks: Array = []
+var _swp_last_col: int = -1
+var _swp_rest_frames: int = 0
+var _swp_saw_swing: bool = false
+var _swp_pick_ms: float = 0.0
+
+
+func _swp_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - swingprobe smoke: %s" % label)
+	else:
+		_swp_failures += 1
+		printerr("  FAIL - swingprobe smoke: %s" % label)
+
+
+func _finish_swingprobe_smoke() -> void:
+	if _swp_failures == 0:
+		print("PVLDS SWINGPROBE: DONE")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS SWINGPROBE: FAIL (%d)" % _swp_failures)
+		get_tree().quit(1)
+
+
+## The swing A/B driver (see _smoke_swingprobe): boot and
+## seat exactly as the artstream cruise does, cold-reset
+## the decode cache the same way, then make ONE letter pick
+## the pad's way and record every frame delta until the
+## swing settles. The cruise's numbers come from the
+## artstream smoke on the same fixture; this is its pair.
+func _drive_swingprobe_smoke() -> void:
+	match _swp_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and not _scan_active \
+					and (_art_warmer == null or _art_warmer.is_idle()):
+				Input.warp_mouse(Vector2(4, 372))
+				if _room._columns < 40:
+					_swp_expect(false, "swingprobe: the fixture shelf holds %d columns (the swing probe needs at least 40)" % _room._columns)
+					_finish_swingprobe_smoke()
+					return
+				_swp_phase = 1
+				_swp_wait = 0
+				_swp_settle_frames = 0
+			else:
+				_swp_wait += 1
+				if _swp_wait > 21600:
+					_swp_expect(false, "swingprobe: the room never came up (scan/warm never settled)")
+					_finish_swingprobe_smoke()
+		1:
+			_swp_wait += 1
+			if _swp_wait == 1:
+				var mid: int = _room._panels.size() / 2
+				var mid_col: int = _room._grid_coord(mid).x
+				var want_col: int = clampi(mid_col, 12, maxi(12, _room._columns - 20))
+				var start_idx: int = mid
+				for i: int in range(_room._panels.size()):
+					if _room._grid_coord(i).x == want_col and _room._grid_coord(i).y == _room._grid_coord(mid).y:
+						start_idx = i
+						break
+				_room.set_wall_motion_mode("smooth")
+				_room._set_centre(start_idx, true)
+				_room._set_focused(_room._panels[start_idx])
+			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active():
+				_swp_settle_frames += 1
+			else:
+				_swp_settle_frames = 0
+			if _swp_settle_frames >= 5:
+				# The same cold reset the cruise gets.
+				TextureFactory.clear_art_decode_cache()
+				TextureFactory.probe_reset()
+				_swp_from_col = _room._grid_coord(_room.centre_index()).x
+				# Choose the nearest letter whose first game
+				# stands at least 14 columns ahead - a long
+				# swing through cold columns, the field shape
+				# of Chris's letter taps.
+				var best_key: String = ""
+				var best_dist: int = 1 << 30
+				for li: int in range(26):
+					var key: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[li]
+					for gi: int in range(_room._visible_games.size()):
+						if LetterIndex.letter_of(_room._visible_games[gi].title) == key:
+							var gcol: int = _room._grid_coord(gi).x
+							var dist: int = gcol - _swp_from_col
+							if dist >= 14 and dist < best_dist:
+								best_dist = dist
+								best_key = key
+							break
+				if best_key == "":
+					_swp_expect(false, "swingprobe: no letter stands 14+ columns ahead of col %d on this fixture" % _swp_from_col)
+					_finish_swingprobe_smoke()
+					return
+				_swp_letter = best_key
+				var pick_t0: int = Time.get_ticks_usec()
+				_letters_pick(best_key)
+				_swp_pick_ms = float(Time.get_ticks_usec() - pick_t0) / 1000.0
+				_swp_to_col = _room._grid_coord(_room.centre_index()).x
+				_swp_last_col = _swp_from_col
+				_swp_last_usec = Time.get_ticks_usec()
+				_swp_phase = 2
+				_swp_wait = 0
+			elif _swp_wait > 7200:
+				_swp_expect(false, "swingprobe: the start window never settled")
+				_finish_swingprobe_smoke()
+		2:
+			_swp_wait += 1
+			var now_usec: int = Time.get_ticks_usec()
+			var delta_ms: float = float(now_usec - _swp_last_usec) / 1000.0
+			_swp_last_usec = now_usec
+			_swp_frames += 1
+			if _swp_frames == 1:
+				_swp_first_ms = delta_ms
+			if delta_ms > _swp_worst_ms:
+				_swp_worst_ms = delta_ms
+			if delta_ms > 50.0:
+				_swp_over50 += 1
+			if delta_ms > 33.0:
+				_swp_over33 += 1
+			var col_now: int = _room._grid_coord(_room.centre_index()).x
+			if delta_ms > 40.0:
+				_swp_spikes.append([col_now, snappedf(delta_ms, 0.1)])
+			if col_now != _swp_last_col:
+				_swp_col_marks.append(col_now)
+				_swp_last_col = col_now
+			if _room.swing_active():
+				_swp_saw_swing = true
+			if _swp_saw_swing and not _room.swing_active() and not _room.page_slide_active():
+				_swp_rest_frames += 1
+			else:
+				_swp_rest_frames = 0
+			if _swp_rest_frames >= 5:
+				var final_col: int = _room._grid_coord(_room.centre_index()).x
+				print("SWINGPROBE: letter %s, from col %d to col %d (target col %d), pick call %.1f ms, first frame %.1f ms, frames %d, worst frame %.1f ms, frames >50 ms: %d, frames >33 ms: %d" % [
+					_swp_letter, _swp_from_col, final_col, _swp_to_col, _swp_pick_ms, _swp_first_ms, _swp_frames, _swp_worst_ms, _swp_over50, _swp_over33])
+				var spikes_line: String = "SWINGPROBE SPIKES (>40 ms):"
+				if _swp_spikes.is_empty():
+					spikes_line += " none"
+				for sp: Variant in _swp_spikes:
+					spikes_line += " [col %d: %.1f ms]" % [int((sp as Array)[0]), float((sp as Array)[1])]
+				print(spikes_line)
+				_swp_expect(_swp_saw_swing, "swingprobe: the letter pick swung the drum (a real swing, not a teleport)")
+				_swp_expect(absi(final_col - _swp_from_col) >= 10, "swingprobe: the swing spanned %d columns (a long travel, the cruise's pair)" % absi(final_col - _swp_from_col))
+				_artstream_print_probe()
+				_finish_swingprobe_smoke()
+			elif _swp_wait > 7200:
+				_swp_expect(false, "swingprobe: the swing never settled")
+				_finish_swingprobe_smoke()
 
 
 func _artstream_print_probe() -> void:
