@@ -244,6 +244,11 @@ var _shot_setup_panel_frames: int = 0
 var _shot_setup_panel_after_scan: bool = false ## --pvlds-shot-setup-panel-scan: run the panel's scan first, capture the post-scan room (Chris's stray framing)
 var _shot_setup_panel_scan_fired: bool = false
 var _shot_setup_panel_scanned: bool = false
+var _smoke_scanwall: bool = false ## --pvlds-smoke-scanwall: GRADFIX14 item 2 - mid-session scans WITH library changes, across the panel / early-close / desk / tournament routes
+var _scanwall_phase: int = 0
+var _scanwall_wait: int = 0
+var _scanwall_failures: int = 0
+var _scanwall_deadline_msec: int = 0
 var _smoke_desk: bool = false ## --pvlds-smoke-desk: drive the desk's live session switch, assert the config file follows
 var _smoke_dpadexit: bool = false ## --pvlds-smoke-dpadexit: a fresh D-pad Right in the room must exit the app
 var _dpadexit_held_leg: bool = false ## --pvlds-smoke-dpadexit-held: the button is pinned from boot; no exit until a witnessed release, then a fresh press exits
@@ -479,6 +484,8 @@ func _ready() -> void:
 		_smoke_placard = true
 	if user_args.has("--pvlds-smoke-setup-panel"):
 		_smoke_setup_panel = true
+	if user_args.has("--pvlds-smoke-scanwall"):
+		_smoke_scanwall = true
 	var shot_sp_idx: int = user_args.find("--pvlds-shot-setup-panel")
 	if shot_sp_idx >= 0 and shot_sp_idx + 1 < user_args.size():
 		_shot_setup_panel_path = user_args[shot_sp_idx + 1]
@@ -626,6 +633,14 @@ func _ready() -> void:
 	# vertical-wall-law legs fail by name). Set here, before
 	# any room exists.
 	RoomView.debug_gf13_nc = OS.get_environment("PVLDS_GF13_NC")
+	# GRADFIX14's adoption negative-control seam (PVLDS_
+	# GF14_NC=oldadopt): restores the pre-fix adoption
+	# behaviour - refresh_library discards the player's
+	# place and a scan landing in a launch wait is dropped
+	# at the guard below - so the scanwall smoke's focus
+	# and launch-wait legs fail by name. Set here, before
+	# any room exists.
+	RoomView.debug_gf14_nc = OS.get_environment("PVLDS_GF14_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -660,7 +675,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -810,6 +825,8 @@ func _process(_delta: float) -> void:
 		_drive_placard_smoke()
 	if _smoke_setup_panel:
 		_drive_setup_panel_smoke()
+	if _smoke_scanwall:
+		_drive_scanwall_smoke()
 	if _shot_setup_panel_phase >= 0:
 		_drive_shot_setup_panel()
 	if _smoke_desk:
@@ -984,10 +1001,17 @@ func _finish_scan() -> void:
 	# room DEFERS that adoption to the panel's close (see
 	# RoomView.adopt_library) - behind the panel only the
 	# panel's own health numbers and message line move. During
-	# a load wait the wait owns the room; no adoption then
-	# (the wait's settle path rebuilds nothing).
+	# a load wait the wait owns the room: the room HOLDS the
+	# adoption (adopt_library again) and lands it when the
+	# wait settles back to the wall - it is never dropped.
+	# (Before GRADFIX14 the landing was skipped outright
+	# during a wait, and a launch that failed back to the
+	# room left the wall on the pre-scan library for the
+	# rest of the session. The oldadopt NC restores that
+	# skip so the scanwall smoke's launch-wait legs fail
+	# by name.)
 	if _room != null and _scanner != null:
-		if not _launch_pending:
+		if not _launch_pending or RoomView.debug_gf14_nc != "oldadopt":
 			_room.adopt_library(_scanner)
 		var done_msg: String
 		if _scanner.missing_b2s_files.is_empty():
@@ -3376,6 +3400,428 @@ func _finish_setup_panel_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS SETUP PANEL SMOKE: FAIL (%d)" % _setup_panel_smoke_failures)
+		get_tree().quit(1)
+
+
+# ------------------------------------------------------- scanwall smoke
+
+## --pvlds-smoke-scanwall (GRADFIX14 item 2): the field incident
+## (Chris, 2026-11-01) - a scan landed, World Poker Tour was NOT
+## on the library wall, and only a tournament-view detour (a view
+## rebuild) seated it: the wall had been showing the pre-scan
+## library. Every leg here runs a MID-SESSION scan against a
+## fixture library that CHANGES under the scan (the harness
+## stages a mutable copy of the dummy library; pristine copies
+## of the moved files live in PVLDS_SCANWALL_STASH):
+##   (a) panel ADD: a table file added, scanned from the SETUP
+##       panel, panel closed - the standing wall's card set
+##       includes the new game with NO view switch;
+##   (b) early-close REMOVE: the panel is closed BEFORE the
+##       scan lands - the removal still reaches the wall when
+##       the scan lands on the standing wall;
+##   (b2) desk ADD: a scan run from the desktop desk while the
+##       room stands (hidden) - Enter the Room returns to a
+##       wall that already carries the change;
+##   (a2) tournament REMOVE: a scan run from the panel while
+##       the Tournament Room stands - the library the player
+##       returns to (B exit, no other rebuild) carries it;
+##   (c) focus-survives: the focused/centred game survives a
+##       no-change panel scan - it stays the centre (the panel
+##       close's own law lands focus on the rail SETUP stop);
+##   (d) focus-vanishes: the focused/centred game is removed
+##       by the scan - the wall lands per the fallback law and
+##       never on the vanished card;
+##   (a-wait)/(b-wait): the ADD/REMOVE lands while a launch
+##       wait stands (the scan started from the panel, the
+##       panel closed, a launch fired before the landing, and
+##       the stub VPX dies windowless so the wait settles
+##       FAILED back to the wall) - the landed scan must be
+##       HELD by the room during the wait and adopted at the
+##       settle, never dropped.
+## The negative control (PVLDS_GF14_NC=oldadopt, set by Main
+## before any room exists) restores the pre-fix adoption
+## behaviour at the convicted seams (the place reset in
+## refresh_library, the launch-wait drop in _finish_scan),
+## so the launch-wait forms of legs (a)/(b) and leg (c)
+## fail by name against it.
+
+const SCANWALL_ADD_NAME: String = "Steel Foundry (Northlight 1993).vpx"
+const SCANWALL_ADD_ID: String = "dg-steel-foundry"
+const SCANWALL_REM_NAME: String = "Low Orbit (Northlight 1998).vpx"
+const SCANWALL_REM_ID: String = "dg-low-orbit"
+
+
+func _scanwall_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - scanwall smoke: ", label)
+	else:
+		_scanwall_failures += 1
+		printerr("  FAIL - scanwall smoke: ", label)
+
+
+func _scanwall_folder() -> String:
+	if _config == null or _config.table_folders.is_empty():
+		return ""
+	return _config.table_folders[0]
+
+
+## The mutation guard: the driver's file copies/deletes may
+## only ever touch the harness's declared fixture folder
+## (PVLDS_SCANWALL_DIR). A boot that fell back to a seeded or
+## stray config must fail here, never mutate a real library.
+func _scanwall_folder_ok() -> bool:
+	var want: String = OS.get_environment("PVLDS_SCANWALL_DIR")
+	return want != "" and _scanwall_folder() == want
+
+
+func _scanwall_copy_in(name: String) -> void:
+	if not _scanwall_folder_ok():
+		_scanwall_expect(false, "fixture: copy refused - the config folder is not the harness fixture")
+		return
+	var stash: String = OS.get_environment("PVLDS_SCANWALL_STASH")
+	var src: String = stash.path_join(name)
+	var dst: String = _scanwall_folder().path_join(name)
+	var err: Error = DirAccess.copy_absolute(src, dst)
+	_scanwall_expect(err == OK, "fixture: copied %s into the library (err %d)" % [name, err])
+
+
+func _scanwall_delete(name: String) -> void:
+	if not _scanwall_folder_ok():
+		_scanwall_expect(false, "fixture: delete refused - the config folder is not the harness fixture")
+		return
+	var path: String = _scanwall_folder().path_join(name)
+	var err: Error = DirAccess.remove_absolute(path)
+	_scanwall_expect(err == OK, "fixture: removed %s from the library (err %d)" % [name, err])
+
+
+func _scanwall_wall_ids() -> Array[String]:
+	var ids: Array[String] = []
+	if _room != null:
+		for g: GameEntry in _room._visible_games:
+			ids.append(g.game_id)
+	return ids
+
+
+func _scanwall_panel_ids() -> Array[String]:
+	var ids: Array[String] = []
+	if _room != null:
+		for q: ClickableQuad in _room._panels:
+			ids.append(q.payload)
+	return ids
+
+
+func _scanwall_centre_id() -> String:
+	if _room == null or _room._visible_games.is_empty():
+		return ""
+	var idx: int = clampi(_room._centre_index, 0, _room._visible_games.size() - 1)
+	return _room._visible_games[idx].game_id
+
+
+## Fire a real launch through Main's own funnel (the lockout
+## smoke's shape): the runner's stub VPX (PVLDS_SCANWALL_EXE)
+## never opens a window and dies on its timer, so the wait
+## stands across the scan's landing and then settles FAILED
+## back to the wall.
+func _scanwall_fire_launch() -> void:
+	var exe: String = OS.get_environment("PVLDS_SCANWALL_EXE")
+	if exe != "" and _config != null:
+		_config.vpx_exe_path = exe
+	var game: GameEntry = null
+	if _scanner != null:
+		game = _scanner.game_by_id("dg-galaxy-corsair")
+		if game == null and not _scanner.games.is_empty():
+			game = _scanner.games[0]
+	if game == null:
+		_scanwall_expect(false, "launch wait: no game to launch")
+		return
+	var build: TableBuild = game.resolve_default_build(_state)
+	_on_launch_requested(game, build)
+
+
+func _scanwall_focus_game(id: String) -> void:
+	if _room == null:
+		return
+	for i: int in range(_room._visible_games.size()):
+		if _room._visible_games[i].game_id == id:
+			_room._set_centre(i, true)
+			if i < _room._panels.size():
+				_room._set_focused(_room._panels[i])
+			return
+
+
+func _scanwall_timed_out(label: String) -> bool:
+	if Time.get_ticks_msec() > _scanwall_deadline_msec:
+		_scanwall_expect(false, label)
+		_finish_scanwall_smoke()
+		return true
+	return false
+
+
+func _drive_scanwall_smoke() -> void:
+	match _scanwall_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				print("  info - scanwall smoke: config folders: ", _config.table_folders if _config != null else [])
+				print("  info - scanwall smoke: user:// resolves to: ", ProjectSettings.globalize_path("user://"))
+				if not _scanwall_folder_ok():
+					_scanwall_expect(false, "boot: the config's table folder is the harness fixture (PVLDS_SCANWALL_DIR) - refusing to mutate anything else")
+					_finish_scanwall_smoke()
+					return
+				_room._xr_enabled = true
+				_room._activate(_room.rail_quad("filter:all"))
+				_scanwall_wait = 0
+				_scanwall_phase = 1
+				_scanwall_deadline_msec = Time.get_ticks_msec() + 120000
+			elif _scanwall_deadline_msec == 0:
+				_scanwall_deadline_msec = Time.get_ticks_msec() + 120000
+			elif _scanwall_timed_out("boot: the room never came up"):
+				return
+		1:
+			_scanwall_wait += 1
+			if _scanwall_wait >= 5:
+				print("  info - scanwall smoke: baseline wall ids: ", _scanwall_wall_ids())
+				print("  info - scanwall smoke: baseline scanner ids: ", _scanner.games.map(func(g: GameEntry) -> String: return g.game_id) if _scanner != null else [])
+				_scanwall_expect(_scanwall_wall_ids().has(SCANWALL_REM_ID),
+					"baseline: the wall seats Low Orbit before any scan")
+				_scanwall_expect(not _scanwall_wall_ids().has(SCANWALL_ADD_ID),
+					"baseline: the wall does not seat Steel Foundry before it is added")
+				_scanwall_expect(_scanwall_panel_ids() == _scanwall_wall_ids(),
+					"baseline: the standing panels match the visible games")
+				# Leg (a): panel ADD.
+				_room._activate(_room.rail_quad("desk"))
+				_scanwall_expect(_room.is_setup_panel_up(), "panel add: the SETUP panel stands")
+				_scanwall_copy_in(SCANWALL_ADD_NAME)
+				_room._activate(_room.setup_panel_scan_quad())
+				_scanwall_deadline_msec = Time.get_ticks_msec() + 60000
+				_scanwall_phase = 2
+		2:
+			if _room.setup_panel_message().begins_with("Scan done") and not _scan_active:
+				_scanwall_expect(_room._pending_library == _scanner,
+					"panel add: the landed scan is held behind the panel (deferral intact)")
+				_room._activate(_room.setup_panel_back_quad())
+				_scanwall_wait = 0
+				_scanwall_phase = 3
+			elif _scanwall_timed_out("panel add: the scan never landed on the panel"):
+				return
+		3:
+			_scanwall_wait += 1
+			if _scanwall_wait >= 6:
+				_scanwall_expect(_room._scanner == _scanner,
+					"panel add: the room runs on the new library after the panel closes")
+				_scanwall_expect(_scanwall_wall_ids().has(SCANWALL_ADD_ID),
+					"panel add: the standing wall seats the added game without any view switch")
+				_scanwall_expect(_scanwall_panel_ids().has(SCANWALL_ADD_ID),
+					"panel add: the standing panels seat the added game without any view switch")
+				_scanwall_expect(_room._mode == "wall" and not _room.tournament_active(),
+					"panel add: the verdict is read on the library wall itself (no view detour taken)")
+				# Leg (b): early-close REMOVE - close the panel in
+				# the same driver call that starts the scan, so the
+				# panel is provably down before the landing is
+				# processed (Main polls landings after the drivers).
+				_room._activate(_room.rail_quad("desk"))
+				_scanwall_expect(_room.is_setup_panel_up(), "early-close remove: the SETUP panel stands")
+				_scanwall_delete(SCANWALL_REM_NAME)
+				_room._activate(_room.setup_panel_scan_quad())
+				_room._activate(_room.setup_panel_back_quad())
+				_scanwall_expect(not _room.is_setup_panel_up(),
+					"early-close remove: the panel is down before the scan lands")
+				_scanwall_deadline_msec = Time.get_ticks_msec() + 60000
+				_scanwall_phase = 4
+		4:
+			if not _scan_active and _room._scanner == _scanner:
+				_scanwall_wait = 0
+				_scanwall_phase = 5
+			elif _scanwall_timed_out("early-close remove: the scan never landed"):
+				return
+		5:
+			_scanwall_wait += 1
+			if _scanwall_wait >= 6:
+				_scanwall_expect(not _scanwall_wall_ids().has(SCANWALL_REM_ID),
+					"early-close remove: the standing wall drops the removed game without any view switch")
+				_scanwall_expect(not _scanwall_panel_ids().has(SCANWALL_REM_ID),
+					"early-close remove: the standing panels drop the removed game without any view switch")
+				# Leg (b2): desk ADD - the desk route while the
+				# room stands (hidden on the flat route).
+				_room._xr_enabled = false
+				_room._activate(_room.rail_quad("desk"))
+				_scanwall_expect(_desk != null and _desk.visible and not _room.visible,
+					"desk add: the desk shows and the room hides, as before")
+				_scanwall_copy_in(SCANWALL_REM_NAME)
+				_desk._on_save_and_scan()
+				_scanwall_deadline_msec = Time.get_ticks_msec() + 60000
+				_scanwall_phase = 6
+		6:
+			if not _scan_active and _desk != null and _desk._scanned:
+				_desk.enter_room_requested.emit()
+				_scanwall_wait = 0
+				_scanwall_phase = 7
+			elif _scanwall_timed_out("desk add: the desk scan never landed"):
+				return
+		7:
+			_scanwall_wait += 1
+			if _scanwall_wait >= 6 and _room.visible and _room.wall_ready:
+				_scanwall_expect(_scanwall_wall_ids().has(SCANWALL_REM_ID),
+					"desk add: the wall seats the desk-scanned game on return to the room")
+				_scanwall_expect(_scanwall_panel_ids().has(SCANWALL_REM_ID),
+					"desk add: the panels seat the desk-scanned game on return to the room")
+				# Leg (a2): tournament REMOVE.
+				_room._xr_enabled = true
+				_room._activate(_room.rail_quad("tournament"))
+				_scanwall_expect(_room.tournament_active(), "tournament remove: the Tournament Room stands")
+				_room._activate(_room.rail_quad("desk"))
+				_scanwall_expect(_room.is_setup_panel_up(), "tournament remove: the SETUP panel stands over the Tournament Room")
+				_scanwall_delete(SCANWALL_ADD_NAME)
+				_room._activate(_room.setup_panel_scan_quad())
+				_scanwall_deadline_msec = Time.get_ticks_msec() + 60000
+				_scanwall_phase = 8
+		8:
+			if _room.setup_panel_message().begins_with("Scan done") and not _scan_active:
+				_room._activate(_room.setup_panel_back_quad())
+				_scanwall_wait = 0
+				_scanwall_phase = 9
+			elif _scanwall_timed_out("tournament remove: the scan never landed on the panel"):
+				return
+		9:
+			_scanwall_wait += 1
+			if _scanwall_wait >= 6:
+				_scanwall_expect(_room.tournament_active(),
+					"tournament remove: the Tournament Room still stands after the panel closes")
+				_room._b_exit_tournament()
+				_scanwall_wait = 0
+				_scanwall_phase = 10
+		10:
+			_scanwall_wait += 1
+			if _scanwall_wait >= 6:
+				_scanwall_expect(not _scanwall_wall_ids().has(SCANWALL_ADD_ID),
+					"tournament remove: the library wall returned to drops the removed game")
+				_scanwall_expect(_scanwall_wall_ids().has(SCANWALL_REM_ID),
+					"tournament remove: the library wall returned to still seats the surviving games")
+				# Leg (c): focus-survives - a no-change panel scan.
+				_scanwall_focus_game(SCANWALL_REM_ID)
+				_scanwall_expect(_scanwall_centre_id() == SCANWALL_REM_ID,
+					"focus survives: the fixture focus lands on Low Orbit before the scan")
+				_room._activate(_room.rail_quad("desk"))
+				_room._activate(_room.setup_panel_scan_quad())
+				_scanwall_deadline_msec = Time.get_ticks_msec() + 60000
+				_scanwall_phase = 11
+		11:
+			if _room.setup_panel_message().begins_with("Scan done") and not _scan_active:
+				_room._activate(_room.setup_panel_back_quad())
+				_scanwall_wait = 0
+				_scanwall_phase = 12
+			elif _scanwall_timed_out("focus survives: the scan never landed on the panel"):
+				return
+		12:
+			_scanwall_wait += 1
+			if _scanwall_wait >= 6:
+				_scanwall_expect(_scanwall_centre_id() == SCANWALL_REM_ID,
+					"focus survives: the centred game is still centred after the scan lands")
+				_scanwall_expect(_room.focused_quad() == _room.rail_quad("desk"),
+					"focus survives: the panel close lands focus on the rail SETUP stop (the panel law)")
+				# Leg (d): focus-vanishes.
+				_scanwall_focus_game(SCANWALL_REM_ID)
+				_room._activate(_room.rail_quad("desk"))
+				_scanwall_delete(SCANWALL_REM_NAME)
+				_room._activate(_room.setup_panel_scan_quad())
+				_scanwall_deadline_msec = Time.get_ticks_msec() + 60000
+				_scanwall_phase = 13
+		13:
+			if _room.setup_panel_message().begins_with("Scan done") and not _scan_active:
+				_room._activate(_room.setup_panel_back_quad())
+				_scanwall_wait = 0
+				_scanwall_phase = 14
+			elif _scanwall_timed_out("focus vanishes: the scan never landed on the panel"):
+				return
+		14:
+			_scanwall_wait += 1
+			if _scanwall_wait >= 6:
+				_scanwall_expect(not _scanwall_wall_ids().has(SCANWALL_REM_ID),
+					"focus vanishes: the wall drops the vanished game")
+				_scanwall_expect(_scanwall_centre_id() != SCANWALL_REM_ID and _scanwall_centre_id() != "",
+					"focus vanishes: the drum centres on a surviving game (fallback: the refreshed wall's first card)")
+				_scanwall_expect(_room.focused_quad() == _room.rail_quad("desk"),
+					"focus vanishes: focus lands on the rail SETUP stop (the panel-close fallback)")
+				# Leg (a-wait): the ADD lands while a launch wait
+				# stands. The panel scan starts, the panel closes,
+				# and the launch fires in the same driver call -
+				# the scan (a second or two of thread work) is
+				# provably still running, and the stub's wait
+				# (10 s, never a window) provably outlasts it.
+				_room._activate(_room.rail_quad("desk"))
+				_scanwall_copy_in(SCANWALL_ADD_NAME)
+				_room._activate(_room.setup_panel_scan_quad())
+				_room._activate(_room.setup_panel_back_quad())
+				_scanwall_fire_launch()
+				_scanwall_expect(_launch_pending,
+					"panel add, scan lands in a launch wait: the launch wait stands")
+				_scanwall_deadline_msec = Time.get_ticks_msec() + 60000
+				_scanwall_phase = 15
+		15:
+			if not _scan_active:
+				_scanwall_expect(_room._pending_library == _scanner,
+					"panel add, scan lands in a launch wait: the landed scan is held by the room, not dropped")
+				_scanwall_expect(_room._scanner != _scanner,
+					"panel add, scan lands in a launch wait: the wall still runs the old library during the wait (the wait is undisturbed)")
+				_scanwall_deadline_msec = Time.get_ticks_msec() + 90000
+				_scanwall_phase = 16
+			elif _scanwall_timed_out("panel add, scan lands in a launch wait: the scan never landed"):
+				return
+		16:
+			if not _launch_pending:
+				_scanwall_wait = 0
+				_scanwall_phase = 17
+			elif _scanwall_timed_out("panel add, scan lands in a launch wait: the launch never settled"):
+				return
+		17:
+			_scanwall_wait += 1
+			if _scanwall_wait >= 6:
+				_scanwall_expect(_room._scanner == _scanner,
+					"panel add, scan lands in a launch wait: the room runs on the new library after the wait settles")
+				_scanwall_expect(_scanwall_wall_ids().has(SCANWALL_ADD_ID),
+					"panel add, scan lands in a launch wait: the standing wall seats the added game without any view switch")
+				_scanwall_expect(_scanwall_panel_ids().has(SCANWALL_ADD_ID),
+					"panel add, scan lands in a launch wait: the standing panels seat the added game without any view switch")
+				# Leg (b-wait): the REMOVE lands in a launch wait,
+				# on the same choreography.
+				_room._activate(_room.rail_quad("desk"))
+				_scanwall_delete(SCANWALL_ADD_NAME)
+				_room._activate(_room.setup_panel_scan_quad())
+				_room._activate(_room.setup_panel_back_quad())
+				_scanwall_fire_launch()
+				_scanwall_expect(_launch_pending,
+					"panel remove, scan lands in a launch wait: the launch wait stands")
+				_scanwall_deadline_msec = Time.get_ticks_msec() + 60000
+				_scanwall_phase = 18
+		18:
+			if not _scan_active:
+				_scanwall_expect(_room._pending_library == _scanner,
+					"panel remove, scan lands in a launch wait: the landed scan is held by the room, not dropped")
+				_scanwall_deadline_msec = Time.get_ticks_msec() + 90000
+				_scanwall_phase = 19
+			elif _scanwall_timed_out("panel remove, scan lands in a launch wait: the scan never landed"):
+				return
+		19:
+			if not _launch_pending:
+				_scanwall_wait = 0
+				_scanwall_phase = 20
+			elif _scanwall_timed_out("panel remove, scan lands in a launch wait: the launch never settled"):
+				return
+		20:
+			_scanwall_wait += 1
+			if _scanwall_wait >= 6:
+				_scanwall_expect(not _scanwall_wall_ids().has(SCANWALL_ADD_ID),
+					"panel remove, scan lands in a launch wait: the standing wall drops the removed game without any view switch")
+				_scanwall_expect(not _scanwall_panel_ids().has(SCANWALL_ADD_ID),
+					"panel remove, scan lands in a launch wait: the standing panels drop the removed game without any view switch")
+				_finish_scanwall_smoke()
+
+
+func _finish_scanwall_smoke() -> void:
+	if _scanwall_failures == 0:
+		print("PVLDS SCANWALL SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS SCANWALL SMOKE: FAIL (%d)" % _scanwall_failures)
 		get_tree().quit(1)
 
 
