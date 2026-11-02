@@ -88,15 +88,24 @@ const PUP_BADGE_COLOR: Color = Color(0.45, 0.85, 1.0)
 const BOARD_SCORE_COL_MAX_PX: float = 330.0
 
 var _bg: ColorRect
-## GRADFIX15 (item 1): the One Book's cover rect and page
-## gradient are DELETED - a board face no longer renders any
-## filled panel behind its text (Chris, 2026-11-02: "lets
-## nuke the grey line and background color"). The board's
-## text block stands on transparency; see apply_spec's
-## frameless law. The spine furniture below dies with it in
-## item 2 of the same round.
-var _spine_line: ColorRect ## board kind: the spine ridge's highlight hairline, just inside the spine edge
-var _spine_shade: ColorRect ## board kind: the dark fall past the spine hairline, to the spine edge
+## GRADFIX15 (items 1+2): the One Book's cover rect, page
+## gradient and spine furniture are DELETED - a board face
+## no longer renders any filled panel behind its text, and
+## the thin vertical grey line at the text block's edge is
+## gone at its source (Chris, 2026-11-02: "lets nuke the
+## grey line and background color"). The board's text block
+## stands on transparency; see apply_spec's frameless law.
+## The line's convicted identity, for the record: it was
+## _spine_line, the GRADFIX4 spine ridge's highlight
+## hairline - Color(0.48, 0.55, 0.70, 0.85), 3 px wide, set
+## at x = size.x - 44 for a "right" spine (x = 41 for
+## "left"), running the face's height inside the cover
+## border, with _spine_shade's dark fall (31 px, alpha 0.6)
+## between it and the edge. Pixel proof on the pre-fix WPT
+## render: x 676-678 reads (105, 121, 156) - the hairline
+## blended over the page gradient's dark end, to the digit -
+## and the line survives the panel fill's death (item 1's
+## bisect render), so it was never a panel-edge artefact.
 var _strip_grad_rect: TextureRect ## strip_section kind (GRADFIX14 item 1): the section's graphite gradient, drawn over the ground and under the type
 var _strip_grad_tex: GradientTexture2D ## strip_section kind: the gradient's texture (its Gradient is rebuilt per spec)
 var _strip_seam_dark: ColorRect ## strip_section kind: the etched seam's dark line at the section's right edge
@@ -133,22 +142,9 @@ func _init() -> void:
 	_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(_bg)
 
-	# The spine furniture (GRADFIX4, the One Book) - deleted
-	# in GRADFIX15 item 2; the cover and the page gradient it
-	# rode on died in item 1, above.
-	_spine_line = ColorRect.new()
-	_spine_line.color = Color(0.48, 0.55, 0.70, 0.85)
-	_spine_line.visible = false
-	add_child(_spine_line)
-	_spine_shade = ColorRect.new()
-	_spine_shade.color = Color(0.008, 0.012, 0.028, 0.6)
-	_spine_shade.visible = false
-	add_child(_spine_shade)
-
 	# The machined strip's section furniture (GRADFIX14 item
 	# 1): gradient, etched seam, edge lines - asserted per
-	# spec like the One Book's page above, standing only for
-	# strip_section faces.
+	# spec, standing only for strip_section faces.
 	_strip_grad_tex = GradientTexture2D.new()
 	_strip_grad_tex.fill_from = Vector2(0.5, 0.0)
 	_strip_grad_tex.fill_to = Vector2(0.5, 1.0)
@@ -397,22 +393,11 @@ func apply_spec(spec: Dictionary) -> void:
 		and OS.get_environment("PVLDS_GF15_NC") != "panelfill"
 	_bg.visible = not frameless
 	_bg.color = bg
-	# The spine furniture stands for board faces only
-	# (GRADFIX4); it dies in GRADFIX15 item 2.
-	_spine_line.visible = kind == "board"
-	_spine_shade.visible = kind == "board"
-	if kind == "board" and size.x > 0.0:
-		var spine_left: bool = str(spec.get("spine_side", "right")) == "left"
-		if spine_left:
-			_spine_shade.position = Vector2(10.0, 10.0)
-			_spine_shade.size = Vector2(31.0, size.y - 20.0)
-			_spine_line.position = Vector2(41.0, 10.0)
-			_spine_line.size = Vector2(3.0, size.y - 20.0)
-		else:
-			_spine_line.position = Vector2(size.x - 44.0, 10.0)
-			_spine_line.size = Vector2(3.0, size.y - 20.0)
-			_spine_shade.position = Vector2(size.x - 41.0, 10.0)
-			_spine_shade.size = Vector2(31.0, size.y - 20.0)
+	# GRADFIX15 (item 2): there is no spine furniture to
+	# assert - _spine_line and _spine_shade are deleted (see
+	# the member block's conviction note). The specs'
+	# "spine_side" keys are inert data now; nothing on this
+	# face reads them.
 	# The machined strip's section furniture (GRADFIX14 item
 	# 1): stands only for strip_section faces. The gradient
 	# carries the mock's four stops; the seam is etched at
