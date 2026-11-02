@@ -13225,57 +13225,27 @@ func _gf13_seated_extent(gt: Transform3D, size: Vector2, img: Image, cam: Camera
 	return {"ok": true, "delta": (top_t + bot_t) * 0.5 - 0.5, "why": "", "lines": lines_hit}
 
 
-## GRADFIX13 (item 1): one standing board's seated-centre
-## leg - grab the room as it stands (the caller has centred
-## the board's pair card and let the drum settle), save the
-## grab beside the boot, and judge the board's ink extent
-## against its standing quad's bounding box in the grab.
-## Tolerance adopted: 2% of the quad's height - the same
-## 2% the texture legs have always carried, now on the
-## object the player sees.
+## GRADFIX15: the standing boards' seated-centre grab leg
+## is RETIRED, openly, here. Its ruler (_gf13_seated_extent)
+## called a grab sample ink when its colour left the
+## profile line's modal colour - and on a board that modal
+## colour was the board's own PANEL FILL. GRADFIX15 nuked
+## the fill at Chris's order ("lets nuke the grey line and
+## background color. problem solved"), so the lines now
+## profile the room behind the board and every delta is a
+## measurement of the starfield, not the text. The property
+## the leg guarded - the text block not riding high on its
+## object - no longer exists as a visible fault: there is
+## no frame left to be off-centre against. The composition
+## itself stays guarded where it lives, in texture space:
+## the ink-extent legs on the rendered faces (which pass
+## exactly), and the board's presence and framelessness in
+## the room are guarded by the GRADFIX15 "frameless board:"
+## legs. This stub stays so the two call sites stand and
+## the log says, every run, that the leg is retired and
+## why - it registers no expectation.
 func _gf13_seated_board_leg(i: int, tag: String) -> void:
-	var rows: Array = _room.tournament_rows()
-	var tname: String = _tournament_row_table_name(rows[i] as Dictionary) if i >= 0 and i < rows.size() else "?"
-	var node: MeshInstance3D = _room._board_nodes[i] as MeshInstance3D if i >= 0 and i < _room._board_nodes.size() else null
-	if node == null:
-		_tournament_expect(false, "seated centre: '%s' (%s) has a standing board node to grab" % [tname, tag])
-		return
-	var img: Image = get_viewport().get_texture().get_image()
-	var grab_dir: String = OS.get_environment("PVLDS_GRAB_DIR")
-	if grab_dir != "" and img != null and not img.is_empty():
-		img.save_png(grab_dir.path_join("gf13_board_%d.png" % i))
-	var cam: Camera3D = get_viewport().get_camera_3d()
-	var res: Dictionary = _gf13_seated_extent(node.global_transform, RoomSpecs.board_panel_size(), img, cam)
-	var shape: String = "shape unread"
-	if i >= 0 and i < rows.size():
-		var rd: Dictionary = rows[i] as Dictionary
-		var ch: WovpChallenge = rd.get("challenge") as WovpChallenge
-		if ch != null:
-			var spec: Dictionary = RoomSpecs.tournament_board_spec(
-				ch, bool(rd.get("owned", false)), _wovp_user_id,
-				int(Time.get_unix_time_from_system()), bool(rd.get("build_owned", false)))
-			var srows: int = 0
-			var notes: int = 0
-			var his: bool = false
-			for rv: Variant in (spec.get("rows", []) as Array):
-				if rv is Dictionary:
-					var rk: String = str((rv as Dictionary).get("kind", ""))
-					if rk == "score":
-						srows += 1
-						if bool((rv as Dictionary).get("accent", false)):
-							his = true
-					elif rk == "note":
-						notes += 1
-			shape = "%d score rows, his row %s, %d notes, %d chips" % [
-				srows, str(his), notes, (spec.get("chips", []) as Array).size()]
-	var delta: float = float(res.get("delta", 0.0))
-	print("GRADFIX13 SEATED board %d '%s' (%s): extent delta %.2f%% of quad height%s, shape %s"
-		% [i, tname, tag, 100.0 * delta,
-			"" if bool(res.get("ok", false)) else " - " + str(res.get("why", "")), shape])
-	_tournament_expect(bool(res.get("ok", false)) and absf(delta) <= 0.02,
-		"seated centre: '%s' board's ink extent centres on its STANDING QUAD in the room grab (delta %.2f%% of quad height, tolerance 2%%; shape: %s)%s"
-			% [tname, 100.0 * delta, shape,
-				"" if bool(res.get("ok", false)) else " - " + str(res.get("why", ""))])
+	print("GRADFIX15: seated centre board leg RETIRED (%s, board %d) - its ruler's premise was the panel fill GRADFIX15 removed; centring is guarded by the texture-space extent legs" % [tag, i])
 
 
 ## The wing-sized board probe (layout mode, GRADFIX2
