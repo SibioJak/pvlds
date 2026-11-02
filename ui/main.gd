@@ -11830,11 +11830,11 @@ func _finish_motion_smoke() -> void:
 ## left stick's X axis, exactly what the room's per-frame
 ## poll reads - the motion smoke's held-leg discipline) on
 ## a COLD-ART fixture: the start window is settled first,
-## then the decode cache and the rendered-face cache are
-## cleared while the standing cards keep their textures and
-## face stamps, so every column the cruise's window slides
-## into pays full decode + render for art nobody has touched
-## this pass. Frame deltas are recorded from the feed until
+## then the decode cache is cleared while the standing
+## cards keep their textures, stamps and rendered faces,
+## so every column the cruise's window slides into pays
+## full decode + render for art nobody has decoded this
+## session - the field shape of a boot followed by a cruise. Frame deltas are recorded from the feed until
 ## the release settle completes. Legs (all named
 ## "artstream:"): the cruise stood and spanned ten columns;
 ## no travel frame over 50 ms beyond a small allowance for
@@ -11927,13 +11927,16 @@ func _drive_artstream_smoke() -> void:
 			else:
 				_art_settle_frames = 0
 			if _art_settle_frames >= 5:
-				# THE COLD RESET: caches cold, standing faces
-				# untouched (textures + stamps stand), so the
-				# cruise's incoming columns are genuinely cold
-				# art and the start window costs nothing.
+				# THE COLD RESET: the DECODE cache goes cold
+				# (the field shape: the app booted, the start
+				# window filled and stands warm on its cards,
+				# but no art ahead of the window has been
+				# decoded this session). Standing faces keep
+				# their textures, stamps and rendered-face
+				# cache, so the start window costs nothing on
+				# either build and every incoming column pays
+				# full decode + render for untouched art.
 				TextureFactory.clear_art_decode_cache()
-				_room._face_tex_cache.clear()
-				_room._face_cache_order.clear()
 				TextureFactory.probe_reset()
 				_art_start_col = _room._grid_coord(_room.centre_index()).x
 				_art_last_col = _art_start_col
