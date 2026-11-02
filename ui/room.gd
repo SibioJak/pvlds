@@ -4281,6 +4281,13 @@ func _art_pipe_pass() -> void:
 			if gen != _gen:
 				break
 			await get_tree().process_frame # the budget: at most one staged face per frame, ever
+			if _cruise_dir != 0 or _swing_active:
+				# Travelling: halve the application rate -
+				# one face per two frames. A cruise demands
+				# ~16 faces a second at full speed; even the
+				# halved rate supplies ~30, and the frames
+				# between applications are the drum's alone.
+				await get_tree().process_frame
 		if gen != _gen:
 			break
 		if deferred.is_empty():
