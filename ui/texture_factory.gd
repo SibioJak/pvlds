@@ -28,16 +28,19 @@ var _render_in_flight: bool = false ## the serialization queue's lock: one captu
 ## probe never changes what any operation does or returns.
 static var probe_enabled: bool = false
 static var probe_stats: Dictionary = {} ## op -> [count, total_usec, max_usec]
+static var _probe_mutex: Mutex = Mutex.new() ## GRADFIX16: decode notes also land from the art pipeline's worker thread
 
 
 static func probe_note(op: String, usec: int) -> void:
 	if not probe_enabled:
 		return
+	_probe_mutex.lock()
 	var row: Array = probe_stats.get(op, [0, 0, 0]) as Array
 	row[0] = int(row[0]) + 1
 	row[1] = int(row[1]) + usec
 	row[2] = maxi(int(row[2]), usec)
 	probe_stats[op] = row
+	_probe_mutex.unlock()
 
 
 static func probe_reset() -> void:
@@ -406,21 +409,34 @@ static func clear_art_decode_cache() -> void:
 	_art_decode_order.clear()
 
 
-## Loads an image file as a texture, downscaled to a sane VRAM size.
-static func load_art_texture(path: String) -> Texture2D:
-	var probe_total_t: int = Time.get_ticks_usec() if probe_enabled else 0
-	var probe_t: int = probe_total_t
-	var mtime: int = FileAccess.get_modified_time(path)
-	var size: int = -1
-	var probe: FileAccess = FileAccess.open(path, FileAccess.READ)
-	if probe != null:
-		size = int(probe.get_length())
-		probe.close()
+## Whether the decode cache already holds this exact file
+## version (the same mtime+size verification load performs).
+static func art_decode_is_cached(path: String) -> bool:
 	var hit: Variant = _art_decode_cache.get(path)
-	if hit is Array and int(hit[1]) == mtime and int(hit[2]) == size:
-		if probe_enabled:
-			probe_note("decode_cache_hit", Time.get_ticks_usec() - probe_t)
-		return hit[0] as Texture2D
+	if not (hit is Array):
+		return false
+	var arr: Array = hit as Array
+	return int(arr[1]) == FileAccess.get_modified_time(path) \
+		and int(arr[2]) == _file_size(path)
+
+
+static func _file_size(path: String) -> int:
+	var probe: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if probe == null:
+		return -1
+	var size: int = int(probe.get_length())
+	probe.close()
+	return size
+
+
+## Decode one art file to a downscaled Image - NO texture
+## creation, NO cache writes. Worker-thread safe (a pure
+## function of the file's bytes): the GRADFIX16 art pipeline
+## runs this on a WorkerThreadPool thread so travel frames
+## never pay the decode + Lanczos resize the conviction
+## measured (~15 ms of synchronous work per cold face).
+static func decode_art_image(path: String) -> Image:
+	var probe_t: int = Time.get_ticks_usec() if probe_enabled else 0
 	var img: Image = Image.new()
 	if img.load(path) != OK:
 		return null
@@ -432,15 +448,46 @@ static func load_art_texture(path: String) -> Texture2D:
 		img.resize(1024, int(float(img.get_height()) * ratio), Image.INTERPOLATE_LANCZOS)
 	if probe_enabled:
 		probe_note("decode_resize", Time.get_ticks_usec() - probe_t)
-		probe_t = Time.get_ticks_usec()
+	return img
+
+
+## Turn a decoded Image into the cached art texture (main
+## thread only: ImageTexture creation + the decode cache).
+static func art_texture_from_decoded(path: String, img: Image) -> Texture2D:
+	if img == null:
+		return null
+	var probe_t: int = Time.get_ticks_usec() if probe_enabled else 0
 	var tex: Texture2D = ImageTexture.create_from_image(img)
 	if probe_enabled:
 		probe_note("decode_create_texture", Time.get_ticks_usec() - probe_t)
-		probe_note("decode_miss_total", Time.get_ticks_usec() - probe_total_t)
-	_art_decode_cache[path] = [tex, mtime, size]
+	_store_decoded_texture(path, tex)
+	return tex
+
+
+static func _store_decoded_texture(path: String, tex: Texture2D) -> void:
+	_art_decode_cache[path] = [tex, FileAccess.get_modified_time(path), _file_size(path)]
 	_art_decode_order.erase(path)
 	_art_decode_order.push_back(path)
 	while _art_decode_order.size() > ART_DECODE_CACHE_MAX:
 		var old: String = _art_decode_order.pop_front()
 		_art_decode_cache.erase(old)
+
+
+## Loads an image file as a texture, downscaled to a sane VRAM size.
+static func load_art_texture(path: String) -> Texture2D:
+	var probe_total_t: int = Time.get_ticks_usec() if probe_enabled else 0
+	var probe_t: int = probe_total_t
+	var mtime: int = FileAccess.get_modified_time(path)
+	var size: int = _file_size(path)
+	var hit: Variant = _art_decode_cache.get(path)
+	if hit is Array and int(hit[1]) == mtime and int(hit[2]) == size:
+		if probe_enabled:
+			probe_note("decode_cache_hit", Time.get_ticks_usec() - probe_t)
+		return hit[0] as Texture2D
+	var img: Image = decode_art_image(path)
+	if img == null:
+		return null
+	var tex: Texture2D = art_texture_from_decoded(path, img)
+	if probe_enabled:
+		probe_note("decode_miss_total", Time.get_ticks_usec() - probe_total_t)
 	return tex

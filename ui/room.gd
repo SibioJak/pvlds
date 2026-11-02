@@ -628,6 +628,16 @@ var _mat_frame_amber: StandardMaterial3D = null ## the centred card's amber fram
 var _mat_plate: StandardMaterial3D = null ## the shared nameplate/status plate material (the marquee fade drives its alpha)
 var _window_fill_busy: bool = false ## a window face-fill pass is running (centre changes coalesce through _window_fill_dirty)
 var _window_fill_dirty: bool = false
+## GRADFIX16 (item 2) art pipeline state: the staged face
+## fill that replaced the serial window fill on the travel
+## path (see the pipeline block at _request_window_fill).
+var _art_pipe_busy: bool = false ## a staged pipeline pass is running
+var _art_pipe_queue: Array[int] = [] ## panel indices awaiting a staged face, centre-out order, revalidated at pop time
+var _art_pipe_in_stage: bool = false ## the pipeline is inside _fill_one_face_sync: its decode branch reads staged results instead of paying a synchronous decode
+var _art_decode_pending: Dictionary = {} ## art path -> true while a background decode task is in flight for it
+var _art_decoded_ready: Dictionary = {} ## art path -> Image: a finished background decode awaiting texture creation on the pipeline's own frames
+var _art_decoded_failed: Dictionary = {} ## art path -> true: a background decode finished and produced no image (the staged face falls through to its styled card, exactly as a synchronous load failure did)
+var _art_decode_mutex: Mutex = Mutex.new() ## guards the three decode dictionaries against the worker thread
 var _power_subject_inflight: Dictionary = {} ## game_id -> true while its power-on subject renders
 var _power_prefetch_asked: Dictionary = {} ## game_id -> true once the warmer has been asked for its cold backglass (GRADFIX6)
 var _face_heal_retries: Dictionary = {} ## GRADFIX6 item 2: "game_id|art_file" -> art-render retries already spent by the panel heal
@@ -3866,27 +3876,93 @@ func _fill_wall_textures(gen: int) -> void:
 ## one library adoption, cached like the furniture's faces
 ## (the pick-latency fix): pooled cards keep their faces
 ## across rebuilds, so a revisit usually costs nothing at all.
+##
+## GRADFIX16 (item 2) - THE STAGED PIPELINE. The conviction
+## (Chris's scroll telemetry + the harness probe, same
+## fixture before/after): during a held cruise each incoming
+## column made the travel path itself pay, serially per face,
+## a synchronous PNG decode (~7.5 ms) + Lanczos resize
+## (~8 ms) in TextureFactory.load_art_texture and a GPU
+## readback in TextureFactory.render_texture - per-column
+## fill totals of 54-105 ms on the harness box, ~125 ms a
+## hitch on the field rig, one hitch per column at cruise
+## cadence. The fill now runs OFF the travel frame:
+## _set_centre only ENQUEUES the window's faces (below) and
+## returns; a deferred pipeline pass does the work on its
+## own frames, one face per frame at most -
+##   1. DECODE stages on a WorkerThreadPool thread
+##      (TextureFactory.decode_art_image: load + resize, no
+##      texture creation), dispatched for every queued face
+##      up front, so decodes overlap travel instead of
+##      punctuating it;
+##   2. RENDER + APPLY run in the pipeline pass when the
+##      decode has landed (or immediately, for cache hits
+##      and styled faces), still through the factory's
+##      serial capture queue - but the pass is a background
+##      coroutine yielding a frame between faces, never a
+##      call the travel path awaits.
+## A picture may land late; the drum never waits for it.
+## The card a face belongs to keeps whatever honest texture
+## it already wears (or the placeholder) until its staged
+## face applies; the standing heal re-asks for anything the
+## pipeline skipped, exactly as before. Under the NC
+## PVLDS_GF16_NC=syncfill the pre-fix serial worker below
+## runs instead and _set_centre's callers pay inline again,
+## so the artstream smoke's travel legs fail by name.
 func _request_window_fill() -> void:
-	if _window_fill_busy:
-		_window_fill_dirty = true
+	if debug_gf16_nc == "syncfill":
+		if _window_fill_busy:
+			_window_fill_dirty = true
+			return
+		_run_window_fill_sync()
 		return
-	_run_window_fill()
+	if _art_pipe_busy:
+		_window_fill_dirty = true
+	_art_pipe_enqueue_window()
+	if not _art_pipe_busy:
+		_run_art_pipe()
 
 
-func _run_window_fill() -> void:
+## The pre-GRADFIX16 serial worker (the NC's restored shape,
+## and nothing else's): a centre change's pass is awaited
+## inline, face by face, decode + render on the caller's
+## frames.
+func _run_window_fill_sync() -> void:
 	_window_fill_busy = true
 	_window_fill_dirty = false
 	var gen: int = _gen
-	await _fill_window_faces(gen)
+	await _fill_window_faces_sync(gen)
 	_window_fill_busy = false
 	if _window_fill_dirty and gen == _gen:
-		_run_window_fill()
+		_run_window_fill_sync()
 
 
-func _fill_window_faces(gen: int) -> void:
+func _fill_window_faces_sync(gen: int) -> void:
 	if _panel_window_lo < 0:
 		return
+	var order: Array[int] = _window_fill_order()
+	for idx: int in order:
+		if gen != _gen:
+			return
+		var cc: int = _grid_coord(idx).x
+		if cc < _panel_window_lo or cc > _panel_window_hi:
+			continue
+		var gf16_probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
+		await _fill_one_face_sync(idx, gen)
+		if TextureFactory.probe_enabled:
+			var gf16_us: int = Time.get_ticks_usec() - gf16_probe_t
+			TextureFactory.probe_note("fill_face_total", gf16_us)
+			TextureFactory.probe_note("fill_col_%d" % cc, gf16_us)
+	if gen == _gen:
+		_on_window_fill_drained(gen)
+
+
+## The window's face indices, centre column outward - the
+## one fill order both workers walk.
+func _window_fill_order() -> Array[int]:
 	var order: Array[int] = []
+	if _panel_window_lo < 0:
+		return order
 	var centre_col: int = _grid_coord(_centre_index).x
 	for dist: int in range(0, centre_col + VISIBLE_HALF_COLUMNS + 1):
 		for c: int in [centre_col - dist, centre_col + dist]:
@@ -3898,43 +3974,146 @@ func _fill_window_faces(gen: int) -> void:
 				var idx: int = _raw_index(c, row)
 				if idx >= 0 and idx < _panels.size():
 					order.append(idx)
-	for idx: int in order:
-		if gen != _gen:
-			return
-		# A fast sweep moves the window mid-pass (centre
-		# changes do not bump the generation): never spend a
-		# render on a card the window has already left.
-		var cc: int = _grid_coord(idx).x
-		if cc < _panel_window_lo or cc > _panel_window_hi:
+	return order
+
+
+## A fill pass resolved the standing window: the wall is
+## ready, and Main's warmer is asked to bring the columns
+## just outside the window forward (GRADFIX6's widened ask -
+## on the staged path the extraction lookahead plus the
+## pipeline's own queue are what stand between a fast sweep
+## and a wall of title cards).
+func _on_window_fill_drained(gen: int) -> void:
+	if gen != _gen:
+		return
+	wall_ready = true
+	var near: Array = []
+	for c: int in [_panel_window_lo - 2, _panel_window_lo - 1, _panel_window_hi + 1, _panel_window_hi + 2]:
+		if c < 0 or c >= _columns:
 			continue
-		# GRADFIX16 probe (PVLDS_GF16_PROBE): the fill's
-		# per-face and per-column cost on this path, timed
-		# around the await the window pass actually pays.
-		var gf16_probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
-		await _fill_one_face(idx, gen)
-		if TextureFactory.probe_enabled:
-			var gf16_us: int = Time.get_ticks_usec() - gf16_probe_t
-			TextureFactory.probe_note("fill_face_total", gf16_us)
-			TextureFactory.probe_note("fill_col_%d" % cc, gf16_us)
-	if gen == _gen:
-		wall_ready = true
-		# The window is dressed: ask Main's warmer to bring
-		# the columns just outside it forward, so a swing
-		# lands on warm art even mid-warm-up. GRADFIX6 widens
-		# the ask from one column to two - the fill path no
-		# longer extracts inline, so the warmer's lookahead
-		# is the only thing standing between a fast sweep and
-		# a wall of title cards.
-		var near: Array = []
-		for c: int in [_panel_window_lo - 2, _panel_window_lo - 1, _panel_window_hi + 1, _panel_window_hi + 2]:
-			if c < 0 or c >= _columns:
+		for row: int in range(3):
+			var idx: int = _raw_index(c, row)
+			if idx >= 0 and idx < _visible_games.size():
+				near.append(_visible_games[idx])
+	if not near.is_empty():
+		art_prefetch_requested.emit(near)
+
+
+## Enqueue the standing window's faces for the staged
+## pipeline (centre-out), and dispatch background decodes
+## for every queued face whose art is neither decoded nor
+## already in flight. Called on every centre change: the
+## queue is REBUILT from the standing window each time
+## (faces already queued keep no stale priority; a face the
+## window left is dropped before it can spend a render).
+func _art_pipe_enqueue_window() -> void:
+	_art_pipe_queue = _window_fill_order()
+	_art_pipe_dispatch_decodes(_art_pipe_queue)
+
+
+func _art_pipe_dispatch_decodes(idxs: Array[int]) -> void:
+	for idx: int in idxs:
+		if idx < 0 or idx >= _visible_games.size():
+			continue
+		var path: String = _face_path_for(_visible_games[idx])
+		if path == "":
+			continue
+		if TextureFactory.art_decode_is_cached(path):
+			continue
+		_art_decode_mutex.lock()
+		var known: bool = _art_decode_pending.has(path) or _art_decoded_ready.has(path) or _art_decoded_failed.has(path)
+		if not known:
+			_art_decode_pending[path] = true
+		_art_decode_mutex.unlock()
+		if not known:
+			WorkerThreadPool.add_task(Callable(self, "_art_decode_worker").bind(path))
+
+
+## The background decode task (worker thread): decode only -
+## load + downscale into an Image and hand it back through
+## the mutex-guarded dictionaries. No texture creation, no
+## cache writes, no node access: everything the worker
+## touches is either its own local Image or the guarded
+## dictionaries.
+func _art_decode_worker(path: String) -> void:
+	var img: Image = TextureFactory.decode_art_image(path)
+	_art_decode_mutex.lock()
+	_art_decode_pending.erase(path)
+	if img != null:
+		_art_decoded_ready[path] = img
+	else:
+		_art_decoded_failed[path] = true
+	_art_decode_mutex.unlock()
+
+
+## The staged pipeline pass: a deferred coroutine (started
+## via call_deferred from _run_art_pipe, so it never runs
+## inside a _set_centre call), walking the queue one face
+## per frame at most. A face whose decode is still in
+## flight is SKIPPED this pass - never waited on - and
+## re-queued behind the rest; the pass ends only when the
+## queue holds nothing but in-flight decodes, and even then
+## it polls on its own frames until they land or the
+## generation changes. Faces are applied by the same
+## _fill_one_face_sync the serial worker uses, with
+## _art_pipe_in_stage set so its decode branch consumes the
+## staged result instead of paying a synchronous decode.
+func _run_art_pipe() -> void:
+	_art_pipe_busy = true
+	_window_fill_busy = true
+	call_deferred("_art_pipe_pass")
+
+
+func _art_pipe_pass() -> void:
+	var gen: int = _gen
+	var deferred: Array[int] = []
+	while gen == _gen:
+		while not _art_pipe_queue.is_empty():
+			if gen != _gen:
+				break
+			var idx: int = _art_pipe_queue.pop_front()
+			if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
 				continue
-			for row: int in range(3):
-				var idx: int = _raw_index(c, row)
-				if idx >= 0 and idx < _visible_games.size():
-					near.append(_visible_games[idx])
-		if not near.is_empty():
-			art_prefetch_requested.emit(near)
+			var cc: int = _grid_coord(idx).x
+			if cc < _panel_window_lo or cc > _panel_window_hi:
+				continue # the window left this card behind mid-pass
+			var path: String = _face_path_for(_visible_games[idx])
+			_art_decode_mutex.lock()
+			var in_flight: bool = path != "" and _art_decode_pending.has(path)
+			_art_decode_mutex.unlock()
+			if in_flight:
+				deferred.append(idx)
+				continue
+			var gf16_probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
+			_art_pipe_in_stage = true
+			await _fill_one_face_sync(idx, gen)
+			_art_pipe_in_stage = false
+			if TextureFactory.probe_enabled:
+				var gf16_us: int = Time.get_ticks_usec() - gf16_probe_t
+				TextureFactory.probe_note("fill_face_total", gf16_us)
+				TextureFactory.probe_note("fill_col_%d" % cc, gf16_us)
+			if gen != _gen:
+				break
+			await get_tree().process_frame # the budget: at most one staged face per frame, ever
+		if gen != _gen:
+			break
+		if deferred.is_empty():
+			break
+		# Only in-flight decodes remain: poll on the
+		# pipeline's own frames until they land.
+		_art_pipe_queue = deferred
+		deferred = []
+		await get_tree().process_frame
+	_art_pipe_busy = false
+	_window_fill_busy = false
+	if gen == _gen:
+		_on_window_fill_drained(gen)
+		if _window_fill_dirty:
+			# A centre change landed while this pass ran:
+			# one more pass for the window as it now stands.
+			_window_fill_dirty = false
+			_art_pipe_enqueue_window()
+			_run_art_pipe()
 
 
 ## The fill path's face read (GRADFIX6 items 2+3): the
@@ -3993,7 +4172,28 @@ func _rederive_card_plate(idx: int, game: GameEntry) -> void:
 ## title there), and a second name painted into the art would
 ## fight it. The favorite star stays inside the rendered
 ## face, exactly as the shipped art_spec draws it.
+## The one-face fill entry every direct caller uses
+## (refresh_shot_faces, the X-press re-render, the heal via
+## the window worker). GRADFIX16: on the staged path a
+## direct ask never pays inline either - the face joins the
+## pipeline's queue (at the front: it was asked for by name)
+## and lands when the pipeline reaches it, a frame or two
+## later. The NC's syncfill path, and the pipeline's own
+## stage step, call _fill_one_face_sync directly.
 func _fill_one_face(idx: int, gen: int) -> void:
+	if debug_gf16_nc == "syncfill" or _art_pipe_in_stage:
+		await _fill_one_face_sync(idx, gen)
+		return
+	if idx < 0 or idx >= _panels.size():
+		return
+	if not _art_pipe_queue.has(idx):
+		_art_pipe_queue.push_front(idx)
+		_art_pipe_dispatch_decodes([idx])
+	if not _art_pipe_busy:
+		_run_art_pipe()
+
+
+func _fill_one_face_sync(idx: int, gen: int) -> void:
 	if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
 		return
 	if _tournament and idx < _tournament_rows.size() \
@@ -4028,7 +4228,29 @@ func _fill_one_face(idx: int, gen: int) -> void:
 		from_art = art_aspect > 0.0
 	else:
 		if art_file != "":
-			var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
+			var art_tex: Texture2D = null
+			if _art_pipe_in_stage:
+				# GRADFIX16 staged decode: consume the
+				# background decode's Image (texture
+				# creation only - the ~2 ms tail), or the
+				# decode cache's standing texture. A decode
+				# that failed in the background falls
+				# through with art_tex null, exactly as a
+				# synchronous load failure did.
+				_art_decode_mutex.lock()
+				var staged_img: Image = _art_decoded_ready.get(art_file, null) as Image
+				var staged_failed: bool = _art_decoded_failed.has(art_file)
+				if staged_img != null:
+					_art_decoded_ready.erase(art_file)
+				if staged_failed:
+					_art_decoded_failed.erase(art_file)
+				_art_decode_mutex.unlock()
+				if staged_img != null:
+					art_tex = TextureFactory.art_texture_from_decoded(art_file, staged_img)
+				elif not staged_failed and TextureFactory.art_decode_is_cached(art_file):
+					art_tex = TextureFactory.load_art_texture(art_file)
+			else:
+				art_tex = TextureFactory.load_art_texture(art_file)
 			if art_tex != null:
 				art_aspect = float(art_tex.get_width()) / float(art_tex.get_height())
 				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store, false), _panel_face_px)
