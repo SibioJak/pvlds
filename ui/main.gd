@@ -356,6 +356,12 @@ var _art_heal_deadline_msec: int = 0
 var _art_pacing_ms: float = 16.7 ## median frame delta measured over the start window's settle (the legs judge hitches against the pacing this box actually ran, the motion smoke's discipline)
 var _art_pace_stamps: Array = [] ## frame deltas collected during the settle
 var _art_over_hitch: int = 0 ## travel frames over pacing + 40 ms (an art hitch's signature, at any pacing)
+var _art_cold_deltas: Array = [] ## every cold-cruise frame delta (judged against the warm cruise at the end)
+var _art_warm_deltas: Array = [] ## every warm-cruise frame delta (the same-run motion baseline)
+var _art_warm_worst_ms: float = 0.0
+var _art_warm_released: bool = false
+var _art_warm_rest_frames: int = 0
+var _art_warm_saw_cruise: bool = false
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -11977,6 +11983,7 @@ func _drive_artstream_smoke() -> void:
 				_art_over33 += 1
 			if delta_ms > _art_pacing_ms + 40.0:
 				_art_over_hitch += 1
+			_art_cold_deltas.append(delta_ms)
 			var col_now: int = _room._grid_coord(_room.centre_index()).x
 			if delta_ms > 40.0:
 				_art_spikes.append([col_now, snappedf(delta_ms, 0.1)])
@@ -12016,12 +12023,84 @@ func _drive_artstream_smoke() -> void:
 					landed += 1
 			if not states.is_empty() and landed == states.size():
 				_artstream_expect(true, "artstream: every face in the standing window healed to real art after the cruise (%d of %d faces: key stamped, real, from art - no fallback solid stands as a face)" % [landed, states.size()])
-				_artstream_print_probe()
-				_finish_artstream_smoke()
+				_art_begin_warm_cruise()
 			elif Time.get_ticks_msec() > _art_heal_deadline_msec:
 				_artstream_expect(false, "artstream: every face in the standing window healed to real art after the cruise (%d of %d faces landed within 30 s)" % [landed, states.size()])
-				_artstream_print_probe()
+				_art_begin_warm_cruise()
+		4:
+			# The warm cruise: back over the same columns,
+			# now with every face warm - the same-run,
+			# same-box motion baseline the cold cruise is
+			# judged against (a still-wall settle pacing
+			# cannot stand in for a moving wall's frame cost
+			# on a CPU renderer).
+			_art_wait += 1
+			var warm_now: int = Time.get_ticks_usec()
+			var warm_delta: float = float(warm_now - _art_last_usec) / 1000.0
+			_art_last_usec = warm_now
+			_art_warm_deltas.append(warm_delta)
+			if warm_delta > _art_warm_worst_ms:
+				_art_warm_worst_ms = warm_delta
+			if _room.cruise_active():
+				_art_warm_saw_cruise = true
+			var warm_col: int = _room._grid_coord(_room.centre_index()).x
+			if not _art_warm_released and warm_col <= _art_start_col + 1:
+				_art_warm_released = true
+				_input_feed_stick_x(0.0)
+			if _art_warm_released:
+				if not _room.swing_active():
+					_art_warm_rest_frames += 1
+				else:
+					_art_warm_rest_frames = 0
+				if _art_warm_rest_frames >= 3:
+					_judge_artstream_against_warm()
+					_artstream_print_probe()
+					_finish_artstream_smoke()
+			elif _art_wait > 7200:
+				_input_feed_stick_x(0.0)
+				_artstream_fail("artstream: the warm return cruise never settled")
 				_finish_artstream_smoke()
+
+
+## Arm the warm return cruise (see phase 4): the stick held
+## LEFT on the real input path, from wherever the cold
+## cruise's settle left the centre.
+func _art_begin_warm_cruise() -> void:
+	_room.set_wall_motion_mode("smooth")
+	_art_warm_deltas.clear()
+	_art_warm_worst_ms = 0.0
+	_art_warm_released = false
+	_art_warm_rest_frames = 0
+	_art_warm_saw_cruise = false
+	_art_last_usec = Time.get_ticks_usec()
+	_input_feed_stick_x(-1.0)
+	_art_phase = 4
+	_art_wait = 0
+
+
+## The final travel verdict: the cold cruise judged against
+## the warm cruise's own median frame (same run, same box,
+## same wall in motion - the only honest baseline for what
+## a travel frame costs here). A hitch is a cold frame
+## carrying warm median + 40 ms; the base build's serial
+## per-column fill produces one per incoming column at any
+## pacing, the staged build produces none beyond noise.
+func _judge_artstream_against_warm() -> void:
+	if _art_warm_deltas.size() < 6:
+		_artstream_fail("artstream: the warm return cruise produced too few frames to judge against (%d)" % _art_warm_deltas.size())
+		return
+	var sorted_warm: Array = _art_warm_deltas.duplicate()
+	sorted_warm.sort()
+	var warm_median: float = float(sorted_warm[sorted_warm.size() / 2])
+	var cold_hitches: int = 0
+	for dv: Variant in _art_cold_deltas:
+		if float(dv) > warm_median + 40.0:
+			cold_hitches += 1
+	print("ARTSTREAM WARM CRUISE: frames %d, median frame %.1f ms, worst %.1f ms, saw cruise %s" % [
+		_art_warm_deltas.size(), warm_median, _art_warm_worst_ms, str(_art_warm_saw_cruise)])
+	_artstream_expect(_art_warm_saw_cruise, "artstream: the warm return also cruised on the real input path (the baseline is a cruise, not a glide)")
+	_artstream_expect(cold_hitches <= 2, "artstream: travel frames never wait on art - %d cold-cruise hitch frames (over the warm cruise's median %.1f ms + 40 ms; worst cold frame %.1f ms; allowance 2 for harness pacing)" % [cold_hitches, warm_median, _art_worst_ms])
+	_artstream_expect(_art_worst_ms <= warm_median + 75.0, "artstream: the cold cruise's worst frame stayed within the warm median + 75 ms (worst %.1f ms against warm median %.1f ms - the base build's serial fill adds ~90-140 ms over its motion baseline per column)" % [_art_worst_ms, warm_median])
 
 
 func _judge_artstream_travel() -> void:
@@ -12040,17 +12119,12 @@ func _judge_artstream_travel() -> void:
 	print("ARTSTREAM COLUMN MARKS:", mark_text if mark_text != "" else " none")
 	_artstream_expect(_art_saw_cruise, "artstream: holding the stick under SMOOTH became a cruise on the real input path")
 	_artstream_expect(final_col - _art_start_col >= 10, "artstream: the cruise spanned at least ten columns (got %d)" % (final_col - _art_start_col))
-	# The travel-frame law: the drum may never hitch for
-	# art. Judged against the pacing this box actually ran
-	# (the motion smoke's discipline - a contended llvmpipe
-	# box's bare frame can run 5x a clean rig's, and an
-	# absolute bound would judge the box, not the art): a
-	# hitch is a frame carrying pacing + 40 ms, the chunk a
-	# column of serial art work adds on the base build at
-	# any pacing, about once per incoming column. Two
-	# frames of allowance covers harness noise.
-	_artstream_expect(_art_over_hitch <= 2, "artstream: travel frames never wait on art - %d hitch frames (over pacing %.1f ms + 40 ms) during the cold-art cruise (worst %.1f ms; raw frames over 50 ms: %d; allowance 2 for harness pacing)" % [_art_over_hitch, _art_pacing_ms, _art_worst_ms, _art_over50])
-	_artstream_expect(_art_worst_ms <= _art_pacing_ms + 75.0, "artstream: the worst travel frame stayed within pacing + 75 ms during the cold-art cruise (worst %.1f ms against pacing %.1f ms - the base build's per-column serial fill adds ~90-140 ms over pacing per column)" % [_art_worst_ms, _art_pacing_ms])
+	# The travel-frame law itself is judged at the end,
+	# against the warm return cruise (see
+	# _judge_artstream_against_warm): a still-wall settle
+	# pacing cannot stand in for a moving wall's frame cost
+	# on a CPU renderer, so the cold cruise is compared to
+	# the same wall in motion with warm art, same run.
 
 
 func _drive_bootfocus_smoke() -> void:

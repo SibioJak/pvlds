@@ -4261,6 +4261,22 @@ func _art_pipe_pass() -> void:
 			var cc: int = _grid_coord(idx).x
 			if cc < _panel_window_lo or cc > _panel_window_hi:
 				continue # the window left this card behind mid-pass
+			# While a held CRUISE stands, the pipeline
+			# applies NOTHING: sustained travel is the
+			# convicted case, and on any renderer a face
+			# capture landing mid-cruise is a hitch the
+			# drum pays for art. Background decodes keep
+			# running (they touch no frame), so the faces
+			# are staged and ready; applications resume
+			# the frame the cruise ends - a picture lands
+			# a beat after the drum stops, never during
+			# its travel. Ordinary swings keep the halved
+			# rate below (short travels, the shipped cost
+			# class).
+			while _cruise_dir != 0 and gen == _gen:
+				await get_tree().process_frame
+			if gen != _gen:
+				break
 			var path: String = _face_path_for(_visible_games[idx])
 			if path != "" and not TextureFactory.art_decode_is_cached(path):
 				_art_decode_mutex.lock()
