@@ -641,6 +641,7 @@ var _art_decode_mutex: Mutex = Mutex.new() ## guards the decode dictionaries and
 var _art_decode_queue: Array[String] = [] ## art paths awaiting the decode pump (mutex-guarded)
 var _art_decode_pump_active: bool = false ## a pump task is draining _art_decode_queue (mutex-guarded): ONE decode at a time, ever - the ArtWarmer's proven discipline, so background decode can never swarm the renderer's cores
 var _art_stopping: bool = false ## the room is leaving the tree: the pipeline starts no new face and the pump returns after its current decode - art work must wind down at exit, not continue into engine teardown (the harness's swing probe segfaulted at quit with fills in flight; the serial worker it replaced was almost always idle by quit, the pipeline by design is not)
+var _face_path_memo: Dictionary = {} ## game_id -> art path, for the pipeline's per-centre-change filter ONLY: _face_path_for probes the filesystem per game, and asking it for all 63 window faces on every column crossing put a measurable burst on the crossing frame (healthy-box runs: 1-2 spikes of 50-90 ms per column with all art work parked). The memo is rewritten by every fill from its own fresh probe, erased on shot refresh, and cleared on rebuild; the heal and the fills themselves always probe fresh, so an upgrade the memo missed is still caught and filled by them, and the fill then corrects the memo.
 var _power_subject_inflight: Dictionary = {} ## game_id -> true while its power-on subject renders
 var _power_prefetch_asked: Dictionary = {} ## game_id -> true once the warmer has been asked for its cold backglass (GRADFIX6)
 var _face_heal_retries: Dictionary = {} ## GRADFIX6 item 2: "game_id|art_file" -> art-render retries already spent by the panel heal
@@ -3167,6 +3168,7 @@ func _rebuild_wall() -> void:
 	# adopt_library) - but the confinement law is general.
 	var panel_focus: ClickableQuad = _focused if _setup_panel_up else null
 	_plates_pending = true ## the new wall's nameplates re-derive once their labels shape (see _refresh_card_plate)
+	_face_path_memo.clear() # a rebuilt wall re-derives its paths (the pipeline filter's memo, see _face_path_memo)
 	_gen += 1
 	var gen: int = _gen
 	wall_ready = false
@@ -4145,6 +4147,37 @@ func _face_is_standing(idx: int) -> bool:
 	return str(_panel_face_key.get(game.game_id, "")) == _face_key_for(idx)
 
 
+## The pipeline filter's key: _face_key_for with the art
+## path read through the memo (see _face_path_memo). Only
+## the enqueue filter and the pass's dispatch/landed checks
+## use it - never the heal, never a fill.
+func _face_key_for_memo(idx: int) -> String:
+	if idx < 0 or idx >= _visible_games.size():
+		return ""
+	var game: GameEntry = _visible_games[idx]
+	var art_file: String = _face_path_memoized(game)
+	var fav: bool = _store != null and _store.is_favorite(game.game_id)
+	var pup: bool = game.is_pup_tagged()
+	return game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+
+
+func _face_path_memoized(game: GameEntry) -> String:
+	if _face_path_memo.has(game.game_id):
+		return str(_face_path_memo[game.game_id])
+	var p: String = _face_path_for(game)
+	_face_path_memo[game.game_id] = p
+	return p
+
+
+## The filter's standing test (memoized path): a face whose
+## memo key matches its stamp needs no pipeline work.
+func _face_is_standing_memo(idx: int) -> bool:
+	if idx < 0 or idx >= _visible_games.size():
+		return true
+	var game: GameEntry = _visible_games[idx]
+	return str(_panel_face_key.get(game.game_id, "")) == _face_key_for_memo(idx)
+
+
 ## Enqueue the standing window's faces for the staged
 ## pipeline (centre-out). Called on every centre change:
 ## the queue is REBUILT from the standing window each time,
@@ -4158,23 +4191,26 @@ func _face_is_standing(idx: int) -> bool:
 ## them (see _art_pipe_pass), so this call itself stays
 ## cheap on the travel path that calls it.
 func _art_pipe_enqueue_window() -> void:
+	var probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
 	var order: Array[int] = _window_fill_order()
 	var needy: Array[int] = []
 	for idx: int in order:
-		if not _face_is_standing(idx):
+		if not _face_is_standing_memo(idx):
 			needy.append(idx)
 	_art_pipe_queue = needy
 	var pre: Array[int] = []
 	for i: int in range(mini(6, needy.size())):
 		pre.append(needy[i])
 	_art_pipe_dispatch_decodes(pre)
+	if TextureFactory.probe_enabled:
+		TextureFactory.probe_note("pipe_enqueue_window", Time.get_ticks_usec() - probe_t)
 
 
 func _art_pipe_dispatch_decodes(idxs: Array[int]) -> void:
 	for idx: int in idxs:
 		if idx < 0 or idx >= _visible_games.size():
 			continue
-		var path: String = _face_path_for(_visible_games[idx])
+		var path: String = _face_path_memoized(_visible_games[idx])
 		if path == "":
 			continue
 		if TextureFactory.art_decode_is_cached(path):
@@ -4312,7 +4348,7 @@ func _art_pipe_pass() -> void:
 					await get_tree().process_frame
 			if gen != _gen:
 				break
-			var path: String = _face_path_for(_visible_games[idx])
+			var path: String = _face_path_memoized(_visible_games[idx])
 			if path != "" and not TextureFactory.art_decode_is_cached(path):
 				_art_decode_mutex.lock()
 				var decode_landed: bool = _art_decoded_ready.has(path) or _art_decoded_failed.has(path)
@@ -4446,6 +4482,7 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 	var game: GameEntry = _visible_games[idx]
 	var quad: ClickableQuad = _panels[idx]
 	var art_file: String = _face_path_for(game)
+	_face_path_memo[game.game_id] = art_file # every fill refreshes the pipeline filter's memo from its own fresh probe
 	var fav: bool = _store != null and _store.is_favorite(game.game_id)
 	var pup: bool = game.is_pup_tagged()
 	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
@@ -4613,6 +4650,7 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 func refresh_shot_faces(game: GameEntry) -> void:
 	if game == null:
 		return
+	_face_path_memo.erase(game.game_id) # the shot changed this game's art path; the fill below re-memoizes it fresh
 	var idx: int = _visible_games.find(game)
 	if idx < 0 or idx >= _panels.size():
 		return
