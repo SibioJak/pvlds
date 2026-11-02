@@ -935,6 +935,16 @@ var _joy_prev_lt: bool = false ## trigger edge tracking (GRADFIX10 item 4): the 
 var _joy_prev_rt: bool = false
 var _joy_prev_right: bool = false ## D-pad Right edge tracking: the room's BACK-out press (see _process)
 var _joy_right_armed: bool = false ## baseline-release arming: set once THIS room instance has observed D-pad Right released; until then no right-press edge can exit (see _process)
+## Scroll telemetry (the diagnostic build's witness -
+## core/scroll_telemetry.gd): observation only. The logger
+## is started lazily on the room's first visible frame (by
+## then Main's config apply has named the boot wall-motion
+## mode), and every hook below only READS the standing
+## state - no hook assigns scroll/input state, returns a
+## value a decision can consume, or runs when the room is
+## hidden. Deleting the hooks restores the shipped build.
+var _scroll_telemetry: ScrollTelemetry = ScrollTelemetry.new()
+var _scroll_telemetry_started: bool = false
 
 
 func setup(factory: TextureFactory, scanner: LibraryScanner, store: StateStore, xr_enabled: bool) -> void:
@@ -1330,6 +1340,7 @@ func starfield_mode() -> String:
 ## from the drum's current angle in both modes (the planetarium
 ## speed-gate law). Default "smooth" (Chris's pick).
 func set_wall_motion_mode(mode: String) -> void:
+	var telemetry_old_mode: String = _wall_motion_mode ## scroll telemetry: the dial event's before (read-only)
 	_wall_motion_mode = mode if ["smooth", "stepped"].has(mode) else "smooth"
 	if not _wall_boot_mode_captured:
 		# The first call on a room is Main's config apply at
@@ -1337,6 +1348,17 @@ func set_wall_motion_mode(mode: String) -> void:
 		# nolive NC's driver would be stuck with.
 		_wall_boot_mode = _wall_motion_mode
 		_wall_boot_mode_captured = true
+	# Scroll telemetry: a real change of the dial is an
+	# event (the boot config apply above precedes the
+	# logger's start, so the header carries the boot mode
+	# and only live changes land here; the SETUP panel's
+	# turns are the ones with setup_panel_up standing).
+	if _scroll_telemetry_started and telemetry_old_mode != _wall_motion_mode:
+		var dial_fields: Dictionary = _telemetry_context()
+		dial_fields["old_mode"] = telemetry_old_mode
+		dial_fields["new_mode"] = _wall_motion_mode
+		dial_fields["source"] = "setup_panel" if _setup_panel_up else "set_wall_motion_mode"
+		_telemetry_record("wall_motion_mode_changed", dial_fields)
 	# A dial turn mid-travel hands the standing travel to the
 	# newly chosen driver from the drum's current angle and
 	# velocity - no snap, no restart.
@@ -1344,7 +1366,7 @@ func set_wall_motion_mode(mode: String) -> void:
 		# A held-stick cruise is a SMOOTH-only travel: a dial
 		# turn away from SMOOTH ends it here, settling at the
 		# nearest column under the newly chosen driver.
-		_stop_cruise(true)
+		_stop_cruise(true, "wall_motion_mode_changed_away_from_smooth")
 	if _swing_active:
 		_swing_smooth_retarget()
 
@@ -1374,6 +1396,81 @@ func wall_driver_mode() -> String:
 ## wall-motion driver: the smooth driver re-anchors its
 ## travel on the drum's current angle and standing target
 ## (the real definition stands beside _update_swing).
+
+
+## ------------------------------------------------ scroll telemetry hooks
+## The witness's read-only hooks (see the state block at
+## _scroll_telemetry). _telemetry_context snapshots the
+## standing scroll state for a record; nothing here assigns
+## anything outside the logger.
+
+func _telemetry_start_if_needed() -> void:
+	if _scroll_telemetry_started or not visible:
+		return
+	_scroll_telemetry_started = _scroll_telemetry.start({
+		"build_stamp": ScrollTelemetry.BUILD_STAMP,
+		"base_commit": ScrollTelemetry.BASE_COMMIT,
+		"log_path": ScrollTelemetry.LOG_PATH,
+		"wall_motion_mode_at_boot": wall_motion_mode(),
+		"wall_driver_mode_at_boot": _wall_driver_mode(),
+		"view_at_room_entry": "tournament" if _tournament else "library",
+		"filter_at_room_entry": _filter,
+		"sort_at_room_entry": _sort,
+		"room_mode_at_entry": _mode,
+		"visible_games_at_entry": _visible_games.size(),
+		"columns_at_entry": _columns,
+		"centre_index_at_entry": _centre_index,
+	})
+
+
+func _telemetry_context() -> Dictionary:
+	var centre_col: int = -1
+	if _centre_index >= 0 and _centre_index < _panels.size():
+		centre_col = _grid_coord(_centre_index).x
+	return {
+		"wall_motion_mode": _wall_motion_mode,
+		"wall_driver_mode": _wall_driver_mode(),
+		"room_mode": _mode,
+		"tournament": _tournament,
+		"setup_panel_up": _setup_panel_up,
+		"placard_up": _placard_up,
+		"launch_wait": _launching_game_id != "",
+		"focused_panel_index": _panels.find(_focused) if _focused != null else -1,
+		"centre_index": _centre_index,
+		"centre_column": centre_col,
+		"columns": _columns,
+		"swing_active": _swing_active,
+		"swing_target_yaw_deg": rad_to_deg(_swing_to),
+		"drum_yaw_deg": rad_to_deg(_drum_yaw),
+		"applied_yaw_deg": rad_to_deg(_wall.rotation.y) if _wall != null else rad_to_deg(_drum_yaw),
+		"angular_velocity_deg_s": rad_to_deg(_swing_vel),
+		"cruise_dir": _cruise_dir,
+		"hold_dir_x": _joy_hold_dir.x,
+		"hold_dir_y": _joy_hold_dir.y,
+		"hold_steps": _joy_hold_steps,
+	}
+
+
+func _telemetry_record(kind: String, fields: Dictionary) -> void:
+	if not _scroll_telemetry_started or not visible:
+		return
+	_scroll_telemetry.record(kind, fields)
+
+
+## A cruise exit that happens by direct assignment rather
+## than through _stop_cruise (a centre snap, a wall
+## rebuild): the exit is recorded BEFORE the assignment
+## clears the state, so the log sees the cruise that died.
+func _telemetry_cruise_cleared(reason: String) -> void:
+	if not _scroll_telemetry_started or _cruise_dir == 0:
+		return
+	var fields: Dictionary = _telemetry_context()
+	fields["transition"] = "exit"
+	fields["reason"] = reason
+	fields["from_cruise_dir"] = _cruise_dir
+	fields["to_cruise_dir"] = 0
+	fields["settle"] = false
+	_telemetry_record("cruise_transition", fields)
 
 
 func _apply_starfield_mode() -> void:
@@ -2539,6 +2636,7 @@ func _set_centre(index: int, snap: bool = false) -> void:
 		_swing_vel = 0.0
 		_swing_active = false
 		_swing_journey = false
+		_telemetry_cruise_cleared("centre_snap_teleport") ## scroll telemetry: witness the cruise this teleport kills (read-only)
 		_cruise_dir = 0 ## a teleport kills any held-stick cruise outright (GRADFIX13 item 3)
 		if _wall != null:
 			_wall.rotation.y = target
@@ -2714,6 +2812,16 @@ func _begin_cruise(step: int) -> void:
 	_swing_active = true
 	_swing_journey = false
 	_swing_to = _yaw_for_column(maxi(0, _columns - 1) if step > 0 else 0)
+	# Scroll telemetry: the cruise's birth, with the
+	# counter state that fired it (read-only).
+	if _scroll_telemetry_started:
+		var fields: Dictionary = _telemetry_context()
+		fields["transition"] = "enter"
+		fields["reason"] = "hold_second_step"
+		fields["threshold"] = "same-direction hold reaches its second step (hold_steps >= 1 at the step tick)"
+		fields["cruise_band"] = _cruise_band
+		fields["cruise_speed_deg_s"] = SWING_SMOOTH_CRUISE_DEG
+		_telemetry_record("cruise_transition", fields)
 
 
 ## The cruise's per-frame centre follow: the centre column
@@ -2745,10 +2853,21 @@ func _cruise_follow() -> void:
 ## snap - owns the settle, unchanged). Without settle (a
 ## reversal), nothing is seated here: the caller's fresh
 ## step retargets mid-travel in the same frame.
-func _stop_cruise(settle: bool) -> void:
+func _stop_cruise(settle: bool, reason: String = "unspecified") -> void:
 	if _cruise_dir == 0:
 		return
+	var telemetry_ended_dir: int = _cruise_dir ## scroll telemetry: the cruise that is ending (read-only)
 	_cruise_dir = 0
+	# Scroll telemetry: the cruise's death, recorded before
+	# the settle below retargets anything (read-only).
+	if _scroll_telemetry_started:
+		var fields: Dictionary = _telemetry_context()
+		fields["transition"] = "exit"
+		fields["reason"] = reason
+		fields["from_cruise_dir"] = telemetry_ended_dir
+		fields["to_cruise_dir"] = 0
+		fields["settle"] = settle
+		_telemetry_record("cruise_transition", fields)
 	if not settle or _panels.is_empty() or _columns <= 0:
 		return
 	var col: int = clampi(int(roundf(_drum_yaw / deg_to_rad(ANGLE_STEP_DEG))), 0, maxi(0, _columns - 1))
@@ -2777,7 +2896,7 @@ func _update_cruise(delta: float) -> void:
 	_swing_vel += (desired - _swing_vel) * blend
 	_drum_yaw = clampf(_drum_yaw + _swing_vel * delta, lo, hi)
 	if (_cruise_dir > 0 and _drum_yaw >= hi - 0.0001) or (_cruise_dir < 0 and _drum_yaw <= lo + 0.0001):
-		_stop_cruise(true)
+		_stop_cruise(true, "shelf_end_reached")
 	else:
 		_cruise_follow()
 	var applied_yaw: float = _drum_yaw
@@ -3005,6 +3124,7 @@ func _rebuild_wall() -> void:
 	_swing_active = false
 	_swing_vel = 0.0
 	_swing_journey = false
+	_telemetry_cruise_cleared("wall_rebuilt") ## scroll telemetry: witness the cruise this rebuild kills (read-only)
 	_cruise_dir = 0 ## a rebuild kills any held-stick cruise with the wall it travelled (GRADFIX13 item 3)
 	# Standing cards return to the pool (they are NOT freed:
 	# a rebuild re-seats the same nodes at the new view's
@@ -7834,6 +7954,15 @@ func _unhandled_input(event: InputEvent) -> void:
 					_detail.handle_escape()
 
 
+## Scroll telemetry: the witness closes its file (final
+## flush + footer) as the room leaves the tree, so a normal
+## exit always lands the complete log.
+func _exit_tree() -> void:
+	if _scroll_telemetry_started:
+		_scroll_telemetry.close()
+		_scroll_telemetry_started = false
+
+
 func _process(delta: float) -> void:
 	# The flat (non-XR) camera is STATIC at the seated viewpoint - the
 	# mouse is a pure pointer there, never a look control. A view that
@@ -7880,6 +8009,13 @@ func _process(delta: float) -> void:
 	# the SETUP placard the press also does nothing: BACK is the
 	# only way off the placard.
 	# The loading marquee animates on this same per-frame beat.
+	# Scroll telemetry (observation only): start the witness
+	# on the room's first visible frame, and snapshot the
+	# drum's motion state BEFORE this frame's swing update -
+	# the frame record below reads it against the after.
+	_telemetry_start_if_needed()
+	var telemetry_motion_was_active: bool = _swing_active or _cruise_dir != 0 or absf(_swing_vel) > 0.0001
+	var telemetry_applied_yaw_before: float = _wall.rotation.y if _wall != null else _drum_yaw
 	if _marquee_up:
 		_update_marquee(delta)
 	_update_background(delta) ## the starfield drift (GRADFIX4 item 5d) - its own beat, ungated
@@ -7897,8 +8033,26 @@ func _process(delta: float) -> void:
 	_update_pop(delta)
 	_update_rail_lift(delta)
 	_update_swing(delta)
+	# Scroll telemetry (observation only): one frame record
+	# per rendered frame in which the drum was moving when
+	# the frame began or still is when its swing update has
+	# run - target, actual and applied yaw, velocity, and
+	# the driver state that produced them.
+	if _scroll_telemetry_started and visible and (telemetry_motion_was_active or _swing_active or _cruise_dir != 0 \
+			or absf(_swing_vel) > 0.0001 or absf((_wall.rotation.y if _wall != null else _drum_yaw) - telemetry_applied_yaw_before) > 0.0000001):
+		var frame_fields: Dictionary = _telemetry_context()
+		frame_fields["engine_frame"] = Engine.get_process_frames()
+		frame_fields["frame_delta_ms"] = delta * 1000.0
+		frame_fields["phase"] = "after_swing_update"
+		frame_fields["swing_journey"] = _swing_journey
+		frame_fields["swing_cols"] = _swing_cols
+		frame_fields["swing_duration_s"] = _swing_duration
+		frame_fields["cruise_cap_deg_s"] = rad_to_deg(_swing_cruise_rad)
+		_telemetry_record("frame", frame_fields)
 	_update_power(delta)
 	var deaf: bool = _launching_game_id != ""
+	var telemetry_cooldown_before: float = _joy_cooldown ## scroll telemetry: the poll's before (read-only)
+	var telemetry_cruise_before_poll: int = _cruise_dir ## scroll telemetry: the cruise state as this poll began (read-only)
 	_joy_cooldown = maxf(0.0, _joy_cooldown - delta)
 	var ax: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)
 	var ay: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_Y)
@@ -7932,7 +8086,7 @@ func _process(delta: float) -> void:
 	# seated here).
 	if _cruise_dir != 0 and (_mode != "wall" or _tournament or _placard_up or _setup_panel_up \
 			or deaf or _focused == null or _panels.find(_focused) < 0):
-		_stop_cruise(not deaf)
+		_stop_cruise(not deaf, "cruise_context_lost")
 	# The hold bookkeeping (GRADFIX13 item 3 - see the
 	# cruise block above _cruise_wanted for the conviction):
 	# the poll counts the discrete steps of ONE continuous
@@ -7942,27 +8096,74 @@ func _process(delta: float) -> void:
 	# fresh step below retargets mid-travel, the prime law).
 	if dir == Vector2.ZERO:
 		if _cruise_dir != 0:
-			_stop_cruise(true)
+			_stop_cruise(true, "stick_released")
 		_joy_hold_dir = Vector2.ZERO
 		_joy_hold_steps = 0
 	elif dir != _joy_hold_dir:
 		if _cruise_dir != 0:
-			_stop_cruise(false)
+			_stop_cruise(false, "stick_direction_changed")
 		_joy_hold_dir = dir
 		_joy_hold_steps = 0
+	# Scroll telemetry (observation only): this poll's step
+	# decision, named as the branches below take it. The
+	# locals are written by the branches and read only by
+	# the record after them - they steer nothing.
+	var telemetry_decision: String = "none"
+	var telemetry_decision_source: String = "poll"
+	var telemetry_decision_reason: String = "stick_neutral" if dir == Vector2.ZERO else "cooldown_active"
+	var telemetry_hold_steps_before_decision: int = _joy_hold_steps
+	var telemetry_cooldown_at_poll: float = _joy_cooldown
 	if dir != Vector2.ZERO and _joy_cooldown <= 0.0:
 		if not deaf:
 			if _cruise_dir != 0:
+				telemetry_decision = "none_discrete_step"
+				telemetry_decision_source = "standing_cruise"
+				telemetry_decision_reason = "cruise_owns_hold_travel"
 				pass ## the cruise IS this hold's travel: no discrete step fires under it
 			elif _joy_hold_steps >= 1 and _cruise_wanted(dir):
 				# The hold's second same-direction step: under
 				# SMOOTH the hold becomes a cruise instead of
 				# another per-column retarget.
+				telemetry_decision = "begin_cruise"
+				telemetry_decision_source = "hold_counter"
+				telemetry_decision_reason = "second_same_direction_step"
 				_begin_cruise(1 if dir.x > 0.0 else -1)
 			else:
+				telemetry_decision = "step"
+				telemetry_decision_source = "move_focus"
+				telemetry_decision_reason = "discrete_step_fired"
 				_move_focus(dir)
 				_joy_hold_steps += 1
+		else:
+			telemetry_decision = "suppressed"
+			telemetry_decision_source = "poll"
+			telemetry_decision_reason = "launch_wait_deaf"
 		_joy_cooldown = 0.24
+	# Scroll telemetry (observation only): the poll record -
+	# one per rendered frame, at the product's own cadence,
+	# with the raw axes exactly as the poll read them.
+	if _scroll_telemetry_started and visible:
+		var poll_fields: Dictionary = _telemetry_context()
+		poll_fields["engine_frame"] = Engine.get_process_frames()
+		poll_fields["frame_delta_ms"] = delta * 1000.0
+		poll_fields["joy_axis_x"] = ax
+		poll_fields["joy_axis_y"] = ay
+		poll_fields["dir_x"] = dir.x
+		poll_fields["dir_y"] = dir.y
+		poll_fields["deadzone_threshold"] = 0.55
+		poll_fields["step_decision"] = telemetry_decision
+		poll_fields["step_source"] = telemetry_decision_source
+		poll_fields["step_reason"] = telemetry_decision_reason
+		poll_fields["cooldown_before_s"] = telemetry_cooldown_before
+		poll_fields["cooldown_at_poll_s"] = telemetry_cooldown_at_poll
+		poll_fields["cooldown_after_s"] = _joy_cooldown
+		poll_fields["repeat_cooldown_s"] = 0.24
+		poll_fields["hold_steps_before_decision"] = telemetry_hold_steps_before_decision
+		poll_fields["hold_steps_after"] = _joy_hold_steps
+		poll_fields["cruise_dir_before_poll"] = telemetry_cruise_before_poll
+		poll_fields["cruise_dir_after_poll"] = _cruise_dir
+		poll_fields["deaf"] = deaf
+		_telemetry_record("poll", poll_fields)
 	var a_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_A)
 	if a_now and not _joy_prev_a and _focused != null and not deaf:
 		_a_press()
