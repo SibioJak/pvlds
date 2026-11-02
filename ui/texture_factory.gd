@@ -268,6 +268,65 @@ static func ink_extent(img: Image, exclude_face_rect: Rect2) -> Vector2:
 	return Vector2((float(first_row + last_row + 1) * 0.5) / sy, float(ink_n))
 
 
+## A rendered board face's FRAMELESS census (GRADFIX15
+## item 3): every pixel of the face, judged against the
+## text block's own part rects (CardFace.board_metrics'
+## "part_rects", grown 2 px for antialiasing). A frameless
+## face is its text block on transparency, so: visible
+## (alpha > 0) pixels INSIDE a part rect are ink/accent;
+## visible pixels anywhere else are STRAY - a restored
+## panel fill, a spine line, any furniture the nuke killed
+## - and the count must be 0. "line_out" narrows strays to
+## the former spine-line columns (x 41-43 and x w-44..w-42,
+## the hairline's two seats): the grey line's absence,
+## measured at its old address. Returns {total, visible,
+## transparent, stray, stray_pos, line_out}; a null/empty
+## image returns total 0 (the caller fails that by name).
+static func frameless_census(img: Image, part_rects: Array) -> Dictionary:
+	var out: Dictionary = {"total": 0, "visible": 0, "transparent": 0,
+		"stray": 0, "stray_pos": Vector2i(-1, -1), "line_out": 0}
+	if img == null or img.is_empty():
+		return out
+	var work: Image = img
+	if work.get_format() != Image.FORMAT_RGBA8:
+		work = img.duplicate() as Image
+		work.convert(Image.FORMAT_RGBA8)
+	var w: int = work.get_width()
+	var h: int = work.get_height()
+	var data: PackedByteArray = work.get_data()
+	var rects: Array[Rect2] = []
+	for rv: Variant in part_rects:
+		if rv is Rect2:
+			rects.append((rv as Rect2).grow(2.0))
+	var visible_n: int = 0
+	var stray_n: int = 0
+	var line_n: int = 0
+	var stray_pos: Vector2i = Vector2i(-1, -1)
+	for y: int in range(h):
+		for x: int in range(w):
+			if int(data[(y * w + x) * 4 + 3]) == 0:
+				continue
+			visible_n += 1
+			var inside: bool = false
+			for r: Rect2 in rects:
+				if r.has_point(Vector2(x, y)):
+					inside = true
+					break
+			if not inside:
+				stray_n += 1
+				if stray_pos.x < 0:
+					stray_pos = Vector2i(x, y)
+				if (x >= 41 and x <= 43) or (x >= w - 44 and x <= w - 42):
+					line_n += 1
+	out["total"] = w * h
+	out["visible"] = visible_n
+	out["transparent"] = w * h - visible_n
+	out["stray"] = stray_n
+	out["stray_pos"] = stray_pos
+	out["line_out"] = line_n
+	return out
+
+
 static func make_solid(color: Color) -> Texture2D:
 	var img: Image = Image.create(4, 4, false, Image.FORMAT_RGBA8)
 	img.fill(color)

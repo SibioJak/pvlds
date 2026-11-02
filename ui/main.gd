@@ -4171,6 +4171,7 @@ var _grad_gf10_board_tex: Texture2D ## GRADFIX10 (item 1): the phase-9 board pro
 var _grad_gf10_few_tex: Texture2D ## GRADFIX10 (item 1): the few-rows board probe's rendered texture
 var _grad_gf10_few_m: Dictionary = {} ## GRADFIX10 (item 1): the few-rows board probe's metrics
 var _grad_gf10_few_spec: Dictionary = {} ## GRADFIX10 (item 1): the few-rows board probe's spec
+var _grad_gf15_back_tex: Texture2D ## GRADFIX15 (item 3): the back probe's rendered texture, held for the frameless census
 ## Census violation counters (the sweep counts; the named
 ## verdicts print once, with the first example of each kind).
 var _grad_viol: Dictionary = {}
@@ -5015,7 +5016,7 @@ func _grad_gf8_run_probes() -> void:
 	var g: GameEntry = _grad_game(str(_grad_manifest.get("long_id", "")))
 	if g != null:
 		var wspec: Dictionary = RoomSpecs.wing_spec(g, null, "", now_unix)
-		await _room._factory.render_texture(wspec, RoomSpecs.BACK_FACE_PX)
+		_grad_gf15_back_tex = await _room._factory.render_texture(wspec, RoomSpecs.BACK_FACE_PX)
 		_grad_gf8_back_m = _room._factory.face_board_metrics()
 	_grad_gf8_probes_done = true
 
@@ -5108,6 +5109,40 @@ func _grad_gf8_legs() -> void:
 	# verified by census rather than assumed).
 	_grad_expect(_room.bookend_fin_count() == 0,
 		"fins: zero bookend fin nodes stand in the room (library view; got %d)" % _room.bookend_fin_count())
+	# GRADFIX15 (items 1+2, the amputation): the board and
+	# back faces are FRAMELESS - the text block stands on
+	# transparency, no panel fill behind it, and the grey
+	# spine line is deleted at its source. The census judges
+	# every pixel of the three probe faces against the text
+	# block's own part rects: visible alpha outside them is
+	# stray and must be 0; the former spine-line columns must
+	# carry no visible pixel outside the block. Under
+	# PVLDS_GF15_NC=panelfill the panel fill returns and
+	# these legs fail by name.
+	_grad_gf15_census_leg("many-rows board", _grad_gf10_board_tex, bm)
+	_grad_gf15_census_leg("few-rows board", _grad_gf10_few_tex, _grad_gf10_few_m)
+	_grad_gf15_census_leg("flip back", _grad_gf15_back_tex, wm)
+
+
+## GRADFIX15 (item 3): one face's frameless census verdict -
+## the pixel counts print either way (the record), and the
+## leg fails on any stray alpha, any missing transparency,
+## or any visible pixel at the grey line's former address.
+func _grad_gf15_census_leg(label: String, tex: Texture2D, metrics: Dictionary) -> void:
+	if tex == null or metrics.is_empty():
+		_grad_expect(false, "frameless census: the %s face rendered for its census (texture %s, metrics %s)"
+			% [label, "present" if tex != null else "MISSING", "present" if not metrics.is_empty() else "MISSING"])
+		return
+	var c: Dictionary = TextureFactory.frameless_census(tex.get_image(), metrics.get("part_rects", []) as Array)
+	print("GRADFIX15 CENSUS %s: total %d, visible ink/accent %d, transparent %d, stray %d (first %s), grey-line columns %d"
+		% [label, int(c.get("total", 0)), int(c.get("visible", 0)), int(c.get("transparent", 0)),
+			int(c.get("stray", 0)), str(c.get("stray_pos", Vector2i(-1, -1))), int(c.get("line_out", 0))])
+	_grad_expect(int(c.get("total", 0)) > 0 and int(c.get("transparent", 0)) > 0 and int(c.get("stray", 0)) == 0,
+		"frameless census: the %s's text block stands on transparency - %d visible ink/accent px, %d transparent px, %d stray-alpha px outside the text block (must be 0; PVLDS_GF15_NC=panelfill restores the panel fill and this leg fails by name)"
+			% [label, int(c.get("visible", 0)), int(c.get("transparent", 0)), int(c.get("stray", 0))])
+	_grad_expect(int(c.get("line_out", 0)) == 0,
+		"grey line: no visible pixel stands in the former spine-line columns of the %s (%d found outside the text block - the hairline is deleted at its source, CardFace's spine furniture)"
+			% [label, int(c.get("line_out", 0))])
 	# Item 6: the pager stops are gone from the rail; the
 	# page readout stays and still TRACKS the centred
 	# column - move the centre a page over and the readout
@@ -12132,6 +12167,34 @@ func _tournament_leg_standing_boards() -> void:
 				and bool(entry.get("texture_real", false)) and ink > 0.02,
 			"standing board: '%s' board stands open at rest - visible, %dx%d, real, inked (size %s, real %s, ink stdev %.3f)"
 				% [tname, RoomSpecs.BOARD_FACE_PX.x, RoomSpecs.BOARD_FACE_PX.y, str(tex.get_size()) if tex != null else "none", str(bool(entry.get("texture_real", false))), ink])
+		# GRADFIX15 (items 1+2): the standing board's face is
+		# FRAMELESS - its corners are clear and a real share
+		# of its pixels are transparent, because the texture
+		# is the text block alone, with no panel fill and no
+		# spine line behind it. (The grad smoke's census
+		# judges every pixel; this leg samples the standing
+		# texture in the room.) Under PVLDS_GF15_NC=panelfill
+		# the fill returns, the corners go opaque and this
+		# leg fails by name.
+		var fimg: Image = tex.get_image() if tex != null else null
+		var corners_clear: bool = false
+		var transp_pct: int = 0
+		if fimg != null and not fimg.is_empty():
+			var fw: int = fimg.get_width()
+			var fh: int = fimg.get_height()
+			corners_clear = fimg.get_pixel(0, 0).a == 0.0 and fimg.get_pixel(fw - 1, 0).a == 0.0 \
+				and fimg.get_pixel(0, fh - 1).a == 0.0 and fimg.get_pixel(fw - 1, fh - 1).a == 0.0
+			var samp_n: int = 0
+			var samp_t: int = 0
+			for sy: int in range(0, fh, 16):
+				for sx: int in range(0, fw, 16):
+					samp_n += 1
+					if fimg.get_pixel(sx, sy).a == 0.0:
+						samp_t += 1
+			transp_pct = int(round(100.0 * float(samp_t) / float(maxi(1, samp_n))))
+		_tournament_expect(corners_clear and transp_pct >= 10,
+			"frameless board: '%s' board face is its text block on transparency - corners clear %s, %d%% of sampled pixels transparent (PVLDS_GF15_NC=panelfill restores the panel fill and this leg fails by name)"
+				% [tname, str(corners_clear), transp_pct])
 
 
 func _tournament_leg_layout_boards() -> void:
