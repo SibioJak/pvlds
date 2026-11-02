@@ -153,7 +153,17 @@ extends Node
 ##                       pre-nuke D-pad movement and
 ##                       PVLDS_INPUT_NC=notrig leaves the
 ##                       triggers unread: the matching legs
-##                       must fail by name under each.
+##                       must fail by name under each. The
+##                       GRADFIX16 item 1 legs ride the same
+##                       driver: a bumper/stick focus walk
+##                       visits every rail stop in order in
+##                       the library and the Tournament Room,
+##                       REFRESH's lift is proven in a rendered
+##                       grab, and A on REFRESH fires the
+##                       refresh ask in both views. Env
+##                       PVLDS_GF16_NC=refreshgate restores
+##                       the shipped tournament-only gating:
+##                       the library legs must fail by name.
 ##   --pvlds-seated-cam  with --pvlds-shot: take the shot from a
 ##                       seated eye height (RoomView.SEATED_EYE_Y)
 ##                       instead of the standing desk eye
@@ -264,6 +274,7 @@ var _input_smoke_failures: int = 0
 var _input_started: bool = false ## the input legs run async (they feed real pad events and wait out frames); kicked off once
 var _input_done: bool = false ## the input legs have reported
 var _input_exit_fired: bool = false ## the D-pad Right BACK probe's witness (exit_requested caught by a test lambda, not the quit handler)
+var _input_refresh_fired: bool = false ## the GRADFIX16 REFRESH probe's witness (tournament_refresh_requested caught by a test lambda)
 var _smoke_nav: bool = false ## --pvlds-smoke-nav: the focus graph + seated wall clearance contract
 var _nav_smoke_phase: int = 0
 var _nav_smoke_wait: int = 0
@@ -662,6 +673,12 @@ func _ready() -> void:
 	# each so the input smoke's gf14 grammar legs fail by
 	# name. Set here, before any room exists.
 	RoomView.debug_gf14_nc = OS.get_environment("PVLDS_GF14_NC")
+	# GRADFIX16 item 1's negative-control seam
+	# (PVLDS_GF16_NC=refreshgate): restores the shipped
+	# gating - REFRESH pickable only while the Tournament
+	# Room stands - so the input smoke's gf16 refresh legs
+	# fail by name. Set here, before any room exists.
+	RoomView.debug_gf16_nc = OS.get_environment("PVLDS_GF16_NC")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -7918,8 +7935,9 @@ func _xpress_class_async(entry: Dictionary) -> void:
 ##          empties.
 ##   leg 9: THE VERTICAL WALL LAW (GRADFIX13 item 4): from
 ##          EVERY stop in RAIL_FOCUS_ORDER (wovp_refresh
-##          inside the Tournament view, the only view where
-##          it is pickable), UP lands on the centre column's
+##          judged in the library AND inside the Tournament
+##          view - it is pickable in both since GRADFIX16
+##          item 1), UP lands on the centre column's
 ##          card on the centre band - the centre panel
 ##          itself - and DOWN returns to the rail, with the
 ##          drum's seated column and the swing's target yaw
@@ -8322,6 +8340,7 @@ func _input_legs_async() -> void:
 		_input_expect(_room.focused_quad() == _room.rail_quad("desk"),
 			"dpad-back setup panel: focus lands on the rail's SETUP stop")
 	await _input_leg_triggers_async()
+	await _input_leg_gf16_refresh_async()
 	_input_done = true
 
 
@@ -8497,6 +8516,183 @@ func _input_leg_triggers_async() -> void:
 	await _input_wait_frames(10)
 
 
+## Wait until the named rail section's lift settles (flush
+## when sink, full when not), bounded; returns the amount
+## reached.
+func _input_gf16_wait_lift(key: String, sink: bool) -> float:
+	var amt: float = _room.rail_lift_amount(key)
+	var waited: int = 0
+	while waited < 180:
+		amt = _room.rail_lift_amount(key)
+		if sink and amt <= 0.001:
+			break
+		if not sink and amt >= 0.999:
+			break
+		await get_tree().process_frame
+		waited += 1
+	return amt
+
+
+## The REFRESH section's rendered brightness right now:
+## mean luminance over the inner half of its screen rect
+## in a fresh frame grab (saved beside the log under
+## PVLDS_GRAB_DIR when set). -1 when it cannot be read.
+func _input_gf16_refresh_mean(tag: String) -> float:
+	var img: Image = get_viewport().get_texture().get_image()
+	var dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if dir != "":
+		img.save_png(dir.path_join("gf16_refresh_%s.png" % tag))
+	var q: ClickableQuad = _room.rail_quad("wovp_refresh")
+	var cam: Camera3D = _room._active_camera()
+	if q == null or cam == null or img == null or img.is_empty():
+		return -1.0
+	var rect: Rect2 = _nav_screen_rect(q, cam)
+	var inner: Rect2 = rect.grow_individual(-rect.size.x * 0.25, -rect.size.y * 0.25, -rect.size.x * 0.25, -rect.size.y * 0.25)
+	var x0: int = clampi(int(inner.position.x), 0, img.get_width() - 1)
+	var y0: int = clampi(int(inner.position.y), 0, img.get_height() - 1)
+	var x1: int = clampi(int(inner.position.x + inner.size.x), x0 + 1, img.get_width())
+	var y1: int = clampi(int(inner.position.y + inner.size.y), y0 + 1, img.get_height())
+	var sum: float = 0.0
+	var n: int = 0
+	var x: int = x0
+	while x < x1:
+		var y: int = y0
+		while y < y1:
+			var px: Color = img.get_pixel(x, y)
+			sum += (px.r + px.g + px.b) / 3.0
+			n += 1
+			y += 2
+		x += 2
+	if n == 0:
+		return -1.0
+	return sum / float(n)
+
+
+## The lift proof at a REFRESH landing: the spring settles
+## at full lift, the section stands exactly RAIL_STRIP_LIFT
+## off its seat, it is the ONLY lifted section, and the
+## RENDERED frame itself brightens over the section (its
+## lifted gradient and white label swap in at half-rise) -
+## visible evidence, not state alone.
+func _input_gf16_prove_lift(rest_mean: float) -> void:
+	var amt: float = await _input_gf16_wait_lift("wovp_refresh", false)
+	_input_expect(amt >= 0.999,
+		"gf16 refresh: REFRESH's lift settles at full over the library wall (amount %.3f)" % amt)
+	var off: Vector3 = _room.rail_lift_offset("wovp_refresh")
+	_input_expect(absf(off.length() - RoomView.RAIL_STRIP_LIFT) < 0.004,
+		"gf16 refresh: REFRESH stands the full strip lift off its seat (offset %.4f, want %.3f)" % [off.length(), RoomView.RAIL_STRIP_LIFT])
+	var bar: Dictionary = _room.bar_state()
+	_input_expect(int(bar.get("rail_lifted", 0)) == 1,
+		"gf16 refresh: exactly one rail section stands lifted while REFRESH holds focus (got %d)" % int(bar.get("rail_lifted", 0)))
+	var lift_mean: float = _input_gf16_refresh_mean("lifted")
+	_input_expect(rest_mean >= 0.0 and lift_mean > rest_mean + 0.02,
+		"gf16 refresh: the RENDERED frame shows REFRESH lifted - its section brightens as the lifted gradient swaps in (rest %.3f, lifted %.3f)" % [rest_mean, lift_mean])
+
+
+## One A press on the focused REFRESH stop, witnessed by a
+## probe on the room's own signal: the refresh ask fires
+## and focus stays on the stop that was pressed.
+func _input_gf16_press_refresh(context: String) -> void:
+	_room._set_focused(_room.rail_quad("wovp_refresh"))
+	await _input_wait_frames(4)
+	_input_refresh_fired = false
+	var probe: Callable = func() -> void: _input_refresh_fired = true
+	_room.tournament_refresh_requested.connect(probe)
+	await _nav_feed_button(JOY_BUTTON_A)
+	_room.tournament_refresh_requested.disconnect(probe)
+	_input_expect(_input_refresh_fired,
+		"gf16 refresh: A on REFRESH in the %s view fires the tournament refresh ask (Main re-pulls the WoVP boards)" % context)
+	_input_expect(_nav_key_of(_room.focused_quad()) == "wovp_refresh",
+		"gf16 refresh: A on REFRESH in the %s view leaves focus on REFRESH (got '%s')" % [context, _nav_key_of(_room.focused_quad())])
+
+
+## The GRADFIX16 item 1 legs: REFRESH is a rail stop in
+## EVERY view. A focus walk through the REAL input path
+## (bumper button events and stick axis feeds through the
+## Input singleton, walked by the room's own poll) visits
+## every rail stop in RAIL_FOCUS_ORDER order in the library
+## AND in the Tournament Room, both directions; at the
+## library REFRESH landing the lift is proven in the
+## rendered frame; and an A press on REFRESH in both views
+## fires the refresh ask. Under PVLDS_GF16_NC=refreshgate
+## the shipped tournament-only gating returns and the
+## library legs fail by name.
+func _input_leg_gf16_refresh_async() -> void:
+	var order: Array[String] = []
+	order.assign(RoomView.RAIL_FOCUS_ORDER)
+	_input_expect(_room.rail_quad("wovp_refresh").pick_enabled,
+		"gf16 refresh: REFRESH is pickable over the library wall")
+	# Rest evidence: focus parked on the first stop and the
+	# REFRESH section sunk flush before its brightness is
+	# sampled for the lift comparison.
+	_room._set_focused(_room.rail_quad(order[0]))
+	await _input_gf16_wait_lift("wovp_refresh", true)
+	var rest_mean: float = _input_gf16_refresh_mean("rest")
+	# The library walk: right through every stop in drawn
+	# order, clamp at the end, then left all the way back.
+	for i: int in range(1, order.size()):
+		await _nav_feed_button(JOY_BUTTON_RIGHT_SHOULDER)
+		_input_expect(_nav_key_of(_room.focused_quad()) == order[i],
+			"gf16 refresh: library rail walk RB step %d lands on %s (got '%s')" % [i, order[i], _nav_key_of(_room.focused_quad())])
+		if order[i] == "wovp_refresh":
+			await _input_gf16_prove_lift(rest_mean)
+	await _nav_feed_button(JOY_BUTTON_RIGHT_SHOULDER)
+	_input_expect(_nav_key_of(_room.focused_quad()) == order[order.size() - 1],
+		"gf16 refresh: library rail walk clamps at the last stop (RB on exit stays)")
+	for i: int in range(order.size() - 2, -1, -1):
+		await _nav_feed_button(JOY_BUTTON_LEFT_SHOULDER)
+		_input_expect(_nav_key_of(_room.focused_quad()) == order[i],
+			"gf16 refresh: library rail walk LB step lands on %s (got '%s')" % [order[i], _nav_key_of(_room.focused_quad())])
+	# The stick admits REFRESH too: one stick step right
+	# from TOURNAMENT lands on it. The feed is a human tap -
+	# the axis is released the frame focus moves - because
+	# at this rig's frame rate the helper's fixed 3-frame
+	# hold outlives the poll's 0.24 s step cooldown and
+	# would fire a second step no thumb asked for.
+	_room._set_focused(_room.rail_quad("tournament"))
+	await _input_wait_frames(30) ## the stick poll's step cooldown must lapse first
+	var stick_ev: InputEventJoypadMotion = InputEventJoypadMotion.new()
+	stick_ev.device = 0
+	stick_ev.axis = JOY_AXIS_LEFT_X
+	stick_ev.axis_value = 1.0
+	Input.parse_input_event(stick_ev)
+	var stick_guard: int = 0
+	while _nav_key_of(_room.focused_quad()) == "tournament" and stick_guard < 40:
+		await get_tree().process_frame
+		stick_guard += 1
+	var stick_rel: InputEventJoypadMotion = InputEventJoypadMotion.new()
+	stick_rel.device = 0
+	stick_rel.axis = JOY_AXIS_LEFT_X
+	stick_rel.axis_value = 0.0
+	Input.parse_input_event(stick_rel)
+	await _input_wait_frames(4)
+	_input_expect(_nav_key_of(_room.focused_quad()) == "wovp_refresh",
+		"gf16 refresh: a stick step right from TOURNAMENT lands on REFRESH in the library (got '%s')" % _nav_key_of(_room.focused_quad()))
+	await _input_gf16_press_refresh("library")
+	# The Tournament Room: the same full walk, both ways.
+	_room._handle_rail("tournament")
+	await _input_wait_frames(10)
+	_input_expect(_room.tournament_active(),
+		"gf16 refresh: the Tournament Room stands for its walk")
+	_room._set_focused(_room.rail_quad(order[0]))
+	await _input_wait_frames(4)
+	for i: int in range(1, order.size()):
+		await _nav_feed_button(JOY_BUTTON_RIGHT_SHOULDER)
+		_input_expect(_nav_key_of(_room.focused_quad()) == order[i],
+			"gf16 refresh: tournament rail walk RB step %d lands on %s (got '%s')" % [i, order[i], _nav_key_of(_room.focused_quad())])
+		if order[i] == "wovp_refresh":
+			var tamt: float = await _input_gf16_wait_lift("wovp_refresh", false)
+			_input_expect(tamt >= 0.999,
+				"gf16 refresh: REFRESH lifts in the Tournament Room too (amount %.3f)" % tamt)
+	for i: int in range(order.size() - 2, -1, -1):
+		await _nav_feed_button(JOY_BUTTON_LEFT_SHOULDER)
+		_input_expect(_nav_key_of(_room.focused_quad()) == order[i],
+			"gf16 refresh: tournament rail walk LB step lands on %s (got '%s')" % [order[i], _nav_key_of(_room.focused_quad())])
+	await _input_gf16_press_refresh("tournament")
+	_room._handle_rail("filter:all")
+	await _input_wait_frames(10)
+
+
 ## The wall state the bar grammar legs hold byte-identical:
 ## [centre index, page, swing target]. Rail/strip focus
 ## never drives the drum, so any bar press that moves one
@@ -8549,12 +8745,16 @@ func _input_leg_gf14_grammar_async() -> void:
 	_input_expect(_nav_key_of(_room.focused_quad()) == "tournament",
 		"gf14 grammar: rail bumpers step the rail one stop (RB: sort -> tournament, got '%s')" % _nav_key_of(_room.focused_quad()))
 	await _nav_feed_button(JOY_BUTTON_RIGHT_SHOULDER)
+	_input_expect(_nav_key_of(_room.focused_quad()) == "wovp_refresh",
+		"gf14 grammar: rail bumpers step the rail one stop (RB: tournament -> wovp_refresh, REFRESH standing in the library since GRADFIX16 item 1, got '%s')" % _nav_key_of(_room.focused_quad()))
+	await _nav_feed_button(JOY_BUTTON_RIGHT_SHOULDER)
 	_input_expect(_nav_key_of(_room.focused_quad()) == "desk",
-		"gf14 grammar: rail bumpers step the rail one stop (RB: tournament -> desk, the unstanding REFRESH skipped, got '%s')" % _nav_key_of(_room.focused_quad()))
+		"gf14 grammar: rail bumpers step the rail one stop (RB: wovp_refresh -> desk, got '%s')" % _nav_key_of(_room.focused_quad()))
+	await _nav_feed_button(JOY_BUTTON_LEFT_SHOULDER)
 	await _nav_feed_button(JOY_BUTTON_LEFT_SHOULDER)
 	await _nav_feed_button(JOY_BUTTON_LEFT_SHOULDER)
 	_input_expect(_nav_key_of(_room.focused_quad()) == "sort",
-		"gf14 grammar: rail bumpers step the rail one stop (LB twice returns desk -> sort, got '%s')" % _nav_key_of(_room.focused_quad()))
+		"gf14 grammar: rail bumpers step the rail one stop (LB three times returns desk -> sort, got '%s')" % _nav_key_of(_room.focused_quad()))
 	_room._set_focused(_room.rail_quad("filter:all"))
 	await _input_wait_frames(4)
 	await _nav_feed_button(JOY_BUTTON_LEFT_SHOULDER)
@@ -8675,11 +8875,12 @@ func _nav_key_of(q: ClickableQuad) -> String:
 func _nav_leg_rail_walk() -> void:
 	var order: Array[String] = [
 		"filter:all", "filter:vr", "filter:favorites", "filter:recents", "filter:new",
-		"sort", "tournament", "desk", "exit"] ## GRADFIX8 (item 6): page_prev/page_next removed with the pager stops (Chris's order). GRADFIX11: filter:new walks with the rail after filter:recents (Chris's order)
-	# The Tournament Room round's stops: TOURNAMENT walks
-	# with the rail always; REFRESH is a stop only while the
-	# Tournament Room stands, so this library-mode walk
-	# correctly never lands on it.
+		"sort", "tournament", "wovp_refresh", "desk", "exit"] ## GRADFIX8 (item 6): page_prev/page_next removed with the pager stops (Chris's order). GRADFIX11: filter:new walks with the rail after filter:recents (Chris's order)
+	# TOURNAMENT walks with the rail always; REFRESH walks
+	# too, in every view since GRADFIX16 item 1 (it was a
+	# Tournament-only stop before, and this library walk
+	# correctly never landed on it - Chris's field report
+	# convicted exactly that).
 	_room._set_focused(_room.rail_quad(order[0]))
 	for i: int in range(1, order.size()):
 		_room._move_focus(Vector2(1.0, 0.0))
@@ -9247,9 +9448,10 @@ func _nav_leg_b_exit_async() -> void:
 ## the shelf's partial last column (its one card takes the
 ## landing - the column never yields to a neighbour). The
 ## strip path (strip -> rail -> rows and back down) rides
-## the same assertions. wovp_refresh is pickable only
-## while the Tournament Room stands, so its round trip
-## runs in there. Under PVLDS_GF13_NC=oldascent the ascent
+## the same assertions. wovp_refresh's round trip runs
+## inside the Tournament view AND again in the library
+## loop below (it is pickable in both since GRADFIX16
+## item 1). Under PVLDS_GF13_NC=oldascent the ascent
 ## falls back to the projection walk, focus lands a column
 ## off centre, _follow_centre re-seats the drum - and
 ## these legs fail by name.
@@ -9262,8 +9464,8 @@ func _nav_leg_vertical_async() -> void:
 	# centred card's power-on mimic starting - is the
 	# heaviest moment in the leg; everything else must have
 	# reported before the leg walks out there.
-	# wovp_refresh, inside the Tournament view (the only
-	# view where it is pickable).
+	# wovp_refresh, inside the Tournament view first (its
+	# library round trip rides the main loop below).
 	_room._handle_rail("tournament")
 	await _nav_await_ready()
 	if not _room.tournament_active() or _room._panels.is_empty():
@@ -9280,9 +9482,7 @@ func _nav_leg_vertical_async() -> void:
 	_room._set_focused(_room._panels[seat_idx])
 	await _nav_await_centre(seat_idx)
 	for key: String in RoomView.RAIL_FOCUS_ORDER:
-		if key == "wovp_refresh":
-			continue ## judged inside the Tournament view above
-		await _nav_vertical_stop(key)
+		await _nav_vertical_stop(key) ## wovp_refresh included: a library stop since GRADFIX16 item 1, judged in the Tournament view above as well
 	# Seat variant: the centre standing on the bottom band -
 	# the ascent must land on THAT band's card.
 	var low_idx: int = _room._index_at(4, 2)
@@ -13497,14 +13697,16 @@ func _tournament_leg_rendered() -> void:
 		_tournament_expect(reached_rail,
 			"navigation: DOWN from a card reaches the rail - focus is never stranded in the view")
 	# Leaving: a filter press restores the library wall,
-	# focus on the pressed stop, REFRESH disarmed.
+	# focus on the pressed stop. REFRESH stays a stop over
+	# the library wall (GRADFIX16 item 1 - it was disarmed
+	# here before, the shipped gating Chris convicted).
 	_room._handle_rail("filter:all")
 	_tournament_expect(not _room.tournament_active() and _room.tournament_rows().is_empty(),
 		"leaving: a filter press leaves the Tournament Room")
 	_tournament_expect(_room.focused_quad() == _room.rail_quad("filter:all"),
 		"leaving: focus lands on the filter stop that was pressed")
-	_tournament_expect(not _room.rail_quad("wovp_refresh").pick_enabled,
-		"leaving: REFRESH is not a stop over the library wall")
+	_tournament_expect(_room.rail_quad("wovp_refresh").pick_enabled,
+		"leaving: REFRESH stays a live stop over the library wall (GRADFIX16 item 1)")
 
 
 ## nokey / failfetch share one shape: ONE state panel, its

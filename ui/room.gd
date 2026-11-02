@@ -792,6 +792,15 @@ static var debug_gf13_nc: String = ""
 ## shape) - each so the input smoke's gf14 grammar legs
 ## fail by name. Empty in every real run.
 static var debug_gf14_nc: String = ""
+## Negative-control seam for GRADFIX16 item 1 (the harness
+## env PVLDS_GF16_NC, set by Main before any room exists):
+## "refreshgate" restores the shipped gating - REFRESH is
+## pickable only while the Tournament Room stands, so it
+## drops out of the library rail's focus walk, bumper and
+## trigger lists, pointer pick and lift, and the input
+## smoke's gf16 refresh legs fail by name. Empty in every
+## real run.
+static var debug_gf16_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
@@ -3005,6 +3014,32 @@ func _tournament_launchable(idx: int) -> bool:
 	return str(row.get("kind", "")) == "challenge" and bool(row.get("owned", false))
 
 
+## Whether REFRESH stands as a live rail stop right now
+## (GRADFIX16 item 1). THE CONVICTION (Chris's field report,
+## 2026-11-02, on the GRADFIX14 build): REFRESH stood drawn
+## on the library rail but could not be selected - every
+## gate in the room keyed on _tournament: _build_rail built
+## the quad pick-dead, _rebuild_wall re-armed it only while
+## the Tournament Room stood, _refresh_focusables admits
+## only pick_enabled quads (so the focus walk, the bumper
+## neighbour walk, the descent edge and the rail's trigger
+## anchor list all skipped it), the pointer rig picks only
+## pick_enabled quads (and _on_select refuses the rest), the
+## strip lift lifts only the FOCUSED section, and
+## _handle_rail's own wovp_refresh branch was tournament-
+## gated besides. THE FIX: REFRESH is a rail stop in EVERY
+## view, like every other stop - pressing it emits
+## tournament_refresh_requested (Main re-pulls the WoVP
+## boards; the fetch is view-agnostic and the room caches
+## the boards for the Tournament Room), focus lands on it,
+## and it lifts like any other stop. The NC value
+## "refreshgate" (PVLDS_GF16_NC) restores the shipped
+## tournament-only gating at this one seam, so every gate
+## downstream re-closes at once.
+func _refresh_pickable() -> bool:
+	return debug_gf16_nc != "refreshgate" or _tournament
+
+
 func _rebuild_wall() -> void:
 	# The power-on's performer and its overlay die with
 	# the wall being torn down: drop the state without
@@ -3138,13 +3173,13 @@ func _rebuild_wall() -> void:
 			if rq != null:
 				rq.pick_enabled = str(k) != "page_label"
 				rq.set_content_alpha(1.0)
-	# REFRESH is the one stop whose pick state is not a
-	# constant: it lives only while the Tournament Room
-	# stands (the blanket reset above would otherwise arm
-	# it over the library wall).
+	# REFRESH takes the same reset as every other stop
+	# (GRADFIX16 item 1: it is a live stop in every view -
+	# see _refresh_pickable); only the NC's restored gating
+	# re-closes it over the library wall.
 	var refresh_q: ClickableQuad = _rail_quads.get("wovp_refresh") as ClickableQuad
 	if refresh_q != null:
-		refresh_q.pick_enabled = _tournament
+		refresh_q.pick_enabled = _refresh_pickable()
 	# The alphabet strip is furniture on the same terms: built
 	# once beside the rail, and every rebuild re-lays it out
 	# (the "#" slot's existence follows the library), re-reads
@@ -3299,11 +3334,11 @@ func _build_rail(placeholder: Texture2D) -> void:
 		var key: String = str(d[0])
 		var w: float = float(d[1])
 		var q: ClickableQuad = _make_quad(_rail, "rail", key, placeholder, Vector2(w, tile_h), Vector3(x + w * 0.5, y, z))
-		if key == "page_label" or key == "wovp_refresh":
-			# page_label is a readout, never a stop. REFRESH is
-			# a stop only while the Tournament Room stands (see
-			# _rebuild_wall) - refreshing boards you are not
-			# looking at is not a rail job.
+		if key == "page_label" or (key == "wovp_refresh" and not _refresh_pickable()):
+			# page_label is a readout, never a stop. REFRESH
+			# builds live like every other stop (GRADFIX16
+			# item 1 - see _refresh_pickable); only the NC's
+			# restored gating builds it pick-dead.
 			q.pick_enabled = false
 		_rail_quads[key] = q
 		_rail_def_w[key] = w
@@ -5656,9 +5691,11 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 		else:
 			_enter_tournament()
 	elif key == "wovp_refresh":
-		if _tournament:
-			tournament_refresh_requested.emit()
-			_land_on_rail_stop(key)
+		# A stop in every view (GRADFIX16 item 1): the press
+		# asks Main to re-pull the WoVP boards wherever it is
+		# pressed from, and focus lands on the stop pressed.
+		tournament_refresh_requested.emit()
+		_land_on_rail_stop(key)
 	elif key == "page_prev":
 		if _page > 0:
 			_page_travel(-1, _page_travel_landing(key, after_swap))
@@ -5867,8 +5904,8 @@ func _strip_anchor_step(step: int) -> void:
 ## The rail stops focus can actually stand on right now,
 ## in RAIL_FOCUS_ORDER order: the same admission the
 ## sideways walk uses (pickable and in the focusable set -
-## wovp_refresh stands only while the Tournament Room
-## does). The rail's trigger anchors are computed over
+## wovp_refresh stands in every view since GRADFIX16
+## item 1). The rail's trigger anchors are computed over
 ## THIS live list, recomputed on every press, so a view
 ## change between presses is absorbed with no state to go
 ## stale (the strip anchors' positional rule, carried to
@@ -5885,10 +5922,10 @@ func _rail_focusable_keys() -> Array[String]:
 ## The rail's anchors (GRADFIX14 item 3): first, middle
 ## and last of the live rail stops - the middle at index
 ## (count - 1) / 2 of the list, the wall/strip middle rule
-## carried to the rail. On the library rail (nine live
-## stops) that is filter:all / filter:new / exit; in the
-## Tournament Room (ten live stops, REFRESH standing) the
-## same three keys. Fewer than three live stops degenerate
+## carried to the rail. Ten stops stand in both views
+## since GRADFIX16 item 1 (REFRESH live over the library
+## too), and the anchors are filter:all / filter:new /
+## exit in both. Fewer than three live stops degenerate
 ## honestly, exactly as the wall's column anchors do.
 func rail_anchor_keys() -> Array[String]:
 	var stops: Array[String] = _rail_focusable_keys()
@@ -6448,6 +6485,8 @@ func _restore_room_pick_states() -> void:
 		if rq != null and not handled.has(rq):
 			if launching:
 				rq.pick_enabled = false ## the load wait is deaf: no rail quad picks, EXIT/SETUP included
+			elif str(k) == "wovp_refresh":
+				rq.pick_enabled = _refresh_pickable() ## GRADFIX16 item 1: a REFRESH born behind the placard takes the standing view's state, not the blanket rail reset
 			else:
 				rq.pick_enabled = str(k) != "page_label"
 	# The strip's slots take the state the room's current view
