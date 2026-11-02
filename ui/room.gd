@@ -640,6 +640,7 @@ var _art_decoded_failed: Dictionary = {} ## art path -> true: a background decod
 var _art_decode_mutex: Mutex = Mutex.new() ## guards the decode dictionaries and the pump's queue against the worker thread
 var _art_decode_queue: Array[String] = [] ## art paths awaiting the decode pump (mutex-guarded)
 var _art_decode_pump_active: bool = false ## a pump task is draining _art_decode_queue (mutex-guarded): ONE decode at a time, ever - the ArtWarmer's proven discipline, so background decode can never swarm the renderer's cores
+var _art_stopping: bool = false ## the room is leaving the tree: the pipeline starts no new face and the pump returns after its current decode - art work must wind down at exit, not continue into engine teardown (the harness's swing probe segfaulted at quit with fills in flight; the serial worker it replaced was almost always idle by quit, the pipeline by design is not)
 var _power_subject_inflight: Dictionary = {} ## game_id -> true while its power-on subject renders
 var _power_prefetch_asked: Dictionary = {} ## game_id -> true once the warmer has been asked for its cold backglass (GRADFIX6)
 var _face_heal_retries: Dictionary = {} ## GRADFIX6 item 2: "game_id|art_file" -> art-render retries already spent by the panel heal
@@ -4213,6 +4214,11 @@ func _art_pipe_dispatch_one(path: String) -> void:
 ## proven answer).
 func _art_decode_pump() -> void:
 	while true:
+		if _art_stopping:
+			_art_decode_mutex.lock()
+			_art_decode_pump_active = false
+			_art_decode_mutex.unlock()
+			return
 		# While a cruise stands the pump parks too: on a
 		# CPU-bound renderer even a background decode thread
 		# competes with the travel frames (measured on the
@@ -4220,7 +4226,7 @@ func _art_decode_pump() -> void:
 		# cruise's with applications already paused). The
 		# pump sleeps and resumes the moment the cruise ends;
 		# its queue keeps every staged path in order.
-		while _cruise_dir != 0:
+		while _cruise_dir != 0 and not _art_stopping:
 			OS.delay_msec(8)
 		_art_decode_mutex.lock()
 		if _art_decode_queue.is_empty():
@@ -4255,6 +4261,17 @@ func _run_art_pipe() -> void:
 	_art_pipe_busy = true
 	_window_fill_busy = true
 	call_deferred("_art_pipe_pass")
+
+
+## True when no pipeline pass is running and the decode
+## pump has drained (quiescence - the smokes wait for this
+## before quitting, and it is the honest test that staged
+## work has fully landed or been dropped).
+func art_pipeline_idle() -> bool:
+	_art_decode_mutex.lock()
+	var pump_active: bool = _art_decode_pump_active
+	_art_decode_mutex.unlock()
+	return not _art_pipe_busy and not pump_active
 
 
 func _art_pipe_pass() -> void:
@@ -8348,6 +8365,8 @@ func _unhandled_input(event: InputEvent) -> void:
 ## flush + footer) as the room leaves the tree, so a normal
 ## exit always lands the complete log.
 func _exit_tree() -> void:
+	_art_stopping = true
+	_gen += 1 # the pipeline pass breaks at its next await; no new face starts
 	if _scroll_telemetry_started:
 		_scroll_telemetry.close()
 		_scroll_telemetry_started = false

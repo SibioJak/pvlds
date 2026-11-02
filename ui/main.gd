@@ -12039,9 +12039,21 @@ func _drive_swingprobe_smoke() -> void:
 				_swp_expect(_swp_saw_swing, "swingprobe: the letter pick swung the drum (a real swing, not a teleport)")
 				_swp_expect(absi(final_col - _swp_from_col) >= 10, "swingprobe: the swing spanned %d columns (a long travel, the cruise's pair)" % absi(final_col - _swp_from_col))
 				_artstream_print_probe()
-				_finish_swingprobe_smoke()
+				_swp_phase = 3
+				_swp_wait = 0
 			elif _swp_wait > 7200:
 				_swp_expect(false, "swingprobe: the swing never settled")
+				_finish_swingprobe_smoke()
+		3:
+			# Quiescence before quit: staged work still in
+			# flight at process exit crashed the harness
+			# build at teardown - the probe waits for the
+			# pipeline and the decode pump to drain, the
+			# state a settled app quits from. (The base
+			# build has no pipeline; its serial fill has
+			# always drained by settle.)
+			_swp_wait += 1
+			if not _room.has_method("art_pipeline_idle") or _room.art_pipeline_idle() or _swp_wait > 3600:
 				_finish_swingprobe_smoke()
 
 

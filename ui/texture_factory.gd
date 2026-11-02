@@ -44,11 +44,16 @@ static func probe_note(op: String, usec: int) -> void:
 
 
 static func probe_reset() -> void:
+	_probe_mutex.lock()
 	probe_stats.clear()
+	_probe_mutex.unlock()
 
 
 static func probe_snapshot() -> Dictionary:
-	return probe_stats.duplicate()
+	_probe_mutex.lock()
+	var snap: Dictionary = probe_stats.duplicate()
+	_probe_mutex.unlock()
+	return snap
 
 
 func _ready() -> void:
