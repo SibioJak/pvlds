@@ -4119,16 +4119,52 @@ func _on_window_fill_drained(gen: int) -> void:
 		art_prefetch_requested.emit(near)
 
 
+## The face key a panel's fill would compute right now
+## (game, its ready art file, favorite flag, PuP flag) -
+## the one stamp the fill and the heal both judge by.
+func _face_key_for(idx: int) -> String:
+	if idx < 0 or idx >= _visible_games.size():
+		return ""
+	var game: GameEntry = _visible_games[idx]
+	var art_file: String = _face_path_for(game)
+	var fav: bool = _store != null and _store.is_favorite(game.game_id)
+	var pup: bool = game.is_pup_tagged()
+	return game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+
+
+## Whether a panel's standing face is honestly the face its
+## key asks for (the fill's own already-wearing test, asked
+## without rendering anything).
+func _face_is_standing(idx: int) -> bool:
+	if idx < 0 or idx >= _visible_games.size():
+		return true
+	var game: GameEntry = _visible_games[idx]
+	return str(_panel_face_key.get(game.game_id, "")) == _face_key_for(idx)
+
+
 ## Enqueue the standing window's faces for the staged
-## pipeline (centre-out), and dispatch background decodes
-## for every queued face whose art is neither decoded nor
-## already in flight. Called on every centre change: the
-## queue is REBUILT from the standing window each time
-## (faces already queued keep no stale priority; a face the
-## window left is dropped before it can spend a render).
+## pipeline (centre-out). Called on every centre change:
+## the queue is REBUILT from the standing window each time,
+## holding ONLY the faces that are not honestly standing -
+## a stamped face costs the rebuild one key comparison, so
+## the pipeline's one-face-per-frame budget is spent on
+## real work, never on re-walking the dressed window. A
+## face the window left is dropped before it can spend a
+## render. Background decodes for the first few queued
+## faces dispatch here; the rest dispatch as the pass pops
+## them (see _art_pipe_pass), so this call itself stays
+## cheap on the travel path that calls it.
 func _art_pipe_enqueue_window() -> void:
-	_art_pipe_queue = _window_fill_order()
-	_art_pipe_dispatch_decodes(_art_pipe_queue)
+	var order: Array[int] = _window_fill_order()
+	var needy: Array[int] = []
+	for idx: int in order:
+		if not _face_is_standing(idx):
+			needy.append(idx)
+	_art_pipe_queue = needy
+	var pre: Array[int] = []
+	for i: int in range(mini(6, needy.size())):
+		pre.append(needy[i])
+	_art_pipe_dispatch_decodes(pre)
 
 
 func _art_pipe_dispatch_decodes(idxs: Array[int]) -> void:
@@ -4198,12 +4234,22 @@ func _art_pipe_pass() -> void:
 			if cc < _panel_window_lo or cc > _panel_window_hi:
 				continue # the window left this card behind mid-pass
 			var path: String = _face_path_for(_visible_games[idx])
-			_art_decode_mutex.lock()
-			var in_flight: bool = path != "" and _art_decode_pending.has(path)
-			_art_decode_mutex.unlock()
-			if in_flight:
-				deferred.append(idx)
-				continue
+			if path != "" and not TextureFactory.art_decode_is_cached(path):
+				_art_decode_mutex.lock()
+				var decode_known: bool = _art_decode_pending.has(path) or _art_decoded_ready.has(path) or _art_decoded_failed.has(path)
+				if not decode_known:
+					_art_decode_pending[path] = true
+				_art_decode_mutex.unlock()
+				if not decode_known:
+					WorkerThreadPool.add_task(Callable(self, "_art_decode_worker").bind(path))
+					deferred.append(idx)
+					continue
+				_art_decode_mutex.lock()
+				var in_flight: bool = _art_decode_pending.has(path)
+				_art_decode_mutex.unlock()
+				if in_flight:
+					deferred.append(idx)
+					continue
 			var gf16_probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
 			_art_pipe_in_stage = true
 			await _fill_one_face_sync(idx, gen)
