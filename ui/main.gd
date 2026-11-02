@@ -3672,6 +3672,7 @@ func _drive_scanwall_smoke() -> void:
 					return
 				_room._xr_enabled = true
 				_room._activate(_room.rail_quad("filter:all"))
+				Input.warp_mouse(Vector2(512.0, 764.0)) ## parked: hover would drive the centre (see the nav driver) - the focus-survives leg reads the centre after a panel close lands focus on a rail stop, where _follow_centre takes the resting hover's word; unparked, the desk rig's resting ray sits on another card and the leg measures the hover law, not the adoption (GRADFIX14 integration conviction)
 				_scanwall_wait = 0
 				_scanwall_phase = 1
 				_scanwall_deadline_msec = Time.get_ticks_msec() + 120000
