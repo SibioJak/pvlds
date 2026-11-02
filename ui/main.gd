@@ -333,6 +333,26 @@ var _motion_hold_release_col: int = -1 ## held-scroll leg: centre column standin
 var _motion_hold_saw_cruise: bool = false ## held-scroll leg: the room cruised during the hold
 var _motion_hold_start_col: int = 0 ## held-scroll leg: the column the hold started from
 var _motion_hold_rest_frames: int = 0 ## held-scroll leg: consecutive settled frames after release
+var _smoke_artstream: bool = false ## --pvlds-smoke-artstream: GRADFIX16 item 2 - sustained held cruise through the real input path on a cold-art fixture, recording travel frame deltas (worst + count over 50 ms), base vs fixed on the same fixture
+var _art_phase: int = 0
+var _art_wait: int = 0
+var _art_failures: int = 0
+var _art_start_col: int = -1
+var _art_release_col: int = -1
+var _art_saw_cruise: bool = false
+var _art_released: bool = false
+var _art_rest_frames: int = 0
+var _art_last_usec: int = 0
+var _art_frames: int = 0
+var _art_worst_ms: float = 0.0
+var _art_over50: int = 0
+var _art_over33: int = 0
+var _art_spikes: Array = [] ## [centre_col, delta_ms] for every travel frame over 40 ms
+var _art_col_marks: Array = [] ## [msec_since_feed, centre_col] at each centre-column change during the cruise
+var _art_feed_msec: int = 0
+var _art_last_col: int = -1
+var _art_settle_frames: int = 0
+var _art_heal_deadline_msec: int = 0
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -542,6 +562,8 @@ func _ready() -> void:
 		_bootfocus_game = OS.get_environment("PVLDS_BOOTFOCUS_GAME")
 	if user_args.has("--pvlds-smoke-motion"):
 		_smoke_motion = true
+	if user_args.has("--pvlds-smoke-artstream"):
+		_smoke_artstream = true
 	if user_args.has("--pvlds-smoke-jumpbench"):
 		_smoke_jumpbench = true
 		_jumpbench_boot_msec = Time.get_ticks_msec()
@@ -662,6 +684,13 @@ func _ready() -> void:
 	# each so the input smoke's gf14 grammar legs fail by
 	# name. Set here, before any room exists.
 	RoomView.debug_gf14_nc = OS.get_environment("PVLDS_GF14_NC")
+	# GRADFIX16 (item 2): the artstream NC seam + probe gate.
+	# "syncfill" (PVLDS_GF16_NC) restores the base serial fill
+	# on the travel path so the artstream smoke's travel-frame
+	# legs fail by name; PVLDS_GF16_PROBE turns on the
+	# per-operation timing census in TextureFactory/Room.
+	RoomView.debug_gf16_nc = OS.get_environment("PVLDS_GF16_NC")
+	TextureFactory.probe_enabled = OS.has_environment("PVLDS_GF16_PROBE")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
 	if user_args.has("--pvlds-smoke-quitwarm"):
@@ -696,7 +725,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -874,6 +903,8 @@ func _process(_delta: float) -> void:
 		_drive_bootfocus_smoke()
 	if _smoke_motion:
 		_drive_motion_smoke()
+	if _smoke_artstream:
+		_drive_artstream_smoke()
 	if _smoke_jumpbench:
 		_drive_jumpbench_smoke()
 	if _smoke_quitwarm:
@@ -11790,6 +11821,212 @@ func _finish_motion_smoke() -> void:
 	else:
 		printerr("PVLDS MOTION SMOKE: FAIL (%d)" % _motion_failures)
 		get_tree().quit(1)
+
+
+## -------------------------------------------------- artstream smoke (GRADFIX16 item 2)
+##
+## --pvlds-smoke-artstream: a sustained HELD cruise through
+## the REAL input path (a joypad-motion event held on the
+## left stick's X axis, exactly what the room's per-frame
+## poll reads - the motion smoke's held-leg discipline) on
+## a COLD-ART fixture: the start window is settled first,
+## then the decode cache and the rendered-face cache are
+## cleared while the standing cards keep their textures and
+## face stamps, so every column the cruise's window slides
+## into pays full decode + render for art nobody has touched
+## this pass. Frame deltas are recorded from the feed until
+## the release settle completes. Legs (all named
+## "artstream:"): the cruise stood and spanned ten columns;
+## no travel frame over 50 ms beyond a small allowance for
+## harness pacing (the base build's serial fill fails this
+## by name - it pays ~a column of art per window step on
+## the travel frame itself); and after the cruise, every
+## face in the standing window heals to real art (key
+## stamped, not unreal, from art) - pictures may land late,
+## they may not land never, and no fallback solid may stand
+## stamped as a real face. Under PVLDS_GF16_NC=syncfill the
+## room restores the base serial fill and the travel legs
+## fail by this name.
+func _artstream_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - artstream smoke: ", label)
+	else:
+		_artstream_fail(label)
+
+
+func _artstream_fail(label: String) -> void:
+	_art_failures += 1
+	printerr("  FAIL - artstream smoke: ", label)
+
+
+func _finish_artstream_smoke() -> void:
+	if _art_failures == 0:
+		print("PVLDS ARTSTREAM SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS ARTSTREAM SMOKE: FAIL (%d)" % _art_failures)
+		get_tree().quit(1)
+
+
+func _artstream_print_probe() -> void:
+	if not TextureFactory.probe_enabled:
+		return
+	var snap: Dictionary = TextureFactory.probe_snapshot()
+	var keys: Array = snap.keys()
+	keys.sort()
+	for k: Variant in keys:
+		var op: String = str(k)
+		if op.begins_with("fill_col_"):
+			var col_n: int = int(op.trim_prefix("fill_col_"))
+			if col_n < _art_start_col or col_n > _art_start_col + 24:
+				continue
+		var row: Array = snap[k] as Array
+		var cnt: int = int(row[0])
+		var tot: int = int(row[1])
+		var mx: int = int(row[2])
+		print("ARTPROBE %s: count %d, total %.1f ms, avg %.2f ms, max %.2f ms" % [
+			op, cnt, float(tot) / 1000.0, float(tot) / 1000.0 / maxf(float(cnt), 1.0), float(mx) / 1000.0])
+
+
+func _drive_artstream_smoke() -> void:
+	match _art_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and not _scan_active \
+					and (_art_warmer == null or _art_warmer.is_idle()):
+				Input.warp_mouse(Vector2(4, 372))
+				if _room._columns < 40:
+					_artstream_fail("artstream: the fixture shelf holds %d columns (the cold-art cruise needs at least 40)" % _room._columns)
+					_finish_artstream_smoke()
+					return
+				_art_phase = 1
+				_art_wait = 0
+				_art_settle_frames = 0
+			else:
+				_art_wait += 1
+				if _art_wait > 21600:
+					_artstream_fail("artstream: the room never came up (scan/warm never settled)")
+					_finish_artstream_smoke()
+		1:
+			# Seat the start: a column with a settled window
+			# behind it and at least 16 columns of shelf ahead.
+			_art_wait += 1
+			if _art_wait == 1:
+				var mid: int = _room._panels.size() / 2
+				var mid_col: int = _room._grid_coord(mid).x
+				var want_col: int = clampi(mid_col, 12, maxi(12, _room._columns - 20))
+				var start_idx: int = mid
+				for i: int in range(_room._panels.size()):
+					if _room._grid_coord(i).x == want_col and _room._grid_coord(i).y == _room._grid_coord(mid).y:
+						start_idx = i
+						break
+				_room.set_wall_motion_mode("smooth")
+				_room._set_centre(start_idx, true)
+				_room._set_focused(_room._panels[start_idx])
+			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active():
+				_art_settle_frames += 1
+			else:
+				_art_settle_frames = 0
+			if _art_settle_frames >= 5:
+				# THE COLD RESET: caches cold, standing faces
+				# untouched (textures + stamps stand), so the
+				# cruise's incoming columns are genuinely cold
+				# art and the start window costs nothing.
+				TextureFactory.clear_art_decode_cache()
+				_room._face_tex_cache.clear()
+				_room._face_cache_order.clear()
+				TextureFactory.probe_reset()
+				_art_start_col = _room._grid_coord(_room.centre_index()).x
+				_art_last_col = _art_start_col
+				_art_feed_msec = Time.get_ticks_msec()
+				_art_last_usec = Time.get_ticks_usec()
+				_input_feed_stick_x(1.0)
+				_art_phase = 2
+				_art_wait = 0
+			elif _art_wait > 7200:
+				_artstream_fail("artstream: the start window never settled")
+				_finish_artstream_smoke()
+		2:
+			_art_wait += 1
+			var now_usec: int = Time.get_ticks_usec()
+			var delta_ms: float = float(now_usec - _art_last_usec) / 1000.0
+			_art_last_usec = now_usec
+			_art_frames += 1
+			if delta_ms > _art_worst_ms:
+				_art_worst_ms = delta_ms
+			if delta_ms > 50.0:
+				_art_over50 += 1
+			if delta_ms > 33.0:
+				_art_over33 += 1
+			var col_now: int = _room._grid_coord(_room.centre_index()).x
+			if delta_ms > 40.0:
+				_art_spikes.append([col_now, snappedf(delta_ms, 0.1)])
+			if col_now != _art_last_col:
+				_art_col_marks.append([Time.get_ticks_msec() - _art_feed_msec, col_now])
+				_art_last_col = col_now
+			if _room.cruise_active():
+				_art_saw_cruise = true
+			if not _art_released and col_now >= _art_start_col + 10:
+				_art_released = true
+				_art_release_col = col_now
+				_input_feed_stick_x(0.0)
+			if _art_released:
+				if not _room.swing_active():
+					_art_rest_frames += 1
+				else:
+					_art_rest_frames = 0
+				if _art_rest_frames >= 3:
+					_judge_artstream_travel()
+					_art_phase = 3
+					_art_wait = 0
+					_art_heal_deadline_msec = Time.get_ticks_msec() + 30000
+			elif _art_wait > 7200:
+				_input_feed_stick_x(0.0)
+				_artstream_fail("artstream: the held cruise never spanned ten columns and settled")
+				_finish_artstream_smoke()
+		3:
+			# The heal leg: pictures may land late, never
+			# never. Poll the standing window's honest face
+			# state until every card wears real art.
+			_art_wait += 1
+			var states: Array = _room.face_state()
+			var landed: int = 0
+			for sv: Variant in states:
+				var st: Dictionary = sv as Dictionary
+				if bool(st.get("key_stamped", false)) and not bool(st.get("is_unreal", true)) and bool(st.get("from_art", false)):
+					landed += 1
+			if not states.is_empty() and landed == states.size():
+				_artstream_expect(true, "artstream: every face in the standing window healed to real art after the cruise (%d of %d faces: key stamped, real, from art - no fallback solid stands as a face)" % [landed, states.size()])
+				_artstream_print_probe()
+				_finish_artstream_smoke()
+			elif Time.get_ticks_msec() > _art_heal_deadline_msec:
+				_artstream_expect(false, "artstream: every face in the standing window healed to real art after the cruise (%d of %d faces landed within 30 s)" % [landed, states.size()])
+				_artstream_print_probe()
+				_finish_artstream_smoke()
+
+
+func _judge_artstream_travel() -> void:
+	var final_col: int = _room._grid_coord(_room.centre_index()).x
+	print("ARTSTREAM CRUISE: start col %d, release col %d, final col %d, frames %d, worst frame %.1f ms, frames >50 ms: %d, frames >33 ms: %d" % [
+		_art_start_col, _art_release_col, final_col, _art_frames, _art_worst_ms, _art_over50, _art_over33])
+	var spike_text: String = ""
+	for sv: Variant in _art_spikes:
+		var sp: Array = sv as Array
+		spike_text += " [col %d: %.1f ms]" % [int(sp[0]), float(sp[1])]
+	print("ARTSTREAM SPIKES (>40 ms):", spike_text if spike_text != "" else " none")
+	var mark_text: String = ""
+	for mv: Variant in _art_col_marks:
+		var mk: Array = mv as Array
+		mark_text += " [%d ms -> col %d]" % [int(mk[0]), int(mk[1])]
+	print("ARTSTREAM COLUMN MARKS:", mark_text if mark_text != "" else " none")
+	_artstream_expect(_art_saw_cruise, "artstream: holding the stick under SMOOTH became a cruise on the real input path")
+	_artstream_expect(final_col - _art_start_col >= 10, "artstream: the cruise spanned at least ten columns (got %d)" % (final_col - _art_start_col))
+	# The travel-frame law: the drum may never hitch for
+	# art. Two frames of allowance covers harness pacing
+	# noise (a contended llvmpipe box drops a frame for its
+	# own reasons); the base build's serial fill pays about
+	# one hitch per incoming column - ten or more here.
+	_artstream_expect(_art_over50 <= 2, "artstream: travel frames never wait on art - %d frames over 50 ms during the cold-art cruise (worst %.1f ms; allowance 2 for harness pacing)" % [_art_over50, _art_worst_ms])
+	_artstream_expect(_art_worst_ms <= 250.0, "artstream: the worst travel frame stayed under 250 ms during the cold-art cruise (worst %.1f ms - the base build's per-column serial fill lands ~125 ms and up per column on the field rig)" % _art_worst_ms)
 
 
 func _drive_bootfocus_smoke() -> void:

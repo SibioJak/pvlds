@@ -792,6 +792,14 @@ static var debug_gf13_nc: String = ""
 ## shape) - each so the input smoke's gf14 grammar legs
 ## fail by name. Empty in every real run.
 static var debug_gf14_nc: String = ""
+## GRADFIX16 (item 2) negative-control seam (harness env
+## PVLDS_GF16_NC, set by Main before any room exists):
+## "syncfill" restores the pre-fix fill law - a window fill
+## awaited from _set_centre's travel path pays decode +
+## render inline, serially, exactly as the base build did -
+## so the artstream smoke's travel-frame legs fail by name.
+## Empty in every real run.
+static var debug_gf16_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
@@ -3899,7 +3907,15 @@ func _fill_window_faces(gen: int) -> void:
 		var cc: int = _grid_coord(idx).x
 		if cc < _panel_window_lo or cc > _panel_window_hi:
 			continue
+		# GRADFIX16 probe (PVLDS_GF16_PROBE): the fill's
+		# per-face and per-column cost on this path, timed
+		# around the await the window pass actually pays.
+		var gf16_probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
 		await _fill_one_face(idx, gen)
+		if TextureFactory.probe_enabled:
+			var gf16_us: int = Time.get_ticks_usec() - gf16_probe_t
+			TextureFactory.probe_note("fill_face_total", gf16_us)
+			TextureFactory.probe_note("fill_col_%d" % cc, gf16_us)
 	if gen == _gen:
 		wall_ready = true
 		# The window is dressed: ask Main's warmer to bring

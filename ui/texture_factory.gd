@@ -19,6 +19,34 @@ var _viewport: SubViewport
 var _face: CardFace
 var _render_in_flight: bool = false ## the serialization queue's lock: one capture at a time, ever
 
+## GRADFIX16 (item 2) art probe: per-operation timing census
+## for the travel-hitch conviction, gated by the harness env
+## PVLDS_GF16_PROBE (set by Main before any factory exists).
+## When off, every note is one branch. When on, each measured
+## operation accumulates [count, total_usec, max_usec] in
+## probe_stats; the artstream smoke prints the census. The
+## probe never changes what any operation does or returns.
+static var probe_enabled: bool = false
+static var probe_stats: Dictionary = {} ## op -> [count, total_usec, max_usec]
+
+
+static func probe_note(op: String, usec: int) -> void:
+	if not probe_enabled:
+		return
+	var row: Array = probe_stats.get(op, [0, 0, 0]) as Array
+	row[0] = int(row[0]) + 1
+	row[1] = int(row[1]) + usec
+	row[2] = maxi(int(row[2]), usec)
+	probe_stats[op] = row
+
+
+static func probe_reset() -> void:
+	probe_stats.clear()
+
+
+static func probe_snapshot() -> Dictionary:
+	return probe_stats.duplicate()
+
 
 func _ready() -> void:
 	_viewport = SubViewport.new()
@@ -44,11 +72,16 @@ func render_texture(spec: Dictionary, px_size: Vector2i) -> Texture2D:
 	# awaits (GDScript is single-threaded), and a waiter resumes
 	# one frame later to re-check - so renders land in call
 	# order and no capture ever sees another call's spec.
+	var probe_t0: int = Time.get_ticks_usec() if probe_enabled else 0
 	while _render_in_flight:
 		await get_tree().process_frame
+	if probe_enabled:
+		probe_note("render_queue_wait", Time.get_ticks_usec() - probe_t0)
 	_render_in_flight = true
 	var result: Texture2D = await _render_now(spec, px_size)
 	_render_in_flight = false
+	if probe_enabled:
+		probe_note("render_total", Time.get_ticks_usec() - probe_t0)
 	return result
 
 
@@ -60,6 +93,7 @@ func face_board_metrics() -> Dictionary:
 
 
 func _render_now(spec: Dictionary, px_size: Vector2i) -> Texture2D:
+	var probe_t: int = Time.get_ticks_usec() if probe_enabled else 0
 	_viewport.size = px_size
 	# The face's size is asserted before the spec applies:
 	# a spec's layout reads it (a board's band fits itself
@@ -68,13 +102,25 @@ func _render_now(spec: Dictionary, px_size: Vector2i) -> Texture2D:
 	# later than this call.
 	_face.size = Vector2(px_size)
 	_face.apply_spec(spec)
+	if probe_enabled:
+		probe_note("render_apply_spec", Time.get_ticks_usec() - probe_t)
+		probe_t = Time.get_ticks_usec()
 	await get_tree().process_frame
+	if probe_enabled:
+		probe_note("render_wait_process_frame", Time.get_ticks_usec() - probe_t)
+		probe_t = Time.get_ticks_usec()
 	_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 	await RenderingServer.frame_post_draw
+	if probe_enabled:
+		probe_note("render_wait_post_draw", Time.get_ticks_usec() - probe_t)
+		probe_t = Time.get_ticks_usec()
 	var tex: Texture2D = _viewport.get_texture()
 	if tex == null:
 		return make_solid(Color(0.08, 0.08, 0.12))
 	var img: Image = tex.get_image()
+	if probe_enabled:
+		probe_note("render_readback_get_image", Time.get_ticks_usec() - probe_t)
+		probe_t = Time.get_ticks_usec()
 	if img == null or img.is_empty():
 		return make_solid(Color(0.08, 0.08, 0.12))
 	# GRADFIX10 (item 1) introduced this measure-and-correct
@@ -106,13 +152,19 @@ func _render_now(spec: Dictionary, px_size: Vector2i) -> Texture2D:
 		var ink: Vector2 = ink_centroid(img, Rect2()) \
 			if OS.get_environment("PVLDS_GF13_NC") == "inkmass" \
 			else ink_extent(img, Rect2())
+		if probe_enabled:
+			probe_note("render_ink_pass", Time.get_ticks_usec() - probe_t)
+			probe_t = Time.get_ticks_usec()
 		if ink.y > 0.0:
 			var delta: float = ink.x - float(px_size.y) * 0.5
 			if absf(delta) > 1.0:
 				var spec2: Dictionary = spec.duplicate()
 				spec2["ink_bias_px"] = clampi(int(round(-delta)), -px_size.y / 4, px_size.y / 4)
 				return await _render_now(spec2, px_size)
-	return ImageTexture.create_from_image(img)
+	var created: Texture2D = ImageTexture.create_from_image(img)
+	if probe_enabled:
+		probe_note("render_create_texture", Time.get_ticks_usec() - probe_t)
+	return created
 
 
 ## A rendered board face's content-ink vertical centroid,
@@ -346,8 +398,18 @@ static var _art_decode_order: Array[String] = []
 const ART_DECODE_CACHE_MAX: int = 64
 
 
+## Drop every decoded-art entry (the artstream smoke's
+## cold-art reset: a cruise that starts after this call pays
+## full decode for every face it has not rendered this pass).
+static func clear_art_decode_cache() -> void:
+	_art_decode_cache.clear()
+	_art_decode_order.clear()
+
+
 ## Loads an image file as a texture, downscaled to a sane VRAM size.
 static func load_art_texture(path: String) -> Texture2D:
+	var probe_total_t: int = Time.get_ticks_usec() if probe_enabled else 0
+	var probe_t: int = probe_total_t
 	var mtime: int = FileAccess.get_modified_time(path)
 	var size: int = -1
 	var probe: FileAccess = FileAccess.open(path, FileAccess.READ)
@@ -356,14 +418,25 @@ static func load_art_texture(path: String) -> Texture2D:
 		probe.close()
 	var hit: Variant = _art_decode_cache.get(path)
 	if hit is Array and int(hit[1]) == mtime and int(hit[2]) == size:
+		if probe_enabled:
+			probe_note("decode_cache_hit", Time.get_ticks_usec() - probe_t)
 		return hit[0] as Texture2D
 	var img: Image = Image.new()
 	if img.load(path) != OK:
 		return null
+	if probe_enabled:
+		probe_note("decode_image_load", Time.get_ticks_usec() - probe_t)
+		probe_t = Time.get_ticks_usec()
 	if img.get_width() > 1024:
 		var ratio: float = 1024.0 / float(img.get_width())
 		img.resize(1024, int(float(img.get_height()) * ratio), Image.INTERPOLATE_LANCZOS)
+	if probe_enabled:
+		probe_note("decode_resize", Time.get_ticks_usec() - probe_t)
+		probe_t = Time.get_ticks_usec()
 	var tex: Texture2D = ImageTexture.create_from_image(img)
+	if probe_enabled:
+		probe_note("decode_create_texture", Time.get_ticks_usec() - probe_t)
+		probe_note("decode_miss_total", Time.get_ticks_usec() - probe_total_t)
 	_art_decode_cache[path] = [tex, mtime, size]
 	_art_decode_order.erase(path)
 	_art_decode_order.push_back(path)
