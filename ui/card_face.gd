@@ -918,6 +918,29 @@ func board_metrics() -> Dictionary:
 		have_block = true
 	if have_block:
 		out["content_rect"] = block
+	# GRADFIX15 (item 3): the content block's INDIVIDUAL part
+	# rects - band, title, sub, body, the chips row as one,
+	# and each board row on its own (never the rows box as a
+	# whole: its gaps are exactly where a stray fill or the
+	# old spine line would stand). The frameless census
+	# (TextureFactory.frameless_census) judges every visible
+	# pixel against this set: ink inside a part is the text
+	# block; visible alpha anywhere else is a stray.
+	var part_rects: Array = []
+	for part2: Control in parts:
+		if part2 == null or not part2.visible or part2 == _rows_box:
+			continue
+		var r2: Rect2 = part2.get_global_rect()
+		if r2.size.x > 0.0 and r2.size.y > 0.0:
+			part_rects.append(r2)
+	if _rows_box.visible:
+		for child: Node in _rows_box.get_children():
+			var rc: Control = child as Control
+			if rc != null and rc.visible:
+				var rr: Rect2 = rc.get_global_rect()
+				if rr.size.x > 0.0 and rr.size.y > 0.0:
+					part_rects.append(rr)
+	out["part_rects"] = part_rects
 	out["sub_text"] = _sub_label.text
 	out["sub_need_px"] = _text_w(_measure_font(), _sub_label.text, _sub_label.get_theme_font_size("font_size"))
 	out["sub_allot_px"] = _sub_label.get_global_rect().size.x
