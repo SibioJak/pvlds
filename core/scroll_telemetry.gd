@@ -1,8 +1,10 @@
 class_name ScrollTelemetry
 extends RefCounted
 
-## Scroll telemetry (the diagnostic build's witness, branch
-## diag/scroll-telemetry): an observation-only JSONL logger
+## Scroll telemetry (first built as the diagnostic build's
+## witness on branch diag/scroll-telemetry; ported into
+## GRADFIX16 so the shipped build produces the same log):
+## an observation-only JSONL logger
 ## for the wall-motion investigation. It is written to by
 ## RoomView at the product's own poll cadence, at cruise
 ## state transitions, per rendered frame while the drum is
@@ -17,8 +19,8 @@ extends RefCounted
 ## logging itself never does file work per frame.
 
 const LOG_PATH: String = "user://scroll_telemetry.jsonl"
-const BUILD_STAMP: String = "PVLDS-SCROLLDIAG (diag/scroll-telemetry)"
-const BASE_COMMIT: String = "52b6b41"
+const BUILD_STAMP: String = "PVLDS-GRADFIX16 (gf16-artstream)"
+const BASE_COMMIT: String = "d1893fd"
 const FLUSH_LINES: int = 64
 const FLUSH_INTERVAL_MSEC: int = 250
 
