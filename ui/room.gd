@@ -4213,6 +4213,15 @@ func _art_pipe_dispatch_one(path: String) -> void:
 ## proven answer).
 func _art_decode_pump() -> void:
 	while true:
+		# While a cruise stands the pump parks too: on a
+		# CPU-bound renderer even a background decode thread
+		# competes with the travel frames (measured on the
+		# harness box - cold-cruise frames ran ~3x the warm
+		# cruise's with applications already paused). The
+		# pump sleeps and resumes the moment the cruise ends;
+		# its queue keeps every staged path in order.
+		while _cruise_dir != 0:
+			OS.delay_msec(8)
 		_art_decode_mutex.lock()
 		if _art_decode_queue.is_empty():
 			_art_decode_pump_active = false
@@ -4273,8 +4282,17 @@ func _art_pipe_pass() -> void:
 			# its travel. Ordinary swings keep the halved
 			# rate below (short travels, the shipped cost
 			# class).
+			var was_cruise_parked: bool = false
 			while _cruise_dir != 0 and gen == _gen:
+				was_cruise_parked = true
 				await get_tree().process_frame
+			if was_cruise_parked and gen == _gen:
+				# The release settle gets three frames of
+				# clear road before the first staged face
+				# lands - the resumed-work burst must not
+				# ride the very frame the drum stops on.
+				for grace_i: int in range(3):
+					await get_tree().process_frame
 			if gen != _gen:
 				break
 			var path: String = _face_path_for(_visible_games[idx])
