@@ -12277,19 +12277,24 @@ func _judge_artstream_against_warm() -> void:
 	# conditions) and the warm cruise's median (measured
 	# after it): the harness box's speed drifts across a
 	# run, and judging the early cold cruise against only
-	# the late warm cruise would convict the clock. What
-	# neither baseline can explain is a hitch: a cold frame
-	# carrying baseline + 40 ms, the chunk a column of
-	# serial art work adds at any pacing.
+	# the late warm cruise would convict the clock. A hitch
+	# is a cold frame carrying baseline + 60 ms: the
+	# convicted art chunk measures +90-190 ms over baseline
+	# per column on the base build, while the residuals
+	# measured with ALL art work parked (applications and
+	# the decode pump both wait out a cruise) stay under
+	# +55 ms - the harness floor of seating a cold wall
+	# (nameplate shaping, box warm-up), present in the base
+	# build's own settle-to-warm drift as well.
 	var baseline: float = maxf(_art_pacing_ms, warm_median)
 	var cold_hitches: int = 0
 	for dv: Variant in _art_cold_deltas:
-		if float(dv) > baseline + 40.0:
+		if float(dv) > baseline + 60.0:
 			cold_hitches += 1
 	print("ARTSTREAM WARM CRUISE: frames %d, median frame %.1f ms, worst %.1f ms, saw cruise %s; judge baseline %.1f ms (max of settle pacing %.1f and warm median)" % [
 		_art_warm_deltas.size(), warm_median, _art_warm_worst_ms, str(_art_warm_saw_cruise), baseline, _art_pacing_ms])
 	_artstream_expect(_art_warm_saw_cruise, "artstream: the warm return also cruised on the real input path (the baseline is a cruise, not a glide)")
-	_artstream_expect(cold_hitches <= 2, "artstream: travel frames never wait on art - %d cold-cruise hitch frames (over the judge baseline %.1f ms + 40 ms; worst cold frame %.1f ms; allowance 2 for harness pacing)" % [cold_hitches, baseline, _art_worst_ms])
+	_artstream_expect(cold_hitches <= 2, "artstream: travel frames never wait on art - %d cold-cruise hitch frames (over the judge baseline %.1f ms + 60 ms, the convicted art signature; worst cold frame %.1f ms; allowance 2 for harness pacing)" % [cold_hitches, baseline, _art_worst_ms])
 	_artstream_expect(_art_worst_ms <= baseline + 75.0, "artstream: the cold cruise's worst frame stayed within the judge baseline + 75 ms (worst %.1f ms against baseline %.1f ms - the base build's serial fill adds ~90-190 ms over its baseline per column)" % [_art_worst_ms, baseline])
 
 
