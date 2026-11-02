@@ -724,6 +724,15 @@ static var debug_gf12_nc: String = ""
 ## smoke's vertical-wall-law legs fail by name. Empty in
 ## every real run.
 static var debug_gf13_nc: String = ""
+## Negative-control seam for GRADFIX14 item 2 (the harness
+## env PVLDS_GF14_NC, set by Main before any room exists):
+## "oldadopt" restores the pre-fix adoption behaviour -
+## refresh_library discards the player's place (centre back
+## to the shelf's head, focus dropped) and Main drops a scan
+## that lands while a launch wait stands - so the scanwall
+## smoke's focus and launch-wait legs fail by name. Empty in
+## every real run.
+static var debug_gf14_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
@@ -949,6 +958,34 @@ func setup(factory: TextureFactory, scanner: LibraryScanner, store: StateStore, 
 
 func refresh_library() -> void:
 	_letter_net = "" ## a fresh library lifts any standing net: its set was the old scan's truth
+	# GRADFIX14 (item 2): the player's place survives an
+	# adoption. Before this, every landed scan reset the
+	# centre to the shelf's head and dropped the focus, so
+	# the wall the player returned to was a wall restarted
+	# at zero - a game deep in the shelf (a new "W..." among
+	# 374) was not on the wall in front of him until a later
+	# view rebuild re-seated his browsing (Chris's post-scan
+	# wall, 2026-11-01: World Poker Tour found only after a
+	# tournament detour). The place is read from the standing
+	# wall BEFORE the recompute: the focused card first,
+	# then the centred game, then the restored selection.
+	# If the placed game survived the scan it keeps its
+	# centre (and its focus, when the focus was its card);
+	# if it vanished, the standing fallback stands: centre
+	# at the refreshed wall's first card, focus wherever the
+	# caller's own landing law puts it (the panel close's
+	# rail SETUP stop, or none). The NC seam (oldadopt)
+	# restores the reset wholesale.
+	var place_id: String = ""
+	var place_focus: bool = false
+	if debug_gf14_nc != "oldadopt":
+		if _focused != null and _panels.has(_focused):
+			place_id = _focused.payload
+			place_focus = true
+		elif _centre_index >= 0 and _centre_index < _visible_games.size():
+			place_id = _visible_games[_centre_index].game_id
+		elif _selected_game_id != "":
+			place_id = _selected_game_id
 	# Cached faces belong to the old library's truth (titles,
 	# build counts, art can all change under a game_id across
 	# a rescan): they die with the library that minted them.
@@ -960,7 +997,17 @@ func refresh_library() -> void:
 	_recompute_visible()
 	_page = 0
 	_centre_index = 0
+	var place_idx: int = -1
+	if place_id != "":
+		for i: int in range(_visible_games.size()):
+			if _visible_games[i].game_id == place_id:
+				place_idx = i
+				break
+	if place_idx >= 0:
+		_centre_index = place_idx
 	_rebuild_wall()
+	if place_focus and place_idx >= 0 and place_idx < _panels.size():
+		_set_focused(_panels[place_idx])
 
 
 ## The card pool dies with its library: every pooled card node
@@ -1015,7 +1062,32 @@ func adopt_library(scanner: LibraryScanner) -> void:
 	if _setup_panel_up:
 		_pending_library = scanner
 		return
+	if _launching_game_id != "":
+		# GRADFIX14 (item 2): a scan that lands while the load
+		# wait stands is HELD, exactly like the panel's hold -
+		# never dropped. Main used to skip this call outright
+		# during a wait, so when the launch then FAILED back
+		# to the room, the room kept the pre-scan library for
+		# the rest of the session while Main ran on the new
+		# one. The wait is undisturbed (no rebuild behind it);
+		# the held scan adopts when the wait settles back to
+		# the wall (end_launch_failed). A successful hand-off
+		# exits the process, and the next boot scans fresh.
+		_pending_library = scanner
+		return
 	_scanner = scanner
+	refresh_library()
+
+
+## Adopt a held scan (the panel's close, the load wait's
+## settle): the held library becomes the room's, once, and
+## the wall rebuilds from it in place.
+func _adopt_pending_library() -> void:
+	if _pending_library == null:
+		return
+	var pending: LibraryScanner = _pending_library
+	_pending_library = null
+	_scanner = pending
 	refresh_library()
 
 
@@ -5987,10 +6059,7 @@ func clear_setup_panel() -> void:
 		# panel - never rebuilt piecemeal behind it while it
 		# stood. hide_setup_panel lands the focus on the
 		# rail's SETUP stop right after this.
-		var pending: LibraryScanner = _pending_library
-		_pending_library = null
-		_scanner = pending
-		refresh_library()
+		_adopt_pending_library()
 
 
 ## Panel queries (Main's feeds and the smokes read the panel
@@ -6346,6 +6415,13 @@ func end_launch_failed(game: GameEntry, reason: String) -> void:
 	_status_note = "Launch failed: %s - %s" % [game.title, reason]
 	if _detail != null and _detail.is_open():
 		_detail.set_launching(false)
+	# GRADFIX14 (item 2): a scan held during the load wait
+	# adopts here, as the wait settles back to the wall -
+	# the failure's marks are already recorded above, so
+	# the adoption's rebuild carries them, and in detail
+	# mode the adoption still lands in the data the detail
+	# close rebuilds from.
+	_adopt_pending_library()
 	if _mode == "detail":
 		return
 	_rebuild_wall()
