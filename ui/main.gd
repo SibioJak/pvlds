@@ -353,6 +353,9 @@ var _art_feed_msec: int = 0
 var _art_last_col: int = -1
 var _art_settle_frames: int = 0
 var _art_heal_deadline_msec: int = 0
+var _art_pacing_ms: float = 16.7 ## median frame delta measured over the start window's settle (the legs judge hitches against the pacing this box actually ran, the motion smoke's discipline)
+var _art_pace_stamps: Array = [] ## frame deltas collected during the settle
+var _art_over_hitch: int = 0 ## travel frames over pacing + 40 ms (an art hitch's signature, at any pacing)
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -11837,10 +11840,11 @@ func _finish_motion_smoke() -> void:
 ## session - the field shape of a boot followed by a cruise. Frame deltas are recorded from the feed until
 ## the release settle completes. Legs (all named
 ## "artstream:"): the cruise stood and spanned ten columns;
-## no travel frame over 50 ms beyond a small allowance for
-## harness pacing (the base build's serial fill fails this
-## by name - it pays ~a column of art per window step on
-## the travel frame itself); and after the cruise, every
+## no travel frame hitches beyond a small allowance, a
+## hitch judged against the pacing the box actually ran
+## (pacing + 40 ms - the base build's serial fill fails
+## this by name, paying ~a column of art per window step
+## on the travel frame itself); and after the cruise, every
 ## face in the standing window heals to real art (key
 ## stamped, not unreal, from art) - pictures may land late,
 ## they may not land never, and no fallback solid may stand
@@ -11910,6 +11914,12 @@ func _drive_artstream_smoke() -> void:
 			# Seat the start: a column with a settled window
 			# behind it and at least 16 columns of shelf ahead.
 			_art_wait += 1
+			var pace_now: int = Time.get_ticks_usec()
+			if _art_last_usec > 0:
+				_art_pace_stamps.append(float(pace_now - _art_last_usec) / 1000.0)
+				if _art_pace_stamps.size() > 40:
+					_art_pace_stamps.pop_front()
+			_art_last_usec = pace_now
 			if _art_wait == 1:
 				var mid: int = _room._panels.size() / 2
 				var mid_col: int = _room._grid_coord(mid).x
@@ -11938,6 +11948,11 @@ func _drive_artstream_smoke() -> void:
 				# full decode + render for untouched art.
 				TextureFactory.clear_art_decode_cache()
 				TextureFactory.probe_reset()
+				if _art_pace_stamps.size() >= 6:
+					var sorted_pace: Array = _art_pace_stamps.duplicate()
+					sorted_pace.sort()
+					_art_pacing_ms = float(sorted_pace[sorted_pace.size() / 2])
+				print("ARTSTREAM PACING: median frame %.1f ms during the start settle" % _art_pacing_ms)
 				_art_start_col = _room._grid_coord(_room.centre_index()).x
 				_art_last_col = _art_start_col
 				_art_feed_msec = Time.get_ticks_msec()
@@ -11960,6 +11975,8 @@ func _drive_artstream_smoke() -> void:
 				_art_over50 += 1
 			if delta_ms > 33.0:
 				_art_over33 += 1
+			if delta_ms > _art_pacing_ms + 40.0:
+				_art_over_hitch += 1
 			var col_now: int = _room._grid_coord(_room.centre_index()).x
 			if delta_ms > 40.0:
 				_art_spikes.append([col_now, snappedf(delta_ms, 0.1)])
@@ -12009,8 +12026,8 @@ func _drive_artstream_smoke() -> void:
 
 func _judge_artstream_travel() -> void:
 	var final_col: int = _room._grid_coord(_room.centre_index()).x
-	print("ARTSTREAM CRUISE: start col %d, release col %d, final col %d, frames %d, worst frame %.1f ms, frames >50 ms: %d, frames >33 ms: %d" % [
-		_art_start_col, _art_release_col, final_col, _art_frames, _art_worst_ms, _art_over50, _art_over33])
+	print("ARTSTREAM CRUISE: start col %d, release col %d, final col %d, frames %d, worst frame %.1f ms, frames >50 ms: %d, frames >33 ms: %d, pacing %.1f ms, hitch frames (pacing + 40 ms): %d" % [
+		_art_start_col, _art_release_col, final_col, _art_frames, _art_worst_ms, _art_over50, _art_over33, _art_pacing_ms, _art_over_hitch])
 	var spike_text: String = ""
 	for sv: Variant in _art_spikes:
 		var sp: Array = sv as Array
@@ -12024,12 +12041,16 @@ func _judge_artstream_travel() -> void:
 	_artstream_expect(_art_saw_cruise, "artstream: holding the stick under SMOOTH became a cruise on the real input path")
 	_artstream_expect(final_col - _art_start_col >= 10, "artstream: the cruise spanned at least ten columns (got %d)" % (final_col - _art_start_col))
 	# The travel-frame law: the drum may never hitch for
-	# art. Two frames of allowance covers harness pacing
-	# noise (a contended llvmpipe box drops a frame for its
-	# own reasons); the base build's serial fill pays about
-	# one hitch per incoming column - ten or more here.
-	_artstream_expect(_art_over50 <= 2, "artstream: travel frames never wait on art - %d frames over 50 ms during the cold-art cruise (worst %.1f ms; allowance 2 for harness pacing)" % [_art_over50, _art_worst_ms])
-	_artstream_expect(_art_worst_ms <= 250.0, "artstream: the worst travel frame stayed under 250 ms during the cold-art cruise (worst %.1f ms - the base build's per-column serial fill lands ~125 ms and up per column on the field rig)" % _art_worst_ms)
+	# art. Judged against the pacing this box actually ran
+	# (the motion smoke's discipline - a contended llvmpipe
+	# box's bare frame can run 5x a clean rig's, and an
+	# absolute bound would judge the box, not the art): a
+	# hitch is a frame carrying pacing + 40 ms, the chunk a
+	# column of serial art work adds on the base build at
+	# any pacing, about once per incoming column. Two
+	# frames of allowance covers harness noise.
+	_artstream_expect(_art_over_hitch <= 2, "artstream: travel frames never wait on art - %d hitch frames (over pacing %.1f ms + 40 ms) during the cold-art cruise (worst %.1f ms; raw frames over 50 ms: %d; allowance 2 for harness pacing)" % [_art_over_hitch, _art_pacing_ms, _art_worst_ms, _art_over50])
+	_artstream_expect(_art_worst_ms <= _art_pacing_ms + 75.0, "artstream: the worst travel frame stayed within pacing + 75 ms during the cold-art cruise (worst %.1f ms against pacing %.1f ms - the base build's per-column serial fill adds ~90-140 ms over pacing per column)" % [_art_worst_ms, _art_pacing_ms])
 
 
 func _drive_bootfocus_smoke() -> void:
