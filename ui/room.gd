@@ -634,10 +634,12 @@ var _window_fill_dirty: bool = false
 var _art_pipe_busy: bool = false ## a staged pipeline pass is running
 var _art_pipe_queue: Array[int] = [] ## panel indices awaiting a staged face, centre-out order, revalidated at pop time
 var _art_pipe_in_stage: bool = false ## the pipeline is inside _fill_one_face_sync: its decode branch reads staged results instead of paying a synchronous decode
-var _art_decode_pending: Dictionary = {} ## art path -> true while a background decode task is in flight for it
+var _art_decode_pending: Dictionary = {} ## art path -> true while a background decode is queued for or in flight on the decode pump
 var _art_decoded_ready: Dictionary = {} ## art path -> Image: a finished background decode awaiting texture creation on the pipeline's own frames
 var _art_decoded_failed: Dictionary = {} ## art path -> true: a background decode finished and produced no image (the staged face falls through to its styled card, exactly as a synchronous load failure did)
-var _art_decode_mutex: Mutex = Mutex.new() ## guards the three decode dictionaries against the worker thread
+var _art_decode_mutex: Mutex = Mutex.new() ## guards the decode dictionaries and the pump's queue against the worker thread
+var _art_decode_queue: Array[String] = [] ## art paths awaiting the decode pump (mutex-guarded)
+var _art_decode_pump_active: bool = false ## a pump task is draining _art_decode_queue (mutex-guarded): ONE decode at a time, ever - the ArtWarmer's proven discipline, so background decode can never swarm the renderer's cores
 var _power_subject_inflight: Dictionary = {} ## game_id -> true while its power-on subject renders
 var _power_prefetch_asked: Dictionary = {} ## game_id -> true once the warmer has been asked for its cold backglass (GRADFIX6)
 var _face_heal_retries: Dictionary = {} ## GRADFIX6 item 2: "game_id|art_file" -> art-render retries already spent by the panel heal
@@ -4176,30 +4178,56 @@ func _art_pipe_dispatch_decodes(idxs: Array[int]) -> void:
 			continue
 		if TextureFactory.art_decode_is_cached(path):
 			continue
-		_art_decode_mutex.lock()
-		var known: bool = _art_decode_pending.has(path) or _art_decoded_ready.has(path) or _art_decoded_failed.has(path)
-		if not known:
-			_art_decode_pending[path] = true
-		_art_decode_mutex.unlock()
-		if not known:
-			WorkerThreadPool.add_task(Callable(self, "_art_decode_worker").bind(path))
+		_art_pipe_dispatch_one(path)
 
 
-## The background decode task (worker thread): decode only -
-## load + downscale into an Image and hand it back through
-## the mutex-guarded dictionaries. No texture creation, no
-## cache writes, no node access: everything the worker
-## touches is either its own local Image or the guarded
-## dictionaries.
-func _art_decode_worker(path: String) -> void:
-	var img: Image = TextureFactory.decode_art_image(path)
+## Queue one art path for the background decode pump
+## (deduplicated against queued / in-flight / landed /
+## failed decodes, and against the standing decode cache's
+## own hits at stage time). Starts the pump when it is idle.
+func _art_pipe_dispatch_one(path: String) -> void:
 	_art_decode_mutex.lock()
-	_art_decode_pending.erase(path)
-	if img != null:
-		_art_decoded_ready[path] = img
-	else:
-		_art_decoded_failed[path] = true
+	var known: bool = _art_decode_pending.has(path) or _art_decoded_ready.has(path) or _art_decoded_failed.has(path)
+	var start_pump: bool = false
+	if not known:
+		_art_decode_pending[path] = true
+		_art_decode_queue.append(path)
+		if not _art_decode_pump_active:
+			_art_decode_pump_active = true
+			start_pump = true
 	_art_decode_mutex.unlock()
+	if start_pump:
+		WorkerThreadPool.add_task(Callable(self, "_art_decode_pump"))
+
+
+## The background decode pump (ONE worker task): drains the
+## decode queue one file at a time - load + downscale into
+## an Image, handed back through the mutex-guarded
+## dictionaries. No texture creation, no cache writes, no
+## node access: everything the pump touches is either its
+## own local Image or the guarded dictionaries. One at a
+## time is deliberate (the first staged runs dispatched a
+## task per face, and the decode swarm fought the renderer
+## for cores - the cruise crawled and the spikes came back;
+## the ArtWarmer's one-worker discipline is the house's
+## proven answer).
+func _art_decode_pump() -> void:
+	while true:
+		_art_decode_mutex.lock()
+		if _art_decode_queue.is_empty():
+			_art_decode_pump_active = false
+			_art_decode_mutex.unlock()
+			return
+		var path: String = _art_decode_queue.pop_front()
+		_art_decode_mutex.unlock()
+		var img: Image = TextureFactory.decode_art_image(path)
+		_art_decode_mutex.lock()
+		_art_decode_pending.erase(path)
+		if img != null:
+			_art_decoded_ready[path] = img
+		else:
+			_art_decoded_failed[path] = true
+		_art_decode_mutex.unlock()
 
 
 ## The staged pipeline pass: a deferred coroutine (started
@@ -4236,18 +4264,10 @@ func _art_pipe_pass() -> void:
 			var path: String = _face_path_for(_visible_games[idx])
 			if path != "" and not TextureFactory.art_decode_is_cached(path):
 				_art_decode_mutex.lock()
-				var decode_known: bool = _art_decode_pending.has(path) or _art_decoded_ready.has(path) or _art_decoded_failed.has(path)
-				if not decode_known:
-					_art_decode_pending[path] = true
+				var decode_landed: bool = _art_decoded_ready.has(path) or _art_decoded_failed.has(path)
 				_art_decode_mutex.unlock()
-				if not decode_known:
-					WorkerThreadPool.add_task(Callable(self, "_art_decode_worker").bind(path))
-					deferred.append(idx)
-					continue
-				_art_decode_mutex.lock()
-				var in_flight: bool = _art_decode_pending.has(path)
-				_art_decode_mutex.unlock()
-				if in_flight:
+				if not decode_landed:
+					_art_pipe_dispatch_one(path)
 					deferred.append(idx)
 					continue
 			var gf16_probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
