@@ -23,6 +23,13 @@ var _render_in_flight: bool = false ## the serialization queue's lock: one captu
 func _ready() -> void:
 	_viewport = SubViewport.new()
 	_viewport.size = Vector2i(512, 640)
+	# GRADFIX15 (item 1): the capture clears to TRANSPARENT -
+	# a board face's texture is its text block on transparency
+	# (CardFace's frameless law), and an opaque clear colour
+	# would stamp a black field behind it. Every other face
+	# kind paints its own full-rect ground over the clear, so
+	# their captures are unchanged.
+	_viewport.transparent_bg = true
 	_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	_viewport.gui_disable_input = true
 	add_child(_viewport)

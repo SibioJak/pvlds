@@ -13,6 +13,10 @@ extends Control
 ##            deadline line, then stacked board rows - score
 ##            rows (his carries the accent ground), a divider
 ##            row where the cutoff line falls, and note rows.
+##            GRADFIX15: the board face is FRAMELESS - the
+##            text block stands on transparency with no panel
+##            fill behind it (the One Book dressing below is
+##            the retired shape, kept as the record).
 ##            GRADFIX4 (One Book): the face is a page of the
 ##            focused card's own book - the paper sits inside
 ##            a cover border of the card frame's stock, a
@@ -84,9 +88,13 @@ const PUP_BADGE_COLOR: Color = Color(0.45, 0.85, 1.0)
 const BOARD_SCORE_COL_MAX_PX: float = 330.0
 
 var _bg: ColorRect
-var _cover_rect: ColorRect ## board kind (GRADFIX4, One Book): the book's cover - a border of the card frame's own stock around the page, so the text page and the art page wear the same frame
-var _page_tex: GradientTexture2D ## board kind: the page gradient, aimed per spec at the spine side
-var _page_rect: TextureRect ## board kind: the One Book's page gradient (lit at the free edge, darkening toward the spine)
+## GRADFIX15 (item 1): the One Book's cover rect and page
+## gradient are DELETED - a board face no longer renders any
+## filled panel behind its text (Chris, 2026-11-02: "lets
+## nuke the grey line and background color"). The board's
+## text block stands on transparency; see apply_spec's
+## frameless law. The spine furniture below dies with it in
+## item 2 of the same round.
 var _spine_line: ColorRect ## board kind: the spine ridge's highlight hairline, just inside the spine edge
 var _spine_shade: ColorRect ## board kind: the dark fall past the spine hairline, to the spine edge
 var _strip_grad_rect: TextureRect ## strip_section kind (GRADFIX14 item 1): the section's graphite gradient, drawn over the ground and under the type
@@ -125,42 +133,9 @@ func _init() -> void:
 	_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(_bg)
 
-	# The One Book's page (GRADFIX4): a board face is a page
-	# of the focused card's own book - the paper sits inside
-	# a COVER of the card frame's stock (the border the 3D
-	# frame quad continues around the page), lit at its free
-	# edge and shading down toward the spine, which sits at
-	# whichever edge joins the art page (spec "spine_side":
-	# "right" for the library wing, "left" for the Tournament
-	# board). The gradient and the spine furniture draw over
-	# the ground and under every line of type; they stand
-	# only for the board kind, asserted per spec like
-	# everything else on this shared face.
-	_cover_rect = ColorRect.new()
-	_cover_rect.color = Color(0.025, 0.03, 0.06)
-	_cover_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_cover_rect.visible = false
-	add_child(_cover_rect)
-	_page_rect = TextureRect.new()
-	var page_grad: Gradient = Gradient.new()
-	page_grad.set_color(0, Color(0.115, 0.145, 0.225))
-	page_grad.set_color(1, Color(0.035, 0.045, 0.09))
-	_page_tex = GradientTexture2D.new()
-	_page_tex.gradient = page_grad
-	_page_tex.fill_from = Vector2(0.0, 0.5)
-	_page_tex.fill_to = Vector2(1.0, 0.5)
-	_page_tex.width = 256
-	_page_tex.height = 8
-	_page_rect.texture = _page_tex
-	_page_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_page_rect.offset_left = 10.0
-	_page_rect.offset_top = 10.0
-	_page_rect.offset_right = -10.0
-	_page_rect.offset_bottom = -10.0
-	_page_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_page_rect.stretch_mode = TextureRect.STRETCH_SCALE
-	_page_rect.visible = false
-	add_child(_page_rect)
+	# The spine furniture (GRADFIX4, the One Book) - deleted
+	# in GRADFIX15 item 2; the cover and the page gradient it
+	# rode on died in item 1, above.
 	_spine_line = ColorRect.new()
 	_spine_line.color = Color(0.48, 0.55, 0.70, 0.85)
 	_spine_line.visible = false
@@ -406,21 +381,28 @@ func apply_spec(spec: Dictionary) -> void:
 	_vbox.alignment = BoxContainer.ALIGNMENT_CENTER if kind == "button" or kind == "banner" or kind == "strip_section" else BoxContainer.ALIGNMENT_BEGIN
 	var bg: Color = _color_of(spec, "bg", Color(0.05, 0.05, 0.09))
 	var band: Color = _color_of(spec, "band", Color(0.25, 0.25, 0.38))
+	# GRADFIX15 (item 1): a board face is FRAMELESS - no
+	# filled panel behind the text. The shared ground rect
+	# hides for the board kind and no cover/page ground
+	# stands in its place (both deleted): the face texture
+	# is the text block itself - band strip, title, deadline,
+	# score rows, chips, his-row ground, designer/version
+	# notes - on transparency, and the standing quad shows
+	# exactly that. Every other kind keeps its ground,
+	# re-asserted here like everything on this shared face.
+	# The NC seam PVLDS_GF15_NC=panelfill restores the flat
+	# panel fill (the spec's "bg" colour, full rect) so the
+	# frameless census legs fail by name.
+	var frameless: bool = kind == "board" \
+		and OS.get_environment("PVLDS_GF15_NC") != "panelfill"
+	_bg.visible = not frameless
 	_bg.color = bg
-	# The One Book's page furniture stands for board faces
-	# only (GRADFIX4); the spine ridge hugs the page's SPINE
-	# edge - the edge that joins the art page (spec
-	# "spine_side", default "right") - the gradient darkens
-	# toward it and the hairline + fall sit just inside the
-	# cover border.
-	_cover_rect.visible = kind == "board"
-	_page_rect.visible = kind == "board"
+	# The spine furniture stands for board faces only
+	# (GRADFIX4); it dies in GRADFIX15 item 2.
 	_spine_line.visible = kind == "board"
 	_spine_shade.visible = kind == "board"
 	if kind == "board" and size.x > 0.0:
 		var spine_left: bool = str(spec.get("spine_side", "right")) == "left"
-		_page_tex.fill_from = Vector2(1.0, 0.5) if spine_left else Vector2(0.0, 0.5)
-		_page_tex.fill_to = Vector2(0.0, 0.5) if spine_left else Vector2(1.0, 0.5)
 		if spine_left:
 			_spine_shade.position = Vector2(10.0, 10.0)
 			_spine_shade.size = Vector2(31.0, size.y - 20.0)

@@ -647,6 +647,23 @@ var _power_overlay: MeshInstance3D = null ## the mimic's one quad over the perfo
 var _power_mat: ShaderMaterial = null ## the overlay's material - its uniforms are the performance
 var _power_missed: ClickableQuad = null ## a candidate whose face texture was not ready when its settle fired: skipped until focus changes, never retried per frame
 var _placeholder_tex: Texture2D = null ## the standing wall's placeholder face (minted per _rebuild_wall): a panel still wearing it has no face yet
+## GRADFIX15 (item 1): the board faces' placeholder - a fully
+## TRANSPARENT 4x4. A board (or flip back, or state face) that
+## has not rendered yet stands INVISIBLE, never as the dark
+## placeholder slab: a frameless face has no fill to fake.
+## Reality bookkeeping is untouched by the swap: real is
+## still size + the book's tex_real flag (_tex_is_real reads
+## a 4x4 as unreal whatever its colour), so the heal rounds
+## keep re-issuing a missing board exactly as before, and a
+## landed board face - mostly alpha 0 - is a REAL face by
+## its size, never mistaken for this placeholder.
+static var _clear_tex: Texture2D = null
+
+
+static func clear_tex() -> Texture2D:
+	if _clear_tex == null:
+		_clear_tex = TextureFactory.make_solid(Color(0.0, 0.0, 0.0, 0.0))
+	return _clear_tex
 ## Negative-control seam (the focus-fix round's harness env
 ## PVLDS_FOCUS_NC, set by Main before any room exists):
 ## "visual" starves the strip quads of visual-state refreshes
@@ -2213,7 +2230,10 @@ func _make_card_label(parent: Node, text: String) -> Label3D:
 func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 	var size: Vector2 = RoomSpecs.board_panel_size() if mode == "board" else CARD_SIZE
 	var q: ClickableQuad = ClickableQuad.new()
-	q.setup("panel", game.game_id, _placeholder_tex, size)
+	# GRADFIX15 (item 1): a board-mode panel (the tournament
+	# state face) starts on the CLEAR texture, like a standing
+	# board - no face yet reads as no fill, never a dark slab.
+	q.setup("panel", game.game_id, clear_tex() if mode == "board" else _placeholder_tex, size)
 	# The quad's own highlight frame is sized off the face
 	# (x1.055): on a dome card that ring would outgrow the
 	# prototype's frame geometry the clearance proof measured,
@@ -2277,6 +2297,14 @@ func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 		bface.mesh = bqm
 		var bmat: StandardMaterial3D = StandardMaterial3D.new()
 		bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		# GRADFIX15 (item 1): the back face is a frameless board
+		# face (its texture is text on transparency), so its
+		# material blends alpha like the standing boards' -
+		# without this the transparent field would render as
+		# an opaque black slab - and it stands on the clear
+		# texture until its first real capture lands.
+		bmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		bmat.albedo_texture = clear_tex()
 		bface.material_override = bmat
 		bface.position = Vector3(0.0, 0.0, 0.001)
 		back.add_child(bface)
@@ -4241,7 +4269,11 @@ func _fill_tournament_state_faces(gen: int) -> void:
 		var tex: Texture2D = await _factory.render_texture(spec, RoomSpecs.board_face_px())
 		if gen != _gen:
 			return
-		quad.set_texture(tex)
+		# GRADFIX15 (item 1): the state face is a board face -
+		# only a real capture stamps; a fallback landing leaves
+		# the panel's clear texture standing (invisible).
+		if _tex_is_real(tex):
+			quad.set_texture(tex)
 		_panel_art_aspect[i] = 0.0
 		if i < _panel_launches.size() and _panel_launches[i] != null:
 			var lq: ClickableQuad = _panel_launches[i]
@@ -4349,7 +4381,7 @@ func _seat_tournament_boards() -> void:
 			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			mat.albedo_texture = _placeholder_tex
+			mat.albedo_texture = clear_tex() ## GRADFIX15: not yet rendered = invisible, never a dark slab
 			root.material_override = mat
 			entry = {"root": root, "mat": mat}
 			_board_pool[cid] = entry
@@ -4377,7 +4409,7 @@ func _seat_tournament_boards() -> void:
 				book["tex_key"] = key
 				book["tex_real"] = true
 			else:
-				mat.albedo_texture = _placeholder_tex
+				mat.albedo_texture = clear_tex() ## GRADFIX15: no face yet - the board stands invisible
 				book["tex_key"] = ""
 				book["tex_real"] = false
 		elif bool(book.get("tex_real", false)) and _board_tex_cache.has(key):
@@ -4478,10 +4510,16 @@ func _render_tournament_board(idx: int) -> void:
 		real = true
 	if real:
 		_board_tex_cache[key] = tex
+	# GRADFIX15 (item 1): only a REAL capture is ever stamped
+	# on a board. A render that lands the factory's fallback
+	# solid leaves the board standing on its clear texture
+	# (invisible) and the book's tex_real false, so the heal
+	# re-issues it (bounded) - the fallback never stands as a
+	# dark slab dressed as a board.
 	var node: MeshInstance3D = _board_nodes[idx] as MeshInstance3D
 	if node != null:
 		var mat: StandardMaterial3D = node.material_override as StandardMaterial3D
-		if mat != null:
+		if mat != null and real:
 			mat.albedo_texture = tex
 	book["key"] = key
 	book["tex_key"] = key
@@ -4526,7 +4564,7 @@ func _heal_tournament_boards() -> void:
 			if hnode != null:
 				var hmat: StandardMaterial3D = hnode.material_override as StandardMaterial3D
 				if hmat != null:
-					hmat.albedo_texture = _placeholder_tex
+					hmat.albedo_texture = clear_tex() ## GRADFIX15: a re-keyed board stands invisible until its face lands
 			needs_pass = true
 			continue
 		if str(book.get("tex_key", "")) == key and bool(book.get("tex_real", false)):
@@ -5169,9 +5207,10 @@ func _tex_is_real(tex: Texture2D) -> bool:
 ## with a real capture, or when that render is in flight.
 ## The render is the factory's ordinary async path - it
 ## never blocks a frame, and the turn never waits for it:
-## a back whose art is still landing shows the page's
-## ground, then the content swaps in (the heal below keeps
-## retrying a fallback landing, bounded).
+## a back whose face is still landing shows nothing (the
+## clear texture - GRADFIX15's frameless law), then the
+## content swaps in (the heal below keeps retrying a
+## fallback landing, bounded).
 func _refresh_card_back() -> void:
 	if _flip_idx < 0:
 		return
@@ -5220,7 +5259,13 @@ func _render_card_back(idx: int, key: String) -> void:
 		tex = TextureFactory.make_solid(Color(0.055, 0.055, 0.095))
 		real = true
 	var bmat: StandardMaterial3D = nodes["back_mat"] as StandardMaterial3D
-	if bmat != null:
+	# GRADFIX15 (item 1): only a real capture stamps the back
+	# (the solidboard NC's counterfeit counts itself real
+	# above, as its seam requires). A fallback landing leaves
+	# the clear texture standing and tex_real false, so the
+	# blank-back heal re-issues the render, bounded - a
+	# frameless back never stands as a dark slab.
+	if bmat != null and real:
 		bmat.albedo_texture = tex
 	nodes["back_key"] = key
 	nodes["back_tex_real"] = real
