@@ -641,11 +641,15 @@ var _art_decode_mutex: Mutex = Mutex.new() ## guards the decode dictionaries and
 var _art_decode_queue: Array[String] = [] ## art paths awaiting the decode pump (mutex-guarded)
 var _art_decode_pump_active: bool = false ## a pump task is draining _art_decode_queue (mutex-guarded): ONE decode at a time, ever - the ArtWarmer's proven discipline, so background decode can never swarm the renderer's cores
 var _art_stopping: bool = false ## the room is leaving the tree: the pipeline starts no new face and the pump returns after its current decode - art work must wind down at exit, not continue into engine teardown (the harness's swing probe segfaulted at quit with fills in flight; the serial worker it replaced was almost always idle by quit, the pipeline by design is not)
-var _face_path_memo: Dictionary = {} ## game_id -> art path, for the pipeline's per-centre-change filter ONLY: _face_path_for probes the filesystem per game, and asking it for all 63 window faces on every column crossing put a measurable burst on the crossing frame (healthy-box runs: 1-2 spikes of 50-90 ms per column with all art work parked). The memo is rewritten by every fill from its own fresh probe, erased on shot refresh, and cleared on rebuild; the heal and the fills themselves always probe fresh, so an upgrade the memo missed is still caught and filled by them, and the fill then corrects the memo.
+var _face_path_memo: Dictionary = {} ## game_id -> art path, for the pipeline's per-centre-change filter ONLY: _face_path_for probes the filesystem per game, and asking it for all 63 window faces on every column crossing put a measurable burst on the crossing frame (healthy-box runs: 1-2 spikes of 50-90 ms per column with all art work parked). The memo is rewritten by every fill from its own fresh probe, erased on shot refresh, and cleared on rebuild. GRADFIX17 (item 1): a fill is NOT the only corrector any more - the heal and the settle audit probe fresh and rewrite the memo from that probe whenever their fresh key disagrees with the stamp, because a memo written while a face's art was still cold otherwise vetoed every later pass for that face (the filter judged it standing; the fill that would have corrected the memo was the very thing being filtered out).
 var _power_subject_inflight: Dictionary = {} ## game_id -> true while its power-on subject renders
 var _power_prefetch_asked: Dictionary = {} ## game_id -> true once the warmer has been asked for its cold backglass (GRADFIX6)
 var _face_heal_retries: Dictionary = {} ## GRADFIX6 item 2: "game_id|art_file" -> art-render retries already spent by the panel heal
 var _face_heal_msec: int = 0 ## GRADFIX6 item 2: the panel heal's throttle stamp (one sweep per BOARD_TEX_RETRY_MS)
+var _gf17_was_travelling: bool = false ## GRADFIX17 item 1: the drum was travelling last frame (cruise / swing / page slide) - its falling edge arms the landing guarantee's settle audit
+var _gf17_audit_armed: bool = false ## GRADFIX17 item 1: a settle audit is owed: the standing window is re-audited against fresh probes until every visible face honestly stands or its heal budget is spent
+var _gf17_audit_msec: int = 0 ## GRADFIX17 item 1: the settle audit's throttle stamp (one sweep per BOARD_TEX_RETRY_MS, the heal's cadence)
+var _gf17_audit_runs: int = 0 ## GRADFIX17 item 1: sweeps spent on the current settle (bounded - see _guarantee_audit)
 ## (The shelf's bookend fins stood here until GRADFIX8
 ## item 5 - removed entirely, Chris's order; see
 ## bookend_fin_count in the smoke-support section.)
@@ -4757,6 +4761,21 @@ func _heal_panel_faces() -> void:
 		var pup: bool = game.is_pup_tagged()
 		var want_key: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
 		if stamped != want_key:
+			# GRADFIX17 (item 1): correct the pipeline
+			# filter's memo from this fresh probe before
+			# asking for the pass. The memo is only ever
+			# rewritten by a fill, and the enqueue filter
+			# spends the pass budget by the memo - so a
+			# face whose art landed after its memo was
+			# written (the extraction chain, a pair's On
+			# half, a landed shot the refresh hook missed)
+			# was judged "standing" by the filter forever:
+			# the heal asked, the pipeline refused, and
+			# the card stood dark for good. With the memo
+			# corrected, the pass the heal asks for below
+			# can finally spend itself on this face.
+			if debug_gf17_nc != "noguarantee":
+				_face_path_memo[game.game_id] = art_file
 			needs_pass = true # an upgrade is ready (or the face never landed); never budget-charged
 		elif tex == null or tex == _placeholder_tex or not _tex_is_real(tex):
 			# Stamped as this face, yet not honestly standing
@@ -4783,6 +4802,98 @@ func _heal_panel_faces() -> void:
 				needs_pass = true
 	if needs_pass:
 		_request_window_fill()
+
+
+## The landing guarantee's settle audit (GRADFIX17 item 1):
+## armed the frame travel ends (see _update_pop), it sweeps
+## the standing window on the heal's cadence and re-issues
+## every face that is not honestly standing, until a fresh
+## census reads zero missing or the heal's own bounds say
+## the face has had its retries. Per face it applies the
+## heal's three tests with ONE addition - the memo
+## correction that is this round's conviction: the pipeline
+## filter judges by _face_path_memo, which a fill alone
+## rewrites, so any face whose ready path changed after its
+## memo was written (extraction landed, pair On appeared,
+## shot arrived off-window) was permanently filtered out of
+## every pass the heal requested. The audit (and the heal's
+## first branch, above) rewrites the memo from the fresh
+## probe, so the requested pass can reach the face. Bounds,
+## consonant with the heal laws: key-changed re-issues are
+## never budget-charged (an upgrade, not a retry); unreal
+## stamps and styled-over-art retries spend the same
+## per-key BOARD_TEX_MAX_RETRIES budget the heal spends;
+## the audit itself disarms after GF17_AUDIT_MAX_RUNS sweeps
+## on one settle, so a persistently failing capture settles
+## on its styled card instead of spinning. The fallback
+## solid is never stamped as a real face (the fill's
+## reality gate is untouched), and nothing here runs while
+## the drum travels - the GF16 travel law stands.
+const GF17_AUDIT_MAX_RUNS: int = 40
+
+func _guarantee_audit() -> void:
+	if debug_gf17_nc == "noguarantee":
+		_gf17_audit_armed = false
+		return
+	if _panel_window_lo < 0 or _panels.is_empty():
+		_gf17_audit_armed = false
+		return
+	var now: int = Time.get_ticks_msec()
+	if now - _gf17_audit_msec < BOARD_TEX_RETRY_MS:
+		return
+	_gf17_audit_msec = now
+	_gf17_audit_runs += 1
+	var missing: int = 0
+	var actionable: bool = false
+	var needs_pass: bool = false
+	for idx: int in range(_panels.size()):
+		if idx >= _visible_games.size():
+			continue
+		var cc: int = _grid_coord(idx).x
+		if cc < _panel_window_lo or cc > _panel_window_hi:
+			continue
+		if _tournament and idx < _tournament_rows.size() \
+				and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+			continue # state panels wear board faces, not card faces
+		var game: GameEntry = _visible_games[idx]
+		var quad: ClickableQuad = _panels[idx]
+		var tex: Texture2D = quad.current_texture()
+		var stamped: String = str(_panel_face_key.get(game.game_id, ""))
+		var art_file: String = _face_path_for(game)
+		var fav: bool = _store != null and _store.is_favorite(game.game_id)
+		var pup: bool = game.is_pup_tagged()
+		var want_key: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+		if stamped != want_key:
+			missing += 1
+			actionable = true
+			_face_path_memo[game.game_id] = art_file # the correction (see above)
+			needs_pass = true # an upgrade is ready; never budget-charged
+		elif tex == null or tex == _placeholder_tex or not _tex_is_real(tex):
+			missing += 1
+			var rkey: String = game.game_id + "|" + want_key
+			var spent: int = int(_face_heal_retries.get(rkey, 0))
+			if spent < BOARD_TEX_MAX_RETRIES:
+				actionable = true
+				_face_heal_retries[rkey] = spent + 1
+				_panel_face_key.erase(game.game_id)
+				_face_path_memo[game.game_id] = art_file
+				needs_pass = true
+		elif art_file != "" and _panel_art_aspect[idx] <= 0.0:
+			missing += 1
+			var rkey: String = game.game_id + "|" + art_file
+			var spent: int = int(_face_heal_retries.get(rkey, 0))
+			if spent < BOARD_TEX_MAX_RETRIES:
+				actionable = true
+				_face_heal_retries[rkey] = spent + 1
+				_face_cache_evict(stamped)
+				_panel_face_key.erase(game.game_id)
+				_face_path_memo[game.game_id] = art_file
+				needs_pass = true
+	if needs_pass:
+		_request_window_fill()
+	if missing == 0 or not actionable or _gf17_audit_runs >= GF17_AUDIT_MAX_RUNS:
+		_gf17_audit_armed = false
+		_gf17_audit_runs = 0
 
 
 ## Per-panel face state for the smokes (the sweep driver's
@@ -5557,6 +5668,20 @@ func _update_pop(delta: float) -> void:
 				bnode.position = (_board_base_pos[i] as Vector3) \
 					+ (_board_pop_dir[i] as Vector3) * (POP_OUT_DISTANCE * applied)
 	_update_flip(delta)
+	# GRADFIX17 (item 1): the landing guarantee's arming - a
+	# travel's falling edge (cruise, swing or page slide stood
+	# last frame, stands no longer) owes the standing window
+	# a settle audit. The audit runs BEFORE the heal so its
+	# memo corrections ride the heal's own pass request too.
+	var gf17_travelling: bool = _cruise_dir != 0 or _swing_active or page_slide_active()
+	if gf17_travelling:
+		_gf17_was_travelling = true
+	elif _gf17_was_travelling:
+		_gf17_was_travelling = false
+		_gf17_audit_armed = true
+		_gf17_audit_runs = 0
+	if _gf17_audit_armed:
+		_guarantee_audit()
 	_heal_panel_faces()
 	_heal_tournament_boards()
 
