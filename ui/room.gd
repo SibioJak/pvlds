@@ -836,6 +836,14 @@ static var debug_gf14_nc: String = ""
 ## so the artstream smoke's travel-frame legs fail by name.
 ## Empty in every real run.
 static var debug_gf16_nc: String = ""
+## GRADFIX17 (item 2) negative-control seam (harness env
+## PVLDS_GF17_NC): "hazeall" restores the pre-fix wall-alpha
+## law - _apply_wall_alpha rewrites every panel's, launch's
+## and label's alpha on every centre change, changed or not
+## (the per-column write storm the hitchhunt convicted) -
+## so the hitchhunt smoke's alpha-write leg fails by name.
+## Empty in every real run.
+static var debug_gf17_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
@@ -903,6 +911,28 @@ var _marquee_name: Label3D = null
 var _marquee_up: bool = false
 var _marquee_t: float = 0.0 ## seconds since the marquee rose
 var _wall_alpha_applied: float = 1.0 ## the wall fade's last applied alpha (change guard)
+## GRADFIX17 (item 2): the wall-alpha pass's write-on-change
+## bookkeeping. The pass used to rewrite every panel's,
+## launch's and label's alpha on EVERY centre change (the
+## haze "follows the centre", so _refresh_window defeated
+## the change guard by resetting it) - some 3 renderer
+## writes per panel per column crossing, ~99% of them
+## writing the value already standing (a panel's haze
+## factor moves materially only while it crosses the
+## 6-to-10-column band around the centre). The pass now
+## writes only what changed by at least its own standing
+## epsilon (0.002, the guard's own threshold - a smaller
+## change is invisible by the code's own standard), and
+## _alpha_write_count counts the writes so the hitchhunt
+## smoke can judge the law structurally. PVLDS_GF17_NC=
+## hazeall restores the write-everything law (debug_gf17_nc).
+var _alpha_write_count: int = 0 ## wall-alpha values written since boot (the hitchhunt smoke reads the cruise deltas)
+var _alpha_haze_centre: int = -999 ## the centre column the standing per-panel alphas were computed for
+var _panel_alpha_applied: Array[float] = [] ## per panel: the content alpha last written (-1 = never)
+var _launch_alpha_applied: Array[float] = [] ## per launch quad: same
+var _label_alpha_applied: Array[float] = [] ## per panel label: same
+var _board_alpha_applied: Array[float] = [] ## per board node: same
+var _alpha_flat_applied: Dictionary = {} ## rail/strip/status/plate/border key -> the alpha last written (these ride the global fade only, never the haze)
 var _placard: Node3D = null ## the setup placard's holder; in the tree only while the placard stands
 var _placard_face: ClickableQuad = null
 var _placard_back: ClickableQuad = null
@@ -3174,7 +3204,14 @@ func _refresh_card_frames() -> void:
 			break
 		var f: MeshInstance3D = _panel_frames[idx]
 		if f != null:
-			f.material_override = _frame_mat(idx == _centre_index)
+			# GRADFIX17: only the old and new centre frames
+			# ever change material (two shared materials,
+			# centre or dark) - assigning the standing one
+			# again is a renderer write for nothing, per
+			# panel per column. Compare and skip.
+			var want_mat: StandardMaterial3D = _frame_mat(idx == _centre_index)
+			if f.material_override != want_mat:
+				f.material_override = want_mat
 
 
 ## The drawn window: cards within VISIBLE_HALF_COLUMNS of the
@@ -3206,9 +3243,12 @@ func _refresh_window() -> void:
 		bnode2.visible = bc2.x >= _panel_window_lo and bc2.x <= _panel_window_hi
 	# The haze follows the centre (see _haze_for): re-apply
 	# the standing wall fade with the new centre's factors.
-	var keep_alpha: float = _wall_alpha_applied
-	_wall_alpha_applied = -1.0
-	_apply_wall_alpha(keep_alpha)
+	# GRADFIX17: the pass itself now knows the haze moved
+	# (it watches the centre column) and writes only the
+	# alphas that actually change - the old shape defeated
+	# its change guard here (resetting it to -1) so EVERY
+	# centre change rewrote every alpha on the wall.
+	_apply_wall_alpha(_wall_alpha_applied)
 
 
 ## Whether a Tournament panel may launch: only a challenge row
@@ -3310,6 +3350,12 @@ func _rebuild_wall() -> void:
 	_panel_window_lo = -1
 	_panel_window_hi = -1
 	_wall_alpha_applied = 1.0 ## fresh quads start opaque; the marquee fade re-applies from there
+	_panel_alpha_applied.clear() ## GRADFIX17: the alpha pass's write-on-change caches reset with the wall (fresh materials stand at their own defaults)
+	_launch_alpha_applied.clear()
+	_label_alpha_applied.clear()
+	_board_alpha_applied.clear()
+	_alpha_flat_applied.clear()
+	_alpha_haze_centre = -999
 	_set_focused(null)
 
 	_placeholder_tex = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
@@ -7780,48 +7826,110 @@ func _update_marquee(delta: float) -> void:
 ## every frame of the wait. Each card's fade is multiplied by
 ## its haze (the background stack's fourth layer): the marquee
 ## dims the whole wall, the haze dims the far columns further.
+## The wall-alpha write counter (the hitchhunt smoke reads
+## the deltas across its cruises: the write-on-change law's
+## structural proof, immune to harness-box pacing).
+func alpha_write_count() -> int:
+	return _alpha_write_count
+
+
+## Grow an alpha cache to index i with the never-written
+## stamp (-1: every real alpha is >= 0, so the first pass
+## always writes).
+func _alpha_cache_ensure(cache: Array[float], i: int) -> void:
+	while cache.size() <= i:
+		cache.append(-1.0)
+
+
 func _apply_wall_alpha(a: float) -> void:
-	if absf(a - _wall_alpha_applied) < 0.002:
+	# GRADFIX17 (item 2): the pass runs when the global fade
+	# moved OR the haze's centre moved - and then writes
+	# only the alphas that actually change (see the state
+	# block at _alpha_write_count). The pre-fix law, restored
+	# by PVLDS_GF17_NC=hazeall, writes everything on both
+	# triggers: that per-column write storm is what the
+	# hitchhunt smoke's alpha leg fails against by name.
+	var nc_all: bool = debug_gf17_nc == "hazeall"
+	var centre_col: int = _grid_coord(_centre_index).x if _centre_index >= 0 and _centre_index < _panels.size() else -1
+	if not nc_all and absf(a - _wall_alpha_applied) < 0.002 and centre_col == _alpha_haze_centre:
 		return
 	_wall_alpha_applied = a
+	_alpha_haze_centre = centre_col
 	for i: int in range(_panels.size()):
-		_panels[i].set_content_alpha(a * _haze_for(i))
+		var want_p: float = a * _haze_for(i)
+		_alpha_cache_ensure(_panel_alpha_applied, i)
+		if nc_all or absf(want_p - _panel_alpha_applied[i]) >= 0.002:
+			_panel_alpha_applied[i] = want_p
+			_panels[i].set_content_alpha(want_p)
+			_alpha_write_count += 1
 	for i2: int in range(_panel_launches.size()):
 		if _panel_launches[i2] != null:
-			_panel_launches[i2].set_content_alpha(a * _haze_for(i2))
+			var want_l: float = a * _haze_for(i2)
+			_alpha_cache_ensure(_launch_alpha_applied, i2)
+			if nc_all or absf(want_l - _launch_alpha_applied[i2]) >= 0.002:
+				_launch_alpha_applied[i2] = want_l
+				_panel_launches[i2].set_content_alpha(want_l)
+				_alpha_write_count += 1
 	for bi2: int in range(_board_nodes.size()):
 		var bnode3: MeshInstance3D = _board_nodes[bi2] as MeshInstance3D
 		if bnode3 != null and bi2 < _board_nodes.size():
 			var bmat3: StandardMaterial3D = bnode3.material_override as StandardMaterial3D
 			if bmat3 != null:
-				bmat3.albedo_color = Color(1.0, 1.0, 1.0, a * _haze_for(bi2))
+				var want_b: float = a * _haze_for(bi2)
+				_alpha_cache_ensure(_board_alpha_applied, bi2)
+				if nc_all or absf(want_b - _board_alpha_applied[bi2]) >= 0.002:
+					_board_alpha_applied[bi2] = want_b
+					bmat3.albedo_color = Color(1.0, 1.0, 1.0, want_b)
+					_alpha_write_count += 1
 	for k: Variant in _rail_quads.keys():
 		var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
 		if rq != null:
-			rq.set_content_alpha(a)
+			var rkey: String = "rail:" + str(k)
+			if nc_all or absf(a - float(_alpha_flat_applied.get(rkey, -1.0))) >= 0.002:
+				_alpha_flat_applied[rkey] = a
+				rq.set_content_alpha(a)
+				_alpha_write_count += 1
 	for skey: Variant in _strip_quads.keys():
 		var sq: ClickableQuad = _strip_quads[skey] as ClickableQuad
 		if sq != null:
-			sq.set_content_alpha(a)
+			var skey2: String = "strip:" + str(skey)
+			if nc_all or absf(a - float(_alpha_flat_applied.get(skey2, -1.0))) >= 0.002:
+				_alpha_flat_applied[skey2] = a
+				sq.set_content_alpha(a)
+				_alpha_write_count += 1
 	# The status line fades with the wall, and so do the
 	# cards' nameplates (plate + label ride their cards).
 	# The plates all share one material, so its alpha is
 	# set once, here.
 	if _status_label != null:
-		_status_label.modulate = Color(0.92, 0.95, 1.0, a)
-		_status_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * a)
-	_plate_mat().albedo_color = Color(0.0, 0.0, 0.0, 0.66 * a)
+		if nc_all or absf(a - float(_alpha_flat_applied.get("status", -1.0))) >= 0.002:
+			_alpha_flat_applied["status"] = a
+			_status_label.modulate = Color(0.92, 0.95, 1.0, a)
+			_status_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * a)
+			_alpha_write_count += 1
+	if nc_all or absf(a - float(_alpha_flat_applied.get("plate", -1.0))) >= 0.002:
+		_alpha_flat_applied["plate"] = a
+		_plate_mat().albedo_color = Color(0.0, 0.0, 0.0, 0.66 * a)
+		_alpha_write_count += 1
 	# The tournie borders fade with the wall too (GRADFIX8
 	# item 4): their materials are shared per type, so the
 	# global alpha is set once per type here - the same
 	# shared-material terms the nameplates already ride.
 	for bk: Variant in _border_mats.keys():
-		(_border_mats[bk] as ShaderMaterial).set_shader_parameter("global_alpha", clampf(a, 0.0, 1.0))
+		var bkey2: String = "border:" + str(bk)
+		if nc_all or absf(a - float(_alpha_flat_applied.get(bkey2, -1.0))) >= 0.002:
+			_alpha_flat_applied[bkey2] = a
+			(_border_mats[bk] as ShaderMaterial).set_shader_parameter("global_alpha", clampf(a, 0.0, 1.0))
+			_alpha_write_count += 1
 	for idx: int in range(_panels.size()):
 		if idx < _panel_labels.size() and _panel_labels[idx] != null:
 			var la: float = a * _haze_for(idx)
-			_panel_labels[idx].modulate = Color(0.96, 0.97, 1.0, la)
-			_panel_labels[idx].outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * la)
+			_alpha_cache_ensure(_label_alpha_applied, idx)
+			if nc_all or absf(la - _label_alpha_applied[idx]) >= 0.002:
+				_label_alpha_applied[idx] = la
+				_panel_labels[idx].modulate = Color(0.96, 0.97, 1.0, la)
+				_panel_labels[idx].outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * la)
+				_alpha_write_count += 1
 
 
 ## Load-wait queries (the lockout smoke reads the room the way the
