@@ -4323,8 +4323,10 @@ func _window_fill_order() -> Array[int]:
 
 
 ## Face indices over an explicit column span, centre column
-## outward (the window order's general shape - GRADFIX18's
-## stream window walks a wider span through here).
+## outward (the window order's general shape; GRADFIX18's
+## stream walks its span in arrival order instead - see
+## _stream_fill_order - and only falls back to this at a
+## standstill inside a stream span).
 func _fill_order_for(lo: int, hi: int) -> Array[int]:
 	var order: Array[int] = []
 	if lo < 0 or hi < lo or _centre_index < 0:
@@ -4341,6 +4343,61 @@ func _fill_order_for(lo: int, hi: int) -> Array[int]:
 				var idx: int = _raw_index(c, row)
 				if idx >= 0 and idx < _panels.size():
 					order.append(idx)
+	return order
+
+
+## GRADFIX18 (item A): face indices over the stream span in
+## ARRIVAL order - the order the drum reaches them: the
+## drawn window's leading edge first (those faces are on
+## screen now and stay on screen longest), then the lead
+## columns in the order they will enter, then the trail.
+## The centre-out order above is right at rest and wrong
+## for the stream: the streamahead bench runs 1-4 convicted
+## it - with a bounded decode supply the queue spent itself
+## mid-window (faces already passed) and the leading edge,
+## the faces the entry census samples, was bare on every
+## single run (69 of 69), however the pump was pooled or
+## prioritized. Arrival order spends the same supply on
+## the faces the drum reaches first.
+func _stream_fill_order(lo: int, hi: int) -> Array[int]:
+	var order: Array[int] = []
+	if lo < 0 or hi < lo or _panel_window_lo < 0:
+		return order
+	var dir: int = int(_travel_dir_speed()[0])
+	if dir == 0:
+		return _fill_order_for(lo, hi)
+	var cols: Array[int] = []
+	if dir > 0:
+		var c: int = _panel_window_hi
+		while c >= _panel_window_lo:
+			cols.append(c)
+			c -= 1
+		c = _panel_window_hi + 1
+		while c <= hi:
+			cols.append(c)
+			c += 1
+		c = _panel_window_lo - 1
+		while c >= lo:
+			cols.append(c)
+			c -= 1
+	else:
+		var c2: int = _panel_window_lo
+		while c2 <= _panel_window_hi:
+			cols.append(c2)
+			c2 += 1
+		c2 = _panel_window_lo - 1
+		while c2 >= lo:
+			cols.append(c2)
+			c2 -= 1
+		c2 = _panel_window_hi + 1
+		while c2 <= hi:
+			cols.append(c2)
+			c2 += 1
+	for cc: int in cols:
+		for row: int in range(3):
+			var idx: int = _raw_index(cc, row)
+			if idx >= 0 and idx < _panels.size():
+				order.append(idx)
 	return order
 
 
@@ -4486,8 +4543,8 @@ func _face_is_stream_dressed(idx: int) -> bool:
 
 ## GRADFIX18 (item A): re-order the decode pump's queue to
 ## the standing stream window's arrival order - the window's
-## needy paths first, in enqueue (centre-out, lead-behind-
-## window) order, everything else behind in its standing
+## needy paths first, in enqueue (arrival) order,
+## everything else behind in its standing
 ## order. Without this the pump chews FIFO through whatever
 ## earlier windows queued (a boot seat's whole backlog), and
 ## the lead faces the drum is approaching wait behind faces
@@ -4589,7 +4646,7 @@ func _art_pipe_enqueue_window() -> void:
 	# decoded and dressed before they enter the drawn window.
 	var stream_cols: Vector2i = _stream_cols()
 	var streaming: bool = stream_cols.x != _panel_window_lo or stream_cols.y != _panel_window_hi
-	var order: Array[int] = _fill_order_for(stream_cols.x, stream_cols.y) if streaming else _window_fill_order()
+	var order: Array[int] = _stream_fill_order(stream_cols.x, stream_cols.y) if streaming else _window_fill_order()
 	var needy: Array[int] = []
 	for idx: int in order:
 		if not _face_is_standing_memo(idx):
