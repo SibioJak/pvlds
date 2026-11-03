@@ -256,7 +256,7 @@ const ANGLE_STEP_DEG: float = 13.5 ## column pitch, degrees
 const VISIBLE_HALF_COLUMNS: int = 10 ## drawn columns either side of the focused column
 const CARD_SIZE: Vector2 = Vector2(0.62, 1.08) ## the card face, metres - the author screenshot's portrait shape
 const CARD_FRAME_SIZE: Vector2 = Vector2(0.68, 1.10) ## the frame quad behind the face (DOME5's trimmed height)
-const CARD_FACE_PX: Vector2i = Vector2i(496, 864) ## card faces render at the card's own aspect (0.574)
+const CARD_FACE_PX: Vector2i = Vector2i(248, 432) ## GF18-HALFRES diagnostic: HALF the GF18 face size in each dimension (was 496x864) - the ONE variable of this build; card faces render at the card's own aspect (0.574)
 ## GRADFIX8 (item 4): the tournie border - a live-challenge
 ## card's animated ring, standing OUTSIDE the card's own
 ## frame (0.68 x 1.10) with a small air gap, inside the
@@ -686,7 +686,7 @@ var gf18_ask_total_max_ms: float = 0.0 ## worst whole drained-handler cost on th
 ## sub-steps (TextureFactory._render_now): apply_spec
 ## (sub-ms), one process-frame wait, UPDATE_ONCE +
 ## frame_post_draw (the SubViewport's own draw), get_image()
-## readback (GPU->CPU copy of the 496x864 face), and
+## readback (GPU->CPU copy of the CARD_FACE_PX face), and
 ## ImageTexture creation for the capture. The waits and the
 ## readback cannot be sliced under a frame budget - a render
 ## is atomic - so NO viewport render runs on a travel frame.
@@ -1577,6 +1577,7 @@ func _telemetry_start_if_needed() -> void:
 	_scroll_telemetry_started = _scroll_telemetry.start({
 		"build_stamp": ScrollTelemetry.BUILD_STAMP,
 		"base_commit": ScrollTelemetry.BASE_COMMIT,
+		"face_px": [CARD_FACE_PX.x, CARD_FACE_PX.y], ## GF18-HALFRES: the face texture size in force, so a returned log self-identifies the diagnostic's one variable
 		"log_path": ScrollTelemetry.LOG_PATH,
 		"wall_motion_mode_at_boot": wall_motion_mode(),
 		"wall_driver_mode_at_boot": _wall_driver_mode(),
