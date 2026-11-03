@@ -5033,10 +5033,14 @@ func _art_pipe_pass() -> void:
 				# costume stands - applies park for the
 				# costume's duration, GF16-style (background
 				# decodes continue on their own threads; they
-				# were acquitted). The queue is left untouched;
-				# the pass polls on its own frames and resumes
-				# the frame the costume comes off.
-				await get_tree().process_frame
+				# were acquitted). The job is DISCARDED, not
+				# held: the card wears the costume, its upgrade
+				# is settle work (costume-off re-enqueues the
+				# window fill), and letting the queue drain
+				# keeps the pass's own bookkeeping honest -
+				# the drained handler fires and Main's warmer
+				# ask goes out on travel exactly as shipped.
+				_art_pipe_queue.pop_front()
 				continue
 			var idx: int = _art_pipe_queue.pop_front()
 			if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
