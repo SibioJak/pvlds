@@ -641,6 +641,22 @@ var _art_decode_mutex: Mutex = Mutex.new() ## guards the decode dictionaries and
 var _art_decode_queue: Array[String] = [] ## art paths awaiting the decode pump (mutex-guarded)
 var _art_decode_pump_active: bool = false ## a pump task is draining _art_decode_queue (mutex-guarded): ONE decode at a time, ever - the ArtWarmer's proven discipline, so background decode can never swarm the renderer's cores
 var _art_stopping: bool = false ## the room is leaving the tree: the pipeline starts no new face and the pump returns after its current decode - art work must wind down at exit, not continue into engine teardown (the harness's swing probe segfaulted at quit with fills in flight; the serial worker it replaced was almost always idle by quit, the pipeline by design is not)
+## GRADFIX17 (hitch hunt) art-pipeline telemetry staging:
+## the pipeline's seams (enqueue, decode pump, apply, heal,
+## prefetch) stage event dictionaries here through
+## _art_event (mutex-guarded: the decode pump stages from
+## its worker thread), and the main thread drains them into
+## the scroll telemetry log (see _telemetry_drain_art_events).
+## Observation only: staging is one mutex + one array
+## append per event; no pipeline decision reads it.
+## PVLDS_GF17_TEL=off disables the staging entirely (the
+## overhead A/B seam: same build, witness muted).
+var _art_tel_mutex: Mutex = Mutex.new()
+var _art_tel_pending: Array[Dictionary] = []
+var _art_tel_mode: int = -1 ## -1 unknown, 0 off, 1 on (the env read is cached on first use)
+var _art_apply_branch: String = "" ## the branch the running _fill_one_face_sync took (written by the fill, read by its caller's telemetry wrap)
+var _art_apply_load_ms: float = 0.0 ## the running fill's art-load cost (same wrap)
+var _art_apply_render_ms: float = 0.0 ## the running fill's face-render cost (same wrap)
 var _face_path_memo: Dictionary = {} ## game_id -> art path, for the pipeline's per-centre-change filter ONLY: _face_path_for probes the filesystem per game, and asking it for all 63 window faces on every column crossing put a measurable burst on the crossing frame (healthy-box runs: 1-2 spikes of 50-90 ms per column with all art work parked). The memo is rewritten by every fill from its own fresh probe, erased on shot refresh, and cleared on rebuild; the heal and the fills themselves always probe fresh, so an upgrade the memo missed is still caught and filled by them, and the fill then corrects the memo.
 var _power_subject_inflight: Dictionary = {} ## game_id -> true while its power-on subject renders
 var _power_prefetch_asked: Dictionary = {} ## game_id -> true once the warmer has been asked for its cold backglass (GRADFIX6)
@@ -1499,7 +1515,46 @@ func _telemetry_context() -> Dictionary:
 func _telemetry_record(kind: String, fields: Dictionary) -> void:
 	if not _scroll_telemetry_started or not visible:
 		return
+	_telemetry_drain_art_events()
 	_scroll_telemetry.record(kind, fields)
+
+
+## GRADFIX17: stage one art-pipeline event for the scroll
+## telemetry log. Callable from any thread (the decode pump
+## stages its decode start/end here): the whole cost is one
+## mutex, one dictionary append, one unlock. Costs and wall
+## stamps are measured BY THE SEAM and carried in fields -
+## the record's own t_ms is the drain time (within a frame
+## on the main thread, a frame or two for the pump), never
+## the evidence. The pending array is capped: a witness
+## that grows without bound would become the fault it hunts.
+func _art_event(event: String, fields: Dictionary) -> void:
+	if _art_tel_mode < 0:
+		_art_tel_mode = 0 if OS.get_environment("PVLDS_GF17_TEL") == "off" else 1
+	if _art_tel_mode == 0:
+		return
+	var rec: Dictionary = {"event": event}
+	for key: Variant in fields.keys():
+		rec[key] = fields[key]
+	_art_tel_mutex.lock()
+	if _art_tel_pending.size() < 1024:
+		_art_tel_pending.append(rec)
+	_art_tel_mutex.unlock()
+
+
+## Main thread only: move staged art events into the log as
+## kind "art" records (a NEW kind - the shipped kinds keep
+## their exact shape for Chris's A/B reads). Called from
+## _telemetry_record, so drains ride the log's own cadence.
+func _telemetry_drain_art_events() -> void:
+	if not _scroll_telemetry_started:
+		return
+	_art_tel_mutex.lock()
+	var staged: Array[Dictionary] = _art_tel_pending.duplicate()
+	_art_tel_pending.clear()
+	_art_tel_mutex.unlock()
+	for rec: Dictionary in staged:
+		_scroll_telemetry.record("art", rec)
 
 
 ## A cruise exit that happens by direct assignment rather
@@ -4105,7 +4160,19 @@ func _fill_window_faces_sync(gen: int) -> void:
 		if cc < _panel_window_lo or cc > _panel_window_hi:
 			continue
 		var gf16_probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
+		_art_apply_branch = ""
+		_art_apply_load_ms = 0.0
+		_art_apply_render_ms = 0.0
+		var tel_apply_t0: int = Time.get_ticks_usec()
 		await _fill_one_face_sync(idx, gen)
+		_art_event("apply", {
+			"game": _visible_games[idx].game_id, "path": _face_path_memoized(_visible_games[idx]), "col": cc,
+			"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+			"cruise_dir": _cruise_dir, "swing": _swing_active,
+			"cost_ms": float(Time.get_ticks_usec() - tel_apply_t0) / 1000.0,
+			"branch": _art_apply_branch, "load_ms": _art_apply_load_ms, "render_ms": _art_apply_render_ms,
+			"via": "syncfill",
+		})
 		if TextureFactory.probe_enabled:
 			var gf16_us: int = Time.get_ticks_usec() - gf16_probe_t
 			TextureFactory.probe_note("fill_face_total", gf16_us)
@@ -4153,6 +4220,11 @@ func _on_window_fill_drained(gen: int) -> void:
 			if idx >= 0 and idx < _visible_games.size():
 				near.append(_visible_games[idx])
 	if not near.is_empty():
+		_art_event("prefetch", { ## GRADFIX17 telemetry: the warmer ask that follows a drained pass
+			"col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+			"cruise_dir": _cruise_dir, "games": near.size(),
+			"first": (near[0] as GameEntry).game_id,
+		})
 		art_prefetch_requested.emit(near)
 
 
@@ -4223,6 +4295,7 @@ func _face_is_standing_memo(idx: int) -> bool:
 ## them (see _art_pipe_pass), so this call itself stays
 ## cheap on the travel path that calls it.
 func _art_pipe_enqueue_window() -> void:
+	var tel_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the enqueue's own cost, measured unconditionally
 	var probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
 	var order: Array[int] = _window_fill_order()
 	var needy: Array[int] = []
@@ -4230,6 +4303,21 @@ func _art_pipe_enqueue_window() -> void:
 		if not _face_is_standing_memo(idx):
 			needy.append(idx)
 	_art_pipe_queue = needy
+	# GRADFIX17 telemetry: the enqueue's own account - which
+	# faces it found needy (identity = game + art file), on
+	# which column, under which travel state.
+	var tel_faces: Array = []
+	for nidx: int in needy:
+		var ngame: GameEntry = _visible_games[nidx]
+		tel_faces.append({"g": ngame.game_id, "p": _face_path_memoized(ngame)})
+	_art_event("enqueue", {
+		"col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+		"cruise_dir": _cruise_dir,
+		"swing": _swing_active,
+		"needy": needy.size(),
+		"faces": tel_faces,
+		"cost_ms": float(Time.get_ticks_usec() - tel_t0) / 1000.0,
+	})
 	var pre: Array[int] = []
 	for i: int in range(mini(6, needy.size())):
 		pre.append(needy[i])
@@ -4265,6 +4353,8 @@ func _art_pipe_dispatch_one(path: String) -> void:
 			_art_decode_pump_active = true
 			start_pump = true
 	_art_decode_mutex.unlock()
+	if not known:
+		_art_event("decode_queue", {"path": path, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
 	if start_pump:
 		WorkerThreadPool.add_task(Callable(self, "_art_decode_pump"))
 
@@ -4303,7 +4393,10 @@ func _art_decode_pump() -> void:
 			return
 		var path: String = _art_decode_queue.pop_front()
 		_art_decode_mutex.unlock()
+		_art_event("decode_start", {"path": path, "thread": OS.get_thread_caller_id(), "wall_ms": Time.get_ticks_msec()})
+		var tel_t0: int = Time.get_ticks_usec()
 		var img: Image = TextureFactory.decode_art_image(path)
+		_art_event("decode_end", {"path": path, "thread": OS.get_thread_caller_id(), "wall_ms": Time.get_ticks_msec(), "cost_ms": float(Time.get_ticks_usec() - tel_t0) / 1000.0, "ok": img != null})
 		_art_decode_mutex.lock()
 		_art_decode_pending.erase(path)
 		if img != null:
@@ -4368,9 +4461,12 @@ func _art_pipe_pass() -> void:
 			# rate below (short travels, the shipped cost
 			# class).
 			var was_cruise_parked: bool = false
+			var tel_park_msec: int = Time.get_ticks_msec()
 			while _cruise_dir != 0 and gen == _gen:
 				was_cruise_parked = true
 				await get_tree().process_frame
+			if was_cruise_parked:
+				_art_event("pipe_park", {"parked_ms": Time.get_ticks_msec() - tel_park_msec, "col": cc, "game": _visible_games[idx].game_id})
 			if was_cruise_parked and gen == _gen:
 				# The release settle gets three frames of
 				# clear road before the first staged face
@@ -4391,8 +4487,20 @@ func _art_pipe_pass() -> void:
 					continue
 			var gf16_probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
 			_art_pipe_in_stage = true
+			_art_apply_branch = ""
+			_art_apply_load_ms = 0.0
+			_art_apply_render_ms = 0.0
+			var tel_apply_t0: int = Time.get_ticks_usec()
 			await _fill_one_face_sync(idx, gen)
 			_art_pipe_in_stage = false
+			_art_event("apply", {
+				"game": _visible_games[idx].game_id, "path": path, "col": cc,
+				"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+				"cruise_dir": _cruise_dir, "swing": _swing_active,
+				"cost_ms": float(Time.get_ticks_usec() - tel_apply_t0) / 1000.0,
+				"branch": _art_apply_branch, "load_ms": _art_apply_load_ms, "render_ms": _art_apply_render_ms,
+				"via": "pipe",
+			})
 			if TextureFactory.probe_enabled:
 				var gf16_us: int = Time.get_ticks_usec() - gf16_probe_t
 				TextureFactory.probe_note("fill_face_total", gf16_us)
@@ -4496,6 +4604,13 @@ func _fill_one_face(idx: int, gen: int) -> void:
 	if debug_gf16_nc == "syncfill" or _art_pipe_in_stage:
 		await _fill_one_face_sync(idx, gen)
 		return
+	# GRADFIX17 telemetry: a direct ask (shot landing, X-press
+	# re-render, the heal's window worker) joins the queue.
+	if idx >= 0 and idx < _visible_games.size():
+		_art_event("fill_direct", {
+			"game": _visible_games[idx].game_id, "col": _grid_coord(idx).x,
+			"cruise_dir": _cruise_dir, "swing": _swing_active,
+		})
 	if idx < 0 or idx >= _panels.size():
 		return
 	if not _art_pipe_queue.has(idx):
@@ -4519,6 +4634,7 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 	var pup: bool = game.is_pup_tagged()
 	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
 	if str(_panel_face_key.get(game.game_id, "")) == fkey:
+		_art_apply_branch = "standing" ## GRADFIX17 telemetry (read by the caller's apply wrap)
 		# Already wearing exactly this face - but a rebuild
 		# since the fill reset this seat's art aspect to 0
 		# and re-derived its plate under the styled law, so
@@ -4539,9 +4655,11 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 		tex = cached_face[0] as Texture2D
 		art_aspect = float(cached_face[1])
 		from_art = art_aspect > 0.0
+		_art_apply_branch = "facecache" ## GRADFIX17 telemetry
 	else:
 		if art_file != "":
 			var art_tex: Texture2D = null
+			var tel_load_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry
 			if _art_pipe_in_stage:
 				# GRADFIX16 staged decode: consume the
 				# background decode's Image (texture
@@ -4559,14 +4677,20 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 					_art_decoded_failed.erase(art_file)
 				_art_decode_mutex.unlock()
 				if staged_img != null:
+					_art_apply_branch = "staged" ## GRADFIX17 telemetry
 					art_tex = TextureFactory.art_texture_from_decoded(art_file, staged_img)
 				elif not staged_failed and TextureFactory.art_decode_is_cached(art_file):
+					_art_apply_branch = "decodecache" ## GRADFIX17 telemetry
 					art_tex = TextureFactory.load_art_texture(art_file)
 			else:
+				_art_apply_branch = "syncload" ## GRADFIX17 telemetry
 				art_tex = TextureFactory.load_art_texture(art_file)
+			_art_apply_load_ms = float(Time.get_ticks_usec() - tel_load_t0) / 1000.0 ## GRADFIX17 telemetry
 			if art_tex != null:
 				art_aspect = float(art_tex.get_width()) / float(art_tex.get_height())
+				var tel_render_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry
 				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store, false), _panel_face_px)
+				_art_apply_render_ms = float(Time.get_ticks_usec() - tel_render_t0) / 1000.0 ## GRADFIX17 telemetry
 				from_art = tex != null
 				if from_art and _blackface_nc(game):
 					# NC (PVLDS_GRADFIX6_NC=blackface, target in
@@ -4588,7 +4712,10 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 					tex = null
 					from_art = false
 		if tex == null:
+			_art_apply_branch = "styled" if _art_apply_branch == "" else _art_apply_branch + "+styled" ## GRADFIX17 telemetry
+			var tel_styled_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry
 			tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), _panel_face_px)
+			_art_apply_render_ms += float(Time.get_ticks_usec() - tel_styled_t0) / 1000.0 ## GRADFIX17 telemetry
 			from_art = false
 		if gen != _gen:
 			return
@@ -4729,6 +4856,9 @@ func _heal_panel_faces() -> void:
 	if now - _face_heal_msec < BOARD_TEX_RETRY_MS:
 		return
 	_face_heal_msec = now
+	var tel_heal_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the sweep's own cost + findings
+	var tel_mismatch: Array = []
+	var tel_unreal: Array = []
 	var needs_pass: bool = false
 	for idx: int in range(_panels.size()):
 		if idx >= _visible_games.size():
@@ -4749,7 +4879,9 @@ func _heal_panel_faces() -> void:
 		var want_key: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
 		if stamped != want_key:
 			needs_pass = true # an upgrade is ready (or the face never landed); never budget-charged
+			tel_mismatch.append(game.game_id) ## GRADFIX17 telemetry
 		elif tex == null or tex == _placeholder_tex or not _tex_is_real(tex):
+			tel_unreal.append(game.game_id) ## GRADFIX17 telemetry
 			# Stamped as this face, yet not honestly standing
 			# (a rebuild re-dressed the pooled panel, a race):
 			# clear the stamp so the worker re-renders it,
@@ -4772,6 +4904,18 @@ func _heal_panel_faces() -> void:
 				_face_cache_evict(stamped)
 				_panel_face_key.erase(game.game_id)
 				needs_pass = true
+	# GRADFIX17 telemetry: every sweep that asks for a pass,
+	# and any sweep whose own probe walk costs real time -
+	# the heal reads fresh filesystem probes for all 63
+	# window faces, so its cost belongs in the log by name.
+	var tel_heal_ms: float = float(Time.get_ticks_usec() - tel_heal_t0) / 1000.0
+	if needs_pass or tel_heal_ms >= 8.0:
+		_art_event("heal", {
+			"col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+			"cruise_dir": _cruise_dir, "swing": _swing_active,
+			"needs_pass": needs_pass, "cost_ms": tel_heal_ms,
+			"mismatch": tel_mismatch, "unreal": tel_unreal,
+		})
 	if needs_pass:
 		_request_window_fill()
 
