@@ -414,6 +414,23 @@ static func clear_art_decode_cache() -> void:
 	_art_decode_order.clear()
 
 
+## GRADFIX18 (item B) residency gauge for the decoded-art
+## cache: {count, bytes} with bytes estimated from each
+## texture's pixel size (w*h*4) - no image data is touched.
+## The scroll telemetry samples this at column crossings so a
+## cruise spike can be read against what the wall held.
+static func art_decode_cache_stats() -> Dictionary:
+	var bytes_est: int = 0
+	for key: Variant in _art_decode_cache.keys():
+		var hit: Variant = _art_decode_cache[key]
+		if hit is Array:
+			var arr: Array = hit as Array
+			if arr.size() > 0 and arr[0] is Texture2D:
+				var tex: Texture2D = arr[0] as Texture2D
+				bytes_est += tex.get_width() * tex.get_height() * 4
+	return {"count": _art_decode_cache.size(), "bytes": bytes_est}
+
+
 ## Whether the decode cache already holds this exact file
 ## version (the same mtime+size verification load performs).
 static func art_decode_is_cached(path: String) -> bool:

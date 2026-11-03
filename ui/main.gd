@@ -346,6 +346,31 @@ var _motion_hold_start_col: int = 0 ## held-scroll leg: the column the hold star
 var _motion_hold_rest_frames: int = 0 ## held-scroll leg: consecutive settled frames after release
 var _smoke_artstream: bool = false ## --pvlds-smoke-artstream: GRADFIX16 item 2 - sustained held cruise through the real input path on a cold-art fixture, recording travel frame deltas (worst + count over 50 ms), base vs fixed on the same fixture
 var _smoke_hitchhunt: bool = false ## --pvlds-smoke-hitchhunt: GRADFIX17 item 2 - cold held cruises in BOTH directions over one long stretch of the same cold-art fixture (the field residue was one-directional: leftward bursts through one shelf region), judged per direction, plus the alpha-write count the window pass spends per column
+var _smoke_bite: bool = false ## --pvlds-smoke-bite: GRADFIX18 item B - progressively dress the wall (two cold cruises), then cruise the FULLY dressed wall both directions (the GF17 field paradox: the full wall travelled worse than the empty one); legs judge the ask-proof (queue surgery never on the asking thread), the residency growth, and the full-wall cruise frames
+var _bite_phase: int = 0
+var _bite_wait: int = 0
+var _bite_failures: int = 0
+var _bite_settle_frames: int = 0
+var _bite_start_col: int = -1
+var _bite_last_usec: int = 0
+var _bite_pacing_ms: float = 16.7
+var _bite_pace_stamps: Array = []
+var _bite_leg: int = 0 ## 0 = dress left, 1 = dress right, 2 = full left, 3 = full right
+var _bite_deltas: Array = [[], [], [], []] ## per leg: every cruise frame delta
+var _bite_worst: Array = [0.0, 0.0, 0.0, 0.0]
+var _bite_spikes: Array = [[], [], [], []] ## per leg: [centre_col, delta_ms] over 40 ms
+var _bite_saw_cruise: Array = [false, false, false, false]
+var _bite_released: Array = [false, false, false, false]
+var _bite_rest_frames: int = 0
+var _bite_release_col: int = -1
+var _bite_heal_deadline_msec: int = 0
+var _bite_res_at_leg_start: Array = [{}, {}, {}, {}] ## per leg: the residency gauge where the leg began
+var _bite_res_face_max: Array = [0, 0, 0, 0] ## per leg: the largest live face-texture count sampled during the leg
+var _bite_res_sample_msec: int = 0
+var _bite_prefetch_at_leg_start: Array = [0, 0, 0, 0]
+var _bite_ask_max_full_ms: float = 0.0 ## worst main-thread prefetch emit sampled across the full-wall legs
+var _bite_proof_before: int = 0 ## prio batches applied before the ask-proof ask
+var _bite_proof_wait: int = 0
 var _hh_phase: int = 0
 var _hh_wait: int = 0
 var _hh_failures: int = 0
@@ -626,6 +651,8 @@ func _ready() -> void:
 		_smoke_artstream = true
 	if user_args.has("--pvlds-smoke-hitchhunt"):
 		_smoke_hitchhunt = true
+	if user_args.has("--pvlds-smoke-bite"):
+		_smoke_bite = true
 	if user_args.has("--pvlds-smoke-swingprobe"):
 		_smoke_swingprobe = true
 	if user_args.has("--pvlds-smoke-landing"):
@@ -768,6 +795,12 @@ func _ready() -> void:
 	# wall-alpha write-everything law, so the hitchhunt
 	# smoke's alpha-write leg fails by name.
 	RoomView.debug_gf17_nc = OS.get_environment("PVLDS_GF17_NC")
+	# GRADFIX18 item B's negative-control seam (PVLDS_GF18_NC=
+	# askmain): the warmer's prioritize applies synchronously
+	# on the caller's thread again - the pre-fix asking chain -
+	# so the bite smoke's ask-proof leg fails by name.
+	RoomView.debug_gf18_nc = OS.get_environment("PVLDS_GF18_NC")
+	ArtWarmer.nc_sync_prioritize = OS.get_environment("PVLDS_GF18_NC") == "askmain"
 	TextureFactory.probe_enabled = OS.has_environment("PVLDS_GF16_PROBE")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
@@ -803,7 +836,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_hitchhunt or _smoke_swingprobe or _smoke_landing or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_hitchhunt or _smoke_bite or _smoke_swingprobe or _smoke_landing or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -985,6 +1018,8 @@ func _process(_delta: float) -> void:
 		_drive_artstream_smoke()
 	if _smoke_hitchhunt:
 		_drive_hitchhunt_smoke()
+	if _smoke_bite:
+		_drive_bite_smoke()
 	if _smoke_swingprobe:
 		_drive_swingprobe_smoke()
 	if _smoke_landing:
@@ -13080,6 +13115,289 @@ func _judge_hitchhunt() -> void:
 		_hh_expect(hitches <= 2, "hitchhunt: %s cold cruise travel frames never wait on art - %d hitch frames (over the judge baseline %.1f ms + 60 ms; worst cold frame %.1f ms; allowance 2 for harness pacing)" % [dir_name, hitches, baseline, float(_hh_worst[leg])])
 		_hh_expect(float(_hh_worst[leg]) <= baseline + 75.0, "hitchhunt: the %s cold cruise's worst frame stayed within the judge baseline + 75 ms (worst %.1f ms against baseline %.1f ms)" % [dir_name, float(_hh_worst[leg]), baseline])
 		_hh_expect(float(_hh_alpha_per_col[leg]) <= 220.0, "hitchhunt: the %s cruise's window pass wrote %.0f wall-alpha values per column (bound 220 - the write-on-change law; the pre-fix law writes every panel, launch and label every column)" % [dir_name, float(_hh_alpha_per_col[leg])])
+
+
+## -------------------------------------------------- bite smoke (GRADFIX18 item B)
+##
+## --pvlds-smoke-bite: the 140 ms bite hunt. GF17's field log
+## showed cruise spikes growing as the wall dressed (mean
+## cruise frame 17 -> 39 ms by session third; spikes a uniform
+## ~140 ms, each following a prefetch ask, while every measured
+## art cost stayed flat and art events got rarer). This smoke
+## rebuilds that progression on the bench: two cold cruises
+## dress the wall, then two cruises cross the FULLY dressed
+## wall - the field's ratchet legs. Legs (all named "bite:"):
+##   - the ask proof: with the prio worker held, a prefetch ask
+##     must land as a pending note with NO queue surgery on the
+##     asking thread, then land once released. Under
+##     PVLDS_GF18_NC=askmain the ask applies synchronously on
+##     the caller again and this leg fails by name.
+##   - residency grew: the live face-texture count at the end
+##     of the run stands at or above where the dress began
+##     (without growth the full-wall legs judge nothing).
+##   - the full-wall legs cruised, prefetch asks kept firing
+##     through them, and no ask's main-thread emit cost over
+##     25 ms while they ran.
+##   - the full-wall cruise frames judge against the dress
+##     legs' own baseline exactly as the hitchhunt judge does
+##     (hitch = baseline + 60 ms, allowance 2; worst within
+##     baseline + 75 ms). On the llvmpipe bench absolute frame
+##     times are load-bound - the GF17 caveat stands; the
+##     structural legs above are the bench proof and the
+##     field's GF18-stamped log is the frame verdict.
+func _bite_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - bite smoke: ", label)
+	else:
+		_bite_failures += 1
+		printerr("  FAIL - bite smoke: ", label)
+
+
+func _finish_bite_smoke() -> void:
+	ArtWarmer.prio_test_hold = false
+	_input_feed_stick_x(0.0)
+	if _bite_failures == 0:
+		print("PVLDS BITE SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS BITE SMOKE: FAIL (%d)" % _bite_failures)
+		get_tree().quit(1)
+
+
+func _bite_begin_leg(leg: int, feed: float) -> void:
+	_bite_leg = leg
+	if leg == 0:
+		# The dress legs pay the artstream cold reset; the
+		# full-wall legs (2, 3) run over what the dress built.
+		TextureFactory.clear_art_decode_cache()
+	_bite_res_at_leg_start[leg] = _room.gf18_residency()
+	_bite_prefetch_at_leg_start[leg] = _room.gf18_prefetch_count
+	_bite_released[leg] = false
+	_bite_rest_frames = 0
+	_bite_release_col = -1
+	_bite_last_usec = Time.get_ticks_usec()
+	_bite_res_sample_msec = 0
+	_input_feed_stick_x(feed)
+	_bite_phase = 3
+	_bite_wait = 0
+
+
+func _bite_record_frame() -> void:
+	var now_usec: int = Time.get_ticks_usec()
+	var delta_ms: float = float(now_usec - _bite_last_usec) / 1000.0
+	_bite_last_usec = now_usec
+	var leg: int = _bite_leg
+	(_bite_deltas[leg] as Array).append(delta_ms)
+	if delta_ms > float(_bite_worst[leg]):
+		_bite_worst[leg] = delta_ms
+	var col_now: int = _room._grid_coord(_room.centre_index()).x
+	if delta_ms > 40.0:
+		(_bite_spikes[leg] as Array).append([col_now, snappedf(delta_ms, 0.1)])
+	if _room.cruise_active():
+		_bite_saw_cruise[leg] = true
+	var now_msec: int = Time.get_ticks_msec()
+	if now_msec - _bite_res_sample_msec >= 250:
+		_bite_res_sample_msec = now_msec
+		var gauge: Dictionary = _room.gf18_residency()
+		_bite_res_face_max[leg] = maxi(int(_bite_res_face_max[leg]), int(gauge.get("res_face_count", 0)))
+		if leg >= 2:
+			_bite_ask_max_full_ms = maxf(_bite_ask_max_full_ms, _room.gf18_ask_emit_max_ms)
+
+
+func _bite_print_leg(leg: int, from_col: int, to_col: int) -> void:
+	var names: Array = ["DRESS-LEFT", "DRESS-RIGHT", "FULL-LEFT", "FULL-RIGHT"]
+	var spikes_line: String = ""
+	for sv: Variant in (_bite_spikes[leg] as Array):
+		var sp: Array = sv as Array
+		spikes_line += " [col %d: %.1f ms]" % [int(sp[0]), float(sp[1])]
+	var start_res: Dictionary = _bite_res_at_leg_start[leg] as Dictionary
+	print("BITE %s: from col %d to col %d, frames %d, worst frame %.1f ms, residency faces %d -> peak %d (art cache %d), prefetch asks %d; spikes (>40 ms):%s" % [
+		str(names[leg]), from_col, to_col, (_bite_deltas[leg] as Array).size(), float(_bite_worst[leg]),
+		int(start_res.get("res_face_count", 0)), int(_bite_res_face_max[leg]), int(start_res.get("res_art_count", 0)),
+		_room.gf18_prefetch_count - int(_bite_prefetch_at_leg_start[leg]),
+		spikes_line if spikes_line != "" else " none"])
+
+
+func _drive_bite_smoke() -> void:
+	match _bite_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and not _scan_active \
+					and (_art_warmer == null or _art_warmer.is_idle()):
+				Input.warp_mouse(Vector2(4, 372))
+				if _room._columns < 56:
+					_bite_expect(false, "bite: the fixture shelf holds %d columns (the dress + full-wall legs need at least 56)" % _room._columns)
+					_finish_bite_smoke()
+					return
+				_bite_phase = 1
+				_bite_wait = 0
+				_bite_settle_frames = 0
+			else:
+				_bite_wait += 1
+				if _bite_wait > 21600:
+					_bite_expect(false, "bite: the room never came up (scan/warm never settled)")
+					_finish_bite_smoke()
+		1:
+			# Seat the start near the shelf's right end and
+			# settle, the hitchhunt shape; then run the
+			# ask-proof while the wall stands still.
+			_bite_wait += 1
+			var pace_now: int = Time.get_ticks_usec()
+			if _bite_last_usec > 0:
+				_bite_pace_stamps.append(float(pace_now - _bite_last_usec) / 1000.0)
+				if _bite_pace_stamps.size() > 40:
+					_bite_pace_stamps.pop_front()
+			_bite_last_usec = pace_now
+			if _bite_wait == 1:
+				var want_col: int = _room._columns - 18
+				var start_idx: int = -1
+				for i: int in range(_room._panels.size()):
+					if _room._grid_coord(i).x == want_col and _room._grid_coord(i).y == 1:
+						start_idx = i
+						break
+				if start_idx < 0:
+					start_idx = _room._panels.size() / 2
+				_room.set_wall_motion_mode("smooth")
+				_room._set_centre(start_idx, true)
+				_room._set_focused(_room._panels[start_idx])
+			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active():
+				_bite_settle_frames += 1
+			else:
+				_bite_settle_frames = 0
+			if _bite_settle_frames >= 5:
+				if _bite_pace_stamps.size() >= 6:
+					var sorted_pace: Array = _bite_pace_stamps.duplicate()
+					sorted_pace.sort()
+					_bite_pacing_ms = float(sorted_pace[sorted_pace.size() / 2])
+				print("BITE PACING: median frame %.1f ms during the start settle" % _bite_pacing_ms)
+				_bite_start_col = _room._grid_coord(_room.centre_index()).x
+				_bite_phase = 2
+				_bite_wait = 0
+				_bite_proof_wait = 0
+			elif _bite_wait > 7200:
+				_bite_expect(false, "bite: the start window never settled")
+				_finish_bite_smoke()
+		2:
+			# The ask proof: hold the prio worker, place one
+			# ask, and read the warmer's state on THIS thread
+			# before any frame passes. Shipped: the ask is a
+			# pending note, no surgery has landed. NC
+			# (askmain): the surgery already landed inside the
+			# call - the leg fails by name.
+			_bite_wait += 1
+			if _bite_wait == 1:
+				if _art_warmer == null:
+					_bite_expect(false, "bite: no art warmer stands to take the ask")
+					_finish_bite_smoke()
+					return
+				ArtWarmer.prio_test_hold = true
+				_bite_proof_before = _art_warmer.prio_applied_batches
+				var ask_games: Array[GameEntry] = []
+				for gi: int in range(mini(12, _room._visible_games.size())):
+					ask_games.append(_room._visible_games[gi])
+				_art_warmer.prioritize(ask_games)
+				var applied_now: int = _art_warmer.prio_applied_batches
+				var pending_now: int = _art_warmer.prio_pending_count()
+				_bite_expect(applied_now == _bite_proof_before and pending_now >= 1,
+					"bite: the ask proof - a prefetch ask lands as a note and its queue surgery never runs on the asking thread (applied %d -> %d, pending %d)" % [_bite_proof_before, applied_now, pending_now])
+				ArtWarmer.prio_test_hold = false
+			else:
+				_bite_proof_wait += 1
+				if _art_warmer.prio_applied_batches > _bite_proof_before:
+					_bite_expect(true, "bite: the held ask still lands on the warmer's side once released")
+					_bite_begin_leg(0, -1.0)
+				elif _bite_proof_wait > 7200:
+					_bite_expect(false, "bite: the held ask never landed on the warmer's side")
+					_finish_bite_smoke()
+		3:
+			_bite_wait += 1
+			_bite_record_frame()
+			var col_now2: int = _room._grid_coord(_room.centre_index()).x
+			var leg2: int = _bite_leg
+			if not bool(_bite_released[leg2]):
+				var done_travelling: bool = false
+				if (leg2 == 0 or leg2 == 2) and col_now2 <= _bite_start_col - 40:
+					done_travelling = true
+				elif (leg2 == 1 or leg2 == 3) and col_now2 >= _bite_start_col - 2:
+					done_travelling = true
+				if done_travelling:
+					_bite_released[leg2] = true
+					_bite_release_col = col_now2
+					_input_feed_stick_x(0.0)
+			if bool(_bite_released[leg2]):
+				if not _room.swing_active():
+					_bite_rest_frames += 1
+				else:
+					_bite_rest_frames = 0
+				if _bite_rest_frames >= 3:
+					var end_col: int = _room._grid_coord(_room.centre_index()).x
+					var from_col: int = _bite_start_col if (leg2 == 0 or leg2 == 2) else _bite_start_col - 40
+					if leg2 == 3:
+						from_col = _bite_start_col - 40
+					_bite_print_leg(leg2, from_col, end_col)
+					if leg2 == 0:
+						_bite_phase = 4
+						_bite_wait = 0
+						_bite_heal_deadline_msec = Time.get_ticks_msec() + 30000
+					elif leg2 == 1:
+						_bite_begin_leg(2, -1.0)
+					elif leg2 == 2:
+						_bite_begin_leg(3, 1.0)
+					else:
+						_judge_bite()
+						_finish_bite_smoke()
+			elif _bite_wait > 14400:
+				_input_feed_stick_x(0.0)
+				_bite_expect(false, "bite: leg %d never spanned its stretch and settled" % leg2)
+				_finish_bite_smoke()
+		4:
+			# The landing wait between the dress legs (the
+			# hitchhunt heal discipline): every face in the
+			# standing window lands before the return cruise.
+			_bite_wait += 1
+			var states: Array = _room.face_state()
+			var landed: int = 0
+			for sv2: Variant in states:
+				var st: Dictionary = sv2 as Dictionary
+				if bool(st.get("key_stamped", false)) and not bool(st.get("is_unreal", true)) and bool(st.get("from_art", false)):
+					landed += 1
+			if (not states.is_empty() and landed == states.size()) or Time.get_ticks_msec() > _bite_heal_deadline_msec:
+				_bite_begin_leg(1, 1.0)
+			elif _bite_wait > 7200:
+				_bite_begin_leg(1, 1.0)
+
+
+func _judge_bite() -> void:
+	var dress: Array = []
+	for dv: Variant in (_bite_deltas[0] as Array):
+		dress.append(dv)
+	for dv2: Variant in (_bite_deltas[1] as Array):
+		dress.append(dv2)
+	if dress.size() < 6:
+		_bite_expect(false, "bite: the dress legs produced too few frames to judge against (%d)" % dress.size())
+		return
+	var sorted_dress: Array = dress.duplicate()
+	sorted_dress.sort()
+	var dress_median: float = float(sorted_dress[sorted_dress.size() / 2])
+	var baseline: float = maxf(_bite_pacing_ms, dress_median)
+	print("BITE BASELINE: %.1f ms (max of settle pacing %.1f and dress median %.1f)" % [baseline, _bite_pacing_ms, dress_median])
+	# Residency growth: the wall the full legs crossed held
+	# at least the faces the dress began with.
+	var res_start: Dictionary = _bite_res_at_leg_start[0] as Dictionary
+	var res_full: Dictionary = _bite_res_at_leg_start[2] as Dictionary
+	_bite_expect(int(res_full.get("res_face_count", 0)) >= int(res_start.get("res_face_count", 0)),
+		"bite: residency grew - the full-wall legs crossed %d live face textures against the dress legs' opening %d" % [int(res_full.get("res_face_count", 0)), int(res_start.get("res_face_count", 0))])
+	for leg: int in [2, 3]:
+		var dir_name: String = "leftward" if leg == 2 else "rightward"
+		_bite_expect(bool(_bite_saw_cruise[leg]), "bite: the %s full-wall leg cruised on the real input path" % dir_name)
+		var asks: int = _room.gf18_prefetch_count - int(_bite_prefetch_at_leg_start[leg])
+		_bite_expect(asks > 0, "bite: prefetch asks kept firing through the %s full-wall leg (%d asks)" % [dir_name, asks])
+		var hitches: int = 0
+		for dv3: Variant in (_bite_deltas[leg] as Array):
+			if float(dv3) > baseline + 60.0:
+				hitches += 1
+		_bite_expect(hitches <= 2, "bite: %s full-wall cruise travel frames never wait on the ask - %d hitch frames (over the dress baseline %.1f ms + 60 ms; worst full frame %.1f ms; allowance 2 for harness pacing)" % [dir_name, hitches, baseline, float(_bite_worst[leg])])
+		_bite_expect(float(_bite_worst[leg]) <= baseline + 75.0, "bite: the %s full-wall cruise's worst frame stayed within the dress baseline + 75 ms (worst %.1f ms against baseline %.1f ms)" % [dir_name, float(_bite_worst[leg]), baseline])
+	_bite_expect(_bite_ask_max_full_ms <= 25.0, "bite: no prefetch ask cost a full-wall travel frame more than 25 ms on the main thread (worst emit %.2f ms)" % _bite_ask_max_full_ms)
 
 
 func _drive_bootfocus_smoke() -> void:

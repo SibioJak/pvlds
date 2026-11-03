@@ -19,8 +19,8 @@ extends RefCounted
 ## logging itself never does file work per frame.
 
 const LOG_PATH: String = "user://scroll_telemetry.jsonl"
-const BUILD_STAMP: String = "PVLDS-GRADFIX17 (gf17-hitchhunt)"
-const BASE_COMMIT: String = "70c6f5d"
+const BUILD_STAMP: String = "PVLDS-GRADFIX18 (gf18-bite)"
+const BASE_COMMIT: String = "a740571"
 const FLUSH_LINES: int = 64
 const FLUSH_INTERVAL_MSEC: int = 250
 

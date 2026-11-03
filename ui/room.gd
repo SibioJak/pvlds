@@ -666,6 +666,14 @@ var _gf17_was_travelling: bool = false ## GRADFIX17 item 1: the drum was travell
 var _gf17_audit_armed: bool = false ## GRADFIX17 item 1: a settle audit is owed: the standing window is re-audited against fresh probes until every visible face honestly stands or its heal budget is spent
 var _gf17_audit_msec: int = 0 ## GRADFIX17 item 1: the settle audit's throttle stamp (one sweep per BOARD_TEX_RETRY_MS, the heal's cadence)
 var _gf17_audit_runs: int = 0 ## GRADFIX17 item 1: sweeps spent on the current settle (bounded - see _guarantee_audit)
+## GRADFIX18 (item B) bite-hunt state: the prefetch ask's
+## main-thread cost witnesses (read by the bite smoke) and the
+## last enqueue's stamp (the prefetch event reports its lag
+## behind the enqueue that bred it).
+var _gf18_last_enqueue_msec: int = 0
+var gf18_prefetch_count: int = 0 ## prefetch asks emitted since boot
+var gf18_ask_emit_max_ms: float = 0.0 ## worst main-thread emit (the synchronous prioritize ask) inside a drained pass
+var gf18_ask_total_max_ms: float = 0.0 ## worst whole drained-handler cost on the main thread
 ## (The shelf's bookend fins stood here until GRADFIX8
 ## item 5 - removed entirely, Chris's order; see
 ## bookend_fin_count in the smoke-support section.)
@@ -856,6 +864,15 @@ static var debug_gf16_nc: String = ""
 ## so the hitchhunt smoke's alpha-write leg fails by name.
 ## Empty in every real run.
 static var debug_gf17_nc: String = ""
+## Negative-control seam for GRADFIX18 (item B, harness env
+## PVLDS_GF18_NC, set by Main before any room exists):
+## "askmain" restores the pre-fix asking chain - the warmer's
+## prioritize applies its source gathering + queue surgery
+## synchronously on the caller's (main) thread again (via
+## ArtWarmer.nc_sync_prioritize, set beside this) - so the
+## bite smoke's ask-proof leg fails by name. Empty in every
+## real run.
+static var debug_gf18_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
@@ -1597,6 +1614,46 @@ func _telemetry_drain_art_events() -> void:
 	_art_tel_mutex.unlock()
 	for rec: Dictionary in staged:
 		_scroll_telemetry.record("art", rec)
+
+
+## GRADFIX18 (item B): the wall's residency gauge - what the
+## wall holds at this moment, in live face textures: the
+## rendered face cache (count + estimated bytes from pixel
+## size), the factory's decoded-art cache, and the pipeline's
+## staged images awaiting texture creation. Sampled by the
+## enqueue and prefetch telemetry at column crossings, so a
+## cruise spike can be read against the residency that stood
+## when it bit. Pure arithmetic over standing dictionaries -
+## no image data is touched. The bite smoke reads it too.
+func gf18_residency() -> Dictionary:
+	var face_bytes: int = 0
+	for key: Variant in _face_tex_cache.keys():
+		var entry: Variant = _face_tex_cache[key]
+		if entry is Array:
+			var earr: Array = entry as Array
+			if earr.size() > 0 and earr[0] is Texture2D:
+				var tex: Texture2D = earr[0] as Texture2D
+				face_bytes += tex.get_width() * tex.get_height() * 4
+	var art_stats: Dictionary = TextureFactory.art_decode_cache_stats()
+	_art_decode_mutex.lock()
+	var ready_images: int = _art_decoded_ready.size()
+	var ready_bytes: int = 0
+	for rkey: Variant in _art_decoded_ready.keys():
+		var img: Image = _art_decoded_ready[rkey] as Image
+		if img != null:
+			ready_bytes += img.get_width() * img.get_height() * 4
+	var pending_decodes: int = _art_decode_pending.size()
+	_art_decode_mutex.unlock()
+	return {
+		"res_face_count": _face_tex_cache.size(),
+		"res_face_bytes": face_bytes,
+		"res_art_count": int(art_stats.get("count", 0)),
+		"res_art_bytes": int(art_stats.get("bytes", 0)),
+		"res_ready_images": ready_images,
+		"res_ready_bytes": ready_bytes,
+		"res_pending_decodes": pending_decodes,
+		"res_pipe_queue": _art_pipe_queue.size(),
+	}
 
 
 ## A cruise exit that happens by direct assignment rather
@@ -4283,6 +4340,7 @@ func _window_fill_order() -> Array[int]:
 func _on_window_fill_drained(gen: int) -> void:
 	if gen != _gen:
 		return
+	var tel_drain_t0: int = Time.get_ticks_usec() ## GRADFIX18 telemetry: the drained handler's own stamp (the prefetch legs time against it)
 	wall_ready = true
 	var near: Array = []
 	for c: int in [_panel_window_lo - 2, _panel_window_lo - 1, _panel_window_hi + 1, _panel_window_hi + 2]:
@@ -4293,12 +4351,43 @@ func _on_window_fill_drained(gen: int) -> void:
 			if idx >= 0 and idx < _visible_games.size():
 				near.append(_visible_games[idx])
 	if not near.is_empty():
-		_art_event("prefetch", { ## GRADFIX17 telemetry: the warmer ask that follows a drained pass
+		# GRADFIX18 telemetry: the prefetch ask, timed at last.
+		# GF17's log left this event costless while every cruise
+		# spike followed one - so the whole drained handler is
+		# timed here in legs: building the near list (near_ms),
+		# the emit itself (emit_ms - the signal runs Main's
+		# handler and the warmer's prioritize SYNCHRONOUSLY on
+		# this thread, so emit_ms IS the ask's main-thread cost),
+		# and the total. ArtWarmer.last_ask / last_prio_worker
+		# carry the ask's own breakdown (the worker leg is the
+		# previous batch's - it lands asynchronously by design).
+		var tel_pf_t0: int = Time.get_ticks_usec()
+		var tel_near_ms: float = float(tel_pf_t0 - tel_drain_t0) / 1000.0
+		var tel_emit_t0: int = Time.get_ticks_usec()
+		art_prefetch_requested.emit(near)
+		var tel_emit_ms: float = float(Time.get_ticks_usec() - tel_emit_t0) / 1000.0
+		var tel_total_ms: float = float(Time.get_ticks_usec() - tel_drain_t0) / 1000.0
+		gf18_prefetch_count += 1
+		gf18_ask_emit_max_ms = maxf(gf18_ask_emit_max_ms, tel_emit_ms)
+		gf18_ask_total_max_ms = maxf(gf18_ask_total_max_ms, tel_total_ms)
+		var tel_rec: Dictionary = {
 			"col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
 			"cruise_dir": _cruise_dir, "games": near.size(),
 			"first": (near[0] as GameEntry).game_id,
-		})
-		art_prefetch_requested.emit(near)
+			"cost_ms": tel_total_ms,
+			"near_ms": tel_near_ms,
+			"emit_ms": tel_emit_ms,
+			"lag_ms": float(Time.get_ticks_msec() - _gf18_last_enqueue_msec) if _gf18_last_enqueue_msec > 0 else -1.0,
+			"ask_ms": float(ArtWarmer.last_ask.get("ask_ms", -1.0)),
+			"ask_mode": str(ArtWarmer.last_ask.get("mode", "")),
+			"prio_front_ms": float(ArtWarmer.last_prio_worker.get("front_ms", -1.0)),
+			"prio_queue_ms": float(ArtWarmer.last_prio_worker.get("queue_ms", -1.0)),
+			"prio_sources": int(ArtWarmer.last_prio_worker.get("sources", -1)),
+		}
+		var gauge: Dictionary = gf18_residency()
+		for gkey: Variant in gauge.keys():
+			tel_rec[gkey] = gauge[gkey]
+		_art_event("prefetch", tel_rec)
 
 
 ## The face key a panel's fill would compute right now
@@ -4370,27 +4459,59 @@ func _face_is_standing_memo(idx: int) -> bool:
 func _art_pipe_enqueue_window() -> void:
 	var tel_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the enqueue's own cost, measured unconditionally
 	var probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
+	_gf18_last_enqueue_msec = Time.get_ticks_msec()
+	# GRADFIX18 telemetry: the enqueue's sub-steps, timed
+	# individually - the order walk, the standing filter (the
+	# probe chain's seat: on a memo miss it runs the full
+	# face_path_ready probe per face), and the decode dispatch.
 	var order: Array[int] = _window_fill_order()
+	var tel_order_done: int = Time.get_ticks_usec()
 	var needy: Array[int] = []
+	var tel_filter_ms: float = 0.0
+	var tel_filter_max_ms: float = 0.0
+	var tel_filter_max_game: String = ""
+	var tel_memo_miss: int = 0
 	for idx: int in order:
+		var tel_face_t0: int = Time.get_ticks_usec()
+		var fgame: GameEntry = _visible_games[idx]
+		if not _face_path_memo.has(fgame.game_id):
+			tel_memo_miss += 1
 		if not _face_is_standing_memo(idx):
 			needy.append(idx)
+		var tel_face_ms: float = float(Time.get_ticks_usec() - tel_face_t0) / 1000.0
+		tel_filter_ms += tel_face_ms
+		if tel_face_ms > tel_filter_max_ms:
+			tel_filter_max_ms = tel_face_ms
+			tel_filter_max_game = fgame.game_id
 	_art_pipe_queue = needy
+	var tel_filter_done: int = Time.get_ticks_usec()
 	# GRADFIX17 telemetry: the enqueue's own account - which
 	# faces it found needy (identity = game + art file), on
-	# which column, under which travel state.
+	# which column, under which travel state. GRADFIX18 adds
+	# the sub-step costs and the residency gauge.
 	var tel_faces: Array = []
 	for nidx: int in needy:
 		var ngame: GameEntry = _visible_games[nidx]
 		tel_faces.append({"g": ngame.game_id, "p": _face_path_memoized(ngame)})
-	_art_event("enqueue", {
+	var tel_faces_ms: float = float(Time.get_ticks_usec() - tel_filter_done) / 1000.0
+	var tel_rec: Dictionary = {
 		"col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
 		"cruise_dir": _cruise_dir,
 		"swing": _swing_active,
 		"needy": needy.size(),
 		"faces": tel_faces,
 		"cost_ms": float(Time.get_ticks_usec() - tel_t0) / 1000.0,
-	})
+		"order_ms": float(tel_order_done - tel_t0) / 1000.0,
+		"filter_ms": tel_filter_ms,
+		"filter_max_ms": tel_filter_max_ms,
+		"filter_max_game": tel_filter_max_game,
+		"memo_miss": tel_memo_miss,
+		"faces_ms": tel_faces_ms,
+	}
+	var gauge: Dictionary = gf18_residency()
+	for gkey: Variant in gauge.keys():
+		tel_rec[gkey] = gauge[gkey]
+	_art_event("enqueue", tel_rec)
 	var pre: Array[int] = []
 	for i: int in range(mini(6, needy.size())):
 		pre.append(needy[i])
