@@ -464,6 +464,22 @@ var _sa_warm_worst_ms: float = 0.0
 var _sa_warm_released: bool = false
 var _sa_warm_rest_frames: int = 0
 var _sa_warm_saw_cruise: bool = false
+var _smoke_costume: bool = false ## --pvlds-smoke-costume: GRADFIX19 - a settled dressed window, then one held SMOOTH cruise with NO stops: every cruise frame samples the drawn window (no card may present real art while the drum moves; every card wears the styled costume), mid-cruise grabs are saved for eyeball proof, the costume-on swap cost is read from the room's own account, and after the stop the window must dress fully (settle census zero) with the dress latency measured. A STEPPED swing at the end must never engage the costume. Under PVLDS_GF19_NC=no-costume the costume legs fail by name.
+var _cs_phase: int = 0
+var _cs_wait: int = 0
+var _cs_failures: int = 0
+var _cs_settle_frames: int = 0
+var _cs_start_col: int = -1
+var _cs_saw_cruise: bool = false
+var _cs_released: bool = false
+var _cs_rest_frames: int = 0
+var _cs_cruise_frames: int = 0
+var _cs_art_presented: int = 0 ## card-frames sampled mid-cruise presenting real art (the costume's named defect)
+var _cs_unworn: int = 0 ## card-frames sampled mid-cruise not wearing the costume at all
+var _cs_grabs: int = 0
+var _cs_deadline_msec: int = 0
+var _cs_stepped_engagements: int = -1
+var _cs_stepped_saw_on: bool = false
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -685,6 +701,8 @@ func _ready() -> void:
 		_smoke_landing = true
 	if user_args.has("--pvlds-smoke-streamahead"):
 		_smoke_streamahead = true
+	if user_args.has("--pvlds-smoke-costume"):
+		_smoke_costume = true
 	if user_args.has("--pvlds-smoke-jumpbench"):
 		_smoke_jumpbench = true
 		_jumpbench_boot_msec = Time.get_ticks_msec()
@@ -833,6 +851,12 @@ func _ready() -> void:
 	# fail by name. Set here, before any room exists.
 	RoomView.debug_gf18_nc = OS.get_environment("PVLDS_GF18_NC")
 	ArtWarmer.nc_sync_prioritize = OS.get_environment("PVLDS_GF18_NC") == "askmain"
+	# GRADFIX19's negative-control seam: "no-costume" disables
+	# the travel costume - SMOOTH travel wears the dressed
+	# wall again exactly as GF18 shipped - so the costume
+	# smoke's legs fail by name. Set here, before any room
+	# exists.
+	RoomView.debug_gf19_nc = OS.get_environment("PVLDS_GF19_NC")
 	TextureFactory.probe_enabled = OS.has_environment("PVLDS_GF16_PROBE")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
@@ -868,7 +892,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_hitchhunt or _smoke_bite or _smoke_swingprobe or _smoke_landing or _smoke_streamahead or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_hitchhunt or _smoke_bite or _smoke_swingprobe or _smoke_landing or _smoke_streamahead or _smoke_costume or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1058,6 +1082,8 @@ func _process(_delta: float) -> void:
 		_drive_landing_smoke()
 	if _smoke_streamahead:
 		_drive_streamahead_smoke()
+	if _smoke_costume:
+		_drive_costume_smoke()
 	if _smoke_jumpbench:
 		_drive_jumpbench_smoke()
 	if _smoke_quitwarm:
@@ -12706,6 +12732,195 @@ func _finish_streamahead_smoke() -> void:
 	else:
 		printerr("PVLDS STREAMAHEAD SMOKE: FAIL (%d)" % _sa_failures)
 		get_tree().quit(1)
+
+
+## GRADFIX19 costume smoke (see _smoke_costume): legs are
+## named "costume:". Under PVLDS_GF19_NC=no-costume the
+## costume never engages, so the engagement / no-art /
+## swap-cost legs fail by name.
+func _cs_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - costume smoke: ", label)
+	else:
+		_cs_failures += 1
+		printerr("  FAIL - costume smoke: ", label)
+
+
+func _finish_costume_smoke() -> void:
+	_input_feed_stick_x(0.0)
+	if _cs_failures == 0:
+		print("PVLDS COSTUME SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS COSTUME SMOKE: FAIL (%d)" % _cs_failures)
+		get_tree().quit(1)
+
+
+func _cs_grab(name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_GF19_GRAB_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	if img == null or img.is_empty():
+		return
+	img.save_png(dir.path_join(name))
+	_cs_grabs += 1
+
+
+func _drive_costume_smoke() -> void:
+	match _cs_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and not _scan_active \
+					and (_art_warmer == null or _art_warmer.is_idle()):
+				Input.warp_mouse(Vector2(4, 372))
+				if _room._columns < 56:
+					_cs_expect(false, "costume: the fixture shelf holds %d columns (the cruise needs at least 56)" % _room._columns)
+					_finish_costume_smoke()
+					return
+				_cs_phase = 1
+				_cs_wait = 0
+				_cs_settle_frames = 0
+			else:
+				_cs_wait += 1
+				if _cs_wait > 21600:
+					_cs_expect(false, "costume: the room never came up (scan/warm never settled)")
+					_finish_costume_smoke()
+		1:
+			# Seat at col 12 and wait for the field regime:
+			# the window fully dressed (census zero, pipeline
+			# idle) AND the costume cache covering the whole
+			# drawn window (pre-generation at rest).
+			_cs_wait += 1
+			if _cs_wait == 1:
+				var start_idx: int = -1
+				for i: int in range(_room._panels.size()):
+					if _room._grid_coord(i).x == 12 and _room._grid_coord(i).y == 1:
+						start_idx = i
+						break
+				if start_idx < 0:
+					start_idx = _room._panels.size() / 2
+				_room.set_wall_motion_mode("smooth")
+				_room._set_centre(start_idx, true)
+				_room._set_focused(_room._panels[start_idx])
+			var census1: Dictionary = _room.landing_census()
+			var coverage: Dictionary = _room.costume_window_coverage()
+			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active() \
+					and (census1.get("missing", ["x"]) as Array).is_empty() and _room.art_pipeline_idle() \
+					and int(coverage.get("covered", 0)) >= int(coverage.get("total", 1)):
+				_cs_settle_frames += 1
+			else:
+				_cs_settle_frames = 0
+			if _cs_settle_frames >= 5:
+				_cs_expect(RoomView.CARD_FACE_PX == Vector2i(496, 864), "costume: production face size restored to 496x864 (stands at %s)" % str(RoomView.CARD_FACE_PX))
+				var art_faces: int = 0
+				for sv: Variant in _room.face_state():
+					var st: Dictionary = sv as Dictionary
+					if bool(st.get("from_art", false)) and int(st.get("tex_w", 0)) == 496:
+						art_faces += 1
+				_cs_expect(art_faces >= 30, "costume: the seat window stands dressed in full-res art before travel (%d art faces at 496 px wide)" % art_faces)
+				_cs_start_col = _room._grid_coord(_room.centre_index()).x
+				_input_feed_stick_x(1.0)
+				_cs_phase = 2
+				_cs_wait = 0
+			elif _cs_wait > 10800:
+				_cs_expect(false, "costume: the start window never settled dressed + costume-covered")
+				_finish_costume_smoke()
+		2:
+			# The no-stop cruise: every frame, sample the
+			# drawn window - no card may present real art
+			# while the drum moves, and every card must wear
+			# the costume.
+			_cs_wait += 1
+			if _room.cruise_active():
+				_cs_saw_cruise = true
+			if _cs_saw_cruise:
+				_cs_cruise_frames += 1
+				var states: Array = _room.costume_window_state()
+				for sv2: Variant in states:
+					var st2: Dictionary = sv2 as Dictionary
+					if bool(st2.get("from_art", false)):
+						_cs_art_presented += 1
+					if not bool(st2.get("wearing", false)):
+						_cs_unworn += 1
+				if _cs_cruise_frames == 45:
+					_cs_grab("costume_midcruise_a.png")
+				if _cs_cruise_frames == 110:
+					_cs_grab("costume_midcruise_b.png")
+			var col_now: int = _room._grid_coord(_room.centre_index()).x
+			if not _cs_released and col_now >= _cs_start_col + 22:
+				_cs_released = true
+				_input_feed_stick_x(0.0)
+			if _cs_released:
+				if not _room.swing_active():
+					_cs_rest_frames += 1
+				else:
+					_cs_rest_frames = 0
+				if _cs_rest_frames >= 3:
+					var stats: Dictionary = _room.costume_stats()
+					print("COSTUME CRUISE: start col %d, final col %d, cruise frames %d, art-presented card-frames %d, unworn card-frames %d, engagements %d, on-cost last %.2f ms max %.2f ms, swapped last %d total %d, grabs %d" % [
+						_cs_start_col, col_now, _cs_cruise_frames, _cs_art_presented, _cs_unworn,
+						int(stats.get("engagements", 0)), float(stats.get("last_on_cost_ms", 0.0)),
+						float(stats.get("max_on_cost_ms", 0.0)), int(stats.get("last_swapped", 0)),
+						int(stats.get("total_swapped", 0)), _cs_grabs])
+					_cs_expect(_cs_saw_cruise, "costume: holding the stick under SMOOTH became a cruise on the real input path")
+					_cs_expect(col_now - _cs_start_col >= 20, "costume: the no-stop cruise spanned %d columns" % (col_now - _cs_start_col))
+					_cs_expect(int(stats.get("engagements", 0)) >= 1, "costume: the costume engaged for SMOOTH travel (engagements %d)" % int(stats.get("engagements", 0)))
+					_cs_expect(_cs_art_presented == 0, "costume: no real-art face was presented on a moving card (%d art-presented card-frames sampled over %d cruise frames)" % [_cs_art_presented, _cs_cruise_frames])
+					_cs_expect(_cs_unworn == 0, "costume: every drawn card wore the costume on every cruise frame (%d unworn card-frames)" % _cs_unworn)
+					_cs_expect(float(stats.get("max_on_cost_ms", 999.0)) <= 60.0, "costume: the costume-on swap stayed cheap (worst %.2f ms - a ~140 ms costume-change frame is this round's named failure)" % float(stats.get("max_on_cost_ms", 0.0)))
+					_cs_expect(not bool(stats.get("on", true)), "costume: the costume came off when travel ended")
+					_cs_expect(int(stats.get("wearing", -1)) == 0, "costume: no card still wears the costume at rest (%d)" % int(stats.get("wearing", -1)))
+					_cs_deadline_msec = Time.get_ticks_msec() + 90000
+					_cs_phase = 3
+					_cs_wait = 0
+			elif _cs_wait > 7200:
+				_input_feed_stick_x(0.0)
+				_cs_expect(false, "costume: the held cruise never spanned 22 columns and settled")
+				_finish_costume_smoke()
+		3:
+			# DRESS AT REST: the settle census must read zero
+			# missing, nothing left interim, and the room's
+			# own dress latency must have been measured.
+			_cs_wait += 1
+			var census3: Dictionary = _room.landing_census()
+			var missing3: Array = census3.get("missing", []) as Array
+			var streamed3: int = int(census3.get("streamed", 0))
+			if missing3.is_empty() and streamed3 == 0 and _room.art_pipeline_idle():
+				var stats3: Dictionary = _room.costume_stats()
+				print("COSTUME DRESS: census %d faces zero missing, dress latency %.0f ms (measurement %d)" % [
+					int(census3.get("total", 0)), float(stats3.get("last_dress_ms", -1.0)), int(stats3.get("dress_count", 0))])
+				_cs_expect(true, "costume: dress at rest - settle census zero missing after the cruise")
+				_cs_expect(float(stats3.get("last_dress_ms", -1.0)) > 0.0, "costume: dress-at-rest latency was measured from travel end (%.0f ms)" % float(stats3.get("last_dress_ms", -1.0)))
+				_cs_grab("costume_rest_dressed.png")
+				# STEPPED: a swing under the stepped driver
+				# must never engage the costume.
+				_cs_stepped_engagements = int(stats3.get("engagements", 0))
+				_room.set_wall_motion_mode("stepped")
+				var target_idx: int = -1
+				for i2: int in range(_room._panels.size()):
+					if _room._grid_coord(i2).x == _cs_start_col + 26 and _room._grid_coord(i2).y == 1:
+						target_idx = i2
+						break
+				if target_idx >= 0:
+					_room._set_centre(target_idx)
+					_room._set_focused(_room._panels[target_idx])
+				_cs_phase = 4
+				_cs_wait = 0
+			elif Time.get_ticks_msec() > _cs_deadline_msec:
+				_cs_expect(false, "costume: dress at rest - settle census zero missing after the cruise (%d still missing, %d interim)" % [missing3.size(), streamed3])
+				_finish_costume_smoke()
+		4:
+			_cs_wait += 1
+			var stats4: Dictionary = _room.costume_stats()
+			if bool(stats4.get("on", false)):
+				_cs_stepped_saw_on = true
+			if not _room.swing_active() and _cs_wait > 10:
+				_cs_expect(int(stats4.get("engagements", 0)) == _cs_stepped_engagements and not _cs_stepped_saw_on, "costume: STEPPED travel never engaged the costume (engagements %d before, %d after the stepped swing)" % [_cs_stepped_engagements, int(stats4.get("engagements", 0))])
+				_room.set_wall_motion_mode("smooth")
+				_finish_costume_smoke()
+			elif _cs_wait > 3600:
+				_cs_expect(false, "costume: the stepped swing never settled")
+				_finish_costume_smoke()
 
 
 func _drive_streamahead_smoke() -> void:

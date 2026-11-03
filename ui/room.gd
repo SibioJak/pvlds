@@ -256,7 +256,7 @@ const ANGLE_STEP_DEG: float = 13.5 ## column pitch, degrees
 const VISIBLE_HALF_COLUMNS: int = 10 ## drawn columns either side of the focused column
 const CARD_SIZE: Vector2 = Vector2(0.62, 1.08) ## the card face, metres - the author screenshot's portrait shape
 const CARD_FRAME_SIZE: Vector2 = Vector2(0.68, 1.10) ## the frame quad behind the face (DOME5's trimmed height)
-const CARD_FACE_PX: Vector2i = Vector2i(248, 432) ## GF18-HALFRES diagnostic: HALF the GF18 face size in each dimension (was 496x864) - the ONE variable of this build; card faces render at the card's own aspect (0.574)
+const CARD_FACE_PX: Vector2i = Vector2i(496, 864) ## the production card-face size (GRADFIX19 restores it: GF18-HALFRES halved it to 248x432 as a diagnostic only - that variable never ships); card faces render at the card's own aspect (0.574)
 ## GRADFIX8 (item 4): the tournie border - a live-challenge
 ## card's animated ring, standing OUTSIDE the card's own
 ## frame (0.68 x 1.10) with a small air gap, inside the
@@ -713,6 +713,57 @@ var _stream_budget_yields: int = 0 ## travel frames the budget yielded mid-pass
 var _stream_max_apply_ms: float = 0.0 ## the most expensive single stream apply
 var _stream_max_frame_spend_ms: float = 0.0 ## the fullest travel frame's stream spend
 var _stream_prefetch_key: String = "" ## the lead slice the warmer was last asked for (dedup for the per-crossing asks)
+## GRADFIX19 (the travel costume) state. THE DEAL (Chris's
+## call after the HALFRES verdict acquitted texture size):
+## the wall rolls clean exactly when it wears the cheap
+## styled faces and bites in proportion to how much of it
+## wears real art while moving - so in SMOOTH travel the
+## whole drawn window wears the styled state, and the GF17
+## guarantee dresses it the instant travel ends. THE COSTUME
+## IS THE STYLED STATE, EXACTLY AS _fill_one_face_sync's
+## styled branch stands it (no new "lite" face is invented):
+##   - the face texture is the RoomSpecs.panel_spec render
+##     (maker band, title, year-designer line, file line,
+##     chips - VR / PuP / builds / FAVORITE as a chip);
+##   - the nameplate plate + label stand HIDDEN (the styled
+##     face carries its own title; a title under a title
+##     would double it - the fill's law);
+##   - the art aspect reads 0 (no art face stands);
+##   - the art face's favorite STAR badge and PuP badge do
+##     NOT exist here (they are art_spec furniture; the
+##     styled face's FAVORITE chip carries the same fact);
+##   - no power-on overlay stands (the standing travel law:
+##     _update_power nulls its candidate while a swing
+##     stands and restores a standing performance on the
+##     swing - the costume builds no overlay and the mimic
+##     shader never evaluates on a moving card).
+## The tournie border, the frame and the flip back are not
+## face state and are untouched. STEPPED never sees the
+## costume (gated on the SMOOTH driver). While the costume
+## stands, NO face upgrade lands (the pipeline's applies
+## park, GF16-style; background decodes continue - they
+## were acquitted). The swap is a texture swap against the
+## costume cache below: styled textures are captured from
+## the fill's own styled renders and pre-generated at rest
+## (spread one render per frame over the drawn window plus
+## a lead span each side), so travel start swaps standing
+## textures, never renders.
+const COSTUME_STAMP_SUFFIX: String = "|costume" ## bookkeeping only: costume swaps never touch _panel_face_key (the dress stamps stay honest underneath); the suffix names the costume's own saved-state entries in reports
+const COSTUME_CACHE_MAX: int = 168 ## styled textures kept (the drawn window is 63 faces; the cache holds it plus a cruise's lead on both sides)
+const COSTUME_LEAD_COLS: int = 10 ## columns each side of the drawn window whose styled faces pre-generate at rest, so a cruise's entering cards already wear the costume
+var _costume_on: bool = false ## the travel costume stands (SMOOTH travel only)
+var _costume_saved: Dictionary = {} ## panel idx -> {tex, aspect, plate_vis, label_vis}: the dressed state a costumed card hands back at costume-off
+var _costume_tex_cache: Dictionary = {} ## face key -> Texture2D: styled face textures, captured from fills and pre-generated at rest
+var _costume_cache_order: Array[String] = [] ## the costume cache's LRU order (oldest first)
+var _costume_pregen_busy: bool = false ## a styled pre-generation render is in flight (one at a time, ever - the factory is serial)
+var _costume_on_count: int = 0 ## costume engagements since boot (the costume smoke's witness)
+var _costume_last_on_cost_ms: float = 0.0 ## the most recent costume-on swap's measured cost
+var _costume_max_on_cost_ms: float = 0.0 ## the worst costume-on swap cost since boot
+var _costume_last_swapped: int = 0 ## cards swapped by the most recent costume-on
+var _costume_total_swapped: int = 0 ## cards swapped into the costume since boot (on + mid-travel entries)
+var _costume_travel_end_msec: int = 0 ## when the last travel ended (the dress latency's zero)
+var _costume_last_dress_ms: float = -1.0 ## ms from the last travel end to its settle census reading zero missing (-1 = no completed settle measured yet)
+var _costume_dress_count: int = 0 ## completed dress-at-rest measurements since boot
 ## (The shelf's bookend fins stood here until GRADFIX8
 ## item 5 - removed entirely, Chris's order; see
 ## bookend_fin_count in the smoke-support section.)
@@ -920,6 +971,13 @@ static var debug_gf17_nc: String = ""
 ## renders run on the travel path again, unsliced - so its
 ## frame legs fail by name. Empty in every real run.
 static var debug_gf18_nc: String = ""
+## Negative-control seam for GRADFIX19 (the harness env
+## PVLDS_GF19_NC, set by Main before any room exists):
+## "no-costume" disables the travel costume - SMOOTH travel
+## wears the dressed wall again exactly as GF18 shipped -
+## so the costume smoke's legs fail by name. Empty in every
+## real run.
+static var debug_gf19_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
@@ -3406,6 +3464,12 @@ func _refresh_pickable() -> bool:
 
 
 func _rebuild_wall() -> void:
+	# GRADFIX19: the costume belongs to the wall being torn
+	# down too - drop it without restoring (the rebuild
+	# re-dresses every face itself).
+	_costume_on = false
+	_costume_saved.clear()
+	_costume_travel_end_msec = 0
 	# The power-on's performer and its overlay die with
 	# the wall being torn down: drop the state without
 	# touching the (about to be freed) nodes.
@@ -4949,6 +5013,16 @@ func _art_pipe_pass() -> void:
 		while not _art_pipe_queue.is_empty():
 			if gen != _gen:
 				break
+			if _costume_on:
+				# GRADFIX19: no face upgrade lands while the
+				# costume stands - applies park for the
+				# costume's duration, GF16-style (background
+				# decodes continue on their own threads; they
+				# were acquitted). The queue is left untouched;
+				# the pass polls on its own frames and resumes
+				# the frame the costume comes off.
+				await get_tree().process_frame
+				continue
 			var idx: int = _art_pipe_queue.pop_front()
 			if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
 				continue
@@ -5187,6 +5261,339 @@ func stream_stats() -> Dictionary:
 		"lead_cols": STREAM_LEAD_COLS,
 	}
 
+## GRADFIX19 (the travel costume): whether travel stands
+## this frame under the costume's gate - the SMOOTH driver
+## only, the drum actually travelling (a held cruise or a
+## swing), the no-costume NC off. STEPPED travel never
+## satisfies this: the stepped path stays byte-identical.
+func _costume_travel_wanted() -> bool:
+	if debug_gf19_nc == "no-costume":
+		return false
+	if _wall_driver_mode() != "smooth":
+		return false
+	return _cruise_dir != 0 or _swing_active
+
+
+func _costume_cache_put(key: String, tex: Texture2D) -> void:
+	if key == "" or tex == null:
+		return
+	if _costume_tex_cache.has(key):
+		_costume_cache_order.erase(key)
+	elif _costume_tex_cache.size() >= COSTUME_CACHE_MAX:
+		var old: String = str(_costume_cache_order.pop_front())
+		_costume_tex_cache.erase(old)
+	_costume_tex_cache[key] = tex
+	_costume_cache_order.append(key)
+
+
+func _costume_cache_get(key: String) -> Texture2D:
+	var tex: Texture2D = _costume_tex_cache.get(key, null) as Texture2D
+	if tex != null:
+		_costume_cache_order.erase(key)
+		_costume_cache_order.append(key)
+	return tex
+
+
+## Whether a panel may wear the costume: a card-mode panel
+## (never the Tournament state row, which wears a board
+## face, and never a board-mode panel).
+func _costume_panel_ok(idx: int) -> bool:
+	if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
+		return false
+	if _tournament and idx < _tournament_rows.size() \
+			and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+		return false
+	var nodes: Dictionary = _panel_pool.get(_visible_games[idx].game_id, {}) as Dictionary
+	return str(nodes.get("mode", "card")) == "card"
+
+
+## Swap ONE panel into the costume. The dressed state is
+## saved first, verbatim (texture, art aspect, nameplate
+## visibility), so costume-off hands it back untouched -
+## _panel_face_key is never rewritten, so the dress stamps
+## stay honest underneath. Returns false when no styled
+## texture stands for the card yet: its pre-generation is
+## owed and the card joins the costume the frame it lands
+## (see _costume_pregen_tick). A card already wearing its
+## styled face (filled styled, never upgraded) IS the
+## costume state: its standing texture is adopted.
+func _costume_swap_in(idx: int) -> bool:
+	if _costume_saved.has(idx):
+		return true
+	if not _costume_panel_ok(idx):
+		return false
+	var key: String = _face_key_for_memo(idx)
+	var tex: Texture2D = _costume_cache_get(key)
+	if tex == null and idx < _panel_art_aspect.size() and _panel_art_aspect[idx] <= 0.0:
+		var standing: Texture2D = _panels[idx].current_texture()
+		if standing != null and standing != _placeholder_tex and _tex_is_real(standing):
+			tex = standing
+			_costume_cache_put(key, tex)
+	if tex == null:
+		return false
+	_costume_saved[idx] = {
+		"tex": _panels[idx].current_texture(),
+		"aspect": _panel_art_aspect[idx] if idx < _panel_art_aspect.size() else 0.0,
+		"plate_vis": _panel_plates[idx].visible if idx < _panel_plates.size() and _panel_plates[idx] != null else false,
+		"label_vis": _panel_labels[idx].visible if idx < _panel_labels.size() and _panel_labels[idx] != null else false,
+	}
+	_panels[idx].set_texture(tex)
+	if idx < _panel_art_aspect.size():
+		_panel_art_aspect[idx] = 0.0
+	if idx < _panel_plates.size() and _panel_plates[idx] != null:
+		_panel_plates[idx].visible = false
+	if idx < _panel_labels.size() and _panel_labels[idx] != null:
+		_panel_labels[idx].visible = false
+	_costume_total_swapped += 1
+	return true
+
+
+## Travel start: every card in the drawn window swaps to
+## its styled face. Texture swaps only - the styled faces
+## pre-generate at rest (see _costume_pregen_tick) - and the
+## swap's cost is measured and telemetered by name: a lumpy
+## costume change is this round's own named failure.
+func _costume_on_now() -> void:
+	_costume_on = true
+	_costume_on_count += 1
+	var t0: int = Time.get_ticks_usec()
+	var swapped: int = 0
+	if _panel_window_lo >= 0:
+		for idx: int in range(_panels.size()):
+			var c: int = _grid_coord(idx).x
+			if c < _panel_window_lo or c > _panel_window_hi:
+				continue
+			if _costume_swap_in(idx):
+				swapped += 1
+	var cost_ms: float = float(Time.get_ticks_usec() - t0) / 1000.0
+	_costume_last_on_cost_ms = cost_ms
+	_costume_last_swapped = swapped
+	_costume_max_on_cost_ms = maxf(_costume_max_on_cost_ms, cost_ms)
+	var fields: Dictionary = _telemetry_context()
+	fields["event"] = "costume_on"
+	fields["cost_ms"] = cost_ms
+	fields["swapped"] = swapped
+	fields["window_cards"] = _costume_saved.size()
+	_telemetry_record("costume", fields)
+
+
+## Travel end: hand every costumed card its dressed state
+## back, verbatim, and stamp the dress latency's zero. The
+## GF17 settle audit (armed by the same falling edge in
+## _update_pop, running after this) and the pipeline then
+## dress the window exactly as they shipped.
+func _costume_off_now() -> void:
+	if not _costume_on:
+		return
+	_costume_on = false
+	var t0: int = Time.get_ticks_usec()
+	var restored: int = 0
+	for idx_v: Variant in _costume_saved.keys():
+		var idx: int = int(idx_v)
+		var saved: Dictionary = _costume_saved[idx_v] as Dictionary
+		if idx < 0 or idx >= _panels.size():
+			continue
+		var tex: Texture2D = saved.get("tex", null) as Texture2D
+		if tex != null:
+			_panels[idx].set_texture(tex)
+		if idx < _panel_art_aspect.size():
+			_panel_art_aspect[idx] = float(saved.get("aspect", 0.0))
+		if idx < _panel_plates.size() and _panel_plates[idx] != null:
+			_panel_plates[idx].visible = bool(saved.get("plate_vis", false))
+		if idx < _panel_labels.size() and _panel_labels[idx] != null:
+			_panel_labels[idx].visible = bool(saved.get("label_vis", false))
+		restored += 1
+	_costume_saved.clear()
+	_costume_travel_end_msec = Time.get_ticks_msec()
+	var fields: Dictionary = _telemetry_context()
+	fields["event"] = "costume_off"
+	fields["cost_ms"] = float(Time.get_ticks_usec() - t0) / 1000.0
+	fields["restored"] = restored
+	_telemetry_record("costume", fields)
+	_request_window_fill()
+
+
+## Per-frame costume upkeep (from _update_pop, beside the
+## GF17 arming): engage on travel's rising edge under the
+## SMOOTH gate, swap in cards that enter the drawn window
+## mid-travel, release on the falling edge, and - at rest
+## after a travel - measure the dress latency the moment
+## the settle census first reads zero missing, telemetered
+## as costume_dress. The pre-generation tick runs last.
+func _costume_tick() -> void:
+	var wanted: bool = _costume_travel_wanted()
+	if wanted and not _costume_on:
+		_costume_on_now()
+	elif _costume_on and not wanted:
+		_costume_off_now()
+	if _costume_on and _panel_window_lo >= 0:
+		# Cards entering the window mid-travel wear the
+		# costume from their first drawn frame - the state
+		# is continuous, not a snapshot of the window at
+		# travel start.
+		for idx: int in range(_panels.size()):
+			if _costume_saved.has(idx):
+				continue
+			var c: int = _grid_coord(idx).x
+			if c < _panel_window_lo or c > _panel_window_hi:
+				continue
+			_costume_swap_in(idx)
+	if not _costume_on and _costume_travel_end_msec > 0:
+		# Dress-at-rest latency: the first frame the settle
+		# census reads zero missing AND the pipeline has
+		# drained is the window fully dressed. The audit's
+		# own sweeps run on the heal cadence while it stands
+		# armed; this check runs only once it has disarmed
+		# (or given its bound), and gives up after 120 s so a
+		# persistently failing face cannot make the census
+		# walk a per-frame cost forever.
+		if Time.get_ticks_msec() - _costume_travel_end_msec > 120000:
+			_costume_travel_end_msec = 0
+		elif not _gf17_audit_armed:
+			var census: Dictionary = landing_census()
+			if int(census.get("total", 0)) > 0 and (census.get("missing", ["x"]) as Array).is_empty() \
+					and int(census.get("streamed", 0)) == 0 and art_pipeline_idle():
+				_costume_last_dress_ms = float(Time.get_ticks_msec() - _costume_travel_end_msec)
+				_costume_dress_count += 1
+				_costume_travel_end_msec = 0
+				var fields: Dictionary = _telemetry_context()
+				fields["event"] = "costume_dress"
+				fields["dress_ms"] = _costume_last_dress_ms
+				_telemetry_record("costume", fields)
+	_costume_pregen_tick()
+
+
+## Styled-face pre-generation, spread one render per frame:
+## the drawn window plus COSTUME_LEAD_COLS each side, at
+## rest and (for the lead ahead) during travel - a costume
+## render is the styled face's own render, never an art
+## upgrade, and keeping the lead warm is what lets entering
+## cards wear the costume from their first drawn frame.
+## During travel the drawn window goes first (a card
+## showing art mid-travel is the defect this round exists
+## to remove); at rest the order is centre-out.
+func _costume_pregen_tick() -> void:
+	if _costume_pregen_busy or _panel_window_lo < 0 or _panels.is_empty():
+		return
+	if _tournament:
+		return # board faces and state rows are not costume work; library travel is the costume's home
+	var lo: int = maxi(0, _panel_window_lo - COSTUME_LEAD_COLS)
+	var hi: int = mini(_columns - 1, _panel_window_hi + COSTUME_LEAD_COLS)
+	var order: Array[int] = []
+	if _costume_on:
+		order = _stream_fill_order(lo, hi)
+	else:
+		order = _fill_order_for(lo, hi)
+	for idx: int in order:
+		if not _costume_panel_ok(idx):
+			continue
+		if _costume_saved.has(idx):
+			continue
+		var key: String = _face_key_for_memo(idx)
+		if _costume_cache_get(key) != null:
+			continue
+		if idx < _panel_art_aspect.size() and _panel_art_aspect[idx] <= 0.0:
+			var standing: Texture2D = _panels[idx].current_texture()
+			if standing != null and standing != _placeholder_tex and _tex_is_real(standing):
+				_costume_cache_put(key, standing)
+				continue
+		_costume_pregen_busy = true
+		_costume_pregen_one(idx, key)
+		return
+
+
+func _costume_pregen_one(idx: int, key: String) -> void:
+	var game: GameEntry = _visible_games[idx]
+	var gen: int = _gen
+	var tex: Texture2D = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), _panel_face_px)
+	_costume_pregen_busy = false
+	if gen != _gen or tex == null or not _tex_is_real(tex):
+		return
+	_costume_cache_put(key, tex)
+	# A card mid-travel whose styled face just landed joins
+	# the costume now (its first costumed frame).
+	if _costume_on:
+		_costume_swap_in(idx)
+
+
+## GRADFIX19 harness surface: the costume's standing
+## account (the costume smoke judges from this).
+func costume_stats() -> Dictionary:
+	return {
+		"on": _costume_on,
+		"engagements": _costume_on_count,
+		"last_on_cost_ms": _costume_last_on_cost_ms,
+		"max_on_cost_ms": _costume_max_on_cost_ms,
+		"last_swapped": _costume_last_swapped,
+		"total_swapped": _costume_total_swapped,
+		"wearing": _costume_saved.size(),
+		"cache": _costume_tex_cache.size(),
+		"last_dress_ms": _costume_last_dress_ms,
+		"dress_count": _costume_dress_count,
+	}
+
+
+## GRADFIX19 harness surface: per-panel costume state for
+## the standing window - which cards wear the costume right
+## now, and whether the face they present is the styled
+## state (real texture, no art aspect, nameplate hidden).
+func costume_window_state() -> Array:
+	var out: Array = []
+	if _panel_window_lo < 0:
+		return out
+	for idx: int in range(_panels.size()):
+		if idx >= _visible_games.size():
+			continue
+		var cc: int = _grid_coord(idx).x
+		if cc < _panel_window_lo or cc > _panel_window_hi:
+			continue
+		if _tournament and idx < _tournament_rows.size() \
+				and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+			continue
+		var tex: Texture2D = _panels[idx].current_texture()
+		out.append({
+			"idx": idx,
+			"game_id": _visible_games[idx].game_id,
+			"col": cc,
+			"wearing": _costume_saved.has(idx),
+			"tex_real": tex != null and _tex_is_real(tex),
+			"is_placeholder": tex != null and tex == _placeholder_tex,
+			"from_art": _panel_art_aspect[idx] > 0.0 if idx < _panel_art_aspect.size() else false,
+			"plate_vis": _panel_plates[idx].visible if idx < _panel_plates.size() and _panel_plates[idx] != null else false,
+			"label_vis": _panel_labels[idx].visible if idx < _panel_labels.size() and _panel_labels[idx] != null else false,
+		})
+	return out
+
+
+## GRADFIX19 harness surface: how many of the drawn
+## window's cards could wear the costume right now (styled
+## texture cached, or already standing styled) - the
+## costume smoke waits for full coverage before cruising,
+## the regime the field hits because pre-generation runs
+## from the moment the wall seats.
+func costume_window_coverage() -> Dictionary:
+	var total: int = 0
+	var covered: int = 0
+	if _panel_window_lo < 0:
+		return {"total": 0, "covered": 0}
+	for idx: int in range(_panels.size()):
+		if idx >= _visible_games.size():
+			continue
+		var cc: int = _grid_coord(idx).x
+		if cc < _panel_window_lo or cc > _panel_window_hi:
+			continue
+		if not _costume_panel_ok(idx):
+			continue
+		total += 1
+		if _costume_cache_get(_face_key_for_memo(idx)) != null:
+			covered += 1
+		elif idx < _panel_art_aspect.size() and _panel_art_aspect[idx] <= 0.0:
+			var standing: Texture2D = _panels[idx].current_texture()
+			if standing != null and standing != _placeholder_tex and _tex_is_real(standing):
+				covered += 1
+	return {"total": total, "covered": covered}
+
+
 ## The fill path's face read (GRADFIX6 items 2+3): the
 ## READY probe - art that already sits on disk - never the
 ## paying read. A cold card dresses in its styled title
@@ -5379,6 +5786,12 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 			tex = null
 	if tex == null:
 		return
+	if not from_art and _tex_is_real(tex):
+		# GRADFIX19: every styled render that lands is also
+		# the costume's texture for this face key - captured
+		# here so travel start swaps a standing texture
+		# instead of paying a render (see the costume block).
+		_costume_cache_put(fkey, tex)
 	quad.set_texture(tex)
 	_panel_face_key[game.game_id] = fkey
 	# The nameplate shows only over an art face: a generated
@@ -5501,6 +5914,8 @@ func refresh_shot_faces(game: GameEntry) -> void:
 ## for a pass; the worker's key checks make the pass cheap
 ## for every honest face.
 func _heal_panel_faces() -> void:
+	if _costume_on:
+		return # GRADFIX19: the heal reads faces against their dress stamps; under the costume every window face wears the styled state on purpose - the heal resumes at costume-off, on the travel's falling edge below
 	if _panel_window_lo < 0 or _panels.is_empty():
 		return
 	var now: int = Time.get_ticks_msec()
@@ -5614,6 +6029,8 @@ func _heal_panel_faces() -> void:
 const GF17_AUDIT_MAX_RUNS: int = 40
 
 func _guarantee_audit() -> void:
+	if _costume_on:
+		return # GRADFIX19: the audit is dress-at-rest work; the costume hands control back at travel end (see _update_pop) and the audit then runs exactly as GF17/GF18 shipped it
 	if debug_gf17_nc == "noguarantee":
 		_gf17_audit_armed = false
 		return
@@ -5699,6 +6116,7 @@ func face_state() -> Array:
 			"title": _visible_games[idx].title,
 			"col": cc,
 			"key_stamped": _panel_face_key.has(_visible_games[idx].game_id),
+			"costume": _costume_saved.has(idx), ## GRADFIX19: this face currently wears the travel costume
 			"is_stream": str(_panel_face_key.get(_visible_games[idx].game_id, "")).ends_with(STREAM_STAMP_SUFFIX),
 			"tex_w": tex.get_width() if tex != null else 0,
 			"is_placeholder": tex != null and tex == _placeholder_tex,
@@ -6478,6 +6896,12 @@ func _update_pop(delta: float) -> void:
 		_gf17_was_travelling = false
 		_gf17_audit_armed = true
 		_gf17_audit_runs = 0
+	# GRADFIX19: the travel costume's beat - it engages and
+	# releases on the same travel edges the guarantee arms
+	# on, and it runs BEFORE the audit below so a falling
+	# edge hands the dressed state back first and the audit
+	# then runs exactly as shipped.
+	_costume_tick()
 	if _gf17_audit_armed:
 		_guarantee_audit()
 	_heal_panel_faces()
