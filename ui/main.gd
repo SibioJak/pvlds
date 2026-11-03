@@ -373,6 +373,22 @@ var _art_warm_worst_ms: float = 0.0
 var _art_warm_released: bool = false
 var _art_warm_rest_frames: int = 0
 var _art_warm_saw_cruise: bool = false
+var _smoke_landing: bool = false ## --pvlds-smoke-landing: GRADFIX17 item 1 - hard travel (long cruises both directions + letter swings) over a shelf whose named neighbourhood resolves its art LATE (extraction chain / pair / embedded / author shot), then a per-stop census of visible faces still missing art a beat after settle; the census must read ZERO
+var _land_phase: int = 0
+var _land_wait: int = 0
+var _land_failures: int = 0
+var _land_start_col: int = -1
+var _land_saw_cruise: bool = false
+var _land_released: bool = false
+var _land_rest_frames: int = 0
+var _land_settle_frames: int = 0
+var _land_swing_keys: Array[String] = []
+var _land_swing_i: int = 0
+var _land_saw_swing: bool = false
+var _land_tour: Array[String] = []
+var _land_tour_i: int = 0
+var _land_census_deadline_msec: int = 0
+var _land_grabbed: bool = false
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -586,6 +602,8 @@ func _ready() -> void:
 		_smoke_artstream = true
 	if user_args.has("--pvlds-smoke-swingprobe"):
 		_smoke_swingprobe = true
+	if user_args.has("--pvlds-smoke-landing"):
+		_smoke_landing = true
 	if user_args.has("--pvlds-smoke-jumpbench"):
 		_smoke_jumpbench = true
 		_jumpbench_boot_msec = Time.get_ticks_msec()
@@ -716,6 +734,11 @@ func _ready() -> void:
 	# legs fail by name; PVLDS_GF16_PROBE turns on the
 	# per-operation timing census in TextureFactory/Room.
 	RoomView.debug_gf16_nc = OS.get_environment("PVLDS_GF16_NC")
+	# GRADFIX17 item 1's negative-control seam (PVLDS_GF17_NC=
+	# noguarantee): the settle audit + memo correction never
+	# run, so late-landing faces are never re-issued and the
+	# landing smoke's census legs fail by name.
+	RoomView.debug_gf17_nc = OS.get_environment("PVLDS_GF17_NC")
 	TextureFactory.probe_enabled = OS.has_environment("PVLDS_GF16_PROBE")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
@@ -751,7 +774,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_swingprobe or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_swingprobe or _smoke_landing or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -933,6 +956,8 @@ func _process(_delta: float) -> void:
 		_drive_artstream_smoke()
 	if _smoke_swingprobe:
 		_drive_swingprobe_smoke()
+	if _smoke_landing:
+		_drive_landing_smoke()
 	if _smoke_jumpbench:
 		_drive_jumpbench_smoke()
 	if _smoke_quitwarm:
@@ -12253,6 +12278,252 @@ func _drive_swingprobe_smoke() -> void:
 			_swp_wait += 1
 			if not _room.has_method("art_pipeline_idle") or _room.art_pipeline_idle() or _swp_wait > 3600:
 				_finish_swingprobe_smoke()
+
+
+## -------------------------------------------------- landing smoke (GRADFIX17 item 1)
+##
+## --pvlds-smoke-landing: hard travel through the room path -
+## long held cruises BOTH directions, then letter swings -
+## over a shelf whose named neighbourhood (the field report's
+## shape: Medieval Madness, KISS, Ice Fever, Indianapolis 500)
+## resolves its art LATE: big .directb2s extractions the warmer
+## lands seconds after the first fill, a pair backglass, an
+## embedded-.vpx face, and author shots that fetch in flight.
+## After the travel, once the warmer and the fetcher have
+## landed everything they will ever land, the driver tours
+## the named tables and every travel stop: at each stop the
+## room's landing census (fresh probes, the heal's read) must
+## read ZERO visible faces still missing art, and a rendered
+## grab is saved per stop. Legs are named "landing guarantee:".
+## Under PVLDS_GF17_NC=noguarantee the room's settle audit is
+## disabled and the census legs fail by name.
+func _landing_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - landing smoke: ", label)
+	else:
+		_land_failures += 1
+		printerr("  FAIL - landing smoke: ", label)
+
+
+func _finish_landing_smoke() -> void:
+	if _land_failures == 0:
+		print("PVLDS LANDING SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS LANDING SMOKE: FAIL (%d)" % _land_failures)
+		get_tree().quit(1)
+
+
+func _land_tour_titles() -> Array[String]:
+	return ["Medieval Madness", "KISS", "Ice Fever", "Indianapolis 500",
+		"Embedded Falls", "Aaron Spelling", "!WOW!"]
+
+
+func _drive_landing_smoke() -> void:
+	match _land_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and not _scan_active:
+				_land_wait += 1
+				if _land_wait > 21600:
+					_landing_expect(false, "landing guarantee: the start window never settled")
+					_finish_landing_smoke()
+					return
+				Input.warp_mouse(Vector2(4, 372))
+				if _room._columns < 40:
+					_landing_expect(false, "landing guarantee: the fixture shelf holds %d columns (hard travel needs at least 40)" % _room._columns)
+					_finish_landing_smoke()
+					return
+				var mid: int = _room._panels.size() / 2
+				var mid_col: int = _room._grid_coord(mid).x
+				var want_col: int = clampi(mid_col, 12, maxi(12, _room._columns - 20))
+				var start_idx: int = mid
+				for i: int in range(_room._panels.size()):
+					if _room._grid_coord(i).x == want_col and _room._grid_coord(i).y == _room._grid_coord(mid).y:
+						start_idx = i
+						break
+				_room.set_wall_motion_mode("smooth")
+				_room._set_centre(start_idx, true)
+				_room._set_focused(_room._panels[start_idx])
+				if not _room._window_fill_busy and not _room.page_slide_active():
+					_land_settle_frames += 1
+				else:
+					_land_settle_frames = 0
+				if _land_settle_frames >= 5:
+					TextureFactory.clear_art_decode_cache()
+					_land_start_col = _room._grid_coord(_room.centre_index()).x
+					_input_feed_stick_x(1.0)
+					_land_phase = 1
+					_land_wait = 0
+			else:
+				_land_wait += 1
+				if _land_wait > 21600:
+					_landing_expect(false, "landing guarantee: the room never came up (scan never settled)")
+					_finish_landing_smoke()
+		1:
+			# Cruise RIGHT through the real input path.
+			_land_wait += 1
+			if _room.cruise_active():
+				_land_saw_cruise = true
+			var col_now: int = _room._grid_coord(_room.centre_index()).x
+			if not _land_released and col_now >= _land_start_col + 15:
+				_land_released = true
+				_input_feed_stick_x(0.0)
+			if _land_released:
+				if not _room.swing_active():
+					_land_rest_frames += 1
+				else:
+					_land_rest_frames = 0
+				if _land_rest_frames >= 3:
+					_landing_expect(_land_saw_cruise, "landing guarantee: the rightward hold became a cruise on the real input path")
+					_landing_expect(col_now - _land_start_col >= 12, "landing guarantee: the rightward cruise spanned %d columns (a long travel)" % (col_now - _land_start_col))
+					_land_saw_cruise = false
+					_land_released = false
+					_land_rest_frames = 0
+					_input_feed_stick_x(-1.0)
+					_land_phase = 2
+					_land_wait = 0
+			elif _land_wait > 7200:
+				_input_feed_stick_x(0.0)
+				_landing_expect(false, "landing guarantee: the rightward cruise never spanned and settled")
+				_finish_landing_smoke()
+		2:
+			# Cruise LEFT, back past the start.
+			_land_wait += 1
+			if _room.cruise_active():
+				_land_saw_cruise = true
+			var col_now2: int = _room._grid_coord(_room.centre_index()).x
+			if not _land_released and col_now2 <= maxi(2, _land_start_col - 10):
+				_land_released = true
+				_input_feed_stick_x(0.0)
+			if _land_released:
+				if not _room.swing_active():
+					_land_rest_frames += 1
+				else:
+					_land_rest_frames = 0
+				if _land_rest_frames >= 3:
+					_landing_expect(_land_saw_cruise, "landing guarantee: the leftward hold became a cruise on the real input path")
+					_land_swing_keys = ["I", "K", "M", "E"]
+					_land_swing_i = 0
+					_land_saw_swing = false
+					_land_rest_frames = 0
+					_letters_pick(_land_swing_keys[0])
+					_land_phase = 3
+					_land_wait = 0
+			elif _land_wait > 7200:
+				_input_feed_stick_x(0.0)
+				_landing_expect(false, "landing guarantee: the leftward cruise never spanned and settled")
+				_finish_landing_smoke()
+		3:
+			# Letter swings through the strip, the pad's way.
+			_land_wait += 1
+			if _room.swing_active():
+				_land_saw_swing = true
+			if _land_saw_swing and not _room.swing_active() and not _room.page_slide_active():
+				_land_rest_frames += 1
+			else:
+				_land_rest_frames = 0
+			if _land_rest_frames >= 5:
+				_land_swing_i += 1
+				_land_saw_swing = false
+				_land_rest_frames = 0
+				_land_wait = 0
+				if _land_swing_i < _land_swing_keys.size():
+					_letters_pick(_land_swing_keys[_land_swing_i])
+				else:
+					_landing_expect(true, "landing guarantee: letter swings I/K/M/E all travelled and settled")
+					_land_phase = 4
+					_land_wait = 0
+			elif _land_wait > 7200:
+				_landing_expect(false, "landing guarantee: the letter swing to %s never settled" % _land_swing_keys[_land_swing_i])
+				_finish_landing_smoke()
+		4:
+			# Every art source lands: warmer drained, pipeline
+			# idle, and both author shots in their cache. Only
+			# then is a still-missing face a NEVER, not a late.
+			_land_wait += 1
+			var shots_in: bool = true
+			if _scanner != null:
+				for g: GameEntry in _scanner.games:
+					if g.shot_url != "" and not ArtProvider.shot_is_cached(g.shot_url):
+						shots_in = false
+			var warm_in: bool = _art_warmer == null or _art_warmer.is_idle()
+			if warm_in and shots_in and _room.art_pipeline_idle():
+				_land_tour = _land_tour_titles()
+				_land_tour_i = 0
+				_land_census_deadline_msec = 0
+				_land_grabbed = false
+				_land_phase = 5
+				_land_wait = 0
+			elif _land_wait > 21600:
+				_landing_expect(false, "landing guarantee: the art sources never all landed (warmer idle %s, shots in %s)" % [str(warm_in), str(shots_in)])
+				_finish_landing_smoke()
+		5:
+			# The census tour: centre each named table through
+			# the room path, settle, then poll its window's
+			# census - zero missing, or the leg fails by name
+			# with the missing titles printed.
+			_land_wait += 1
+			if _land_tour_i >= _land_tour.size():
+				_land_phase = 6
+				_land_wait = 0
+				return
+			var title: String = _land_tour[_land_tour_i]
+			if _land_census_deadline_msec == 0:
+				var tidx: int = -1
+				for i: int in range(_room._visible_games.size()):
+					if _room._visible_games[i].title == title:
+						tidx = i
+						break
+				if tidx < 0:
+					_landing_expect(false, "landing guarantee: the named table '%s' stands on the fixture shelf" % title)
+					_land_tour_i += 1
+					return
+				_room._set_centre(tidx)
+				_room._set_focused(_room._panels[tidx])
+				_land_census_deadline_msec = -1 # travelling; the census window opens at settle
+				_land_settle_frames = 0
+				return
+			if _land_census_deadline_msec == -1:
+				if not _room.swing_active() and not _room.page_slide_active() and _room.art_pipeline_idle():
+					_land_settle_frames += 1
+				else:
+					_land_settle_frames = 0
+				if _land_settle_frames >= 3:
+					_land_census_deadline_msec = Time.get_ticks_msec() + 30000
+				elif _land_wait > 7200:
+					_landing_expect(false, "landing guarantee: the tour stop at '%s' never settled" % title)
+					_land_tour_i += 1
+					_land_census_deadline_msec = 0
+					_land_wait = 0
+				return
+			var census: Dictionary = _room.landing_census()
+			var missing: Array = census.get("missing", []) as Array
+			var total_faces: int = int(census.get("total", 0))
+			if missing.is_empty() and total_faces > 0:
+				_landing_expect(true, "landing guarantee: at '%s', every visible face wears its art a beat after settle (%d of %d landed, census zero)" % [title, total_faces, total_faces])
+				_land_tour_grab(title)
+				_land_tour_i += 1
+				_land_census_deadline_msec = 0
+				_land_wait = 0
+			elif Time.get_ticks_msec() > _land_census_deadline_msec:
+				var names: PackedStringArray = PackedStringArray(missing)
+				_landing_expect(false, "landing guarantee: at '%s', %d of %d visible faces still missing art a beat after settle: %s" % [title, missing.size(), total_faces, ", ".join(names)])
+				_land_tour_grab(title)
+				_land_tour_i += 1
+				_land_census_deadline_msec = 0
+				_land_wait = 0
+		6:
+			_land_wait += 1
+			if _room.art_pipeline_idle() or _land_wait > 3600:
+				_finish_landing_smoke()
+
+
+func _land_tour_grab(title: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if dir == "":
+		return
+	var slug: String = title.to_lower().replace(" ", "_").replace("!", "wow")
+	_save_shot_png(dir.path_join("landing_" + slug + ".png"))
 
 
 func _artstream_print_probe() -> void:

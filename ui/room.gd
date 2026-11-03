@@ -820,6 +820,15 @@ static var debug_gf14_nc: String = ""
 ## so the artstream smoke's travel-frame legs fail by name.
 ## Empty in every real run.
 static var debug_gf16_nc: String = ""
+## Negative-control seam for GRADFIX17 (item 1, the art-landing
+## guarantee; the harness env PVLDS_GF17_NC, set by Main before
+## any room exists): "noguarantee" disables the settle audit
+## and its memo correction - a face whose ready art path changed
+## after the pipeline's memo first read it is never re-issued,
+## exactly the GRADFIX16 field defect - so the landing smoke's
+## "landing guarantee:" census legs fail by name. Empty in
+## every real run.
+static var debug_gf17_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
@@ -4803,6 +4812,47 @@ func face_state() -> Array:
 			"from_art": _panel_art_aspect[idx] > 0.0 if idx < _panel_art_aspect.size() else false,
 		})
 	return out
+
+
+## GRADFIX17 (item 1) harness census: for every panel in the
+## standing window, whether its face is honestly landed, judged
+## by a FRESH probe (the heal's read - never the pipeline's
+## memo): a face counts missing when its texture is not real,
+## when the fresh face key differs from the stamped key (art
+## became ready after the stamp - an upgrade owed), or when
+## ready art exists but the standing face is the styled card
+## (its art render never landed). A game with no ready art
+## whose styled card stands honestly is NOT missing. Returns
+## {"total": int, "missing": Array[String] of titles}.
+func landing_census() -> Dictionary:
+	var missing: Array[String] = []
+	var total: int = 0
+	if _panel_window_lo < 0:
+		return {"total": 0, "missing": missing}
+	for idx: int in range(_panels.size()):
+		if idx >= _visible_games.size():
+			continue
+		var cc: int = _grid_coord(idx).x
+		if cc < _panel_window_lo or cc > _panel_window_hi:
+			continue
+		if _tournament and idx < _tournament_rows.size() \
+				and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+			continue # state panels wear board faces, not card faces
+		total += 1
+		var game: GameEntry = _visible_games[idx]
+		var quad: ClickableQuad = _panels[idx]
+		var tex: Texture2D = quad.current_texture()
+		var fresh_key: String = _face_key_for(idx)
+		var stamped: String = str(_panel_face_key.get(game.game_id, ""))
+		var art_ready: bool = fresh_key.split("|").size() > 1 and fresh_key.split("|")[1] != ""
+		var from_art: bool = idx < _panel_art_aspect.size() and _panel_art_aspect[idx] > 0.0
+		if tex == null or tex == _placeholder_tex or not _tex_is_real(tex):
+			missing.append(game.title)
+		elif stamped != fresh_key:
+			missing.append(game.title)
+		elif art_ready and not from_art:
+			missing.append(game.title)
+	return {"total": total, "missing": missing}
 
 
 ## The state row's fill (the Tournament redesign): when the
