@@ -12704,7 +12704,20 @@ func _drive_streamahead_smoke() -> void:
 				_room.set_wall_motion_mode("smooth")
 				_room._set_centre(start_idx, true)
 				_room._set_focused(_room._panels[start_idx])
-			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active():
+			# The field regime this smoke judges: the player
+			# STOPPED here first - the seat window is fully
+			# dressed (census zero, pipeline idle) before the
+			# cruise starts. wall_ready alone was not that:
+			# bench runs 1-6 launched the cruise with the
+			# seat window itself still mid-heal, and the
+			# stream's bounded supply was spent re-dressing
+			# the window behind the drum instead of the wall
+			# ahead - a regime the field session never hits,
+			# because the GF17 settle guarantee dresses a
+			# stopped window before any cruise begins.
+			var seat_census: Dictionary = _room.landing_census()
+			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active() \
+					and (seat_census.get("missing", ["x"]) as Array).is_empty() and _room.art_pipeline_idle():
 				_sa_settle_frames += 1
 			else:
 				_sa_settle_frames = 0
