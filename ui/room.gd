@@ -2794,9 +2794,24 @@ func _set_centre(index: int, snap: bool = false) -> void:
 				# STEPPED dial keeps, untouched).
 				_swing_smooth_retarget()
 	if changed:
+		# GRADFIX17 telemetry: a centre change's parts, timed
+		# - this block is the per-column work a cruise pays,
+		# and a slow part names itself in the log.
+		var tel_c_t0: int = Time.get_ticks_usec()
 		_refresh_window()
+		var tel_c_t1: int = Time.get_ticks_usec()
 		_refresh_card_frames()
+		var tel_c_t2: int = Time.get_ticks_usec()
 		_request_window_fill()
+		var tel_c_ms: float = float(Time.get_ticks_usec() - tel_c_t0) / 1000.0
+		if tel_c_ms >= 4.0:
+			_art_event("seg", {
+				"seg": "set_centre", "cost_ms": tel_c_ms,
+				"window_ms": float(tel_c_t1 - tel_c_t0) / 1000.0,
+				"frames_ms": float(tel_c_t2 - tel_c_t1) / 1000.0,
+				"fill_ms": float(Time.get_ticks_usec() - tel_c_t2) / 1000.0,
+				"col": col, "cruise_dir": _cruise_dir, "snap": snap,
+			})
 		# No companion follows the centre any more (the flip
 		# replaced the wing/board): a centre change is one of
 		# the flip's closing conditions, and _update_flip
@@ -5400,6 +5415,7 @@ func _set_focused(q: ClickableQuad) -> void:
 
 
 func _refresh_quad_states() -> void:
+	var tel_q_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the focus-change sweep's cost, timed below
 	var hovered: ClickableQuad = _rig.hovered if _rig != null else null
 	var all: Array[ClickableQuad] = []
 	all.append_array(_panels)
@@ -5449,6 +5465,12 @@ func _refresh_quad_states() -> void:
 		all.append(_setup_panel_back_btn)
 	for q: ClickableQuad in all:
 		q.set_visual_state(q == hovered, q == _focused)
+	# GRADFIX17 telemetry: this sweep walks every quad in
+	# the room on every focus change (once per cruise
+	# column) - a slow one names itself.
+	var tel_q_ms: float = float(Time.get_ticks_usec() - tel_q_t0) / 1000.0
+	if tel_q_ms >= 4.0:
+		_art_event("seg", {"seg": "quad_states", "cost_ms": tel_q_ms, "quads": all.size(), "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
 
 
 func _on_hover_changed(_quad: ClickableQuad) -> void:
@@ -5604,6 +5626,7 @@ func _follow_centre() -> void:
 ## (it is a child), so it stays glued to the card face and
 ## clickable while popped.
 func _update_pop(delta: float) -> void:
+	var tel_pop_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the pop block's cost, timed below
 	_follow_centre()
 	if _panels.is_empty():
 		return
@@ -5653,6 +5676,13 @@ func _update_pop(delta: float) -> void:
 	_update_flip(delta)
 	_heal_panel_faces()
 	_heal_tournament_boards()
+	# GRADFIX17 telemetry: the pop block runs every frame
+	# and carries the follow, the flip and both heals - a
+	# slow one names itself (its parts have their own
+	# segments where they are separately convicted).
+	var tel_pop_ms: float = float(Time.get_ticks_usec() - tel_pop_t0) / 1000.0
+	if tel_pop_ms >= 8.0:
+		_art_event("seg", {"seg": "update_pop", "cost_ms": tel_pop_ms, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
 
 
 ## The machined strip's lift (GRADFIX14 item 1), driven
@@ -8591,6 +8621,7 @@ func _exit_tree() -> void:
 
 
 func _process(delta: float) -> void:
+	var tel_proc_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: this frame's room-side segment clock
 	# The flat (non-XR) camera is STATIC at the seated viewpoint - the
 	# mouse is a pure pointer there, never a look control. A view that
 	# drifts with the cursor makes every click target swim (field
@@ -8676,6 +8707,14 @@ func _process(delta: float) -> void:
 		frame_fields["swing_duration_s"] = _swing_duration
 		frame_fields["cruise_cap_deg_s"] = rad_to_deg(_swing_cruise_rad)
 		_telemetry_record("frame", frame_fields)
+	# GRADFIX17 telemetry: the motion half of this frame's
+	# room work (background, plates, pop, swing) as one
+	# segment - slow frames name it, so a hitch the art
+	# seams did not cause still lands in the log with an
+	# address.
+	var tel_proc_a_ms: float = float(Time.get_ticks_usec() - tel_proc_t0) / 1000.0
+	if tel_proc_a_ms >= 10.0:
+		_art_event("seg", {"seg": "process_motion", "cost_ms": tel_proc_a_ms, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
 	_update_power(delta)
 	var deaf: bool = _launching_game_id != ""
 	var telemetry_cooldown_before: float = _joy_cooldown ## scroll telemetry: the poll's before (read-only)
@@ -8883,6 +8922,13 @@ func _process(delta: float) -> void:
 		elif not _placard_up:
 			_handle_rail("exit")
 	_joy_prev_right = right_now
+	# GRADFIX17 telemetry: the whole _process as one segment
+	# (see process_motion above) - the poll half's cost is
+	# the difference, and a slow poll names itself here when
+	# the motion half was cheap.
+	var tel_proc_all_ms: float = float(Time.get_ticks_usec() - tel_proc_t0) / 1000.0
+	if tel_proc_all_ms >= 10.0:
+		_art_event("seg", {"seg": "process_all", "cost_ms": tel_proc_all_ms, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
 
 
 func _cycle_focus(step: int) -> void:
