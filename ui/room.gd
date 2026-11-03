@@ -334,6 +334,16 @@ const LABEL_WIDTH_PX: float = 246.0 ## wrapped-title width: a long name takes up
 ## drum's current angle (the prototype's speed-gate law).
 const SWING_MIN_SEC: float = 0.16
 const SWING_MAX_SEC: float = 0.72
+## OPTIMIZE finish (hold cadence): after a swing lands, the
+## drum rests this long before a QUEUED hold-repeat step may
+## fire - the pause that makes a hold read as a train of
+## discrete steps (settle plateaus between steps) instead of
+## one blended glide. Only hold-repeats queue; taps and
+## jumps retarget immediately, as they always have.
+const STEP_REST_SEC: float = 0.10
+## How soon the poll re-checks a queued hold-repeat step
+## while it waits for the drum to land and rest.
+const STEP_QUEUE_RECHECK_SEC: float = 0.03
 ## OPTIMIZE round: the SMOOTH driver is deleted - STEPPED (the
 ## spring above) is the only gait, and its constants die with it.
 
@@ -1047,6 +1057,8 @@ var _focused: ClickableQuad = null
 var _joy_cooldown: float = 0.0
 var _joy_hold_dir: Vector2 = Vector2.ZERO ## GRADFIX13 item 3: the direction of the stick hold in progress (ZERO = no hold) - the poll's hold bookkeeping (see the poll in _process)
 var _joy_hold_steps: int = 0 ## discrete steps fired inside the current continuous hold (OPTIMIZE: every step is discrete; the count survives only for the debug_opt_nc="smoothcruise" seam, which arms its roll on the second step)
+var _joy_step_queued: Vector2 = Vector2.ZERO ## OPTIMIZE finish (hold cadence): one pending hold-REPEAT step (the hold's first step never queues) waiting for the drum to land + rest; cleared on release or direction change, fires only while the stick still holds its direction
+var _step_rest_timer: float = 0.0 ## seconds of enforced drum rest left after the last swing landing (STEP_REST_SEC), spent in _process
 var _joy_prev_a: bool = false
 var _joy_prev_b: bool = false
 var _joy_prev_y: bool = false ## Y edge tracking: open the focused card's info (see _process)
@@ -2938,6 +2950,7 @@ func _update_swing(delta: float) -> void:
 		_swing_vel = 0.0
 		_swing_active = false
 		_swing_journey = false
+		_step_rest_timer = STEP_REST_SEC ## OPTIMIZE finish: a queued hold-repeat waits out this rest (the inter-step plateau)
 		_step_landed() ## OPTIMIZE telemetry: the step record closes with its settle duration
 	_wall.rotation.y = _drum_yaw
 
@@ -9041,6 +9054,7 @@ func _process(delta: float) -> void:
 	var telemetry_cooldown_before: float = _joy_cooldown ## scroll telemetry: the poll's before (read-only)
 	var telemetry_roll_before_poll: int = _nc_roll_dir ## scroll telemetry: the NC roll state as this poll began (read-only)
 	_joy_cooldown = maxf(0.0, _joy_cooldown - delta)
+	_step_rest_timer = maxf(0.0, _step_rest_timer - delta)
 	var ax: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)
 	var ay: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_Y)
 	var dir: Vector2 = Vector2.ZERO
@@ -9086,10 +9100,12 @@ func _process(delta: float) -> void:
 		_nc_roll_dir = 0
 		_joy_hold_dir = Vector2.ZERO
 		_joy_hold_steps = 0
+		_joy_step_queued = Vector2.ZERO ## a queued hold-repeat dies with the hold
 	elif dir != _joy_hold_dir:
 		_nc_roll_dir = 0
 		_joy_hold_dir = dir
 		_joy_hold_steps = 0
+		_joy_step_queued = Vector2.ZERO ## and with a direction change
 	# Scroll telemetry (observation only): this poll's step
 	# decision, named as the branches below take it. The
 	# locals are written by the branches and read only by
@@ -9100,6 +9116,7 @@ func _process(delta: float) -> void:
 	var telemetry_hold_steps_before_decision: int = _joy_hold_steps
 	var telemetry_cooldown_at_poll: float = _joy_cooldown
 	if dir != Vector2.ZERO and _joy_cooldown <= 0.0:
+		var next_cooldown: float = 0.24 ## OPTIMIZE finish: a queue-wait re-checks sooner (assigned at the block's foot)
 		if not deaf:
 			if _nc_roll_dir != 0:
 				telemetry_decision = "none_discrete_step"
@@ -9119,6 +9136,31 @@ func _process(delta: float) -> void:
 				_nc_roll_dir = 1 if dir.x > 0.0 else -1
 				_move_focus(dir)
 				_joy_hold_steps += 1
+			elif _joy_step_queued == dir and not _swing_active and _step_rest_timer <= 0.0:
+				# OPTIMIZE finish: the queued hold-repeat
+				# fires - the drum has landed and rested,
+				# and the stick still holds the queued
+				# direction (the bookkeeping above cleared
+				# the queue on any release or change).
+				telemetry_decision = "step"
+				telemetry_decision_source = "queued_step"
+				telemetry_decision_reason = "queued_repeat_fired_after_landing"
+				_joy_step_queued = Vector2.ZERO
+				_move_focus(dir)
+				_joy_hold_steps += 1
+			elif _joy_hold_steps >= 1 and (_swing_active or _step_rest_timer > 0.0):
+				# OPTIMIZE finish (the hold-cadence fix): a
+				# hold-REPEAT never retargets a flying or
+				# just-landed drum - that retarget is what
+				# blended the step train into one glide (the
+				# journey spring never landed between the
+				# poll's 0.24 s retargets). The repeat queues
+				# instead, and the poll re-checks shortly.
+				telemetry_decision = "step_queued"
+				telemetry_decision_source = "poll"
+				telemetry_decision_reason = "repeat_waits_for_landing"
+				_joy_step_queued = dir
+				next_cooldown = STEP_QUEUE_RECHECK_SEC
 			else:
 				telemetry_decision = "step"
 				telemetry_decision_source = "move_focus"
@@ -9129,7 +9171,7 @@ func _process(delta: float) -> void:
 			telemetry_decision = "suppressed"
 			telemetry_decision_source = "poll"
 			telemetry_decision_reason = "launch_wait_deaf"
-		_joy_cooldown = 0.24
+		_joy_cooldown = next_cooldown
 	# Scroll telemetry (observation only): the poll record -
 	# one per rendered frame, at the product's own cadence,
 	# with the raw axes exactly as the poll read them.
