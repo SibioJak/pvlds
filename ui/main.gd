@@ -480,6 +480,7 @@ var _cs_grabs: int = 0
 var _cs_deadline_msec: int = 0
 var _cs_stepped_engagements: int = -1
 var _cs_stepped_saw_on: bool = false
+var _cs_last_yaw: float = 0.0 ## the drum yaw at the last smoke sample (sampling counts only frames the drum actually moved)
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -12899,7 +12900,7 @@ func _drive_costume_smoke() -> void:
 			_cs_wait += 1
 			if _room.cruise_active():
 				_cs_saw_cruise = true
-			if _cs_saw_cruise:
+			if _cs_saw_cruise and absf(_room.drum_yaw_rad() - _cs_last_yaw) > 0.00001:
 				_cs_cruise_frames += 1
 				var states: Array = _room.costume_window_state()
 				for sv2: Variant in states:
@@ -12912,6 +12913,7 @@ func _drive_costume_smoke() -> void:
 					_cs_grab("costume_midcruise_a.png")
 				if _cs_cruise_frames == 70:
 					_cs_grab("costume_midcruise_b.png")
+			_cs_last_yaw = _room.drum_yaw_rad()
 			var col_now4: int = _room._grid_coord(_room.centre_index()).x
 			if not _cs_released and col_now4 <= _cs_start_col - 16:
 				_cs_released = true

@@ -3425,6 +3425,20 @@ func _refresh_window() -> void:
 	# its change guard here (resetting it to -1) so EVERY
 	# centre change rewrote every alpha on the wall.
 	_apply_wall_alpha(_wall_alpha_applied)
+	# GRADFIX19: the window just changed - any card that
+	# entered it mid-travel wears the costume from this
+	# frame, not from the next _update_pop tick (the cruise's
+	# centre follow widens the window inside the swing
+	# update, after the tick: the first bench run sampled
+	# entering cards in art for exactly that one frame).
+	if _costume_on:
+		for cidx: int in range(_panels.size()):
+			if _costume_saved.has(cidx):
+				continue
+			var cc2: int = _grid_coord(cidx).x
+			if cc2 < _panel_window_lo or cc2 > _panel_window_hi:
+				continue
+			_costume_swap_in(cidx)
 
 
 ## Whether a Tournament panel may launch: only a challenge row
