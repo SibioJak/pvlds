@@ -308,7 +308,7 @@ var _bootfocus_phase: int = 0
 var _bootfocus_wait: int = 0
 var _bootfocus_failures: int = 0
 var _bootfocus_game: String = "" ## env PVLDS_BOOTFOCUS_GAME: the seeded last-played game id the boot must focus
-var _smoke_motion: bool = false ## --pvlds-smoke-motion: GRADFIX10 items 2+3 - the pop's dense-frame smoothness trace, the wall-motion dial, SMOOTH continuous travel, input-during-roll, and a stepped-vs-smooth frame-time note
+var _smoke_motion: bool = false ## --pvlds-smoke-motion: the pop's dense-frame smoothness trace plus the OPTIMIZE legs (stepped-only hold, single-step settle, steps stay dressed, radius, applies capped)
 var _motion_phase: int = 0
 var _motion_wait: int = 0
 var _motion_failures: int = 0
@@ -320,113 +320,29 @@ var _motion_grab_msec: Array = [] ## msec stamp per grab in _motion_grabs
 var _motion_pacing_ms: float = 16.0 ## median frame interval measured while the origin pop settled (the legs judge the traces against the pacing the box actually ran)
 var _motion_pace_stamps: Array = [] ## frame stamps collected during the settle (the pacing measure)
 var _motion_t0_msec: int = 0
-var _motion_yaw_trace: Array = [] ## per-frame [msec, drum_yaw_deg] across a multi-column travel
-var _motion_input_at_msec: int = 0 ## when the mid-roll press landed
-var _motion_input_centre: int = -1 ## the centre the mid-roll press asked for
-var _motion_input_frame_msec: int = 0 ## the first frame the centre answered the press
-var _motion_press_i: int = -1 ## the yaw-trace index the press landed on
-var _motion_answer_i: int = -1 ## the yaw-trace index the centre first answered on
-var _motion_perf: Dictionary = {} ## mode -> [frames, total_usec] over an identical travel (the perf note)
-var _motion_perf_mode: String = ""
 var _motion_tr: Array = [] ## GRADFIX12: the standing dense trace, per frame [msec, drum_yaw_deg] sampled through the room's drum accessor
 var _motion_tr_name: String = "" ## the standing trace's name (its leg/print label)
 var _motion_tr_leg: String = "" ## the standing trace's leg name for failures
 var _motion_tr_y0: float = 0.0 ## the standing trace's start yaw, degrees
 var _motion_tr_y1: float = 0.0 ## the standing trace's target yaw, degrees
 var _motion_tr_stats: Dictionary = {} ## trace name -> stats Dictionary (see _motion_trace_stats)
-var _motion_live_boot_mode: String = "" ## the mode the live-toggle leg booted under
-var _motion_live_flip_mode: String = "" ## the mode the SETUP panel flip left standing
-var _motion_hold_mode: String = "" ## held-scroll leg: which real-path leg is sampling
-var _motion_hold_frames: int = 0 ## held-scroll leg: frames sampled so far
-var _motion_hold_released: bool = false ## held-scroll leg: the stick has been let go
-var _motion_hold_release_frame: int = -1 ## held-scroll leg: trace frame of the release
-var _motion_hold_release_col: int = -1 ## held-scroll leg: centre column standing at the release
-var _motion_hold_saw_cruise: bool = false ## held-scroll leg: the room cruised during the hold
-var _motion_hold_start_col: int = 0 ## held-scroll leg: the column the hold started from
-var _motion_hold_rest_frames: int = 0 ## held-scroll leg: consecutive settled frames after release
-var _smoke_artstream: bool = false ## --pvlds-smoke-artstream: GRADFIX16 item 2 - sustained held cruise through the real input path on a cold-art fixture, recording travel frame deltas (worst + count over 50 ms), base vs fixed on the same fixture
-var _smoke_hitchhunt: bool = false ## --pvlds-smoke-hitchhunt: GRADFIX17 item 2 - cold held cruises in BOTH directions over one long stretch of the same cold-art fixture (the field residue was one-directional: leftward bursts through one shelf region), judged per direction, plus the alpha-write count the window pass spends per column
-var _smoke_bite: bool = false ## --pvlds-smoke-bite: GRADFIX18 item B - progressively dress the wall (two cold cruises), then cruise the FULLY dressed wall both directions (the GF17 field paradox: the full wall travelled worse than the empty one); legs judge the ask-proof (queue surgery never on the asking thread), the residency growth, and the full-wall cruise frames
-var _bite_phase: int = 0
-var _bite_wait: int = 0
-var _bite_failures: int = 0
-var _bite_settle_frames: int = 0
-var _bite_start_col: int = -1
-var _bite_last_usec: int = 0
-var _bite_pacing_ms: float = 16.7
-var _bite_pace_stamps: Array = []
-var _bite_leg: int = 0 ## 0 = dress left, 1 = dress right, 2 = full left, 3 = full right
-var _bite_deltas: Array = [[], [], [], []] ## per leg: every cruise frame delta
-var _bite_worst: Array = [0.0, 0.0, 0.0, 0.0]
-var _bite_spikes: Array = [[], [], [], []] ## per leg: [centre_col, delta_ms] over 40 ms
-var _bite_saw_cruise: Array = [false, false, false, false]
-var _bite_released: Array = [false, false, false, false]
-var _bite_rest_frames: int = 0
-var _bite_release_col: int = -1
-var _bite_heal_deadline_msec: int = 0
-var _bite_res_at_leg_start: Array = [{}, {}, {}, {}] ## per leg: the residency gauge where the leg began
-var _bite_res_face_max: Array = [0, 0, 0, 0] ## per leg: the largest live face-texture count sampled during the leg
-var _bite_res_sample_msec: int = 0
-var _bite_prefetch_at_leg_start: Array = [0, 0, 0, 0]
-var _bite_prefetch_at_leg_end: Array = [0, 0, 0, 0]
-var _bite_prefetch_seen: int = 0 ## prefetch count the full-leg emit sampler has already attributed
-var _bite_ask_max_full_ms: float = 0.0 ## worst main-thread prefetch emit attributed to the full-wall legs (sampled when the count moves)
-var _bite_proof_before: int = 0 ## prio batches applied before the ask-proof ask
-var _bite_proof_wait: int = 0
-var _hh_phase: int = 0
-var _hh_wait: int = 0
-var _hh_failures: int = 0
-var _hh_settle_frames: int = 0
-var _hh_start_col: int = -1
-var _hh_last_usec: int = 0
-var _hh_pacing_ms: float = 16.7
-var _hh_pace_stamps: Array = []
-var _hh_leg: int = 0 ## 0 = cold left, 1 = cold right, 2 = warm left (the baseline)
-var _hh_deltas: Array = [[], [], []] ## per leg: every cruise frame delta
-var _hh_worst: Array = [0.0, 0.0, 0.0]
-var _hh_over50: Array = [0, 0, 0]
-var _hh_spikes: Array = [[], [], []] ## per leg: [centre_col, delta_ms] over 40 ms
-var _hh_saw_cruise: Array = [false, false, false]
-var _hh_released: Array = [false, false, false]
-var _hh_rest_frames: int = 0
-var _hh_release_col: int = -1
-var _hh_alpha_at_leg_start: int = 0
-var _hh_alpha_per_col: Array = [0.0, 0.0, 0.0] ## wall-alpha writes per column travelled, per leg
-var _hh_heal_deadline_msec: int = 0
-var _art_phase: int = 0
-var _art_wait: int = 0
-var _art_failures: int = 0
-var _art_start_col: int = -1
-var _art_release_col: int = -1
-var _art_saw_cruise: bool = false
-var _art_released: bool = false
-var _art_rest_frames: int = 0
-var _art_last_usec: int = 0
-var _art_frames: int = 0
-var _art_worst_ms: float = 0.0
-var _art_over50: int = 0
-var _art_over33: int = 0
-var _art_spikes: Array = [] ## [centre_col, delta_ms] for every travel frame over 40 ms
-var _art_col_marks: Array = [] ## [msec_since_feed, centre_col] at each centre-column change during the cruise
-var _art_feed_msec: int = 0
-var _art_last_col: int = -1
-var _art_settle_frames: int = 0
-var _art_heal_deadline_msec: int = 0
-var _art_pacing_ms: float = 16.7 ## median frame delta measured over the start window's settle (the legs judge hitches against the pacing this box actually ran, the motion smoke's discipline)
-var _art_pace_stamps: Array = [] ## frame deltas collected during the settle
-var _art_over_hitch: int = 0 ## travel frames over pacing + 40 ms (an art hitch's signature, at any pacing)
-var _art_cold_deltas: Array = [] ## every cold-cruise frame delta (judged against the warm cruise at the end)
-var _art_warm_deltas: Array = [] ## every warm-cruise frame delta (the same-run motion baseline)
-var _art_warm_worst_ms: float = 0.0
-var _art_warm_released: bool = false
-var _art_warm_rest_frames: int = 0
-var _art_warm_saw_cruise: bool = false
-var _smoke_landing: bool = false ## --pvlds-smoke-landing: GRADFIX17 item 1 - hard travel (long cruises both directions + letter swings) over a shelf whose named neighbourhood resolves its art LATE (extraction chain / pair / embedded / author shot), then a per-stop census of visible faces still missing art a beat after settle; the census must read ZERO
+var _opt_hold_trace: Array = [] ## OPTIMIZE hold leg: per-frame [msec, drum_yaw_deg] across the 3 s real-path hold
+var _opt_hold_t0_msec: int = 0 ## OPTIMIZE hold leg: when the stick was fed
+var _opt_hold_start_col: int = 0 ## OPTIMIZE hold leg: the column the hold started from
+var _opt_rest_frames: int = 0 ## OPTIMIZE legs: consecutive settled frames in a settle wait
+var _opt_saw_swing: bool = false ## OPTIMIZE legs: the travel under wait actually swung
+var _opt_dressed_frames: int = 0 ## OPTIMIZE dressed leg: mid-step frames whose drawn window was face-sampled
+var _opt_dressed_bad: int = 0 ## OPTIMIZE dressed leg: card-frames sampled mid-step presenting no real face
+var _opt_train_start_col: int = 0 ## OPTIMIZE applies leg: the column the step train started from
+var _opt_train_t0_msec: int = 0 ## OPTIMIZE applies leg: when the train's stick was fed
+var _opt_train_dir: float = 1.0 ## OPTIMIZE applies leg: the train's direction (toward the shelf's far half)
+var _opt_letter_key: String = "" ## OPTIMIZE applies leg: the letter the journey jumped to
+var _smoke_landing: bool = false ## --pvlds-smoke-landing: GRADFIX17 item 1 - hard travel (long stepped travels both directions + letter swings) over a shelf whose named neighbourhood resolves its art LATE (extraction chain / pair / embedded / author shot), then a per-stop census of visible faces still missing art a beat after settle; the census must read ZERO. OPTIMIZE adds the "optimize: eviction keeps the census" leg after the tour
 var _land_phase: int = 0
 var _land_wait: int = 0
 var _land_failures: int = 0
 var _land_start_col: int = -1
-var _land_saw_cruise: bool = false
+var _land_saw_travel: bool = false ## a hold actually travelled (swing stood / centre moved) on the real input path
 var _land_released: bool = false
 var _land_rest_frames: int = 0
 var _land_settle_frames: int = 0
@@ -440,47 +356,6 @@ var _land_grabbed: bool = false
 var _land_filter_forced: bool = false
 var _land_warm_held: bool = false
 var _land_rewarm_done: bool = false
-var _smoke_streamahead: bool = false ## --pvlds-smoke-streamahead: GRADFIX18 item A - one continuous held cruise with NO stops over cold art; every column is sampled the frame it enters the drawn window (dressed or bare), the arrival census is read the moment the drum stops, and the cruise's frames are judged against a warm return cruise on the same fixture
-var _sa_phase: int = 0
-var _sa_wait: int = 0
-var _sa_failures: int = 0
-var _sa_start_col: int = -1
-var _sa_saw_cruise: bool = false
-var _sa_released: bool = false
-var _sa_rest_frames: int = 0
-var _sa_settle_frames: int = 0
-var _sa_last_usec: int = 0
-var _sa_frames: int = 0
-var _sa_worst_ms: float = 0.0
-var _sa_cold_deltas: Array = []
-var _sa_pacing_ms: float = 16.7
-var _sa_pace_stamps: Array = []
-var _sa_edge_col: int = -1 ## the highest leading-edge column sampled at window entry so far
-var _sa_entry_total: int = 0
-var _sa_entry_missing: Array = [] ## titles of faces bare on the frame their column entered the drawn window
-var _sa_heal_deadline_msec: int = 0
-var _sa_warm_deltas: Array = []
-var _sa_warm_worst_ms: float = 0.0
-var _sa_warm_released: bool = false
-var _sa_warm_rest_frames: int = 0
-var _sa_warm_saw_cruise: bool = false
-var _smoke_costume: bool = false ## --pvlds-smoke-costume: GRADFIX19 - a settled dressed window, then one held SMOOTH cruise with NO stops: every cruise frame samples the drawn window (no card may present real art while the drum moves; every card wears the styled costume), mid-cruise grabs are saved for eyeball proof, the costume-on swap cost is read from the room's own account, and after the stop the window must dress fully (settle census zero) with the dress latency measured. A STEPPED swing at the end must never engage the costume. Under PVLDS_GF19_NC=no-costume the costume legs fail by name.
-var _cs_phase: int = 0
-var _cs_wait: int = 0
-var _cs_failures: int = 0
-var _cs_settle_frames: int = 0
-var _cs_start_col: int = -1
-var _cs_saw_cruise: bool = false
-var _cs_released: bool = false
-var _cs_rest_frames: int = 0
-var _cs_cruise_frames: int = 0
-var _cs_art_presented: int = 0 ## card-frames sampled mid-cruise presenting real art (the costume's named defect)
-var _cs_unworn: int = 0 ## card-frames sampled mid-cruise not wearing the costume at all
-var _cs_grabs: int = 0
-var _cs_deadline_msec: int = 0
-var _cs_stepped_engagements: int = -1
-var _cs_stepped_saw_on: bool = false
-var _cs_last_yaw: float = 0.0 ## the drum yaw at the last smoke sample (sampling counts only frames the drum actually moved)
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -690,20 +565,10 @@ func _ready() -> void:
 		_bootfocus_game = OS.get_environment("PVLDS_BOOTFOCUS_GAME")
 	if user_args.has("--pvlds-smoke-motion"):
 		_smoke_motion = true
-	if user_args.has("--pvlds-smoke-artstream"):
-		_smoke_artstream = true
-	if user_args.has("--pvlds-smoke-hitchhunt"):
-		_smoke_hitchhunt = true
-	if user_args.has("--pvlds-smoke-bite"):
-		_smoke_bite = true
 	if user_args.has("--pvlds-smoke-swingprobe"):
 		_smoke_swingprobe = true
 	if user_args.has("--pvlds-smoke-landing"):
 		_smoke_landing = true
-	if user_args.has("--pvlds-smoke-streamahead"):
-		_smoke_streamahead = true
-	if user_args.has("--pvlds-smoke-costume"):
-		_smoke_costume = true
 	if user_args.has("--pvlds-smoke-jumpbench"):
 		_smoke_jumpbench = true
 		_jumpbench_boot_msec = Time.get_ticks_msec()
@@ -783,25 +648,18 @@ func _ready() -> void:
 	RoomView.debug_gf8_nc = OS.get_environment("PVLDS_GRADFIX8_NC")
 	# GRADFIX10's negative-control seams (PVLDS_GRADFIX10_NC=
 	# steppop | stepswing): steppop restores the convicted pop
-	# stepping, stepswing restores slot-stepping under the
-	# SMOOTH wall-motion dial - the motion smoke's smoothness
-	# legs fail against them by name. Set here, before any
-	# room exists.
+	# stepping, stepswing restores slot-stepping in the swing
+	# - the pop/travel legs fail against them by name. Set
+	# here, before any room exists.
 	RoomView.debug_gf10_nc = OS.get_environment("PVLDS_GRADFIX10_NC")
-	# GRADFIX12's live-apply negative-control seam
-	# (PVLDS_GRADFIX12_NC=nolive): the wall-motion panel
-	# still records the flipped mode, but the swing driver
-	# keeps the boot mode - the motion smoke's live toggle
-	# leg fails against it by name. Set here, before any
-	# room exists.
-	RoomView.debug_gf12_nc = OS.get_environment("PVLDS_GRADFIX12_NC")
 	# GRADFIX13's negative-control seams (PVLDS_GF13_NC=
 	# steprepeat | oldascent): steprepeat restores the
-	# per-repeat discrete stepping under SMOOTH (item 3, the
-	# held-cruise leg fails by name); oldascent restores the
-	# projection-walk rail->rows ascent (item 4, the
-	# vertical-wall-law legs fail by name). Set here, before
-	# any room exists.
+	# per-repeat discrete stepping (item 3 - its held-cruise
+	# judge retired with the dial in the OPTIMIZE round; the
+	# seam itself is the room's and the wiring stays);
+	# oldascent restores the projection-walk rail->rows
+	# ascent (item 4, the vertical-wall-law legs fail by
+	# name). Set here, before any room exists.
 	RoomView.debug_gf13_nc = OS.get_environment("PVLDS_GF13_NC")
 	# GRADFIX14's adoption negative-control seam (PVLDS_
 	# GF14_NC=oldadopt): restores the pre-fix adoption
@@ -830,8 +688,9 @@ func _ready() -> void:
 	# pickable only while the Tournament Room stands - so
 	# the input smoke's gf16 refresh legs fail by name;
 	# item 2's "syncfill" restores the base serial fill on
-	# the travel path so the artstream smoke's travel-frame
-	# legs fail by name; PVLDS_GF16_PROBE turns on the
+	# the travel path (the fill law - kept in the OPTIMIZE
+	# round; its travel-frame judge retired with the
+	# artstream smoke); PVLDS_GF16_PROBE turns on the
 	# per-operation timing census in TextureFactory/Room.
 	RoomView.debug_gf16_nc = OS.get_environment("PVLDS_GF16_NC")
 	# GRADFIX17's negative-control seams (one env var, two
@@ -839,25 +698,24 @@ func _ready() -> void:
 	# memo correction never run, so late-landing faces are
 	# never re-issued and the landing smoke's census legs
 	# fail by name; item 2's "hazeall" restores the pre-fix
-	# wall-alpha write-everything law, so the hitchhunt
-	# smoke's alpha-write leg fails by name.
+	# wall-alpha write-everything law.
 	RoomView.debug_gf17_nc = OS.get_environment("PVLDS_GF17_NC")
-	# GRADFIX18's negative-control seams (one env var, three
-	# values): item B's "askmain" - the warmer's prioritize
-	# applies synchronously on the caller's thread again - the
-	# pre-fix asking chain - so the bite smoke's ask-proof leg
-	# fails by name; item A's "nostream" disables stream-ahead
-	# so the streamahead smoke's arrival legs fail by name;
-	# "nobudget" disables the travel budget so its frame legs
-	# fail by name. Set here, before any room exists.
-	RoomView.debug_gf18_nc = OS.get_environment("PVLDS_GF18_NC")
-	ArtWarmer.nc_sync_prioritize = OS.get_environment("PVLDS_GF18_NC") == "askmain"
-	# GRADFIX19's negative-control seam: "no-costume" disables
-	# the travel costume - SMOOTH travel wears the dressed
-	# wall again exactly as GF18 shipped - so the costume
-	# smoke's legs fail by name. Set here, before any room
-	# exists.
-	RoomView.debug_gf19_nc = OS.get_environment("PVLDS_GF19_NC")
+	# The OPTIMIZE round's negative-control seam (one env
+	# var, five values - smoothcruise | costume | streamahead
+	# | oldradius | evictvis): each restores one piece of the
+	# deleted machinery so the motion/landing smokes'
+	# "optimize:" legs fail by name. The room reads the value
+	# from its own static; "oldradius" is Main's half - like
+	# the oldwall seam above it restores the pre-OPTIMIZE
+	# wall radius (3.40, the GRADFIX5 step) before any room
+	# exists, so the radius leg fails on its own numbers.
+	# Set here, before any room exists. (The GRADFIX18 and
+	# GRADFIX19 NC wirings are gone with their seams: the
+	# stream machinery and the travel costume are deleted,
+	# and the warmer's nc_sync_prioritize with them.)
+	RoomView.debug_opt_nc = OS.get_environment("PVLDS_OPT_NC")
+	if OS.get_environment("PVLDS_OPT_NC") == "oldradius":
+		RoomView.WALL_RADIUS = 3.40
 	TextureFactory.probe_enabled = OS.has_environment("PVLDS_GF16_PROBE")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
@@ -893,7 +751,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_hitchhunt or _smoke_bite or _smoke_swingprobe or _smoke_landing or _smoke_streamahead or _smoke_costume or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1071,20 +929,10 @@ func _process(_delta: float) -> void:
 		_drive_bootfocus_smoke()
 	if _smoke_motion:
 		_drive_motion_smoke()
-	if _smoke_artstream:
-		_drive_artstream_smoke()
-	if _smoke_hitchhunt:
-		_drive_hitchhunt_smoke()
-	if _smoke_bite:
-		_drive_bite_smoke()
 	if _smoke_swingprobe:
 		_drive_swingprobe_smoke()
 	if _smoke_landing:
 		_drive_landing_smoke()
-	if _smoke_streamahead:
-		_drive_streamahead_smoke()
-	if _smoke_costume:
-		_drive_costume_smoke()
 	if _smoke_jumpbench:
 		_drive_jumpbench_smoke()
 	if _smoke_quitwarm:
@@ -3408,7 +3256,7 @@ func _drive_setup_panel_smoke() -> void:
 				# with the wing in GRADFIX6).
 				_setup_panel_expect(f == _room.setup_panel_scan_quad() or f == _room.setup_panel_download_quad() or f == _room.setup_panel_back_quad()
 					or f == _room.setup_panel_wovp_paste_quad() or f == _room.setup_panel_wovp_test_quad()
-					or f == _room.setup_panel_stars_quad() or f == _room.setup_panel_wall_quad(),
+					or f == _room.setup_panel_stars_quad(),
 					"scan leg: focus stayed on the panel through the landing")
 				# The download leg: the harness's stub database
 				# over local HTTP (PVLDS_VPSDB_URL).
@@ -3621,22 +3469,35 @@ func _setup_panel_surface_assertions() -> void:
 	_setup_panel_expect(_room.setup_panel_wovp_paste_quad() != null, "XR setup: the panel has PASTE KEY (the WoVP row)")
 	_setup_panel_expect(_room.setup_panel_wovp_test_quad() != null, "XR setup: the panel has TEST KEY (the WoVP row)")
 	_setup_panel_expect(_room.setup_panel_stars_quad() != null, "XR setup: the panel has STARS (the display dial row, the GRAD FIX round; the WING dial retired with the wing in GRADFIX6)")
-	_setup_panel_expect(_room.setup_panel_wall_quad() != null, "wall motion dial: the panel has WALL MOTION (the display dial row, GRADFIX10 item 3)")
-	# The dial leg (GRADFIX10 item 3): the standing default is
-	# SMOOTH (Chris's pick); a press turns it to STEPPED in the
-	# room at once and Main persists it to the config; a second
-	# press returns it to SMOOTH (the smoke leaves the dial as
-	# it found it).
-	_setup_panel_expect(_room.wall_motion_mode() == "smooth",
-		"wall motion dial: the standing mode is SMOOTH (the default)")
-	_room._activate(_room.setup_panel_wall_quad())
+	# The OPTIMIZE round retired the WALL MOTION dial: the
+	# panel has NO wall-motion control (no focusable and no
+	# panel descendant carries the dial's action), the room's
+	# standing gait is STEPPED, and panel interaction (the
+	# surviving STARS dial, cycled a full turn so the panel is
+	# left as it was found) never moves the config off it.
+	var wall_control_found: bool = false
+	for fq: Variant in _room._focusables:
+		var fquad: ClickableQuad = fq as ClickableQuad
+		if fquad != null and fquad.action_id == "setup_setting_wall_motion":
+			wall_control_found = true
+	if holder != null:
+		var stack: Array[Node] = [holder]
+		while not stack.is_empty():
+			var nd: Node = stack.pop_back() as Node
+			var cq: ClickableQuad = nd as ClickableQuad
+			if cq != null and cq.action_id == "setup_setting_wall_motion":
+				wall_control_found = true
+			for ch: Node in nd.get_children():
+				stack.append(ch)
+	_setup_panel_expect(not wall_control_found,
+		"wall motion dial: the panel has NO wall-motion control (the dial retired in the OPTIMIZE round - STEPPED is the only gait)")
 	_setup_panel_expect(_room.wall_motion_mode() == "stepped",
-		"wall motion dial: a press turns the dial to STEPPED in the room")
+		"wall motion dial: the room's standing gait is STEPPED")
+	_room._activate(_room.setup_panel_stars_quad())
 	_setup_panel_expect(_config != null and _config.wall_motion_mode == "stepped",
-		"wall motion dial: Main persisted STEPPED to the config")
-	_room._activate(_room.setup_panel_wall_quad())
-	_setup_panel_expect(_room.wall_motion_mode() == "smooth" and _config != null and _config.wall_motion_mode == "smooth",
-		"wall motion dial: a second press returns the dial to SMOOTH (room + config)")
+		"wall motion dial: the config still reads STEPPED after panel interaction")
+	_room._activate(_room.setup_panel_stars_quad())
+	_room._activate(_room.setup_panel_stars_quad())
 	_setup_panel_expect(_room.setup_panel_back_quad() != null, "XR setup: the panel has BACK")
 	_setup_panel_expect(_room.visible, "XR setup: the room stays visible")
 	_setup_panel_expect(not _room.is_setup_placard_up(), "XR setup: no placard - the desktop route is retired")
@@ -3661,18 +3522,16 @@ func _setup_panel_surface_assertions() -> void:
 		and _room.setup_panel_wovp_paste_quad().pick_enabled
 		and _room.setup_panel_wovp_test_quad().pick_enabled
 		and _room.setup_panel_stars_quad().pick_enabled
-		and _room.setup_panel_wall_quad().pick_enabled
 		and _room.setup_panel_back_quad().pick_enabled,
 		"XR setup: the panel's own buttons are live")
-	_setup_panel_expect(_room._focusables.size() == 7
+	_setup_panel_expect(_room._focusables.size() == 6
 		and _room._focusables.has(_room.setup_panel_scan_quad())
 		and _room._focusables.has(_room.setup_panel_download_quad())
 		and _room._focusables.has(_room.setup_panel_wovp_paste_quad())
 		and _room._focusables.has(_room.setup_panel_wovp_test_quad())
 		and _room._focusables.has(_room.setup_panel_stars_quad())
-		and _room._focusables.has(_room.setup_panel_wall_quad())
 		and _room._focusables.has(_room.setup_panel_back_quad()),
-		"XR setup: focus navigation is confined to the panel's seven buttons")
+		"XR setup: focus navigation is confined to the panel's six buttons")
 	_setup_panel_expect(_room._focused == _room.setup_panel_scan_quad(),
 		"XR setup: focus opens on SCAN LIBRARY")
 	# Confinement under travel: TAB around the stops and
@@ -11190,41 +11049,40 @@ func _finish_jumpbench_smoke() -> void:
 ## face, carry the standing power performance ON that face,
 ## and render art (pixel variance) in a grab, all with zero
 ## input.
-## --pvlds-smoke-motion (GRADFIX10 items 2+3): the pop's
-## dense-frame smoothness trace (per-frame pop amounts PLUS
-## rendered grabs whose amber centre-frame edge is measured
-## frame to frame), the wall-motion dial's plumbing, the
-## SMOOTH dial's continuous multi-column travel trace, an
-## input-during-roll leg (a focus press mid-roll must answer
-## within a few frames and retarget the drum with no stop),
-## and a stepped-vs-smooth frame-time note measured on this
-## box over identical travels. Leg names: "pop smoothness:",
-## "wall motion dial:", "smooth wall travel:", "input
-## during roll:". GRADFIX12 item 1 adds dense drum-yaw
-## traces (sampled through the room's accessor): a
-## single-column travel under the boot mode, the SETUP
-## panel's real quad action flipping the dial mid-session,
-## the same travel again ("live wall motion toggle:"), the
-## SMOOTH-vs-STEPPED feel verdict over single- and
-## six-column traces ("wall motion feel:"), and held scrolls
-## under both modes ("held scroll:" / "held cruise:").
-## GRADFIX13 item 3: the held legs drive the REAL input
-## path - a synthetic InputEventJoypadMotion held on the
-## left stick's X axis, exactly what the room's per-frame
-## axis poll reads - because GF12's held legs pressed
-## _set_focused directly on a cadence and so modelled a
-## continuous push the product never receives: a real hold
-## arrives as the poll's 0.24 s auto-repeat of discrete
-## focus steps, and under SMOOTH each repeat retargeted the
-## roll per column (the convicted slot-by-slot advance).
-## The NC seams
-## (PVLDS_GRADFIX10_NC=steppop / stepswing) restore the
-## convicted steppings so the named legs fail by name;
-## PVLDS_GRADFIX12_NC=nolive severs the dial's live apply
-## (the driver keeps the boot mode) so the live toggle leg
-## fails by name; PVLDS_GF13_NC=steprepeat restores the
-## per-column repeat path under SMOOTH so the "held
-## cruise:" leg fails by name.
+## --pvlds-smoke-motion: the pop's dense-frame smoothness
+## trace (per-frame pop amounts PLUS rendered grabs whose
+## amber centre-frame edge is measured frame to frame -
+## leg name "pop smoothness:"), then the OPTIMIZE legs,
+## every one prefixed "optimize:" so failures name
+## themselves:
+##   - gait coercion + config coercion: the room's gait is
+##     STEPPED however it is set, and a config file carrying
+##     the old SMOOTH gait loads as STEPPED (saves write
+##     STEPPED back).
+##   - "optimize: radius": RoomView.WALL_RADIUS is 3.60 and
+##     the booted room's telemetry header records 3.60.
+##   - "optimize: single step settle": one tap's step,
+##     dense-traced; its settle must land in the driver-law
+##     range 150-300 ms and on its column exactly.
+##   - "optimize: hold steps only": the stick held ~3 s
+##     through the REAL pad poll - the centre advances in
+##     discrete steps with settle plateaus (>= 80 ms of yaw
+##     rest between steps) and NO continuous-roll run.
+##   - "optimize: steps stay dressed": mid-step, every
+##     drawn panel presents a real face (face_state's
+##     honest read - never a blank or placeholder).
+##   - "optimize: applies capped": across a letter jump +
+##     a step train, the room's per-frame art-apply account
+##     never exceeds the cap in one frame.
+## The OPTIMIZE negative controls ride PVLDS_OPT_NC (set in
+## _ready, before any room exists): smoothcruise restores
+## the continuous roll so the hold leg fails by name;
+## costume blanks faces during travel so the dressed leg
+## fails by name; oldradius restores WALL_RADIUS 3.40 (Main
+## applies it in _ready, the oldwall mechanism) so the
+## radius leg fails by name; streamahead lifts the apply
+## cap during travel so the applies leg fails by name.
+
 func _drive_motion_smoke() -> void:
 	match _motion_phase:
 		0:
@@ -11318,201 +11176,168 @@ func _drive_motion_smoke() -> void:
 				_motion_phase = 3
 				_motion_wait = 0
 		3:
-			# Dial legs, then the LIVE TOGGLE leg (GRADFIX12
-			# item 1): measure a single-column travel under
-			# the boot mode, flip the dial through the room's
-			# own SETUP panel action, measure the same travel
-			# again in the same session - the driver must have
-			# changed in the hand, not just on the panel.
+			# OPTIMIZE standing facts (gait + config coercion,
+			# radius), then arm the single-step trace.
 			_motion_wait += 1
 			if _motion_wait == 1:
-				_motion_leg_dial()
-				_motion_live_boot_mode = _room.wall_motion_mode()
+				_opt_leg_config_and_radius()
 			if _motion_wait > 10 and not _room.page_slide_active():
-				_motion_begin_trace("single_boot", "live wall motion toggle:", _motion_travel_start(), _motion_single_target(_motion_travel_start()))
-				_motion_phase = 8
+				var from_idx: int = _motion_travel_start()
+				var to_idx: int = _motion_single_target(from_idx)
+				if to_idx < 0:
+					_motion_fail("optimize: single step settle: no same-row panel one column over for the step trace")
+					_finish_motion_smoke()
+					return
+				_motion_begin_trace("opt_single_step", "optimize: single step settle:", from_idx, to_idx)
+				_motion_phase = 20
 				_motion_wait = 0
 			elif _motion_wait > 3600:
-				_motion_fail("live wall motion toggle: the boot-mode single-column travel never armed (the drum never settled)")
+				_motion_fail("optimize: single step settle: the step trace never armed (the drum never settled)")
 				_finish_motion_smoke()
-		8:
-			# Live toggle, first measurement (boot mode).
+		20:
+			# Single step settle: dense-trace one tap's step
+			# and judge its settle against the driver law.
 			_motion_wait += 1
 			if _motion_sample_trace():
-				_motion_store_trace("single_" + _motion_live_boot_mode)
-				_motion_phase = 9
+				_motion_store_trace("opt_single_step")
+				var stats20: Dictionary = _motion_tr_stats.get("opt_single_step", {}) as Dictionary
+				var settle20: int = int(stats20.get("settle_ms", 0))
+				_motion_expect(settle20 >= 150 and settle20 <= 300,
+					"optimize: single step settle: one tap's step settled in %d ms (the driver-law range is 150-300 ms on this llvmpipe bench)" % settle20)
+				_motion_expect(float(stats20.get("final_err_deg", 999.0)) < 0.05,
+					"optimize: single step settle: the step landed exactly on its column (final yaw error %.3f deg)" % float(stats20.get("final_err_deg", 999.0)))
+				# Arm the hold: seat the travel start at rest,
+				# then hold the stick on the real pad poll.
+				var start_idx20: int = _motion_travel_start()
+				_room._set_centre(start_idx20, true)
+				_room._set_focused(_room._panels[start_idx20])
+				_opt_hold_trace.clear()
+				_opt_hold_t0_msec = Time.get_ticks_msec()
+				_opt_hold_start_col = _room._grid_coord(start_idx20).x
+				_opt_dressed_frames = 0
+				_opt_dressed_bad = 0
+				_input_feed_stick_x(1.0)
+				_motion_phase = 21
 				_motion_wait = 0
 			elif _motion_wait > 3600:
-				_motion_fail("live wall motion toggle: the boot-mode single-column travel never settled")
+				_motion_fail("optimize: single step settle: the step never settled")
 				_finish_motion_smoke()
-		9:
-			# Live toggle, the flip itself: the SETUP panel's
-			# real quad action, exactly the player's path.
+		21:
+			# Hold steps only: sample the drum yaw for ~3 s
+			# of held stick; mid-step frames also sample the
+			# drawn window's faces (steps stay dressed).
 			_motion_wait += 1
-			if _motion_wait == 1:
-				_room.show_setup_panel()
-			elif _motion_wait == 3:
-				_motion_expect(_room.is_setup_panel_up() and _room.setup_panel_wall_quad() != null,
-					"live wall motion toggle: the SETUP panel stands with its WALL MOTION quad")
-				_room._activate(_room.setup_panel_wall_quad())
-				_motion_live_flip_mode = _room.wall_motion_mode()
-			elif _motion_wait == 5:
-				_room._activate(_room.setup_panel_back_quad())
-			elif _motion_wait > 8 and not _room.is_setup_panel_up():
-				_motion_begin_trace("single_flip", "live wall motion toggle:", _motion_travel_start(), _motion_single_target(_motion_travel_start()))
-				_motion_phase = 10
-				_motion_wait = 0
-			elif _motion_wait > 3600:
-				_motion_fail("live wall motion toggle: the SETUP panel never closed after the flip")
-				_finish_motion_smoke()
-		10:
-			# Live toggle, second measurement (flipped mode),
-			# then arm the STEPPED six-column travel (perf +
-			# arrival, the standing phase 4).
-			_motion_wait += 1
-			if _motion_sample_trace():
-				_motion_store_trace("single_" + _motion_live_flip_mode)
-				_motion_judge_live_toggle()
-				_room.set_wall_motion_mode("stepped")
-				_motion_snap_to_travel_start()
-				_motion_phase = 35
-				_motion_wait = 0
-			elif _motion_wait > 3600:
-				_motion_fail("live wall motion toggle: the flipped-mode single-column travel never settled")
-				_finish_motion_smoke()
-		35:
-			_motion_wait += 1
-			if _motion_wait > 10 and not _room.page_slide_active():
-				_motion_perf_mode = "stepped"
-				_motion_yaw_trace.clear()
-				_motion_t0_msec = Time.get_ticks_msec()
-				# The six-column trace's yaw anchors from the
-				# known columns: at a slow box's pacing the
-				# first sample lands mid-travel (the spring is
-				# fast), so the trace's own first sample cannot
-				# anchor its span.
-				_motion_tr_y0 = float(_room._grid_coord(_motion_travel_start()).x) * 13.5
-				_motion_tr_y1 = _motion_tr_y0 + 81.0
-				_room._set_focused(_room._panels[_motion_travel_target()])
-				_motion_phase = 4
-				_motion_wait = 0
-			elif _motion_wait > 3600:
-				_motion_fail("smooth wall travel: the stepped travel never armed (the drum never settled)")
-				_finish_motion_smoke()
-		4:
-			_motion_wait += 1
-			_motion_yaw_trace.append([Time.get_ticks_msec() - _motion_t0_msec, rad_to_deg(_room.drum_node().rotation.y), _room.swing_velocity_deg_s()])
-			if (_motion_wait >= 3 and not _room.page_slide_active()) or _motion_wait > 1800:
-				_motion_record_perf("stepped")
-				var stats_4: Dictionary = _motion_trace_stats(_motion_yaw_trace, _motion_tr_y0, _motion_tr_y1)
-				_motion_tr_stats["six_stepped"] = stats_4
-				_motion_print_stats("six_stepped", stats_4)
-				_motion_expect(_room.centre_index() == _motion_travel_target(),
-					"smooth wall travel: the stepped travel landed on its centre (arrival is mode-independent)")
-				_motion_expect(absf(rad_to_deg(_room.drum_yaw_rad() - _room.swing_target_rad())) < 0.05,
-					"smooth wall travel: the stepped travel landed on its yaw target")
-				# Hand over to SMOOTH: same start, same target.
-				_room.set_wall_motion_mode("smooth")
-				_motion_snap_to_travel_start()
-				_motion_phase = 5
-				_motion_wait = 0
-		5:
-			_motion_wait += 1
-			if _motion_wait > 10 and not _room.page_slide_active():
-				_motion_perf_mode = "smooth"
-				_motion_yaw_trace.clear()
-				_motion_input_at_msec = 0
-				_motion_input_frame_msec = 0
-				_motion_t0_msec = Time.get_ticks_msec()
-				_room._set_focused(_room._panels[_motion_travel_target()])
-				_motion_phase = 6
-				_motion_wait = 0
-			elif _motion_wait > 3600:
-				_motion_fail("smooth wall travel: the smooth travel never armed (the drum never settled)")
-				_finish_motion_smoke()
-		6:
-			_motion_wait += 1
-			var now6: int = Time.get_ticks_msec() - _motion_t0_msec
-			_motion_yaw_trace.append([now6, rad_to_deg(_room.drum_node().rotation.y), _room.swing_velocity_deg_s()])
-			# The mid-roll press: once the drum has covered a
-			# third of the travel, a focus press back to the
-			# start panel must answer at once.
-			if _motion_input_at_msec == 0 and _motion_yaw_trace.size() > 3:
-				var y0: float = float((_motion_yaw_trace[0] as Array)[1])
-				var span: float = absf(rad_to_deg(_room.swing_target_rad()) - y0)
-				var done: float = absf(rad_to_deg(_room.drum_node().rotation.y) - y0)
-				if span > 1.0 and done >= 0.50 * span:
-					_motion_input_at_msec = now6
-					_motion_press_i = _motion_yaw_trace.size() - 1
-					_motion_input_centre = _motion_travel_start()
-					_room._set_focused(_room._panels[_motion_travel_start()])
-			if _motion_input_at_msec > 0 and _motion_input_frame_msec == 0 and _room.centre_index() == _motion_input_centre:
-				_motion_input_frame_msec = now6
-				_motion_answer_i = _motion_yaw_trace.size() - 1
-			if _motion_input_at_msec > 0 and _motion_wait >= 3 and not _room.page_slide_active():
-				_motion_record_perf("smooth")
-				_motion_judge_smooth_travel()
-				_motion_judge_input_during_roll()
-				_motion_print_perf()
-				# GRADFIX12: on to the clean (uninterrupted)
-				# SMOOTH six-column trace, the feel judges and
-				# the held-scroll legs.
-				_room.set_wall_motion_mode("smooth")
-				_motion_begin_trace("six_smooth", "wall motion feel:", _motion_travel_start(), _motion_travel_target())
-				_motion_phase = 11
-				_motion_wait = 0
-			elif _motion_wait > 3600:
-				_motion_fail("smooth wall travel: the smooth travel never settled after the mid-roll press")
-				_finish_motion_smoke()
-		11:
-			# The clean SMOOTH six-column roll (no mid-roll
-			# press): settle, peak and slot-boundary velocities
-			# are judged from this trace.
-			_motion_wait += 1
-			if _motion_sample_trace():
-				_motion_store_trace("six_smooth")
-				_motion_judge_feel()
-				_motion_begin_hold("held_stepped")
-				_motion_phase = 12
-				_motion_wait = 0
-			elif _motion_wait > 3600:
-				_motion_fail("wall motion feel: the clean smooth six-column roll never settled")
-				_finish_motion_smoke()
-		12:
-			# Held scroll, STEPPED (GRADFIX13): a real held
-			# stick on the product's own input path - its
-			# shipped repeat-step character is this pole of
-			# the dial and must stand unchanged.
-			_motion_wait += 1
-			if _motion_sample_hold():
-				_motion_store_trace("held_stepped")
-				_motion_judge_hold("held_stepped")
-				_motion_begin_hold("held_smooth")
-				_motion_phase = 13
+			var now21: int = Time.get_ticks_msec()
+			_opt_hold_trace.append([now21 - _opt_hold_t0_msec, _room.drum_yaw_deg()])
+			if _room.swing_active():
+				var states21: Array = _room.face_state()
+				if not states21.is_empty():
+					_opt_dressed_frames += 1
+					for sv21: Variant in states21:
+						var st21: Dictionary = sv21 as Dictionary
+						if bool(st21.get("is_unreal", true)) or bool(st21.get("is_placeholder", true)):
+							_opt_dressed_bad += 1
+			if now21 - _opt_hold_t0_msec >= 3000:
+				_input_feed_stick_x(0.0)
+				_opt_rest_frames = 0
+				_motion_phase = 22
 				_motion_wait = 0
 			elif _motion_wait > 7200:
-				_motion_fail("held scroll: the stepped held scroll never settled")
+				_input_feed_stick_x(0.0)
+				_motion_fail("optimize: hold steps only: the 3 s hold sampling never completed")
 				_finish_motion_smoke()
-		13:
-			# Held cruise, SMOOTH (GRADFIX13 item 3), then
-			# the verdict. Under the steprepeat NC the
-			# release settle returns to the boot-mode driver
-			# first, so this leg's sampling ends quietly and
-			# its judge carries the failure, by name.
+		22:
+			# The release settle, then the hold + dressed
+			# verdicts; arm the applies journey's letter jump.
 			_motion_wait += 1
-			if _motion_sample_hold():
-				if _motion_hold_mode == "held_smooth" and OS.get_environment("PVLDS_GF13_NC") == "steprepeat":
-					RoomView.debug_gf12_nc = "nolive"
-					_room.set_wall_motion_mode("stepped")
-					_room.set_wall_motion_mode("smooth")
-					RoomView.debug_gf12_nc = OS.get_environment("PVLDS_GF12_NC")
-				_motion_store_trace("held_smooth")
-				_motion_judge_hold("held_smooth")
-				_motion_print_ratio()
+			_opt_hold_trace.append([Time.get_ticks_msec() - _opt_hold_t0_msec, _room.drum_yaw_deg()])
+			if not _room.swing_active():
+				_opt_rest_frames += 1
+			else:
+				_opt_rest_frames = 0
+			if _opt_rest_frames >= 3:
+				_opt_judge_hold()
+				var from_col22: int = _room._grid_coord(_room.centre_index()).x
+				var best_key: String = ""
+				var best_dist: int = 1 << 30
+				for li: int in range(26):
+					var key: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[li]
+					for gi: int in range(_room._visible_games.size()):
+						if LetterIndex.letter_of(_room._visible_games[gi].title) == key:
+							var gcol: int = _room._grid_coord(gi).x
+							var dist: int = absi(gcol - from_col22)
+							if dist >= 10 and dist < best_dist:
+								best_dist = dist
+								best_key = key
+							break
+				if best_key == "":
+					_motion_fail("optimize: applies capped: no letter stands 10+ columns away for the journey's jump")
+					_finish_motion_smoke()
+					return
+				_opt_letter_key = best_key
+				_opt_saw_swing = false
+				_opt_rest_frames = 0
+				_letters_pick(best_key)
+				_motion_phase = 23
+				_motion_wait = 0
+			elif _motion_wait > 7200:
+				_motion_fail("optimize: hold steps only: the release settle never completed")
+				_finish_motion_smoke()
+		23:
+			# Applies journey, the jump: wait for the letter
+			# swing to travel and settle, then feed the train.
+			_motion_wait += 1
+			if _room.swing_active():
+				_opt_saw_swing = true
+			if _opt_saw_swing and not _room.swing_active() and not _room.page_slide_active():
+				_opt_rest_frames += 1
+			else:
+				_opt_rest_frames = 0
+			if _opt_rest_frames >= 5:
+				_motion_expect(_opt_saw_swing,
+					"optimize: applies capped: the letter jump to %s swung the drum (a real travel, not a teleport)" % _opt_letter_key)
+				_opt_train_start_col = _room._grid_coord(_room.centre_index()).x
+				_opt_train_dir = 1.0 if _opt_train_start_col <= _room._columns / 2 else -1.0
+				_opt_train_t0_msec = Time.get_ticks_msec()
+				_input_feed_stick_x(_opt_train_dir)
+				_motion_phase = 24
+				_motion_wait = 0
+			elif _motion_wait > 7200:
+				_motion_fail("optimize: applies capped: the letter jump to %s never settled" % _opt_letter_key)
+				_finish_motion_smoke()
+		24:
+			# Applies journey, the train: hold the stick
+			# until the centre has stepped four columns (or
+			# 2.5 s - a shelf end can starve the count).
+			_motion_wait += 1
+			var col24: int = _room._grid_coord(_room.centre_index()).x
+			if absi(col24 - _opt_train_start_col) >= 4 or Time.get_ticks_msec() - _opt_train_t0_msec >= 2500:
+				_input_feed_stick_x(0.0)
+				_opt_rest_frames = 0
+				_motion_phase = 25
+				_motion_wait = 0
+			elif _motion_wait > 7200:
+				_input_feed_stick_x(0.0)
+				_motion_fail("optimize: applies capped: the step train never ran")
+				_finish_motion_smoke()
+		25:
+			# Applies journey, the verdict: settle, then read
+			# the room's per-frame apply account.
+			_motion_wait += 1
+			if not _room.swing_active():
+				_opt_rest_frames += 1
+			else:
+				_opt_rest_frames = 0
+			if _opt_rest_frames >= 3:
+				var astats: Dictionary = _room.art_frame_stats()
+				var max_one: int = int(astats.get("max_applies_one_frame", -1))
+				_motion_expect(max_one >= 0 and max_one <= 2,
+					"optimize: applies capped: across the letter jump + step train, one frame applied at most %d art faces (cap 2 - the room's per-frame apply budget; applies total %d, during travel %d)" % [max_one, int(astats.get("applies_total", 0)), int(astats.get("applies_during_travel", 0))])
 				_finish_motion_smoke()
 			elif _motion_wait > 7200:
-				_motion_fail("held cruise: the smooth held cruise never settled")
+				_motion_fail("optimize: applies capped: the journey never settled")
 				_finish_motion_smoke()
+
 
 
 ## The travel legs' shared start: a panel six columns left of
@@ -11707,227 +11532,132 @@ func _motion_store_trace(key: String) -> void:
 	print("MOTION TRACE RAW %s (y0 %.2f -> y1 %.2f):" % [key, _motion_tr_y0, _motion_tr_y1], raw)
 
 
-## The live-toggle verdict (GRADFIX12 item 1, leg i): the
-## panel flipped the mode string, the driver the trace
-## measured actually changed with it - same session, same
-## room, no re-entry. The harness boots SMOOTH and the flip
-## lands on STEPPED, but the trace expects are symmetric in
-## the two drivers (STEPPED settles fast and peaks hard,
-## SMOOTH rolls), so they judge the change itself, not the
-## direction it happened to run. Under the nolive NC the
-## driver keeps the boot mode and both trace expects fail
-## here, by this leg's name.
-func _motion_judge_live_toggle() -> void:
-	_motion_expect(_motion_live_flip_mode != "" and _motion_live_flip_mode != _motion_live_boot_mode,
-		"live wall motion toggle: the SETUP panel action flipped the mode (%s -> %s)" % [_motion_live_boot_mode, _motion_live_flip_mode])
-	_motion_expect(_room.wall_driver_mode() == _room.wall_motion_mode(),
-		"live wall motion toggle: the swing driver obeys the flipped mode in the same session (driver %s, dial %s)" % [_room.wall_driver_mode(), _room.wall_motion_mode()])
-	var smooth: Dictionary = _motion_tr_stats.get("single_smooth", {}) as Dictionary
-	var stepped: Dictionary = _motion_tr_stats.get("single_stepped", {}) as Dictionary
-	if smooth.is_empty() or stepped.is_empty():
-		_motion_fail("live wall motion toggle: a single-column trace is missing (boot %s, flip %s)" % [_motion_live_boot_mode, _motion_live_flip_mode])
-		return
-	# Whichever way the flip ran, the two traces measured in
-	# this one session must be the two different drivers:
-	# STEPPED settles fast and peaks hard, SMOOTH rolls.
-	_motion_expect(int(stepped.get("settle_ms", 0)) <= int(float(int(smooth.get("settle_ms", 0))) * 0.65),
-		"live wall motion toggle: the two modes measured in one session are different drivers - STEPPED single-column settle %d ms vs SMOOTH %d ms (the dial changed the wall in the hand, no re-entry)" % [int(stepped.get("settle_ms", 0)), int(smooth.get("settle_ms", 0))])
-	_motion_expect(float(stepped.get("peak_deg_s", 0.0)) >= 1.8 * float(smooth.get("peak_deg_s", 0.0)),
-		"live wall motion toggle: the two modes' single-column peak velocities differ as the drivers do - STEPPED %.1f deg/s vs SMOOTH %.1f deg/s" % [float(stepped.get("peak_deg_s", 0.0)), float(smooth.get("peak_deg_s", 0.0))])
+## The OPTIMIZE standing facts (motion phase 3): the gait
+## is STEPPED however it is set, the config coerces any
+## stored gait to STEPPED and persists it, and the wall
+## stands at the OPTIMIZE radius - in the room's static and
+## in the telemetry header the booted room wrote. Under
+## PVLDS_OPT_NC=oldradius Main restored 3.40 before the room
+## existed and the radius expects fail by this leg's name.
+func _opt_leg_config_and_radius() -> void:
+	_room.set_wall_motion_mode("smooth")
+	_motion_expect(_room.wall_motion_mode() == "stepped",
+		"optimize: gait coercion: set_wall_motion_mode(\"smooth\") leaves the standing gait STEPPED (got %s)" % _room.wall_motion_mode())
+	_room.set_wall_motion_mode("bogus")
+	_motion_expect(_room.wall_motion_mode() == "stepped",
+		"optimize: gait coercion: an invalid mode coerces to STEPPED (got %s)" % _room.wall_motion_mode())
+	_motion_expect(_room.wall_driver_mode() == "stepped",
+		"optimize: gait coercion: the wall driver is the stepped driver (got %s)" % _room.wall_driver_mode())
+	if _config != null:
+		# Save writes STEPPED even when a caller left the old
+		# gait standing in the var.
+		_config.wall_motion_mode = "smooth"
+		_config.save_to_disk()
+		var saved: PvldsConfig = PvldsConfig.new()
+		var ok_saved: bool = saved.load_from_disk()
+		_motion_expect(ok_saved and saved.wall_motion_mode == "stepped",
+			"optimize: gait coercion: a save writes STEPPED to the config file")
+		# A config file carrying the old SMOOTH gait (a
+		# shipped build's file) loads as STEPPED, no error.
+		var cfg_path: String = PvldsConfig.save_path()
+		var wf: FileAccess = FileAccess.open(cfg_path, FileAccess.WRITE)
+		if wf != null:
+			wf.store_string(JSON.stringify({"wall_motion_mode": "smooth"}))
+			wf.close()
+		var reloaded: PvldsConfig = PvldsConfig.new()
+		var ok: bool = reloaded.load_from_disk()
+		_motion_expect(ok and reloaded.wall_motion_mode == "stepped",
+			"optimize: gait coercion: a config file carrying the old SMOOTH gait loads as STEPPED")
+		_config.wall_motion_mode = "stepped"
+		_config.save_to_disk()
+	_motion_expect(absf(RoomView.WALL_RADIUS - 3.60) < 0.001,
+		"optimize: radius: RoomView.WALL_RADIUS is 3.60 (got %.2f)" % RoomView.WALL_RADIUS)
+	var header: Dictionary = _opt_telemetry_header()
+	_motion_expect(not header.is_empty() and absf(float(header.get("wall_radius", -1.0)) - 3.60) < 0.001,
+		"optimize: radius: the booted room's telemetry header records wall_radius 3.60 (got %s)" % str(header.get("wall_radius", "none")))
 
 
-## The feel verdict (GRADFIX12 item 1, leg ii): SMOOTH must
-## read as a ROLL against STEPPED's spring - the traces are
-## the verdict, not the constants.
-func _motion_judge_feel() -> void:
-	var ss: Dictionary = _motion_tr_stats.get("single_smooth", {}) as Dictionary
-	var st: Dictionary = _motion_tr_stats.get("single_stepped", {}) as Dictionary
-	var xs: Dictionary = _motion_tr_stats.get("six_smooth", {}) as Dictionary
-	var xt: Dictionary = _motion_tr_stats.get("six_stepped", {}) as Dictionary
-	if ss.is_empty() or st.is_empty() or xs.is_empty() or xt.is_empty():
-		_motion_fail("wall motion feel: a trace is missing (single smooth %s, single stepped %s, six smooth %s, six stepped %s)" % [str(not ss.is_empty()), str(not st.is_empty()), str(not xs.is_empty()), str(not xt.is_empty())])
-		return
-	_motion_expect(float(ss.get("rate_per_s", 0.0)) >= 10.0,
-		"wall motion feel: the smooth single-column trace sampled at %.1f/s (the dense-trace floor is 10/s)" % float(ss.get("rate_per_s", 0.0)))
-	_motion_expect(int(ss.get("settle_ms", 0)) >= int(ceil(2.5 * float(int(st.get("settle_ms", 0))))),
-		"wall motion feel: SMOOTH single-column settle (%d ms) is at least 2.5x STEPPED's (%d ms) - the two settings feel different in the hand" % [int(ss.get("settle_ms", 0)), int(st.get("settle_ms", 0))])
-	_motion_expect(int(ss.get("settle_ms", 0)) <= 1400 + int(ss.get("max_gap_ms", 0)),
-		"wall motion feel: SMOOTH single-column settle (%d ms) stays bounded at 1.4 s (plus one frame of sampling slop)" % int(ss.get("settle_ms", 0)))
-	_motion_expect(float(ss.get("peak_deg_s", 0.0)) <= 0.45 * float(st.get("peak_deg_s", 0.0)),
-		"wall motion feel: SMOOTH single-column peak velocity (%.1f deg/s) is a melt, not the spring's snap (%.1f deg/s)" % [float(ss.get("peak_deg_s", 0.0)), float(st.get("peak_deg_s", 0.0))])
-	_motion_expect(int(xs.get("settle_ms", 0)) <= 2200 + int(xs.get("max_gap_ms", 0)),
-		"wall motion feel: SMOOTH six-column settle (%d ms) stays bounded at ~2.2 s (plus one frame of sampling slop)" % int(xs.get("settle_ms", 0)))
-	_motion_expect(int(xs.get("settle_ms", 0)) >= int(ceil(1.4 * float(int(xt.get("settle_ms", 0))))),
-		"wall motion feel: SMOOTH six-column settle (%d ms) is at least 1.4x STEPPED's (%d ms)" % [int(xs.get("settle_ms", 0)), int(xt.get("settle_ms", 0))])
-	_motion_expect(float(xs.get("boundary_min_deg_s", -1.0)) >= 0.55 * float(xs.get("peak_deg_s", 0.0)),
-		"wall motion feel: SMOOTH six-column slot-boundary velocity (%.1f deg/s) stays at or above 55%% of the roll's peak (%.1f deg/s) - no per-column notching" % [float(xs.get("boundary_min_deg_s", -1.0)), float(xs.get("peak_deg_s", 0.0))])
-	for key: String in ["single_smooth", "single_stepped", "six_smooth", "six_stepped"]:
-		var s: Dictionary = _motion_tr_stats.get(key, {}) as Dictionary
-		_motion_expect(float(s.get("final_err_deg", 999.0)) < 0.05,
-			"wall motion feel: the %s travel landed exactly (final yaw error %.3f deg)" % [key, float(s.get("final_err_deg", 999.0))])
+## The first line of the scroll telemetry the booted room
+## is writing (its header record), or {} when unreadable.
+func _opt_telemetry_header() -> Dictionary:
+	if not FileAccess.file_exists(ScrollTelemetry.LOG_PATH):
+		return {}
+	var text: String = FileAccess.get_file_as_string(ScrollTelemetry.LOG_PATH)
+	var nl: int = text.find("\n")
+	var first: String = text.substr(0, nl) if nl >= 0 else text
+	var parsed: Variant = JSON.parse_string(first)
+	if parsed is Dictionary:
+		var d: Dictionary = parsed
+		return d
+	return {}
 
 
-## Feed the left stick's X axis the way hardware does: a
-## joypad-motion event the room's per-frame poll reads via
-## Input.get_joy_axis (the input smoke's stick-guard leg
-## proved this path drives the poll).
+## Judge the OPTIMIZE hold trace (motion phases 21-22):
+## the centre must have advanced in discrete steps - rest
+## plateaus of at least 80 ms (yaw within 0.02 deg between
+## samples) BETWEEN steps, and no continuous moving run
+## longer than one step's travel - and every mid-step face
+## sample must have found a real face on every drawn card.
+## Under PVLDS_OPT_NC=smoothcruise the hold rolls
+## continuously (one long moving run, no plateaus) and the
+## hold leg fails by name; under PVLDS_OPT_NC=costume the
+## dressed leg's counter fails by its own name.
+func _opt_judge_hold() -> void:
+	var trace: Array = _opt_hold_trace
+	var eps: float = 0.02
+	var runs: Array = [] ## [is_moving, duration_ms] segments of the hold
+	var run_moving: bool = false
+	var run_start_t: int = 0
+	var prev_t: int = 0
+	for i: int in range(trace.size()):
+		var t: int = int((trace[i] as Array)[0])
+		if i == 0:
+			run_start_t = t
+			prev_t = t
+			continue
+		var yprev: float = float((trace[i - 1] as Array)[1])
+		var y: float = float((trace[i] as Array)[1])
+		var moving_i: bool = absf(y - yprev) > eps
+		if moving_i != run_moving:
+			runs.append([run_moving, prev_t - run_start_t])
+			run_moving = moving_i
+			run_start_t = prev_t
+		prev_t = t
+	runs.append([run_moving, prev_t - run_start_t])
+	var plateaus: int = 0
+	var longest_plateau_ms: int = 0
+	var longest_move_ms: int = 0
+	for ri: int in range(runs.size()):
+		var run: Array = runs[ri] as Array
+		var dur: int = int(run[1])
+		if bool(run[0]):
+			longest_move_ms = maxi(longest_move_ms, dur)
+		else:
+			longest_plateau_ms = maxi(longest_plateau_ms, dur)
+			# A plateau counts only BETWEEN steps: a moving
+			# run on both sides of it.
+			if ri > 0 and ri < runs.size() - 1 and dur >= 80:
+				plateaus += 1
+	var final_col: int = _room._grid_coord(_room.centre_index()).x
+	print("OPTIMIZE HOLD TRACE: %d samples, %d segments, plateaus>=80ms between steps %d, longest plateau %d ms, longest moving run %d ms, columns advanced %d"
+		% [trace.size(), runs.size(), plateaus, longest_plateau_ms, longest_move_ms, final_col - _opt_hold_start_col])
+	_motion_expect(final_col - _opt_hold_start_col >= 3,
+		"optimize: hold steps only: the held stick advanced the centre %d columns" % (final_col - _opt_hold_start_col))
+	_motion_expect(plateaus >= 2,
+		"optimize: hold steps only: between steps the yaw rested on settle plateaus of at least 80 ms (%d found, longest %d ms)" % [plateaus, longest_plateau_ms])
+	_motion_expect(longest_move_ms <= 400,
+		"optimize: hold steps only: no continuous roll - the longest unbroken moving run was %d ms (one step's travel; a cruise rolls for seconds)" % longest_move_ms)
+	_motion_expect(_opt_dressed_frames >= 3 and _opt_dressed_bad == 0,
+		"optimize: steps stay dressed: every drawn panel presented a real face mid-step (%d bad card-frames over %d sampled mid-step frames)" % [_opt_dressed_bad, _opt_dressed_frames])
+
+
+
 func _input_feed_stick_x(value: float) -> void:
 	var ev: InputEventJoypadMotion = InputEventJoypadMotion.new()
 	ev.device = 0
 	ev.axis = JOY_AXIS_LEFT_X
 	ev.axis_value = value
 	Input.parse_input_event(ev)
-
-
-## Arm a held-scroll leg (GRADFIX13 item 3): seat the
-## travel start at rest, then HOLD the stick right on the
-## real input path. The room receives exactly what a
-## player's held thumbstick delivers - the axis standing
-## beyond the deadzone while its own poll turns it into
-## steps - never a synthetic focus press (GF12's modelling
-## error). The sampler releases the stick once the centre
-## has advanced four columns and keeps sampling until the
-## release settle completes.
-func _motion_begin_hold(name: String) -> void:
-	_motion_hold_mode = name
-	if name == "held_smooth" and OS.get_environment("PVLDS_GF13_NC") == "steprepeat":
-		# The NC restores the per-column repeat path; its
-		# release settle would run on the room's boot-mode
-		# driver (SMOOTH - the repeat steps' own roll),
-		# whose chase can outlive this leg's frame budget on
-		# a slow box. Judge the hold on the live driver
-		# instead (the cruise assertions are the NC's
-		# target); the phase restores the boot driver for
-		# the settle once sampling ends.
-		RoomView.debug_gf12_nc = ""
-	_room.set_wall_motion_mode("stepped" if name == "held_stepped" else "smooth")
-	var start: int = _motion_travel_start()
-	_motion_tr_name = name
-	_motion_tr_leg = "held cruise:" if name == "held_smooth" else "held scroll:"
-	_room._set_centre(start, true)
-	_room._set_focused(_room._panels[start])
-	_motion_tr_y0 = _room.drum_yaw_deg()
-	_motion_tr_y1 = _motion_tr_y0 + 81.0
-	_motion_tr.clear()
-	_motion_t0_msec = Time.get_ticks_msec()
-	_motion_hold_frames = 0
-	_motion_hold_released = false
-	_motion_hold_release_frame = -1
-	_motion_hold_release_col = -1
-	_motion_hold_saw_cruise = false
-	_motion_hold_start_col = _room._grid_coord(start).x
-	_motion_hold_rest_frames = 0
-	_input_feed_stick_x(1.0)
-
-
-## Sample one held-scroll frame. Returns true once the
-## stick has been released and the drum has settled under
-## the standing snap law.
-func _motion_sample_hold() -> bool:
-	var now: int = Time.get_ticks_msec() - _motion_t0_msec
-	_motion_tr.append([now, _room.drum_yaw_deg(), _room.swing_velocity_deg_s()])
-	_motion_hold_frames += 1
-	if _room.cruise_active():
-		_motion_hold_saw_cruise = true
-	if not _motion_hold_released:
-		var col: int = _room._grid_coord(_room.centre_index()).x
-		if col >= _motion_hold_start_col + 4:
-			_motion_hold_released = true
-			_motion_hold_release_frame = _motion_tr.size() - 1
-			_motion_hold_release_col = col
-			_input_feed_stick_x(0.0)
-		elif _motion_hold_frames > 600:
-			# The hold never advanced four columns: release
-			# anyway so the judge sees the whole story.
-			_motion_hold_released = true
-			_motion_hold_release_frame = _motion_tr.size() - 1
-			_motion_hold_release_col = col
-			_input_feed_stick_x(0.0)
-	else:
-		if not _room.swing_active():
-			_motion_hold_rest_frames += 1
-		else:
-			_motion_hold_rest_frames = 0
-	if _motion_hold_mode == "held_stepped" and OS.get_environment("PVLDS_GRADFIX10_NC") == "stepswing" and _motion_hold_frames == 120:
-		# The six-column STEPPED trace's own NC class: the
-		# quantised swing must read as the convicted
-		# stepping here too (the phase's settle bound
-		# covers the rest).
-		var st6: Dictionary = _motion_tr_stats.get("six_stepped", {}) as Dictionary
-		_motion_expect(float(st6.get("boundary_min_deg_s", -1.0)) < 0.55 * float(st6.get("peak_deg_s", 0.0)),
-			"held scroll: under stepswing the stepped six-column boundary velocity collapses (%.1f deg/s against a %.1f deg/s peak - the convicted stepping, by name)" % [float(st6.get("boundary_min_deg_s", -1.0)), float(st6.get("peak_deg_s", 0.0))])
-	return _motion_hold_released and _motion_hold_rest_frames >= 3 and _motion_tr.size() >= 3
-
-
-func _motion_judge_hold(key: String) -> void:
-	var s: Dictionary = _motion_tr_stats.get(key, {}) as Dictionary
-	if s.is_empty():
-		_motion_fail("held scroll: the %s trace is missing" % key)
-		return
-	var final_col: int = _room._grid_coord(_room.centre_index()).x
-	if key == "held_stepped":
-		# STEPPED's shipped character: the repeats stepped
-		# the wall slot by slot and the release landed it
-		# exactly - judged on landing and span, the trace
-		# class base d156f42 shipped.
-		_motion_expect(final_col - _motion_hold_start_col >= 4,
-			"held scroll: the stepped held scroll advanced at least four columns on the real input path (got %d)" % (final_col - _motion_hold_start_col))
-		_motion_expect(final_col == _motion_hold_release_col or final_col == _motion_hold_release_col + 1,
-			"held scroll: the stepped held scroll landed where the release left it (release col %d, final col %d - one frame's repeat may land after the release)" % [_motion_hold_release_col, final_col])
-		_motion_expect(float(s.get("final_err_deg", 999.0)) < 0.05 or absf(_room.drum_yaw_deg() - float(final_col) * 13.5) < 0.05,
-			"held scroll: the stepped held scroll landed exactly (final yaw error %.3f deg against its target)" % float(s.get("final_err_deg", 999.0)))
-		return
-	# SMOOTH (GRADFIX13 item 3): the hold must have become
-	# a cruise - sustained travel at the roll's cruise
-	# character, no per-column velocity collapse at slot
-	# boundaries - and the release must settle at the
-	# nearest column under the unchanged snap law. Under
-	# PVLDS_GF13_NC=steprepeat the room never cruises and
-	# these expects fail by this leg's name.
-	_motion_expect(_motion_hold_saw_cruise,
-		"held cruise: holding the stick under SMOOTH becomes a continuous cruise (the room's cruise stood during the hold)")
-	_motion_expect(final_col - _motion_hold_start_col >= 4,
-		"held cruise: the cruise spanned at least four columns (got %d)" % (final_col - _motion_hold_start_col))
-	_motion_expect(float(s.get("boundary_min_deg_s", -1.0)) >= 0.45 * float(s.get("peak_deg_s", 0.0)),
-		"held cruise: the cruise's slot-boundary velocity (%.1f deg/s) stays at or above 45%% of its peak (%.1f deg/s) - no per-column velocity collapse during the hold" % [float(s.get("boundary_min_deg_s", -1.0)), float(s.get("peak_deg_s", 0.0))])
-	_motion_expect(final_col == _motion_hold_release_col or final_col == _motion_hold_release_col + 1,
-		"held cruise: the release settled at the nearest column (release col %d, settled col %d)" % [_motion_hold_release_col, final_col])
-	_motion_expect(absf(_room.drum_yaw_deg() - float(final_col) * 13.5) < 0.05,
-		"held cruise: the release settle landed exactly on its column (yaw %.3f deg, column yaw %.3f deg)" % [_room.drum_yaw_deg(), float(final_col) * 13.5])
-	if _motion_hold_release_frame >= 0 and _motion_hold_release_frame < _motion_tr.size():
-		var release_ms: int = int((_motion_tr[_motion_hold_release_frame] as Array)[0])
-		_motion_expect(int(s.get("settle_ms", 0)) - release_ms <= 1600 + int(s.get("max_gap_ms", 0)),
-			"held cruise: the release settle completed within 1.6 s of the release (settled at %d ms, released at %d ms, plus one frame of sampling slop)" % [int(s.get("settle_ms", 0)), release_ms])
-
-
-func _motion_print_ratio() -> void:
-	var ss: Dictionary = _motion_tr_stats.get("single_smooth", {}) as Dictionary
-	var st: Dictionary = _motion_tr_stats.get("single_stepped", {}) as Dictionary
-	var xs: Dictionary = _motion_tr_stats.get("six_smooth", {}) as Dictionary
-	var xt: Dictionary = _motion_tr_stats.get("six_stepped", {}) as Dictionary
-	if ss.is_empty() or st.is_empty() or xs.is_empty() or xt.is_empty():
-		return
-	print("MOTION RATIO: smooth/stepped settle - single-column %.2fx (%d ms / %d ms), six-column %.2fx (%d ms / %d ms)"
-		% [float(int(ss.get("settle_ms", 0))) / maxf(float(int(st.get("settle_ms", 1))), 1.0), int(ss.get("settle_ms", 0)), int(st.get("settle_ms", 0)),
-			float(int(xs.get("settle_ms", 0))) / maxf(float(int(xt.get("settle_ms", 1))), 1.0), int(xs.get("settle_ms", 0)), int(xt.get("settle_ms", 0))])
-
-
-func _motion_record_perf(mode: String) -> void:
-	var frames: int = _motion_yaw_trace.size()
-	var total: int = 0
-	if frames > 1:
-		total = int((_motion_yaw_trace[frames - 1] as Array)[0]) - int((_motion_yaw_trace[0] as Array)[0])
-	_motion_perf[mode] = [frames, total]
-
-
-func _motion_print_perf() -> void:
-	for mode: String in ["stepped", "smooth"]:
-		if _motion_perf.has(mode):
-			var rec: Array = _motion_perf[mode] as Array
-			var frames: int = int(rec[0])
-			var total: int = int(rec[1])
-			print("MOTION PERF (%s): %d frames over %d ms, mean frame %.2f ms (harness box, llvmpipe - relative numbers only)"
-				% [mode, frames, total, float(total) / float(maxi(1, frames - 1))])
 
 
 func _motion_judge_pop() -> void:
@@ -12073,106 +11803,6 @@ func _motion_judge_pop_grabs() -> void:
 			"pop smoothness: the rendered edge never jumped backwards (got %d)" % back)
 
 
-func _motion_judge_smooth_travel() -> void:
-	var n: int = _motion_yaw_trace.size()
-	# Judge only the outbound travel (up to the mid-roll press).
-	var end_i: int = n - 1
-	for i: int in range(n):
-		if _motion_input_at_msec > 0 and int((_motion_yaw_trace[i] as Array)[0]) >= _motion_input_at_msec:
-			end_i = i
-			break
-	var stalls: int = 0
-	var reversals: int = 0
-	var slot_pauses: int = 0
-	var prev_yaw: float = 0.0
-	var prev_step: float = 0.0
-	var moving_frames: int = 0
-	var col_step: float = 13.5 ## ANGLE_STEP_DEG: one slot of drum travel
-	var near_slot_frames: int = 0
-	for i: int in range(end_i + 1):
-		var yaw: float = float((_motion_yaw_trace[i] as Array)[1])
-		if i > 0:
-			var d: float = yaw - prev_yaw
-			if absf(d) > 0.005:
-				moving_frames += 1
-				if signf(d) != signf(prev_step) and absf(prev_step) > 0.005:
-					reversals += 1
-				# A pause at a slot boundary: the travel
-				# stalls while the yaw sits within 0.4 deg
-				# of a whole column.
-				var col_pos: float = fmod(absf(yaw), col_step)
-				if absf(d) < 0.02 and (col_pos < 0.4 or col_pos > col_step - 0.4):
-					near_slot_frames += 1
-			elif moving_frames > 0:
-				stalls += 1
-				var col_pos2: float = fmod(absf(yaw), col_step)
-				if col_pos2 < 0.4 or col_pos2 > col_step - 0.4:
-					slot_pauses += 1
-			prev_step = d
-		prev_yaw = yaw
-	print("MOTION SMOOTH TRACE: %d frames to the press, %d moving, stalls %d, slot pauses %d, reversals %d"
-		% [end_i + 1, moving_frames, stalls, slot_pauses, reversals])
-	var move_floor: int = clampi(int(0.45 * float(maxi(1, _motion_input_at_msec)) / maxf(_motion_pacing_ms, 1.0)), 3, 10)
-	_motion_expect(moving_frames >= move_floor and moving_frames * 2 >= end_i + 1,
-		"smooth wall travel: the multi-column roll moves on most sampled frames (got %d of %d, floor %d at the measured pacing - a roll that stands still between slots is the convicted chop)" % [moving_frames, end_i + 1, move_floor])
-	_motion_expect(slot_pauses == 0,
-		"smooth wall travel: no pauses at slot boundaries during the roll (got %d - slot-stepping under SMOOTH is the convicted chop)" % slot_pauses)
-	_motion_expect(reversals == 0,
-		"smooth wall travel: the roll never reverses before the press (got %d)" % reversals)
-	_motion_expect(near_slot_frames <= 2,
-		"smooth wall travel: the roll does not crawl at slot boundaries (got %d slow slot frames)" % near_slot_frames)
-	# GRADFIX12: the outbound roll's slot-boundary velocities,
-	# from the same applied trace (the press cuts the roll at
-	# half span, so the boundaries it crossed are the ones
-	# judged): each crossing keeps at least 55% of the
-	# outbound peak - a roll, not a column-to-column advance.
-	if end_i >= 1:
-		var out_trace: Array = _motion_yaw_trace.slice(0, end_i + 1)
-		var oy0: float = float((out_trace[0] as Array)[1])
-		var ostats: Dictionary = _motion_trace_stats(out_trace, oy0, oy0 + 81.0)
-		_motion_print_stats("six_smooth_outbound_to_press", ostats)
-		_motion_expect(float(ostats.get("boundary_min_deg_s", -1.0)) >= 0.55 * float(ostats.get("peak_deg_s", 0.0)),
-			"smooth wall travel: the outbound roll's slot-boundary velocity (%.1f deg/s) stays at or above 55%% of its peak (%.1f deg/s)" % [float(ostats.get("boundary_min_deg_s", -1.0)), float(ostats.get("peak_deg_s", 0.0))])
-
-
-func _motion_judge_input_during_roll() -> void:
-	_motion_expect(_motion_input_at_msec > 0,
-		"input during roll: the mid-roll press actually landed during the roll")
-	if _motion_input_at_msec > 0:
-		# The answer latency is counted in FRAMES (the press
-		# lands in one frame; the room's follow law answers
-		# in its next _process): a ms bound would convict
-		# the box's pacing, not the input path.
-		_motion_expect(_motion_answer_i >= 0 and _motion_press_i >= 0 and _motion_answer_i - _motion_press_i <= 2,
-			"input during roll: the centre answered the press within 2 frames mid-roll (press frame %d, answer frame %d; %d ms -> %d ms - motion never gates input)"
-			% [_motion_press_i, _motion_answer_i, _motion_input_at_msec, _motion_input_frame_msec])
-	_motion_expect(_room.centre_index() == _motion_travel_start(),
-		"input during roll: the drum retargeted to the pressed card's column")
-	_motion_expect(absf(rad_to_deg(_room.drum_yaw_rad() - _room.swing_target_rad())) < 0.05,
-		"input during roll: the drum settled exactly on the retargeted yaw (no stop-and-restart scar)")
-
-
-func _motion_leg_dial() -> void:
-	_motion_expect(_room.wall_motion_mode() == "smooth",
-		"wall motion dial: the room's standing mode is SMOOTH (the default, Chris's pick)")
-	_room.set_wall_motion_mode("stepped")
-	_motion_expect(_room.wall_motion_mode() == "stepped",
-		"wall motion dial: STEPPED stands when set")
-	_room.set_wall_motion_mode("bogus")
-	_motion_expect(_room.wall_motion_mode() == "smooth",
-		"wall motion dial: an invalid value validates back to SMOOTH")
-	_room.set_wall_motion_mode("smooth")
-	if _config != null:
-		_config.wall_motion_mode = "stepped"
-		_config.save_to_disk()
-		var reloaded: PvldsConfig = PvldsConfig.new()
-		var ok: bool = reloaded.load_from_disk()
-		_motion_expect(ok and reloaded.wall_motion_mode == "stepped",
-			"wall motion dial: the config persists STEPPED across a reload")
-		_config.wall_motion_mode = "smooth"
-		_config.save_to_disk()
-
-
 func _motion_expect(cond: bool, label: String) -> void:
 	if cond:
 		print("  ok - motion smoke: ", label)
@@ -12194,53 +11824,7 @@ func _finish_motion_smoke() -> void:
 		get_tree().quit(1)
 
 
-## -------------------------------------------------- artstream smoke (GRADFIX16 item 2)
-##
-## --pvlds-smoke-artstream: a sustained HELD cruise through
-## the REAL input path (a joypad-motion event held on the
-## left stick's X axis, exactly what the room's per-frame
-## poll reads - the motion smoke's held-leg discipline) on
-## a COLD-ART fixture: the start window is settled first,
-## then the decode cache is cleared while the standing
-## cards keep their textures, stamps and rendered faces,
-## so every column the cruise's window slides into pays
-## full decode + render for art nobody has decoded this
-## session - the field shape of a boot followed by a cruise. Frame deltas are recorded from the feed until
-## the release settle completes. Legs (all named
-## "artstream:"): the cruise stood and spanned ten columns;
-## no travel frame hitches beyond a small allowance, a
-## hitch judged against the pacing the box actually ran
-## (pacing + 40 ms - the base build's serial fill fails
-## this by name, paying ~a column of art per window step
-## on the travel frame itself); and after the cruise, every
-## face in the standing window heals to real art (key
-## stamped, not unreal, from art) - pictures may land late,
-## they may not land never, and no fallback solid may stand
-## stamped as a real face. Under PVLDS_GF16_NC=syncfill the
-## room restores the base serial fill and the travel legs
-## fail by this name.
-func _artstream_expect(cond: bool, label: String) -> void:
-	if cond:
-		print("  ok - artstream smoke: ", label)
-	else:
-		_artstream_fail(label)
-
-
-func _artstream_fail(label: String) -> void:
-	_art_failures += 1
-	printerr("  FAIL - artstream smoke: ", label)
-
-
-func _finish_artstream_smoke() -> void:
-	if _art_failures == 0:
-		print("PVLDS ARTSTREAM SMOKE: PASS")
-		get_tree().quit(0)
-	else:
-		printerr("PVLDS ARTSTREAM SMOKE: FAIL (%d)" % _art_failures)
-		get_tree().quit(1)
-
-
-var _smoke_swingprobe: bool = false ## --pvlds-smoke-swingprobe: GRADFIX16 item 2, the swing A/B - one letter pick through the real pad path (focus the strip slot, press A) after the same cold reset the artstream cruise gets, recording the swing's travel frame deltas on the same fixture. A reading, not a verdict: the field evidence says a letter swing travels smoothly on Chris's rig while the held cruise slots, and this probe shows whether the harness reproduces the contrast and which difference it convicts.
+var _smoke_swingprobe: bool = false ## --pvlds-smoke-swingprobe: GRADFIX16 item 2, the swing A/B - one letter pick through the real pad path (focus the strip slot, press A) after a cold reset of the decode cache, recording the swing's travel frame deltas on the same fixture. A reading, not a verdict. (Its pair, the artstream cruise smoke, retired in the OPTIMIZE round; the probe stands alone now.)
 var _swp_phase: int = 0
 var _swp_wait: int = 0
 var _swp_failures: int = 0
@@ -12280,11 +11864,9 @@ func _finish_swingprobe_smoke() -> void:
 
 
 ## The swing A/B driver (see _smoke_swingprobe): boot and
-## seat exactly as the artstream cruise does, cold-reset
-## the decode cache the same way, then make ONE letter pick
-## the pad's way and record every frame delta until the
-## swing settles. The cruise's numbers come from the
-## artstream smoke on the same fixture; this is its pair.
+## seat, cold-reset the decode cache, then make ONE letter
+## pick the pad's way and record every frame delta until
+## the swing settles.
 func _drive_swingprobe_smoke() -> void:
 	match _swp_phase:
 		0:
@@ -12314,7 +11896,7 @@ func _drive_swingprobe_smoke() -> void:
 					if _room._grid_coord(i).x == want_col and _room._grid_coord(i).y == _room._grid_coord(mid).y:
 						start_idx = i
 						break
-				_room.set_wall_motion_mode("smooth")
+				_room.set_wall_motion_mode("stepped")
 				_room._set_centre(start_idx, true)
 				_room._set_focused(_room._panels[start_idx])
 			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active():
@@ -12418,20 +12000,28 @@ func _drive_swingprobe_smoke() -> void:
 ## -------------------------------------------------- landing smoke (GRADFIX17 item 1)
 ##
 ## --pvlds-smoke-landing: hard travel through the room path -
-## long held cruises BOTH directions, then letter swings -
-## over a shelf whose named neighbourhood (the field report's
-## shape: Medieval Madness, KISS, Ice Fever, Indianapolis 500)
-## resolves its art LATE: big .directb2s extractions the warmer
-## lands seconds after the first fill, a pair backglass, an
-## embedded-.vpx face, and author shots that fetch in flight.
-## After the travel, once the warmer and the fetcher have
-## landed everything they will ever land, the driver tours
-## the named tables and every travel stop: at each stop the
-## room's landing census (fresh probes, the heal's read) must
-## read ZERO visible faces still missing art, and a rendered
-## grab is saved per stop. Legs are named "landing guarantee:".
-## Under PVLDS_GF17_NC=noguarantee the room's settle audit is
-## disabled and the census legs fail by name.
+## long held stepped travels BOTH directions, then letter
+## swings - over a shelf whose named neighbourhood (the field
+## report's shape: Medieval Madness, KISS, Ice Fever,
+## Indianapolis 500) resolves its art LATE: big .directb2s
+## extractions the warmer lands seconds after the first fill,
+## a pair backglass, an embedded-.vpx face, and author shots
+## that fetch in flight. After the travel, once the warmer and
+## the fetcher have landed everything they will ever land, the
+## driver tours the named tables and every travel stop: at
+## each stop the room's landing census (fresh probes, the
+## heal's read) must read ZERO visible faces still missing
+## art, and a rendered grab is saved per stop. Legs are named
+## "landing guarantee:". Under PVLDS_GF17_NC=noguarantee the
+## room's settle audit is disabled and the census legs fail
+## by name. The OPTIMIZE round adds one leg after the tour,
+## "optimize: eviction keeps the census": after the hard
+## travel + settle + the room's eviction pass, the visible
+## census still reads zero, residency stands within its cap,
+## and at least one far face was actually evicted on the run
+## (the leg cannot pass vacuously). Under PVLDS_OPT_NC=
+## evictvis the eviction eats a visible face and the census
+## part fails by that name.
 func _landing_expect(cond: bool, label: String) -> void:
 	if cond:
 		print("  ok - landing smoke: ", label)
@@ -12505,7 +12095,7 @@ func _drive_landing_smoke() -> void:
 					if _room._grid_coord(i).x == want_col and _room._grid_coord(i).y == _room._grid_coord(mid).y:
 						start_idx = i
 						break
-				_room.set_wall_motion_mode("smooth")
+				_room.set_wall_motion_mode("stepped")
 				_room._set_centre(start_idx, true)
 				_room._set_focused(_room._panels[start_idx])
 				if not _room._window_fill_busy and not _room.page_slide_active():
@@ -12514,7 +12104,7 @@ func _drive_landing_smoke() -> void:
 					_land_settle_frames = 0
 				if _land_settle_frames >= 5:
 					TextureFactory.clear_art_decode_cache()
-					print("LANDING: room up, %d columns, seating and cruising right" % _room._columns)
+					print("LANDING: room up, %d columns, seating and travelling right" % _room._columns)
 					_land_start_col = _room._grid_coord(_room.centre_index()).x
 					_input_feed_stick_x(1.0)
 					_land_phase = 1
@@ -12525,10 +12115,13 @@ func _drive_landing_smoke() -> void:
 					_landing_expect(false, "landing guarantee: the room never came up (scan never settled)")
 					_finish_landing_smoke()
 		1:
-			# Cruise RIGHT through the real input path.
+			# Travel RIGHT through the real input path (a
+			# held stick under the stepped gait: repeated
+			# steps - travel is the swing standing and the
+			# centre moving, the cruise seam is deleted).
 			_land_wait += 1
-			if _room.cruise_active():
-				_land_saw_cruise = true
+			if _room.swing_active() or _room._grid_coord(_room.centre_index()).x != _land_start_col:
+				_land_saw_travel = true
 			var col_now: int = _room._grid_coord(_room.centre_index()).x
 			if not _land_released and col_now >= _land_start_col + 15:
 				_land_released = true
@@ -12539,9 +12132,9 @@ func _drive_landing_smoke() -> void:
 				else:
 					_land_rest_frames = 0
 				if _land_rest_frames >= 3:
-					_landing_expect(_land_saw_cruise, "landing guarantee: the rightward hold became a cruise on the real input path")
-					_landing_expect(col_now - _land_start_col >= 12, "landing guarantee: the rightward cruise spanned %d columns (a long travel)" % (col_now - _land_start_col))
-					_land_saw_cruise = false
+					_landing_expect(_land_saw_travel, "landing guarantee: the rightward hold became stepped travel on the real input path")
+					_landing_expect(col_now - _land_start_col >= 12, "landing guarantee: the rightward travel spanned %d columns (a long travel)" % (col_now - _land_start_col))
+					_land_saw_travel = false
 					_land_released = false
 					_land_rest_frames = 0
 					_input_feed_stick_x(-1.0)
@@ -12549,13 +12142,13 @@ func _drive_landing_smoke() -> void:
 					_land_wait = 0
 			elif _land_wait > 7200:
 				_input_feed_stick_x(0.0)
-				_landing_expect(false, "landing guarantee: the rightward cruise never spanned and settled")
+				_landing_expect(false, "landing guarantee: the rightward travel never spanned and settled")
 				_finish_landing_smoke()
 		2:
-			# Cruise LEFT, back past the start.
+			# Travel LEFT, back past the start.
 			_land_wait += 1
-			if _room.cruise_active():
-				_land_saw_cruise = true
+			if _room.swing_active() or _room._grid_coord(_room.centre_index()).x != _land_start_col:
+				_land_saw_travel = true
 			var col_now2: int = _room._grid_coord(_room.centre_index()).x
 			if not _land_released and col_now2 <= maxi(2, _land_start_col - 10):
 				_land_released = true
@@ -12566,7 +12159,7 @@ func _drive_landing_smoke() -> void:
 				else:
 					_land_rest_frames = 0
 				if _land_rest_frames >= 3:
-					_landing_expect(_land_saw_cruise, "landing guarantee: the leftward hold became a cruise on the real input path")
+					_landing_expect(_land_saw_travel, "landing guarantee: the leftward hold became stepped travel on the real input path")
 					_land_swing_keys = ["I", "K", "M", "E"]
 					_land_swing_i = 0
 					_land_saw_swing = false
@@ -12576,7 +12169,7 @@ func _drive_landing_smoke() -> void:
 					_land_wait = 0
 			elif _land_wait > 7200:
 				_input_feed_stick_x(0.0)
-				_landing_expect(false, "landing guarantee: the leftward cruise never spanned and settled")
+				_landing_expect(false, "landing guarantee: the leftward travel never spanned and settled")
 				_finish_landing_smoke()
 		3:
 			# Letter swings through the strip, the pad's way.
@@ -12637,8 +12230,9 @@ func _drive_landing_smoke() -> void:
 			# with the missing titles printed.
 			_land_wait += 1
 			if _land_tour_i >= _land_tour.size():
-				_land_phase = 6
+				_land_phase = 7
 				_land_wait = 0
+				_land_settle_frames = 0
 				return
 			var title: String = _land_tour[_land_tour_i]
 			if _land_census_deadline_msec == 0:
@@ -12685,6 +12279,35 @@ func _drive_landing_smoke() -> void:
 				_land_tour_i += 1
 				_land_census_deadline_msec = 0
 				_land_wait = 0
+		7:
+			# OPTIMIZE: eviction keeps the census. The tour
+			# travelled the shelf and settled at its last
+			# stop; give the room's eviction pass a beat at
+			# rest, then judge all three parts at the
+			# standing window: the census still zero,
+			# residency within its cap, and at least one far
+			# face actually evicted on the run - a leg that
+			# cannot pass vacuously. Under PVLDS_OPT_NC=
+			# evictvis the eviction eats a visible face and
+			# the census part fails by this leg's name.
+			_land_wait += 1
+			if not _room.swing_active() and not _room.page_slide_active() and _room.art_pipeline_idle():
+				_land_settle_frames += 1
+			else:
+				_land_settle_frames = 0
+			if _land_settle_frames >= 10 or _land_wait > 3600:
+				var census7: Dictionary = _room.landing_census()
+				var missing7: Array = census7.get("missing", []) as Array
+				var total7: int = int(census7.get("total", 0))
+				_landing_expect(missing7.is_empty() and total7 > 0,
+					"optimize: eviction keeps the census: after hard travel + settle + the eviction pass, the visible census still reads zero missing (%d of %d faces missing)" % [missing7.size(), total7])
+				var res7: Dictionary = _room.residency_stats()
+				_landing_expect(int(res7.get("resident_faces", -1)) >= 0 and int(res7.get("resident_faces", 0)) <= int(res7.get("cap_faces", 0)),
+					"optimize: eviction keeps the census: residency stands within its cap (%d resident faces, cap %d, %d resident bytes, margin %d cols)" % [int(res7.get("resident_faces", 0)), int(res7.get("cap_faces", 0)), int(res7.get("resident_bytes", 0)), int(res7.get("margin_cols", 0))])
+				_landing_expect(int(res7.get("evicted_total", 0)) > 0,
+					"optimize: eviction keeps the census: at least one far game's face was actually evicted during the run (evicted_total %d after travelling the full shelf)" % int(res7.get("evicted_total", 0)))
+				_land_phase = 6
+				_land_wait = 0
 		6:
 			_land_wait += 1
 			if _room.art_pipeline_idle() or _land_wait > 3600:
@@ -12699,517 +12322,10 @@ func _land_tour_grab(title: String) -> void:
 	_save_shot_png(dir.path_join("landing_" + slug + ".png"))
 
 
-## -------------------------------------------------- streamahead smoke (GRADFIX18 item A)
-##
-## --pvlds-smoke-streamahead: the GF17 field defect's proof.
-## One continuous held cruise with NO stops over the
-## artstream cold-art fixture: while the drum travels, every
-## column is sampled on the frame it ENTERS the drawn window
-## (was its art already standing?), and the moment the drum
-## stops the arrival census is read - every passed section
-## dressed, zero missing. The cruise's frame deltas are then
-## judged against a warm return cruise over the same stretch
-## (the artstream judge's law: hitch = baseline + 60 ms,
-## allowance 2; worst within baseline + 75 ms), and after
-## settle every streamed face must have received its full
-## render (the GF17 guarantee still owns completeness).
-## Legs are named "streamahead:". Under PVLDS_GF18_NC=
-## nostream the arrival/entry legs fail by name (the GF17
-## park returns: the wall ahead is bare); under nobudget the
-## frame legs fail by name (full renders ride travel frames).
-func _sa_expect(cond: bool, label: String) -> void:
-	if cond:
-		print("  ok - streamahead smoke: ", label)
-	else:
-		_sa_failures += 1
-		printerr("  FAIL - streamahead smoke: ", label)
-
-
-func _finish_streamahead_smoke() -> void:
-	_input_feed_stick_x(0.0)
-	if _sa_failures == 0:
-		print("PVLDS STREAMAHEAD SMOKE: PASS")
-		get_tree().quit(0)
-	else:
-		printerr("PVLDS STREAMAHEAD SMOKE: FAIL (%d)" % _sa_failures)
-		get_tree().quit(1)
-
-
-## GRADFIX19 costume smoke (see _smoke_costume): legs are
-## named "costume:". Under PVLDS_GF19_NC=no-costume the
-## costume never engages, so the engagement / no-art /
-## swap-cost legs fail by name.
-func _cs_expect(cond: bool, label: String) -> void:
-	if cond:
-		print("  ok - costume smoke: ", label)
-	else:
-		_cs_failures += 1
-		printerr("  FAIL - costume smoke: ", label)
-
-
-func _finish_costume_smoke() -> void:
-	_input_feed_stick_x(0.0)
-	if _cs_failures == 0:
-		print("PVLDS COSTUME SMOKE: PASS")
-		get_tree().quit(0)
-	else:
-		printerr("PVLDS COSTUME SMOKE: FAIL (%d)" % _cs_failures)
-		get_tree().quit(1)
-
-
-func _cs_grab(name: String) -> void:
-	var dir: String = OS.get_environment("PVLDS_GF19_GRAB_DIR")
-	if dir == "":
-		return
-	var img: Image = get_viewport().get_texture().get_image()
-	if img == null or img.is_empty():
-		return
-	img.save_png(dir.path_join(name))
-	_cs_grabs += 1
-
-
-func _drive_costume_smoke() -> void:
-	match _cs_phase:
-		0:
-			if _room != null and _room.visible and _room.wall_ready and not _scan_active \
-					and (_art_warmer == null or _art_warmer.is_idle()):
-				Input.warp_mouse(Vector2(4, 372))
-				if _room._columns < 56:
-					_cs_expect(false, "costume: the fixture shelf holds %d columns (the cruise needs at least 56)" % _room._columns)
-					_finish_costume_smoke()
-					return
-				_cs_phase = 1
-				_cs_wait = 0
-				_cs_settle_frames = 0
-			else:
-				_cs_wait += 1
-				if _cs_wait > 21600:
-					_cs_expect(false, "costume: the room never came up (scan/warm never settled)")
-					_finish_costume_smoke()
-		1:
-			# Seat at col 12 and wait for the field regime:
-			# the window fully dressed (census zero, pipeline
-			# idle) AND the costume cache covering the whole
-			# drawn window (pre-generation at rest).
-			_cs_wait += 1
-			if _cs_wait == 1:
-				var start_idx: int = -1
-				for i: int in range(_room._panels.size()):
-					if _room._grid_coord(i).x == 12 and _room._grid_coord(i).y == 1:
-						start_idx = i
-						break
-				if start_idx < 0:
-					start_idx = _room._panels.size() / 2
-				_room.set_wall_motion_mode("smooth")
-				_room._set_centre(start_idx, true)
-				_room._set_focused(_room._panels[start_idx])
-			var census1: Dictionary = _room.landing_census()
-			var coverage: Dictionary = _room.costume_window_coverage()
-			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active() \
-					and (census1.get("missing", ["x"]) as Array).is_empty() and _room.art_pipeline_idle() \
-					and int(coverage.get("covered", 0)) >= int(coverage.get("total", 1)):
-				_cs_settle_frames += 1
-			else:
-				_cs_settle_frames = 0
-			if _cs_settle_frames >= 5:
-				_cs_expect(RoomView.CARD_FACE_PX == Vector2i(496, 864), "costume: production face size restored to 496x864 (stands at %s)" % str(RoomView.CARD_FACE_PX))
-				var art_faces: int = 0
-				for sv: Variant in _room.face_state():
-					var st: Dictionary = sv as Dictionary
-					if bool(st.get("from_art", false)) and int(st.get("tex_w", 0)) == 496:
-						art_faces += 1
-				_cs_expect(art_faces >= 30, "costume: the seat window stands dressed in full-res art before travel (%d art faces at 496 px wide)" % art_faces)
-				_cs_start_col = _room._grid_coord(_room.centre_index()).x
-				_input_feed_stick_x(1.0)
-				_cs_phase = 2
-				_cs_wait = 0
-			elif _cs_wait > 10800:
-				_cs_expect(false, "costume: the start window never settled dressed + costume-covered")
-				_finish_costume_smoke()
-		2:
-			# WARM-UP cruise (the field regime, mirroring the
-			# streamahead smoke's shape): one no-stop cruise
-			# right through unvisited shelf - it visits and
-			# dresses the stretch the measured cruise then
-			# re-crosses. Chris's painful cruises were through
-			# visited, dressed wall (the GF17 paradox), so the
-			# costume is judged there, not on a cold first
-			# pass. Counters here are printed, not legged.
-			_cs_wait += 1
-			if _room.cruise_active():
-				_cs_saw_cruise = true
-			if _cs_saw_cruise:
-				_cs_cruise_frames += 1
-			var col_now: int = _room._grid_coord(_room.centre_index()).x
-			if not _cs_released and col_now >= _cs_start_col + 22:
-				_cs_released = true
-				_input_feed_stick_x(0.0)
-			if _cs_released:
-				if not _room.swing_active():
-					_cs_rest_frames += 1
-				else:
-					_cs_rest_frames = 0
-				if _cs_rest_frames >= 3:
-					_cs_expect(_cs_saw_cruise, "costume: holding the stick under SMOOTH became a cruise on the real input path")
-					_cs_expect(col_now - _cs_start_col >= 20, "costume: the warm-up cruise spanned %d columns" % (col_now - _cs_start_col))
-					_cs_deadline_msec = Time.get_ticks_msec() + 90000
-					_cs_phase = 3
-					_cs_wait = 0
-					_cs_settle_frames = 0
-			elif _cs_wait > 7200:
-				_input_feed_stick_x(0.0)
-				_cs_expect(false, "costume: the warm-up cruise never spanned 22 columns and settled")
-				_finish_costume_smoke()
-		3:
-			# Dress after the warm-up, and pre-generation
-			# re-covering the window - then the measured
-			# cruise starts from a dressed, costume-ready
-			# seat, the field's standing state.
-			_cs_wait += 1
-			var census3: Dictionary = _room.landing_census()
-			var missing3: Array = census3.get("missing", []) as Array
-			var streamed3: int = int(census3.get("streamed", 0))
-			var seat_col3: int = _room._grid_coord(_room.centre_index()).x
-			var coverage3: Dictionary = _room.costume_coverage_for(maxi(0, seat_col3 - 27), seat_col3 + 10)
-			if missing3.is_empty() and streamed3 == 0 and _room.art_pipeline_idle() \
-					and int(coverage3.get("covered", 0)) >= int(coverage3.get("total", 1)):
-				_cs_settle_frames += 1
-			else:
-				_cs_settle_frames = 0
-			if _cs_settle_frames >= 5:
-				_cs_expect(true, "costume: dress at rest - settle census zero missing after the warm-up cruise")
-				_cs_start_col = _room._grid_coord(_room.centre_index()).x
-				_cs_art_presented = 0
-				_cs_unworn = 0
-				_cs_cruise_frames = 0
-				_cs_saw_cruise = false
-				_cs_released = false
-				_cs_rest_frames = 0
-				_input_feed_stick_x(-1.0)
-				_cs_phase = 4
-				_cs_wait = 0
-			elif Time.get_ticks_msec() > _cs_deadline_msec:
-				_cs_expect(false, "costume: dress at rest - settle census zero missing after the warm-up cruise (%d still missing, %d interim)" % [missing3.size(), streamed3])
-				_finish_costume_smoke()
-		4:
-			# THE MEASURED CRUISE: back left through the
-			# visited, dressed stretch. Every frame samples
-			# the drawn window - no card may present real art
-			# while the drum moves, and every card must wear
-			# the costume.
-			_cs_wait += 1
-			if _room.cruise_active():
-				_cs_saw_cruise = true
-			if _cs_saw_cruise and absf(_room.drum_yaw_rad() - _cs_last_yaw) > 0.00001:
-				_cs_cruise_frames += 1
-				var states: Array = _room.costume_window_state()
-				for sv2: Variant in states:
-					var st2: Dictionary = sv2 as Dictionary
-					if bool(st2.get("from_art", false)):
-						_cs_art_presented += 1
-					if not bool(st2.get("wearing", false)):
-						_cs_unworn += 1
-				if _cs_cruise_frames == 12:
-					_cs_grab("costume_midcruise_a.png")
-				if _cs_cruise_frames == 26:
-					_cs_grab("costume_midcruise_b.png")
-			_cs_last_yaw = _room.drum_yaw_rad()
-			var col_now4: int = _room._grid_coord(_room.centre_index()).x
-			if not _cs_released and col_now4 <= _cs_start_col - 16:
-				_cs_released = true
-				_input_feed_stick_x(0.0)
-			if _cs_released:
-				if not _room.swing_active():
-					_cs_rest_frames += 1
-				else:
-					_cs_rest_frames = 0
-				if _cs_rest_frames >= 3:
-					var stats: Dictionary = _room.costume_stats()
-					print("COSTUME CRUISE: start col %d, final col %d, cruise frames %d, art-presented card-frames %d, unworn card-frames %d, engagements %d, on-cost last %.2f ms max %.2f ms, swapped last %d total %d, grabs %d" % [
-						_cs_start_col, col_now4, _cs_cruise_frames, _cs_art_presented, _cs_unworn,
-						int(stats.get("engagements", 0)), float(stats.get("last_on_cost_ms", 0.0)),
-						float(stats.get("max_on_cost_ms", 0.0)), int(stats.get("last_swapped", 0)),
-						int(stats.get("total_swapped", 0)), _cs_grabs])
-					_cs_expect(_cs_saw_cruise, "costume: the measured return became a cruise on the real input path")
-					_cs_expect(_cs_start_col - col_now4 >= 14, "costume: the measured cruise spanned %d columns" % (_cs_start_col - col_now4))
-					_cs_expect(int(stats.get("engagements", 0)) >= 2, "costume: the costume engaged for SMOOTH travel (engagements %d)" % int(stats.get("engagements", 0)))
-					_cs_expect(_cs_art_presented == 0, "costume: no real-art face was presented on a moving card (%d art-presented card-frames sampled over %d cruise frames)" % [_cs_art_presented, _cs_cruise_frames])
-					_cs_expect(_cs_unworn == 0, "costume: every drawn card wore the costume on every cruise frame (%d unworn card-frames)" % _cs_unworn)
-					_cs_expect(float(stats.get("max_on_cost_ms", 999.0)) <= 60.0, "costume: the costume-on swap stayed cheap (worst %.2f ms - a ~140 ms costume-change frame is this round's named failure)" % float(stats.get("max_on_cost_ms", 0.0)))
-					_cs_expect(not bool(stats.get("on", true)), "costume: the costume came off when travel ended")
-					_cs_expect(int(stats.get("wearing", -1)) == 0, "costume: no card still wears the costume at rest (%d)" % int(stats.get("wearing", -1)))
-					_cs_deadline_msec = Time.get_ticks_msec() + 90000
-					_cs_phase = 5
-					_cs_wait = 0
-					_cs_settle_frames = 0
-			elif _cs_wait > 7200:
-				_input_feed_stick_x(0.0)
-				_cs_expect(false, "costume: the measured cruise never spanned 16 columns and settled")
-				_finish_costume_smoke()
-		5:
-			# DRESS AT REST after the measured cruise: census
-			# zero, and the room's own dress latency measured.
-			_cs_wait += 1
-			var census5: Dictionary = _room.landing_census()
-			var missing5: Array = census5.get("missing", []) as Array
-			var streamed5: int = int(census5.get("streamed", 0))
-			if missing5.is_empty() and streamed5 == 0 and _room.art_pipeline_idle() \
-					and int(_room.costume_stats().get("dress_count", 0)) >= 2:
-				_cs_settle_frames += 1
-			else:
-				_cs_settle_frames = 0
-			if _cs_settle_frames >= 5:
-				var stats5: Dictionary = _room.costume_stats()
-				print("COSTUME DRESS: census %d faces zero missing, dress latency %.0f ms (measurement %d)" % [
-					int(census5.get("total", 0)), float(stats5.get("last_dress_ms", -1.0)), int(stats5.get("dress_count", 0))])
-				_cs_expect(true, "costume: dress at rest - settle census zero missing after the measured cruise")
-				_cs_expect(float(stats5.get("last_dress_ms", -1.0)) > 0.0, "costume: dress-at-rest latency was measured from travel end (%.0f ms)" % float(stats5.get("last_dress_ms", -1.0)))
-				_cs_grab("costume_rest_dressed.png")
-				# STEPPED: a swing under the stepped driver
-				# must never engage the costume.
-				_cs_stepped_engagements = int(stats5.get("engagements", 0))
-				_room.set_wall_motion_mode("stepped")
-				var target_idx: int = -1
-				for i2: int in range(_room._panels.size()):
-					if _room._grid_coord(i2).x == _cs_start_col + 4 and _room._grid_coord(i2).y == 1:
-						target_idx = i2
-						break
-				if target_idx >= 0:
-					_room._set_centre(target_idx)
-					_room._set_focused(_room._panels[target_idx])
-				_cs_phase = 6
-				_cs_wait = 0
-			elif Time.get_ticks_msec() > _cs_deadline_msec:
-				_cs_expect(false, "costume: dress at rest - settle census zero missing after the measured cruise (%d still missing, %d interim)" % [missing5.size(), streamed5])
-				_finish_costume_smoke()
-		6:
-			_cs_wait += 1
-			var stats4: Dictionary = _room.costume_stats()
-			if bool(stats4.get("on", false)):
-				_cs_stepped_saw_on = true
-			if not _room.swing_active() and _cs_wait > 10:
-				_cs_expect(int(stats4.get("engagements", 0)) == _cs_stepped_engagements and not _cs_stepped_saw_on, "costume: STEPPED travel never engaged the costume (engagements %d before, %d after the stepped swing)" % [_cs_stepped_engagements, int(stats4.get("engagements", 0))])
-				_room.set_wall_motion_mode("smooth")
-				_finish_costume_smoke()
-			elif _cs_wait > 3600:
-				_cs_expect(false, "costume: the stepped swing never settled")
-				_finish_costume_smoke()
-
-
-func _drive_streamahead_smoke() -> void:
-	match _sa_phase:
-		0:
-			if _room != null and _room.visible and _room.wall_ready and not _scan_active \
-					and (_art_warmer == null or _art_warmer.is_idle()):
-				Input.warp_mouse(Vector2(4, 372))
-				if _room._columns < 56:
-					_sa_expect(false, "streamahead: the fixture shelf holds %d columns (the no-stop cruise needs at least 56)" % _room._columns)
-					_finish_streamahead_smoke()
-					return
-				_sa_phase = 1
-				_sa_wait = 0
-				_sa_settle_frames = 0
-			else:
-				_sa_wait += 1
-				if _sa_wait > 21600:
-					_sa_expect(false, "streamahead: the room never came up (scan/warm never settled)")
-					_finish_streamahead_smoke()
-		1:
-			# Seat the start: a settled window with at least
-			# 34 columns of shelf ahead of it.
-			_sa_wait += 1
-			var pace_now: int = Time.get_ticks_usec()
-			if _sa_last_usec > 0:
-				_sa_pace_stamps.append(float(pace_now - _sa_last_usec) / 1000.0)
-				if _sa_pace_stamps.size() > 40:
-					_sa_pace_stamps.pop_front()
-			_sa_last_usec = pace_now
-			if _sa_wait == 1:
-				var start_idx: int = -1
-				for i: int in range(_room._panels.size()):
-					if _room._grid_coord(i).x == 12 and _room._grid_coord(i).y == 1:
-						start_idx = i
-						break
-				if start_idx < 0:
-					start_idx = _room._panels.size() / 2
-				_room.set_wall_motion_mode("smooth")
-				_room._set_centre(start_idx, true)
-				_room._set_focused(_room._panels[start_idx])
-			# The field regime this smoke judges: the player
-			# STOPPED here first - the seat window is fully
-			# dressed (census zero, pipeline idle) before the
-			# cruise starts. wall_ready alone was not that:
-			# bench runs 1-6 launched the cruise with the
-			# seat window itself still mid-heal, and the
-			# stream's bounded supply was spent re-dressing
-			# the window behind the drum instead of the wall
-			# ahead - a regime the field session never hits,
-			# because the GF17 settle guarantee dresses a
-			# stopped window before any cruise begins.
-			var seat_census: Dictionary = _room.landing_census()
-			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active() \
-					and (seat_census.get("missing", ["x"]) as Array).is_empty() and _room.art_pipeline_idle():
-				_sa_settle_frames += 1
-			else:
-				_sa_settle_frames = 0
-			if _sa_settle_frames >= 5:
-				# The artstream cold reset: no art ahead has
-				# been decoded this session.
-				TextureFactory.clear_art_decode_cache()
-				TextureFactory.probe_reset()
-				if _sa_pace_stamps.size() >= 6:
-					var sorted_pace: Array = _sa_pace_stamps.duplicate()
-					sorted_pace.sort()
-					_sa_pacing_ms = float(sorted_pace[sorted_pace.size() / 2])
-				print("STREAMAHEAD PACING: median frame %.1f ms during the start settle" % _sa_pacing_ms)
-				_sa_start_col = _room._grid_coord(_room.centre_index()).x
-				_sa_edge_col = _sa_start_col + RoomView.VISIBLE_HALF_COLUMNS
-				_sa_last_usec = Time.get_ticks_usec()
-				_input_feed_stick_x(1.0)
-				_sa_phase = 2
-				_sa_wait = 0
-			elif _sa_wait > 7200:
-				_sa_expect(false, "streamahead: the start window never settled")
-				_finish_streamahead_smoke()
-		2:
-			# The no-stop cruise: frames recorded, and every
-			# column sampled on the frame it enters the
-			# drawn window's leading edge.
-			_sa_wait += 1
-			var now_usec: int = Time.get_ticks_usec()
-			var delta_ms: float = float(now_usec - _sa_last_usec) / 1000.0
-			_sa_last_usec = now_usec
-			_sa_frames += 1
-			if delta_ms > _sa_worst_ms:
-				_sa_worst_ms = delta_ms
-			_sa_cold_deltas.append(delta_ms)
-			if _room.cruise_active():
-				_sa_saw_cruise = true
-			var col_now: int = _room._grid_coord(_room.centre_index()).x
-			var edge_now: int = col_now + RoomView.VISIBLE_HALF_COLUMNS
-			if edge_now > _sa_edge_col:
-				var states: Array = _room.face_state()
-				for ec: int in range(_sa_edge_col + 1, edge_now + 1):
-					for sv: Variant in states:
-						var st: Dictionary = sv as Dictionary
-						if int(st.get("col", -1)) != ec:
-							continue
-						_sa_entry_total += 1
-						if bool(st.get("is_unreal", true)) or not bool(st.get("from_art", false)) or not bool(st.get("key_stamped", false)):
-							_sa_entry_missing.append(str(st.get("title", "?")))
-				_sa_edge_col = edge_now
-			if not _sa_released and col_now >= _sa_start_col + 22:
-				_sa_released = true
-				_input_feed_stick_x(0.0)
-			if _sa_released:
-				if not _room.swing_active():
-					_sa_rest_frames += 1
-				else:
-					_sa_rest_frames = 0
-				if _sa_rest_frames >= 3:
-					_sa_phase = 3
-					_sa_wait = 0
-			elif _sa_wait > 7200:
-				_input_feed_stick_x(0.0)
-				_sa_expect(false, "streamahead: the held cruise never spanned 22 columns and settled")
-				_finish_streamahead_smoke()
-		3:
-			# ARRIVAL: the drum has just stopped - read the
-			# census before the settle machinery upgrades
-			# anything (its first audit sweep is a heal
-			# cadence away; at most a face or two can have
-			# been re-rendered in these frames).
-			var census: Dictionary = _room.landing_census()
-			var missing: Array = census.get("missing", []) as Array
-			var total_faces: int = int(census.get("total", 0))
-			var streamed_n: int = int(census.get("streamed", 0))
-			var stats: Dictionary = _room.stream_stats()
-			var final_col: int = _room._grid_coord(_room.centre_index()).x
-			print("STREAMAHEAD CRUISE: start col %d, final col %d, frames %d, worst frame %.1f ms, pacing %.1f ms" % [
-				_sa_start_col, final_col, _sa_frames, _sa_worst_ms, _sa_pacing_ms])
-			print("STREAMAHEAD ENTRY: %d faces sampled at window entry, %d bare: %s" % [
-				_sa_entry_total, _sa_entry_missing.size(), ", ".join(PackedStringArray(_sa_entry_missing))])
-			print("STREAMAHEAD ARRIVAL: census %d faces, %d missing, %d standing on streamed art; stream applied %d, yields %d, max apply %.2f ms, max frame spend %.2f ms (budget %.1f ms)" % [
-				total_faces, missing.size(), streamed_n, int(stats.get("applied", 0)), int(stats.get("yields", 0)),
-				float(stats.get("max_apply_ms", 0.0)), float(stats.get("max_frame_spend_ms", 0.0)), float(stats.get("budget_ms", 0.0))])
-			_sa_expect(_sa_saw_cruise, "streamahead: holding the stick under SMOOTH became a cruise on the real input path")
-			_sa_expect(final_col - _sa_start_col >= 20, "streamahead: the no-stop cruise spanned %d columns (a full-shelf travel, no stops)" % (final_col - _sa_start_col))
-			_sa_expect(_sa_entry_total >= 60, "streamahead: entry sampling covered %d faces (the cruise's leading edge, three a column)" % _sa_entry_total)
-			_sa_expect(_sa_entry_missing.size() <= 2, "streamahead: faces were dressed before arrival - %d of %d sampled faces were bare on the frame their column entered the window (bound 2, named above)" % [_sa_entry_missing.size(), _sa_entry_total])
-			_sa_expect(total_faces > 0 and missing.is_empty(), "streamahead: arrival census - every passed section dressed, zero missing (%d of %d landed at arrival: %s)" % [total_faces - missing.size(), total_faces, ", ".join(PackedStringArray(missing))])
-			_sa_expect(int(stats.get("applied", 0)) >= 20, "streamahead: the stream did the dressing - %d faces stream-applied during the travel" % int(stats.get("applied", 0)))
-			_sa_expect(float(stats.get("max_apply_ms", 999.0)) <= float(stats.get("budget_ms", 4.0)) + 4.0, "streamahead: no single stream apply burst the budget (max %.2f ms against the %.1f ms budget + one apply's slack)" % [float(stats.get("max_apply_ms", 0.0)), float(stats.get("budget_ms", 4.0))])
-			_sa_heal_deadline_msec = Time.get_ticks_msec() + 60000
-			_sa_phase = 4
-			_sa_wait = 0
-		4:
-			# SETTLE: the GF17 guarantee still owns final
-			# completeness - every interim face receives its
-			# full render and the census reads zero with
-			# nothing left streamed.
-			_sa_wait += 1
-			var census2: Dictionary = _room.landing_census()
-			var missing2: Array = census2.get("missing", []) as Array
-			var streamed2: int = int(census2.get("streamed", 0))
-			if missing2.is_empty() and streamed2 == 0 and _room.art_pipeline_idle():
-				_sa_expect(true, "streamahead: settle guarantee - after the stop every streamed face received its full render (census zero, none left interim)")
-				_room.set_wall_motion_mode("smooth")
-				_sa_last_usec = Time.get_ticks_usec()
-				_input_feed_stick_x(-1.0)
-				_sa_phase = 5
-				_sa_wait = 0
-			elif Time.get_ticks_msec() > _sa_heal_deadline_msec:
-				_sa_expect(false, "streamahead: settle guarantee - after the stop every streamed face received its full render (%d still missing, %d still interim after 60 s)" % [missing2.size(), streamed2])
-				_room.set_wall_motion_mode("smooth")
-				_sa_last_usec = Time.get_ticks_usec()
-				_input_feed_stick_x(-1.0)
-				_sa_phase = 5
-				_sa_wait = 0
-		5:
-			# The warm return cruise: the frame judge's
-			# baseline (the artstream law).
-			_sa_wait += 1
-			var warm_now: int = Time.get_ticks_usec()
-			var warm_delta: float = float(warm_now - _sa_last_usec) / 1000.0
-			_sa_last_usec = warm_now
-			_sa_warm_deltas.append(warm_delta)
-			if warm_delta > _sa_warm_worst_ms:
-				_sa_warm_worst_ms = warm_delta
-			if _room.cruise_active():
-				_sa_warm_saw_cruise = true
-			var warm_col: int = _room._grid_coord(_room.centre_index()).x
-			if not _sa_warm_released and warm_col <= _sa_start_col + 1:
-				_sa_warm_released = true
-				_input_feed_stick_x(0.0)
-			if _sa_warm_released:
-				if not _room.swing_active():
-					_sa_warm_rest_frames += 1
-				else:
-					_sa_warm_rest_frames = 0
-				if _sa_warm_rest_frames >= 3:
-					if _sa_warm_deltas.size() < 6:
-						_sa_expect(false, "streamahead: the warm return cruise produced too few frames to judge against (%d)" % _sa_warm_deltas.size())
-					else:
-						var sorted_warm: Array = _sa_warm_deltas.duplicate()
-						sorted_warm.sort()
-						var warm_median: float = float(sorted_warm[sorted_warm.size() / 2])
-						var baseline: float = maxf(_sa_pacing_ms, warm_median)
-						var hitches: int = 0
-						for dv: Variant in _sa_cold_deltas:
-							if float(dv) > baseline + 60.0:
-								hitches += 1
-						print("STREAMAHEAD WARM CRUISE: frames %d, median frame %.1f ms, worst %.1f ms; judge baseline %.1f ms, cold hitches %d, cold worst %.1f ms" % [
-							_sa_warm_deltas.size(), warm_median, _sa_warm_worst_ms, baseline, hitches, _sa_worst_ms])
-						_sa_expect(_sa_warm_saw_cruise, "streamahead: the warm return also cruised on the real input path (the baseline is a cruise, not a glide)")
-						_sa_expect(hitches <= 2, "streamahead: travel frames never wait on art - %d cold-cruise hitch frames (over the judge baseline %.1f ms + 60 ms; worst cold frame %.1f ms; allowance 2 for harness pacing)" % [hitches, baseline, _sa_worst_ms])
-						_sa_expect(_sa_worst_ms <= baseline + 75.0, "streamahead: the cold cruise's worst frame stayed within the judge baseline + 75 ms (worst %.1f ms against baseline %.1f ms)" % [_sa_worst_ms, baseline])
-					_finish_streamahead_smoke()
-			elif _sa_wait > 7200:
-				_input_feed_stick_x(0.0)
-				_sa_expect(false, "streamahead: the warm return cruise never settled")
-				_finish_streamahead_smoke()
-
-
+## The GF16 probe print, kept for the swingprobe (its only
+## remaining caller after the artstream smoke retired in the
+## OPTIMIZE round): per-operation timing rows for the columns
+## around the probe's start column.
 func _artstream_print_probe() -> void:
 	if not TextureFactory.probe_enabled:
 		return
@@ -13220,7 +12336,7 @@ func _artstream_print_probe() -> void:
 		var op: String = str(k)
 		if op.begins_with("fill_col_"):
 			var col_n: int = int(op.trim_prefix("fill_col_"))
-			if col_n < _art_start_col or col_n > _art_start_col + 24:
+			if col_n < _swp_from_col or col_n > _swp_from_col + 24:
 				continue
 		var row: Array = snap[k] as Array
 		var cnt: int = int(row[0])
@@ -13228,760 +12344,6 @@ func _artstream_print_probe() -> void:
 		var mx: int = int(row[2])
 		print("ARTPROBE %s: count %d, total %.1f ms, avg %.2f ms, max %.2f ms" % [
 			op, cnt, float(tot) / 1000.0, float(tot) / 1000.0 / maxf(float(cnt), 1.0), float(mx) / 1000.0])
-
-
-func _drive_artstream_smoke() -> void:
-	match _art_phase:
-		0:
-			if _room != null and _room.visible and _room.wall_ready and not _scan_active \
-					and (_art_warmer == null or _art_warmer.is_idle()):
-				Input.warp_mouse(Vector2(4, 372))
-				if _room._columns < 40:
-					_artstream_fail("artstream: the fixture shelf holds %d columns (the cold-art cruise needs at least 40)" % _room._columns)
-					_finish_artstream_smoke()
-					return
-				_art_phase = 1
-				_art_wait = 0
-				_art_settle_frames = 0
-			else:
-				_art_wait += 1
-				if _art_wait > 21600:
-					_artstream_fail("artstream: the room never came up (scan/warm never settled)")
-					_finish_artstream_smoke()
-		1:
-			# Seat the start: a column with a settled window
-			# behind it and at least 16 columns of shelf ahead.
-			_art_wait += 1
-			var pace_now: int = Time.get_ticks_usec()
-			if _art_last_usec > 0:
-				_art_pace_stamps.append(float(pace_now - _art_last_usec) / 1000.0)
-				if _art_pace_stamps.size() > 40:
-					_art_pace_stamps.pop_front()
-			_art_last_usec = pace_now
-			if _art_wait == 1:
-				var mid: int = _room._panels.size() / 2
-				var mid_col: int = _room._grid_coord(mid).x
-				var want_col: int = clampi(mid_col, 12, maxi(12, _room._columns - 20))
-				var start_idx: int = mid
-				for i: int in range(_room._panels.size()):
-					if _room._grid_coord(i).x == want_col and _room._grid_coord(i).y == _room._grid_coord(mid).y:
-						start_idx = i
-						break
-				_room.set_wall_motion_mode("smooth")
-				_room._set_centre(start_idx, true)
-				_room._set_focused(_room._panels[start_idx])
-			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active():
-				_art_settle_frames += 1
-			else:
-				_art_settle_frames = 0
-			if _art_settle_frames >= 5:
-				# THE COLD RESET: the DECODE cache goes cold
-				# (the field shape: the app booted, the start
-				# window filled and stands warm on its cards,
-				# but no art ahead of the window has been
-				# decoded this session). Standing faces keep
-				# their textures, stamps and rendered-face
-				# cache, so the start window costs nothing on
-				# either build and every incoming column pays
-				# full decode + render for untouched art.
-				TextureFactory.clear_art_decode_cache()
-				TextureFactory.probe_reset()
-				if _art_pace_stamps.size() >= 6:
-					var sorted_pace: Array = _art_pace_stamps.duplicate()
-					sorted_pace.sort()
-					_art_pacing_ms = float(sorted_pace[sorted_pace.size() / 2])
-				print("ARTSTREAM PACING: median frame %.1f ms during the start settle" % _art_pacing_ms)
-				_art_start_col = _room._grid_coord(_room.centre_index()).x
-				_art_last_col = _art_start_col
-				_art_feed_msec = Time.get_ticks_msec()
-				_art_last_usec = Time.get_ticks_usec()
-				_input_feed_stick_x(1.0)
-				_art_phase = 2
-				_art_wait = 0
-			elif _art_wait > 7200:
-				_artstream_fail("artstream: the start window never settled")
-				_finish_artstream_smoke()
-		2:
-			_art_wait += 1
-			var now_usec: int = Time.get_ticks_usec()
-			var delta_ms: float = float(now_usec - _art_last_usec) / 1000.0
-			_art_last_usec = now_usec
-			_art_frames += 1
-			if delta_ms > _art_worst_ms:
-				_art_worst_ms = delta_ms
-			if delta_ms > 50.0:
-				_art_over50 += 1
-			if delta_ms > 33.0:
-				_art_over33 += 1
-			if delta_ms > _art_pacing_ms + 40.0:
-				_art_over_hitch += 1
-			_art_cold_deltas.append(delta_ms)
-			var col_now: int = _room._grid_coord(_room.centre_index()).x
-			if delta_ms > 40.0:
-				_art_spikes.append([col_now, snappedf(delta_ms, 0.1)])
-			if col_now != _art_last_col:
-				_art_col_marks.append([Time.get_ticks_msec() - _art_feed_msec, col_now])
-				_art_last_col = col_now
-			if _room.cruise_active():
-				_art_saw_cruise = true
-			if not _art_released and col_now >= _art_start_col + 10:
-				_art_released = true
-				_art_release_col = col_now
-				_input_feed_stick_x(0.0)
-			if _art_released:
-				if not _room.swing_active():
-					_art_rest_frames += 1
-				else:
-					_art_rest_frames = 0
-				if _art_rest_frames >= 3:
-					_judge_artstream_travel()
-					_art_phase = 3
-					_art_wait = 0
-					_art_heal_deadline_msec = Time.get_ticks_msec() + 30000
-			elif _art_wait > 7200:
-				_input_feed_stick_x(0.0)
-				_artstream_fail("artstream: the held cruise never spanned ten columns and settled")
-				_finish_artstream_smoke()
-		3:
-			# The heal leg: pictures may land late, never
-			# never. Poll the standing window's honest face
-			# state until every card wears real art.
-			_art_wait += 1
-			var states: Array = _room.face_state()
-			var landed: int = 0
-			for sv: Variant in states:
-				var st: Dictionary = sv as Dictionary
-				if bool(st.get("key_stamped", false)) and not bool(st.get("is_unreal", true)) and bool(st.get("from_art", false)):
-					landed += 1
-			if not states.is_empty() and landed == states.size():
-				_artstream_expect(true, "artstream: every face in the standing window healed to real art after the cruise (%d of %d faces: key stamped, real, from art - no fallback solid stands as a face)" % [landed, states.size()])
-				_art_begin_warm_cruise()
-			elif Time.get_ticks_msec() > _art_heal_deadline_msec:
-				_artstream_expect(false, "artstream: every face in the standing window healed to real art after the cruise (%d of %d faces landed within 30 s)" % [landed, states.size()])
-				_art_begin_warm_cruise()
-		4:
-			# The warm cruise: back over the same columns,
-			# now with every face warm - the same-run,
-			# same-box motion baseline the cold cruise is
-			# judged against (a still-wall settle pacing
-			# cannot stand in for a moving wall's frame cost
-			# on a CPU renderer).
-			_art_wait += 1
-			var warm_now: int = Time.get_ticks_usec()
-			var warm_delta: float = float(warm_now - _art_last_usec) / 1000.0
-			_art_last_usec = warm_now
-			_art_warm_deltas.append(warm_delta)
-			if warm_delta > _art_warm_worst_ms:
-				_art_warm_worst_ms = warm_delta
-			if _room.cruise_active():
-				_art_warm_saw_cruise = true
-			var warm_col: int = _room._grid_coord(_room.centre_index()).x
-			if not _art_warm_released and warm_col <= _art_start_col + 1:
-				_art_warm_released = true
-				_input_feed_stick_x(0.0)
-			if _art_warm_released:
-				if not _room.swing_active():
-					_art_warm_rest_frames += 1
-				else:
-					_art_warm_rest_frames = 0
-				if _art_warm_rest_frames >= 3:
-					_judge_artstream_against_warm()
-					_artstream_print_probe()
-					_finish_artstream_smoke()
-			elif _art_wait > 7200:
-				_input_feed_stick_x(0.0)
-				_artstream_fail("artstream: the warm return cruise never settled")
-				_finish_artstream_smoke()
-
-
-## Arm the warm return cruise (see phase 4): the stick held
-## LEFT on the real input path, from wherever the cold
-## cruise's settle left the centre.
-func _art_begin_warm_cruise() -> void:
-	_room.set_wall_motion_mode("smooth")
-	_art_warm_deltas.clear()
-	_art_warm_worst_ms = 0.0
-	_art_warm_released = false
-	_art_warm_rest_frames = 0
-	_art_warm_saw_cruise = false
-	_art_last_usec = Time.get_ticks_usec()
-	_input_feed_stick_x(-1.0)
-	_art_phase = 4
-	_art_wait = 0
-
-
-## The final travel verdict: the cold cruise judged against
-## the warm cruise's own median frame (same run, same box,
-## same wall in motion - the only honest baseline for what
-## a travel frame costs here). A hitch is a cold frame
-## carrying warm median + 40 ms; the base build's serial
-## per-column fill produces one per incoming column at any
-## pacing, the staged build produces none beyond noise.
-func _judge_artstream_against_warm() -> void:
-	if _art_warm_deltas.size() < 6:
-		_artstream_fail("artstream: the warm return cruise produced too few frames to judge against (%d)" % _art_warm_deltas.size())
-		return
-	var sorted_warm: Array = _art_warm_deltas.duplicate()
-	sorted_warm.sort()
-	var warm_median: float = float(sorted_warm[sorted_warm.size() / 2])
-	# The baseline is the FASTER of the run's two honest
-	# baselines - the still wall's settle pacing (measured
-	# minutes before the cold cruise, under the same box
-	# conditions) and the warm cruise's median (measured
-	# after it): the harness box's speed drifts across a
-	# run, and judging the early cold cruise against only
-	# the late warm cruise would convict the clock. A hitch
-	# is a cold frame carrying baseline + 60 ms: the
-	# convicted art chunk measures +90-190 ms over baseline
-	# per column on the base build, while the residuals
-	# measured with ALL art work parked (applications and
-	# the decode pump both wait out a cruise) stay under
-	# +55 ms - the harness floor of seating a cold wall
-	# (nameplate shaping, box warm-up), present in the base
-	# build's own settle-to-warm drift as well.
-	var baseline: float = maxf(_art_pacing_ms, warm_median)
-	var cold_hitches: int = 0
-	for dv: Variant in _art_cold_deltas:
-		if float(dv) > baseline + 60.0:
-			cold_hitches += 1
-	print("ARTSTREAM WARM CRUISE: frames %d, median frame %.1f ms, worst %.1f ms, saw cruise %s; judge baseline %.1f ms (max of settle pacing %.1f and warm median)" % [
-		_art_warm_deltas.size(), warm_median, _art_warm_worst_ms, str(_art_warm_saw_cruise), baseline, _art_pacing_ms])
-	_artstream_expect(_art_warm_saw_cruise, "artstream: the warm return also cruised on the real input path (the baseline is a cruise, not a glide)")
-	_artstream_expect(cold_hitches <= 2, "artstream: travel frames never wait on art - %d cold-cruise hitch frames (over the judge baseline %.1f ms + 60 ms, the convicted art signature; worst cold frame %.1f ms; allowance 2 for harness pacing)" % [cold_hitches, baseline, _art_worst_ms])
-	_artstream_expect(_art_worst_ms <= baseline + 75.0, "artstream: the cold cruise's worst frame stayed within the judge baseline + 75 ms (worst %.1f ms against baseline %.1f ms - the base build's serial fill adds ~90-190 ms over its baseline per column)" % [_art_worst_ms, baseline])
-
-
-func _judge_artstream_travel() -> void:
-	var final_col: int = _room._grid_coord(_room.centre_index()).x
-	print("ARTSTREAM CRUISE: start col %d, release col %d, final col %d, frames %d, worst frame %.1f ms, frames >50 ms: %d, frames >33 ms: %d, pacing %.1f ms, hitch frames (pacing + 40 ms): %d" % [
-		_art_start_col, _art_release_col, final_col, _art_frames, _art_worst_ms, _art_over50, _art_over33, _art_pacing_ms, _art_over_hitch])
-	var spike_text: String = ""
-	for sv: Variant in _art_spikes:
-		var sp: Array = sv as Array
-		spike_text += " [col %d: %.1f ms]" % [int(sp[0]), float(sp[1])]
-	print("ARTSTREAM SPIKES (>40 ms):", spike_text if spike_text != "" else " none")
-	var mark_text: String = ""
-	for mv: Variant in _art_col_marks:
-		var mk: Array = mv as Array
-		mark_text += " [%d ms -> col %d]" % [int(mk[0]), int(mk[1])]
-	print("ARTSTREAM COLUMN MARKS:", mark_text if mark_text != "" else " none")
-	_artstream_expect(_art_saw_cruise, "artstream: holding the stick under SMOOTH became a cruise on the real input path")
-	_artstream_expect(final_col - _art_start_col >= 10, "artstream: the cruise spanned at least ten columns (got %d)" % (final_col - _art_start_col))
-	# The travel-frame law itself is judged at the end,
-	# against the warm return cruise (see
-	# _judge_artstream_against_warm): a still-wall settle
-	# pacing cannot stand in for a moving wall's frame cost
-	# on a CPU renderer, so the cold cruise is compared to
-	# the same wall in motion with warm art, same run.
-
-
-## -------------------------------------------------- hitchhunt smoke (GRADFIX17 item 2)
-##
-## --pvlds-smoke-hitchhunt: the GF16 A/B residue hunt. The
-## field log's residue was one-directional - bursts of
-## ~125 ms frames on LEFTWARD cruises through one shelf
-## region, while rightward cruises over the same shelf ran
-## clean - so this smoke cruises BOTH directions cold over
-## one long stretch of the artstream fixture (40 columns:
-## long enough that the 96-face rendered cache and the
-## 64-entry decode cache both turn over mid-stretch, the
-## field shape of a full-shelf traverse), then once more
-## warm for the baseline. Legs (all named "hitchhunt:"):
-## each cold cruise stood and spanned its stretch; each
-## cold direction's travel frames judge against the warm
-## baseline exactly as the artstream judge does (hitch =
-## baseline + 60 ms, allowance 2; worst within baseline +
-## 75 ms); and the wall-alpha writes the window pass spends
-## stay under a per-column bound - the per-column write
-## storm the hunt convicted (see RoomView._apply_wall_alpha)
-## spends ~3 writes per panel per column under the pre-fix
-## law, restored by PVLDS_GF17_NC=hazeall so this leg fails
-## by name against it.
-func _hh_expect(cond: bool, label: String) -> void:
-	if cond:
-		print("  ok - hitchhunt smoke: ", label)
-	else:
-		_hh_failures += 1
-		printerr("  FAIL - hitchhunt smoke: ", label)
-
-
-func _finish_hitchhunt_smoke() -> void:
-	_input_feed_stick_x(0.0)
-	if _hh_failures == 0:
-		print("PVLDS HITCHHUNT SMOKE: PASS")
-		get_tree().quit(0)
-	else:
-		printerr("PVLDS HITCHHUNT SMOKE: FAIL (%d)" % _hh_failures)
-		get_tree().quit(1)
-
-
-func _hh_begin_leg(leg: int, feed: float) -> void:
-	_hh_leg = leg
-	if leg != 2:
-		# The cold legs pay the artstream cold reset; the
-		# warm baseline leg (2) runs over the stretch the
-		# cold legs just dressed, no reset.
-		TextureFactory.clear_art_decode_cache()
-	TextureFactory.probe_reset()
-	_hh_released[leg] = false
-	_hh_rest_frames = 0
-	_hh_release_col = -1
-	_hh_alpha_at_leg_start = _room.alpha_write_count()
-	_hh_last_usec = Time.get_ticks_usec()
-	_input_feed_stick_x(feed)
-	_hh_phase = 2
-	_hh_wait = 0
-
-
-func _hh_record_frame() -> void:
-	var now_usec: int = Time.get_ticks_usec()
-	var delta_ms: float = float(now_usec - _hh_last_usec) / 1000.0
-	_hh_last_usec = now_usec
-	var leg: int = _hh_leg
-	(_hh_deltas[leg] as Array).append(delta_ms)
-	if delta_ms > float(_hh_worst[leg]):
-		_hh_worst[leg] = delta_ms
-	if delta_ms > 50.0:
-		_hh_over50[leg] = int(_hh_over50[leg]) + 1
-	var col_now: int = _room._grid_coord(_room.centre_index()).x
-	if delta_ms > 40.0:
-		(_hh_spikes[leg] as Array).append([col_now, snappedf(delta_ms, 0.1)])
-	if _room.cruise_active():
-		_hh_saw_cruise[leg] = true
-
-
-func _hh_print_leg(leg: int, from_col: int, to_col: int) -> void:
-	var names: Array = ["LEFT-COLD", "RIGHT-COLD", "LEFT-WARM"]
-	var spikes_line: String = ""
-	for sv: Variant in (_hh_spikes[leg] as Array):
-		var sp: Array = sv as Array
-		spikes_line += " [col %d: %.1f ms]" % [int(sp[0]), float(sp[1])]
-	print("HITCHHUNT %s: from col %d to col %d, frames %d, worst frame %.1f ms, frames >50 ms: %d, alpha writes per column %.0f; spikes (>40 ms):%s" % [
-		str(names[leg]), from_col, to_col, (_hh_deltas[leg] as Array).size(), float(_hh_worst[leg]), int(_hh_over50[leg]), float(_hh_alpha_per_col[leg]), spikes_line if spikes_line != "" else " none"])
-
-
-func _drive_hitchhunt_smoke() -> void:
-	match _hh_phase:
-		0:
-			if _room != null and _room.visible and _room.wall_ready and not _scan_active \
-					and (_art_warmer == null or _art_warmer.is_idle()):
-				Input.warp_mouse(Vector2(4, 372))
-				if _room._columns < 56:
-					_hh_expect(false, "hitchhunt: the fixture shelf holds %d columns (the two-direction hunt needs at least 56)" % _room._columns)
-					_finish_hitchhunt_smoke()
-					return
-				_hh_phase = 1
-				_hh_wait = 0
-				_hh_settle_frames = 0
-			else:
-				_hh_wait += 1
-				if _hh_wait > 21600:
-					_hh_expect(false, "hitchhunt: the room never came up (scan/warm never settled)")
-					_finish_hitchhunt_smoke()
-		1:
-			# Seat the start near the shelf's right end: the
-			# cold LEFT cruise crosses the long stretch from
-			# here, the field residue's own shape.
-			_hh_wait += 1
-			var pace_now: int = Time.get_ticks_usec()
-			if _hh_last_usec > 0:
-				_hh_pace_stamps.append(float(pace_now - _hh_last_usec) / 1000.0)
-				if _hh_pace_stamps.size() > 40:
-					_hh_pace_stamps.pop_front()
-			_hh_last_usec = pace_now
-			if _hh_wait == 1:
-				var want_col: int = _room._columns - 18
-				var start_idx: int = -1
-				for i: int in range(_room._panels.size()):
-					if _room._grid_coord(i).x == want_col and _room._grid_coord(i).y == 1:
-						start_idx = i
-						break
-				if start_idx < 0:
-					start_idx = _room._panels.size() / 2
-				_room.set_wall_motion_mode("smooth")
-				_room._set_centre(start_idx, true)
-				_room._set_focused(_room._panels[start_idx])
-			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active():
-				_hh_settle_frames += 1
-			else:
-				_hh_settle_frames = 0
-			if _hh_settle_frames >= 5:
-				if _hh_pace_stamps.size() >= 6:
-					var sorted_pace: Array = _hh_pace_stamps.duplicate()
-					sorted_pace.sort()
-					_hh_pacing_ms = float(sorted_pace[sorted_pace.size() / 2])
-				print("HITCHHUNT PACING: median frame %.1f ms during the start settle" % _hh_pacing_ms)
-				_hh_start_col = _room._grid_coord(_room.centre_index()).x
-				_hh_begin_leg(0, -1.0)
-			elif _hh_wait > 7200:
-				_hh_expect(false, "hitchhunt: the start window never settled")
-				_finish_hitchhunt_smoke()
-		2:
-			_hh_wait += 1
-			_hh_record_frame()
-			var col_now2: int = _room._grid_coord(_room.centre_index()).x
-			var leg2: int = _hh_leg
-			if not bool(_hh_released[leg2]):
-				var done_travelling: bool = false
-				if leg2 == 0 and col_now2 <= _hh_start_col - 40:
-					done_travelling = true
-				elif leg2 == 1 and col_now2 >= _hh_start_col - 2:
-					done_travelling = true
-				elif leg2 == 2 and col_now2 <= _hh_start_col - 40:
-					done_travelling = true
-				if done_travelling:
-					_hh_released[leg2] = true
-					_hh_release_col = col_now2
-					_input_feed_stick_x(0.0)
-			if bool(_hh_released[leg2]):
-				if not _room.swing_active():
-					_hh_rest_frames += 1
-				else:
-					_hh_rest_frames = 0
-				if _hh_rest_frames >= 3:
-					var end_col: int = _room._grid_coord(_room.centre_index()).x
-					var travelled: int = maxi(1, absi(end_col - (_hh_start_col if leg2 != 1 else _hh_start_col - 40)))
-					_hh_alpha_per_col[leg2] = float(_room.alpha_write_count() - _hh_alpha_at_leg_start) / float(travelled)
-					_hh_print_leg(leg2, _hh_start_col if leg2 != 1 else _hh_start_col - 40, end_col)
-					if leg2 == 0:
-						_hh_phase = 3
-						_hh_wait = 0
-						_hh_heal_deadline_msec = Time.get_ticks_msec() + 30000
-					elif leg2 == 1:
-						_hh_begin_leg(2, -1.0)
-					else:
-						_judge_hitchhunt()
-						_finish_hitchhunt_smoke()
-			elif _hh_wait > 14400:
-				_input_feed_stick_x(0.0)
-				_hh_expect(false, "hitchhunt: leg %d never spanned its stretch and settled" % leg2)
-				_finish_hitchhunt_smoke()
-		3:
-			# The landing wait between the cold legs (the
-			# artstream heal discipline): every face in the
-			# standing window lands before the return cruise,
-			# so the return pays decode-cold only where the
-			# caches turned over, exactly as the field does.
-			_hh_wait += 1
-			var states: Array = _room.face_state()
-			var landed: int = 0
-			for sv2: Variant in states:
-				var st: Dictionary = sv2 as Dictionary
-				if bool(st.get("key_stamped", false)) and not bool(st.get("is_unreal", true)) and bool(st.get("from_art", false)):
-					landed += 1
-			if (not states.is_empty() and landed == states.size()) or Time.get_ticks_msec() > _hh_heal_deadline_msec:
-				_hh_begin_leg(1, 1.0)
-			elif _hh_wait > 7200:
-				_hh_begin_leg(1, 1.0)
-
-
-func _judge_hitchhunt() -> void:
-	var warm: Array = _hh_deltas[2] as Array
-	if warm.size() < 6:
-		_hh_expect(false, "hitchhunt: the warm baseline cruise produced too few frames to judge against (%d)" % warm.size())
-		return
-	var sorted_warm: Array = warm.duplicate()
-	sorted_warm.sort()
-	var warm_median: float = float(sorted_warm[sorted_warm.size() / 2])
-	var baseline: float = maxf(_hh_pacing_ms, warm_median)
-	print("HITCHHUNT BASELINE: %.1f ms (max of settle pacing %.1f and warm median %.1f)" % [baseline, _hh_pacing_ms, warm_median])
-	for leg: int in [0, 1]:
-		var dir_name: String = "leftward" if leg == 0 else "rightward"
-		_hh_expect(bool(_hh_saw_cruise[leg]), "hitchhunt: the %s cold leg cruised on the real input path" % dir_name)
-		var hitches: int = 0
-		for dv: Variant in (_hh_deltas[leg] as Array):
-			if float(dv) > baseline + 60.0:
-				hitches += 1
-		_hh_expect(hitches <= 2, "hitchhunt: %s cold cruise travel frames never wait on art - %d hitch frames (over the judge baseline %.1f ms + 60 ms; worst cold frame %.1f ms; allowance 2 for harness pacing)" % [dir_name, hitches, baseline, float(_hh_worst[leg])])
-		_hh_expect(float(_hh_worst[leg]) <= baseline + 75.0, "hitchhunt: the %s cold cruise's worst frame stayed within the judge baseline + 75 ms (worst %.1f ms against baseline %.1f ms)" % [dir_name, float(_hh_worst[leg]), baseline])
-		_hh_expect(float(_hh_alpha_per_col[leg]) <= 220.0, "hitchhunt: the %s cruise's window pass wrote %.0f wall-alpha values per column (bound 220 - the write-on-change law; the pre-fix law writes every panel, launch and label every column)" % [dir_name, float(_hh_alpha_per_col[leg])])
-
-
-## -------------------------------------------------- bite smoke (GRADFIX18 item B)
-##
-## --pvlds-smoke-bite: the 140 ms bite hunt. GF17's field log
-## showed cruise spikes growing as the wall dressed (mean
-## cruise frame 17 -> 39 ms by session third; spikes a uniform
-## ~140 ms, each following a prefetch ask, while every measured
-## art cost stayed flat and art events got rarer). This smoke
-## rebuilds that progression on the bench: two cold cruises
-## dress the wall, then two cruises cross the FULLY dressed
-## wall - the field's ratchet legs. Legs (all named "bite:"):
-##   - the ask proof: with the prio worker held, a prefetch ask
-##     must land as a pending note with NO queue surgery on the
-##     asking thread, then land once released. Under
-##     PVLDS_GF18_NC=askmain the ask applies synchronously on
-##     the caller again and this leg fails by name.
-##   - residency grew: the live face-texture count at the end
-##     of the run stands at or above where the dress began
-##     (without growth the full-wall legs judge nothing).
-##   - the full-wall legs cruised, prefetch asks kept firing
-##     through them, and no ask's main-thread emit cost over
-##     25 ms while they ran.
-##   - the full-wall cruise frames judge against the dress
-##     legs' own baseline exactly as the hitchhunt judge does
-##     (hitch = baseline + 60 ms, allowance 2; worst within
-##     baseline + 75 ms). On the llvmpipe bench absolute frame
-##     times are load-bound - the GF17 caveat stands; the
-##     structural legs above are the bench proof and the
-##     field's GF18-stamped log is the frame verdict.
-func _bite_expect(cond: bool, label: String) -> void:
-	if cond:
-		print("  ok - bite smoke: ", label)
-	else:
-		_bite_failures += 1
-		printerr("  FAIL - bite smoke: ", label)
-
-
-func _finish_bite_smoke() -> void:
-	ArtWarmer.prio_test_hold = false
-	_input_feed_stick_x(0.0)
-	if _bite_failures == 0:
-		print("PVLDS BITE SMOKE: PASS")
-		get_tree().quit(0)
-	else:
-		printerr("PVLDS BITE SMOKE: FAIL (%d)" % _bite_failures)
-		get_tree().quit(1)
-
-
-func _bite_begin_leg(leg: int, feed: float) -> void:
-	_bite_leg = leg
-	if leg == 0:
-		# The dress legs pay the artstream cold reset; the
-		# full-wall legs (2, 3) run over what the dress built.
-		TextureFactory.clear_art_decode_cache()
-	_bite_res_at_leg_start[leg] = _room.gf18_residency()
-	_bite_prefetch_at_leg_start[leg] = _room.gf18_prefetch_count
-	_bite_prefetch_seen = _room.gf18_prefetch_count
-	_bite_released[leg] = false
-	_bite_rest_frames = 0
-	_bite_release_col = -1
-	_bite_last_usec = Time.get_ticks_usec()
-	_bite_res_sample_msec = 0
-	_input_feed_stick_x(feed)
-	_bite_phase = 3
-	_bite_wait = 0
-
-
-func _bite_record_frame() -> void:
-	var now_usec: int = Time.get_ticks_usec()
-	var delta_ms: float = float(now_usec - _bite_last_usec) / 1000.0
-	_bite_last_usec = now_usec
-	var leg: int = _bite_leg
-	(_bite_deltas[leg] as Array).append(delta_ms)
-	if delta_ms > float(_bite_worst[leg]):
-		_bite_worst[leg] = delta_ms
-	var col_now: int = _room._grid_coord(_room.centre_index()).x
-	if delta_ms > 40.0:
-		(_bite_spikes[leg] as Array).append([col_now, snappedf(delta_ms, 0.1)])
-	if _room.cruise_active():
-		_bite_saw_cruise[leg] = true
-	if leg >= 2 and _room.gf18_prefetch_count > _bite_prefetch_seen:
-		_bite_prefetch_seen = _room.gf18_prefetch_count
-		_bite_ask_max_full_ms = maxf(_bite_ask_max_full_ms, _room.gf18_ask_emit_last_ms)
-	var now_msec: int = Time.get_ticks_msec()
-	if now_msec - _bite_res_sample_msec >= 250:
-		_bite_res_sample_msec = now_msec
-		var gauge: Dictionary = _room.gf18_residency()
-		_bite_res_face_max[leg] = maxi(int(_bite_res_face_max[leg]), int(gauge.get("res_face_count", 0)))
-
-
-func _bite_print_leg(leg: int, from_col: int, to_col: int) -> void:
-	_bite_prefetch_at_leg_end[leg] = _room.gf18_prefetch_count
-	var names: Array = ["DRESS-LEFT", "DRESS-RIGHT", "FULL-LEFT", "FULL-RIGHT"]
-	var spikes_line: String = ""
-	for sv: Variant in (_bite_spikes[leg] as Array):
-		var sp: Array = sv as Array
-		spikes_line += " [col %d: %.1f ms]" % [int(sp[0]), float(sp[1])]
-	var start_res: Dictionary = _bite_res_at_leg_start[leg] as Dictionary
-	print("BITE %s: from col %d to col %d, frames %d, worst frame %.1f ms, residency faces %d -> peak %d (art cache %d), prefetch asks %d; spikes (>40 ms):%s" % [
-		str(names[leg]), from_col, to_col, (_bite_deltas[leg] as Array).size(), float(_bite_worst[leg]),
-		int(start_res.get("res_face_count", 0)), int(_bite_res_face_max[leg]), int(start_res.get("res_art_count", 0)),
-		_room.gf18_prefetch_count - int(_bite_prefetch_at_leg_start[leg]),
-		spikes_line if spikes_line != "" else " none"])
-
-
-func _drive_bite_smoke() -> void:
-	match _bite_phase:
-		0:
-			if _room != null and _room.visible and _room.wall_ready and not _scan_active \
-					and (_art_warmer == null or _art_warmer.is_idle()):
-				Input.warp_mouse(Vector2(4, 372))
-				if _room._columns < 56:
-					_bite_expect(false, "bite: the fixture shelf holds %d columns (the dress + full-wall legs need at least 56)" % _room._columns)
-					_finish_bite_smoke()
-					return
-				_bite_phase = 1
-				_bite_wait = 0
-				_bite_settle_frames = 0
-			else:
-				_bite_wait += 1
-				if _bite_wait > 21600:
-					_bite_expect(false, "bite: the room never came up (scan/warm never settled)")
-					_finish_bite_smoke()
-		1:
-			# Seat the start near the shelf's right end and
-			# settle, the hitchhunt shape; then run the
-			# ask-proof while the wall stands still.
-			_bite_wait += 1
-			var pace_now: int = Time.get_ticks_usec()
-			if _bite_last_usec > 0:
-				_bite_pace_stamps.append(float(pace_now - _bite_last_usec) / 1000.0)
-				if _bite_pace_stamps.size() > 40:
-					_bite_pace_stamps.pop_front()
-			_bite_last_usec = pace_now
-			if _bite_wait == 1:
-				var want_col: int = _room._columns - 18
-				var start_idx: int = -1
-				for i: int in range(_room._panels.size()):
-					if _room._grid_coord(i).x == want_col and _room._grid_coord(i).y == 1:
-						start_idx = i
-						break
-				if start_idx < 0:
-					start_idx = _room._panels.size() / 2
-				_room.set_wall_motion_mode("smooth")
-				_room._set_centre(start_idx, true)
-				_room._set_focused(_room._panels[start_idx])
-			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active():
-				_bite_settle_frames += 1
-			else:
-				_bite_settle_frames = 0
-			if _bite_settle_frames >= 5:
-				if _bite_pace_stamps.size() >= 6:
-					var sorted_pace: Array = _bite_pace_stamps.duplicate()
-					sorted_pace.sort()
-					_bite_pacing_ms = float(sorted_pace[sorted_pace.size() / 2])
-				print("BITE PACING: median frame %.1f ms during the start settle" % _bite_pacing_ms)
-				_bite_start_col = _room._grid_coord(_room.centre_index()).x
-				_bite_phase = 2
-				_bite_wait = 0
-				_bite_proof_wait = 0
-			elif _bite_wait > 7200:
-				_bite_expect(false, "bite: the start window never settled")
-				_finish_bite_smoke()
-		2:
-			# The ask proof: hold the prio worker, place one
-			# ask, and read the warmer's state on THIS thread
-			# before any frame passes. Shipped: the ask is a
-			# pending note, no surgery has landed. NC
-			# (askmain): the surgery already landed inside the
-			# call - the leg fails by name.
-			_bite_wait += 1
-			if _bite_wait == 1:
-				if _art_warmer == null:
-					_bite_expect(false, "bite: no art warmer stands to take the ask")
-					_finish_bite_smoke()
-					return
-				ArtWarmer.prio_test_hold = true
-				_bite_proof_before = _art_warmer.prio_applied_batches
-				var ask_games: Array[GameEntry] = []
-				for gi: int in range(mini(12, _room._visible_games.size())):
-					ask_games.append(_room._visible_games[gi])
-				_art_warmer.prioritize(ask_games)
-				var applied_now: int = _art_warmer.prio_applied_batches
-				var pending_now: int = _art_warmer.prio_pending_count()
-				_bite_expect(applied_now == _bite_proof_before and pending_now >= 1,
-					"bite: the ask proof - a prefetch ask lands as a note and its queue surgery never runs on the asking thread (applied %d -> %d, pending %d)" % [_bite_proof_before, applied_now, pending_now])
-				ArtWarmer.prio_test_hold = false
-			else:
-				_bite_proof_wait += 1
-				if _art_warmer.prio_applied_batches > _bite_proof_before:
-					_bite_expect(true, "bite: the held ask still lands on the warmer's side once released")
-					_bite_begin_leg(0, -1.0)
-				elif _bite_proof_wait > 7200:
-					_bite_expect(false, "bite: the held ask never landed on the warmer's side")
-					_finish_bite_smoke()
-		3:
-			_bite_wait += 1
-			_bite_record_frame()
-			var col_now2: int = _room._grid_coord(_room.centre_index()).x
-			var leg2: int = _bite_leg
-			if not bool(_bite_released[leg2]):
-				var done_travelling: bool = false
-				if (leg2 == 0 or leg2 == 2) and col_now2 <= _bite_start_col - 40:
-					done_travelling = true
-				elif (leg2 == 1 or leg2 == 3) and col_now2 >= _bite_start_col - 2:
-					done_travelling = true
-				if done_travelling:
-					_bite_released[leg2] = true
-					_bite_release_col = col_now2
-					_input_feed_stick_x(0.0)
-			if bool(_bite_released[leg2]):
-				if not _room.swing_active():
-					_bite_rest_frames += 1
-				else:
-					_bite_rest_frames = 0
-				if _bite_rest_frames >= 3:
-					var end_col: int = _room._grid_coord(_room.centre_index()).x
-					var from_col: int = _bite_start_col if (leg2 == 0 or leg2 == 2) else _bite_start_col - 40
-					if leg2 == 3:
-						from_col = _bite_start_col - 40
-					_bite_print_leg(leg2, from_col, end_col)
-					if leg2 == 0:
-						_bite_phase = 4
-						_bite_wait = 0
-						_bite_heal_deadline_msec = Time.get_ticks_msec() + 30000
-					elif leg2 == 1:
-						_bite_begin_leg(2, -1.0)
-					elif leg2 == 2:
-						_bite_begin_leg(3, 1.0)
-					else:
-						_judge_bite()
-						_finish_bite_smoke()
-			elif _bite_wait > 14400:
-				_input_feed_stick_x(0.0)
-				_bite_expect(false, "bite: leg %d never spanned its stretch and settled" % leg2)
-				_finish_bite_smoke()
-		4:
-			# The landing wait between the dress legs (the
-			# hitchhunt heal discipline): every face in the
-			# standing window lands before the return cruise.
-			_bite_wait += 1
-			var states: Array = _room.face_state()
-			var landed: int = 0
-			for sv2: Variant in states:
-				var st: Dictionary = sv2 as Dictionary
-				if bool(st.get("key_stamped", false)) and not bool(st.get("is_unreal", true)) and bool(st.get("from_art", false)):
-					landed += 1
-			if (not states.is_empty() and landed == states.size()) or Time.get_ticks_msec() > _bite_heal_deadline_msec:
-				_bite_begin_leg(1, 1.0)
-			elif _bite_wait > 7200:
-				_bite_begin_leg(1, 1.0)
-
-
-func _judge_bite() -> void:
-	var dress: Array = []
-	for dv: Variant in (_bite_deltas[0] as Array):
-		dress.append(dv)
-	for dv2: Variant in (_bite_deltas[1] as Array):
-		dress.append(dv2)
-	if dress.size() < 6:
-		_bite_expect(false, "bite: the dress legs produced too few frames to judge against (%d)" % dress.size())
-		return
-	var sorted_dress: Array = dress.duplicate()
-	sorted_dress.sort()
-	var dress_median: float = float(sorted_dress[sorted_dress.size() / 2])
-	var baseline: float = maxf(_bite_pacing_ms, dress_median)
-	print("BITE BASELINE: %.1f ms (max of settle pacing %.1f and dress median %.1f)" % [baseline, _bite_pacing_ms, dress_median])
-	# Residency growth: the wall the full legs crossed held
-	# at least the faces the dress began with.
-	var res_start: Dictionary = _bite_res_at_leg_start[0] as Dictionary
-	var res_full: Dictionary = _bite_res_at_leg_start[2] as Dictionary
-	_bite_expect(int(res_full.get("res_face_count", 0)) >= int(res_start.get("res_face_count", 0)),
-		"bite: residency grew - the full-wall legs crossed %d live face textures against the dress legs' opening %d" % [int(res_full.get("res_face_count", 0)), int(res_start.get("res_face_count", 0))])
-	var full_asks: int = (int(_bite_prefetch_at_leg_end[2]) - int(_bite_prefetch_at_leg_start[2])) \
-		+ (int(_bite_prefetch_at_leg_end[3]) - int(_bite_prefetch_at_leg_start[3]))
-	_bite_expect(full_asks > 0, "bite: prefetch asks kept firing through the full-wall legs (%d asks across both - the ask was relocated, not removed)" % full_asks)
-	for leg: int in [2, 3]:
-		var dir_name: String = "leftward" if leg == 2 else "rightward"
-		_bite_expect(bool(_bite_saw_cruise[leg]), "bite: the %s full-wall leg cruised on the real input path" % dir_name)
-		var hitches: int = 0
-		for dv3: Variant in (_bite_deltas[leg] as Array):
-			if float(dv3) > baseline + 60.0:
-				hitches += 1
-		_bite_expect(hitches <= 2, "bite: %s full-wall cruise travel frames never wait on the ask - %d hitch frames (over the dress baseline %.1f ms + 60 ms; worst full frame %.1f ms; allowance 2 for harness pacing)" % [dir_name, hitches, baseline, float(_bite_worst[leg])])
-		_bite_expect(float(_bite_worst[leg]) <= baseline + 75.0, "bite: the %s full-wall cruise's worst frame stayed within the dress baseline + 75 ms (worst %.1f ms against baseline %.1f ms)" % [dir_name, float(_bite_worst[leg]), baseline])
-	_bite_expect(_bite_ask_max_full_ms <= 25.0, "bite: no prefetch ask cost a full-wall travel frame more than 25 ms on the main thread (worst emit %.2f ms)" % _bite_ask_max_full_ms)
 
 
 func _drive_bootfocus_smoke() -> void:

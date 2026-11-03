@@ -42,13 +42,15 @@ var wovp_api_key: String = ""
 ## config file is simply no longer read.)
 var starfield_mode: String = "layered" ## "layered" | "flat" | "off"
 const STARFIELD_MODES: Array[String] = ["layered", "flat", "off"]
-## Display dial (GRADFIX10 item 3, ridden from the same
-## SETUP panel): how the drum wall travels. "smooth" (the
-## default - Chris's pick) rolls continuously to its target;
-## "stepped" is the shipped swing/spring cadence, slot by
-## slot in feel. Mirrors starfield_mode exactly.
-var wall_motion_mode: String = "smooth" ## "smooth" | "stepped"
-const WALL_MOTION_MODES: Array[String] = ["smooth", "stepped"]
+## Wall travel gait (was the GRADFIX10 item 3 display dial):
+## the OPTIMIZE round closed the smooth-cruise saga by the
+## player's ruling - STEPPED is the only gait now. The key
+## stays in the file so configs written by ANY shipped build
+## keep loading, but every stored value coerces to "stepped"
+## on load (an old "smooth" included) and saves write
+## "stepped". The SETUP panel's WALL MOTION button is gone.
+var wall_motion_mode: String = "stepped" ## always "stepped" (OPTIMIZE)
+const WALL_MOTION_MODES: Array[String] = ["stepped"]
 ## Deliberately absent: any close-duty or hold-to-exit setting.
 ## The exit model was simplified by the player's ruling
 ## (2026-10-22): the watchdog's session-close duty is
@@ -107,9 +109,10 @@ func load_from_disk() -> bool:
 	starfield_mode = str(d.get("starfield_mode", "layered"))
 	if not STARFIELD_MODES.has(starfield_mode):
 		starfield_mode = "layered"
-	wall_motion_mode = str(d.get("wall_motion_mode", "smooth"))
-	if not WALL_MOTION_MODES.has(wall_motion_mode):
-		wall_motion_mode = "smooth"
+	# OPTIMIZE: any stored gait coerces to the one gait -
+	# a config written by a shipped build may carry "smooth"
+	# (the old default) and must load as "stepped", never error.
+	wall_motion_mode = "stepped"
 	table_folders.clear()
 	var folders: Variant = d.get("table_folders", [])
 	if folders is Array:
@@ -129,6 +132,7 @@ func save_to_disk() -> bool:
 	d["focus_herding"] = focus_herding
 	d["wovp_api_key"] = wovp_api_key
 	d["starfield_mode"] = starfield_mode
+	wall_motion_mode = "stepped" ## OPTIMIZE: saves write the one gait, whatever a caller left standing in the var
 	d["wall_motion_mode"] = wall_motion_mode
 	var folders: Array = []
 	for f: String in table_folders:
