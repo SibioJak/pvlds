@@ -413,6 +413,30 @@ var _land_grabbed: bool = false
 var _land_filter_forced: bool = false
 var _land_warm_held: bool = false
 var _land_rewarm_done: bool = false
+var _smoke_streamahead: bool = false ## --pvlds-smoke-streamahead: GRADFIX18 item A - one continuous held cruise with NO stops over cold art; every column is sampled the frame it enters the drawn window (dressed or bare), the arrival census is read the moment the drum stops, and the cruise's frames are judged against a warm return cruise on the same fixture
+var _sa_phase: int = 0
+var _sa_wait: int = 0
+var _sa_failures: int = 0
+var _sa_start_col: int = -1
+var _sa_saw_cruise: bool = false
+var _sa_released: bool = false
+var _sa_rest_frames: int = 0
+var _sa_settle_frames: int = 0
+var _sa_last_usec: int = 0
+var _sa_frames: int = 0
+var _sa_worst_ms: float = 0.0
+var _sa_cold_deltas: Array = []
+var _sa_pacing_ms: float = 16.7
+var _sa_pace_stamps: Array = []
+var _sa_edge_col: int = -1 ## the highest leading-edge column sampled at window entry so far
+var _sa_entry_total: int = 0
+var _sa_entry_missing: Array = [] ## titles of faces bare on the frame their column entered the drawn window
+var _sa_heal_deadline_msec: int = 0
+var _sa_warm_deltas: Array = []
+var _sa_warm_worst_ms: float = 0.0
+var _sa_warm_released: bool = false
+var _sa_warm_rest_frames: int = 0
+var _sa_warm_saw_cruise: bool = false
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -630,6 +654,8 @@ func _ready() -> void:
 		_smoke_swingprobe = true
 	if user_args.has("--pvlds-smoke-landing"):
 		_smoke_landing = true
+	if user_args.has("--pvlds-smoke-streamahead"):
+		_smoke_streamahead = true
 	if user_args.has("--pvlds-smoke-jumpbench"):
 		_smoke_jumpbench = true
 		_jumpbench_boot_msec = Time.get_ticks_msec()
@@ -768,6 +794,12 @@ func _ready() -> void:
 	# wall-alpha write-everything law, so the hitchhunt
 	# smoke's alpha-write leg fails by name.
 	RoomView.debug_gf17_nc = OS.get_environment("PVLDS_GF17_NC")
+	# GRADFIX18 item A's negative-control seams (PVLDS_GF18_NC=
+	# nostream | nobudget): nostream disables stream-ahead so
+	# the streamahead smoke's arrival legs fail by name;
+	# nobudget disables the travel budget so its frame legs
+	# fail by name. Set here, before any room exists.
+	RoomView.debug_gf18_nc = OS.get_environment("PVLDS_GF18_NC")
 	TextureFactory.probe_enabled = OS.has_environment("PVLDS_GF16_PROBE")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
@@ -803,7 +835,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_hitchhunt or _smoke_swingprobe or _smoke_landing or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_hitchhunt or _smoke_swingprobe or _smoke_landing or _smoke_streamahead or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -989,6 +1021,8 @@ func _process(_delta: float) -> void:
 		_drive_swingprobe_smoke()
 	if _smoke_landing:
 		_drive_landing_smoke()
+	if _smoke_streamahead:
+		_drive_streamahead_smoke()
 	if _smoke_jumpbench:
 		_drive_jumpbench_smoke()
 	if _smoke_quitwarm:
@@ -12593,6 +12627,243 @@ func _land_tour_grab(title: String) -> void:
 		return
 	var slug: String = title.to_lower().replace(" ", "_").replace("!", "wow")
 	_save_shot_png(dir.path_join("landing_" + slug + ".png"))
+
+
+## -------------------------------------------------- streamahead smoke (GRADFIX18 item A)
+##
+## --pvlds-smoke-streamahead: the GF17 field defect's proof.
+## One continuous held cruise with NO stops over the
+## artstream cold-art fixture: while the drum travels, every
+## column is sampled on the frame it ENTERS the drawn window
+## (was its art already standing?), and the moment the drum
+## stops the arrival census is read - every passed section
+## dressed, zero missing. The cruise's frame deltas are then
+## judged against a warm return cruise over the same stretch
+## (the artstream judge's law: hitch = baseline + 60 ms,
+## allowance 2; worst within baseline + 75 ms), and after
+## settle every streamed face must have received its full
+## render (the GF17 guarantee still owns completeness).
+## Legs are named "streamahead:". Under PVLDS_GF18_NC=
+## nostream the arrival/entry legs fail by name (the GF17
+## park returns: the wall ahead is bare); under nobudget the
+## frame legs fail by name (full renders ride travel frames).
+func _sa_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - streamahead smoke: ", label)
+	else:
+		_sa_failures += 1
+		printerr("  FAIL - streamahead smoke: ", label)
+
+
+func _finish_streamahead_smoke() -> void:
+	_input_feed_stick_x(0.0)
+	if _sa_failures == 0:
+		print("PVLDS STREAMAHEAD SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS STREAMAHEAD SMOKE: FAIL (%d)" % _sa_failures)
+		get_tree().quit(1)
+
+
+func _drive_streamahead_smoke() -> void:
+	match _sa_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and not _scan_active \
+					and (_art_warmer == null or _art_warmer.is_idle()):
+				Input.warp_mouse(Vector2(4, 372))
+				if _room._columns < 56:
+					_sa_expect(false, "streamahead: the fixture shelf holds %d columns (the no-stop cruise needs at least 56)" % _room._columns)
+					_finish_streamahead_smoke()
+					return
+				_sa_phase = 1
+				_sa_wait = 0
+				_sa_settle_frames = 0
+			else:
+				_sa_wait += 1
+				if _sa_wait > 21600:
+					_sa_expect(false, "streamahead: the room never came up (scan/warm never settled)")
+					_finish_streamahead_smoke()
+		1:
+			# Seat the start: a settled window with at least
+			# 34 columns of shelf ahead of it.
+			_sa_wait += 1
+			var pace_now: int = Time.get_ticks_usec()
+			if _sa_last_usec > 0:
+				_sa_pace_stamps.append(float(pace_now - _sa_last_usec) / 1000.0)
+				if _sa_pace_stamps.size() > 40:
+					_sa_pace_stamps.pop_front()
+			_sa_last_usec = pace_now
+			if _sa_wait == 1:
+				var start_idx: int = -1
+				for i: int in range(_room._panels.size()):
+					if _room._grid_coord(i).x == 12 and _room._grid_coord(i).y == 1:
+						start_idx = i
+						break
+				if start_idx < 0:
+					start_idx = _room._panels.size() / 2
+				_room.set_wall_motion_mode("smooth")
+				_room._set_centre(start_idx, true)
+				_room._set_focused(_room._panels[start_idx])
+			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active():
+				_sa_settle_frames += 1
+			else:
+				_sa_settle_frames = 0
+			if _sa_settle_frames >= 5:
+				# The artstream cold reset: no art ahead has
+				# been decoded this session.
+				TextureFactory.clear_art_decode_cache()
+				TextureFactory.probe_reset()
+				if _sa_pace_stamps.size() >= 6:
+					var sorted_pace: Array = _sa_pace_stamps.duplicate()
+					sorted_pace.sort()
+					_sa_pacing_ms = float(sorted_pace[sorted_pace.size() / 2])
+				print("STREAMAHEAD PACING: median frame %.1f ms during the start settle" % _sa_pacing_ms)
+				_sa_start_col = _room._grid_coord(_room.centre_index()).x
+				_sa_edge_col = _sa_start_col + RoomView.VISIBLE_HALF_COLUMNS
+				_sa_last_usec = Time.get_ticks_usec()
+				_input_feed_stick_x(1.0)
+				_sa_phase = 2
+				_sa_wait = 0
+			elif _sa_wait > 7200:
+				_sa_expect(false, "streamahead: the start window never settled")
+				_finish_streamahead_smoke()
+		2:
+			# The no-stop cruise: frames recorded, and every
+			# column sampled on the frame it enters the
+			# drawn window's leading edge.
+			_sa_wait += 1
+			var now_usec: int = Time.get_ticks_usec()
+			var delta_ms: float = float(now_usec - _sa_last_usec) / 1000.0
+			_sa_last_usec = now_usec
+			_sa_frames += 1
+			if delta_ms > _sa_worst_ms:
+				_sa_worst_ms = delta_ms
+			_sa_cold_deltas.append(delta_ms)
+			if _room.cruise_active():
+				_sa_saw_cruise = true
+			var col_now: int = _room._grid_coord(_room.centre_index()).x
+			var edge_now: int = col_now + RoomView.VISIBLE_HALF_COLUMNS
+			if edge_now > _sa_edge_col:
+				var states: Array = _room.face_state()
+				for ec: int in range(_sa_edge_col + 1, edge_now + 1):
+					for sv: Variant in states:
+						var st: Dictionary = sv as Dictionary
+						if int(st.get("col", -1)) != ec:
+							continue
+						_sa_entry_total += 1
+						if bool(st.get("is_unreal", true)) or not bool(st.get("from_art", false)) or not bool(st.get("key_stamped", false)):
+							_sa_entry_missing.append(str(st.get("title", "?")))
+				_sa_edge_col = edge_now
+			if not _sa_released and col_now >= _sa_start_col + 22:
+				_sa_released = true
+				_input_feed_stick_x(0.0)
+			if _sa_released:
+				if not _room.swing_active():
+					_sa_rest_frames += 1
+				else:
+					_sa_rest_frames = 0
+				if _sa_rest_frames >= 3:
+					_sa_phase = 3
+					_sa_wait = 0
+			elif _sa_wait > 7200:
+				_input_feed_stick_x(0.0)
+				_sa_expect(false, "streamahead: the held cruise never spanned 22 columns and settled")
+				_finish_streamahead_smoke()
+		3:
+			# ARRIVAL: the drum has just stopped - read the
+			# census before the settle machinery upgrades
+			# anything (its first audit sweep is a heal
+			# cadence away; at most a face or two can have
+			# been re-rendered in these frames).
+			var census: Dictionary = _room.landing_census()
+			var missing: Array = census.get("missing", []) as Array
+			var total_faces: int = int(census.get("total", 0))
+			var streamed_n: int = int(census.get("streamed", 0))
+			var stats: Dictionary = _room.stream_stats()
+			var final_col: int = _room._grid_coord(_room.centre_index()).x
+			print("STREAMAHEAD CRUISE: start col %d, final col %d, frames %d, worst frame %.1f ms, pacing %.1f ms" % [
+				_sa_start_col, final_col, _sa_frames, _sa_worst_ms, _sa_pacing_ms])
+			print("STREAMAHEAD ENTRY: %d faces sampled at window entry, %d bare: %s" % [
+				_sa_entry_total, _sa_entry_missing.size(), ", ".join(PackedStringArray(_sa_entry_missing))])
+			print("STREAMAHEAD ARRIVAL: census %d faces, %d missing, %d standing on streamed art; stream applied %d, yields %d, max apply %.2f ms, max frame spend %.2f ms (budget %.1f ms)" % [
+				total_faces, missing.size(), streamed_n, int(stats.get("applied", 0)), int(stats.get("yields", 0)),
+				float(stats.get("max_apply_ms", 0.0)), float(stats.get("max_frame_spend_ms", 0.0)), float(stats.get("budget_ms", 0.0))])
+			_sa_expect(_sa_saw_cruise, "streamahead: holding the stick under SMOOTH became a cruise on the real input path")
+			_sa_expect(final_col - _sa_start_col >= 20, "streamahead: the no-stop cruise spanned %d columns (a full-shelf travel, no stops)" % (final_col - _sa_start_col))
+			_sa_expect(_sa_entry_total >= 60, "streamahead: entry sampling covered %d faces (the cruise's leading edge, three a column)" % _sa_entry_total)
+			_sa_expect(_sa_entry_missing.size() <= 2, "streamahead: faces were dressed before arrival - %d of %d sampled faces were bare on the frame their column entered the window (bound 2, named above)" % [_sa_entry_missing.size(), _sa_entry_total])
+			_sa_expect(total_faces > 0 and missing.is_empty(), "streamahead: arrival census - every passed section dressed, zero missing (%d of %d landed at arrival: %s)" % [total_faces - missing.size(), total_faces, ", ".join(PackedStringArray(missing))])
+			_sa_expect(int(stats.get("applied", 0)) >= 20, "streamahead: the stream did the dressing - %d faces stream-applied during the travel" % int(stats.get("applied", 0)))
+			_sa_expect(float(stats.get("max_apply_ms", 999.0)) <= float(stats.get("budget_ms", 4.0)) + 4.0, "streamahead: no single stream apply burst the budget (max %.2f ms against the %.1f ms budget + one apply's slack)" % [float(stats.get("max_apply_ms", 0.0)), float(stats.get("budget_ms", 4.0))])
+			_sa_heal_deadline_msec = Time.get_ticks_msec() + 60000
+			_sa_phase = 4
+			_sa_wait = 0
+		4:
+			# SETTLE: the GF17 guarantee still owns final
+			# completeness - every interim face receives its
+			# full render and the census reads zero with
+			# nothing left streamed.
+			_sa_wait += 1
+			var census2: Dictionary = _room.landing_census()
+			var missing2: Array = census2.get("missing", []) as Array
+			var streamed2: int = int(census2.get("streamed", 0))
+			if missing2.is_empty() and streamed2 == 0 and _room.art_pipeline_idle():
+				_sa_expect(true, "streamahead: settle guarantee - after the stop every streamed face received its full render (census zero, none left interim)")
+				_room.set_wall_motion_mode("smooth")
+				_sa_last_usec = Time.get_ticks_usec()
+				_input_feed_stick_x(-1.0)
+				_sa_phase = 5
+				_sa_wait = 0
+			elif Time.get_ticks_msec() > _sa_heal_deadline_msec:
+				_sa_expect(false, "streamahead: settle guarantee - after the stop every streamed face received its full render (%d still missing, %d still interim after 60 s)" % [missing2.size(), streamed2])
+				_room.set_wall_motion_mode("smooth")
+				_sa_last_usec = Time.get_ticks_usec()
+				_input_feed_stick_x(-1.0)
+				_sa_phase = 5
+				_sa_wait = 0
+		5:
+			# The warm return cruise: the frame judge's
+			# baseline (the artstream law).
+			_sa_wait += 1
+			var warm_now: int = Time.get_ticks_usec()
+			var warm_delta: float = float(warm_now - _sa_last_usec) / 1000.0
+			_sa_last_usec = warm_now
+			_sa_warm_deltas.append(warm_delta)
+			if warm_delta > _sa_warm_worst_ms:
+				_sa_warm_worst_ms = warm_delta
+			if _room.cruise_active():
+				_sa_warm_saw_cruise = true
+			var warm_col: int = _room._grid_coord(_room.centre_index()).x
+			if not _sa_warm_released and warm_col <= _sa_start_col + 1:
+				_sa_warm_released = true
+				_input_feed_stick_x(0.0)
+			if _sa_warm_released:
+				if not _room.swing_active():
+					_sa_warm_rest_frames += 1
+				else:
+					_sa_warm_rest_frames = 0
+				if _sa_warm_rest_frames >= 3:
+					if _sa_warm_deltas.size() < 6:
+						_sa_expect(false, "streamahead: the warm return cruise produced too few frames to judge against (%d)" % _sa_warm_deltas.size())
+					else:
+						var sorted_warm: Array = _sa_warm_deltas.duplicate()
+						sorted_warm.sort()
+						var warm_median: float = float(sorted_warm[sorted_warm.size() / 2])
+						var baseline: float = maxf(_sa_pacing_ms, warm_median)
+						var hitches: int = 0
+						for dv: Variant in _sa_cold_deltas:
+							if float(dv) > baseline + 60.0:
+								hitches += 1
+						print("STREAMAHEAD WARM CRUISE: frames %d, median frame %.1f ms, worst %.1f ms; judge baseline %.1f ms, cold hitches %d, cold worst %.1f ms" % [
+							_sa_warm_deltas.size(), warm_median, _sa_warm_worst_ms, baseline, hitches, _sa_worst_ms])
+						_sa_expect(_sa_warm_saw_cruise, "streamahead: the warm return also cruised on the real input path (the baseline is a cruise, not a glide)")
+						_sa_expect(hitches <= 2, "streamahead: travel frames never wait on art - %d cold-cruise hitch frames (over the judge baseline %.1f ms + 60 ms; worst cold frame %.1f ms; allowance 2 for harness pacing)" % [hitches, baseline, _sa_worst_ms])
+						_sa_expect(_sa_worst_ms <= baseline + 75.0, "streamahead: the cold cruise's worst frame stayed within the judge baseline + 75 ms (worst %.1f ms against baseline %.1f ms)" % [_sa_worst_ms, baseline])
+					_finish_streamahead_smoke()
+			elif _sa_wait > 7200:
+				_input_feed_stick_x(0.0)
+				_sa_expect(false, "streamahead: the warm return cruise never settled")
+				_finish_streamahead_smoke()
 
 
 func _artstream_print_probe() -> void:
