@@ -12336,10 +12336,12 @@ func _drive_landing_smoke() -> void:
 					_land_filter_forced = true
 					_room._handle_rail("filter:all")
 					return
-				# Park the pointer in the sky corner: a
-				# resting ray over the wall would win the
-				# centre follow and fight every settle.
-				Input.warp_mouse(Vector2(2, 2))
+				# Park the pointer over the furniture
+				# (the nav driver's lesson): on the drum
+				# any other park can sit on a card, and
+				# hover would drive the centre away from
+				# the legs' travel and fight every settle.
+				Input.warp_mouse(Vector2(512.0, 764.0))
 				if _room._columns < 40:
 					_landing_expect(false, "landing guarantee: the fixture shelf holds %d columns (hard travel needs at least 40)" % _room._columns)
 					_finish_landing_smoke()
