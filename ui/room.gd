@@ -639,7 +639,9 @@ var _art_decoded_ready: Dictionary = {} ## art path -> Image: a finished backgro
 var _art_decoded_failed: Dictionary = {} ## art path -> true: a background decode finished and produced no image (the staged face falls through to its styled card, exactly as a synchronous load failure did)
 var _art_decode_mutex: Mutex = Mutex.new() ## guards the decode dictionaries and the pump's queue against the worker thread
 var _art_decode_queue: Array[String] = [] ## art paths awaiting the decode pump (mutex-guarded)
-var _art_decode_pump_active: bool = false ## a pump task is draining _art_decode_queue (mutex-guarded): ONE decode at a time, ever - the ArtWarmer's proven discipline, so background decode can never swarm the renderer's cores
+var _art_decode_pump_active: bool = false ## a pump task is draining _art_decode_queue (mutex-guarded)
+var _art_decode_workers: int = 0 ## pump tasks currently draining (mutex-guarded) - GRADFIX18: a BOUNDED pool (ART_DECODE_WORKERS), replacing GF16's one-at-a-time law: a serial pump caps stream dressing at one face per decode cost (field 3.5 ms = ~285/s, ample; the heavy-art bench fixture ~100-300 ms = 3-10/s against a cruise's ~16 faces/s demand, impossible) - the pool is what lets the stream hold its lead on heavy art. Unbounded per-face tasks stay banned (the GF16 swarm); the pool is three, ever.
+const ART_DECODE_WORKERS: int = 3 ## the decode pool's bound (see _art_decode_workers)
 var _art_stopping: bool = false ## the room is leaving the tree: the pipeline starts no new face and the pump returns after its current decode - art work must wind down at exit, not continue into engine teardown (the harness's swing probe segfaulted at quit with fills in flight; the serial worker it replaced was almost always idle by quit, the pipeline by design is not)
 ## GRADFIX17 (hitch hunt) art-pipeline telemetry staging:
 ## the pipeline's seams (enqueue, decode pump, apply, heal,
@@ -675,6 +677,42 @@ var gf18_prefetch_count: int = 0 ## prefetch asks emitted since boot
 var gf18_ask_emit_max_ms: float = 0.0 ## worst main-thread emit (the synchronous prioritize ask) inside a drained pass
 var gf18_ask_emit_last_ms: float = 0.0 ## the most recent drained pass's emit cost (the bite smoke attributes emits to legs by the prefetch count)
 var gf18_ask_total_max_ms: float = 0.0 ## worst whole drained-handler cost on the main thread
+## GRADFIX18 (item A, stream-ahead) state and laws. THE
+## DECOMPOSITION (Chris's GF17 session log, 202 applies, all
+## at rest): enqueue p50 0.27 ms; background decode_end p50
+## 3.5 ms; apply p50 33.4 ms of which load (texture creation
+## from the staged decode) is p50 0.34 ms and the viewport
+## render is p50 33.3 ms - the render IS the apply. Its
+## sub-steps (TextureFactory._render_now): apply_spec
+## (sub-ms), one process-frame wait, UPDATE_ONCE +
+## frame_post_draw (the SubViewport's own draw), get_image()
+## readback (GPU->CPU copy of the 496x864 face), and
+## ImageTexture creation for the capture. The waits and the
+## readback cannot be sliced under a frame budget - a render
+## is atomic - so NO viewport render runs on a travel frame.
+## What runs during travel instead: the background pump
+## decodes AND face-prepares (cover-crop + resize to the
+## face size, replicating CardFace's KEEP_ASPECT_COVERED) on
+## its worker thread, and the main thread only creates one
+## texture from the prepared image (~0.34 ms) and swaps it
+## on. The full rendered face (favorite star / PuP badges
+## composed by CardFace) and the power-on overlay/subject
+## are SETTLE work: a streamed face is stamped fkey+|stream,
+## counts as dressed in the landing census (real art, real
+## texture, honest aspect), and the GF17 settle audit /
+## pipeline upgrade it to the full render after the drum
+## stops (their stamped != want test fires on the suffix).
+const STREAM_LEAD_COLS: int = 8 ## columns of stream window beyond the drawn window's edge on the travel side: at the 72 deg/s cruise (13.5 deg/col = 5.33 col/s, one column per 187 ms) a lead column is asked 8 x 187 ms = 1.50 s before it enters the drawn window - the serial pump (decode ~3.5 ms field / ~15 ms bench + prep) drains the 24 lead faces in well under that
+const STREAM_TRAIL_COLS: int = 2 ## columns kept dressed behind the travel side (a reversal re-enters dressed wall)
+const STREAM_BUDGET_MS: float = 4.0 ## the travel frame's total main-thread stream budget: every stream apply is timed into the frame's spend and the pass yields the frame the moment the spend reaches this - one apply (~0.34 ms texture creation + node writes) can never reach it unsliced
+const STREAM_STAMP_SUFFIX: String = "|stream" ## the interim stamp a streamed face wears (see above)
+var _art_prepared_ready: Dictionary = {} ## art path -> Image: a face-prepared decode awaiting a stream apply (mutex-guarded with the decode dictionaries)
+var _art_decode_target: Dictionary = {} ## art path -> Vector2i: the face size its prepared sibling is made at (mutex-guarded)
+var _stream_applied_count: int = 0 ## faces stream-applied since boot (the streamahead smoke's witness)
+var _stream_budget_yields: int = 0 ## travel frames the budget yielded mid-pass
+var _stream_max_apply_ms: float = 0.0 ## the most expensive single stream apply
+var _stream_max_frame_spend_ms: float = 0.0 ## the fullest travel frame's stream spend
+var _stream_prefetch_key: String = "" ## the lead slice the warmer was last asked for (dedup for the per-crossing asks)
 ## (The shelf's bookend fins stood here until GRADFIX8
 ## item 5 - removed entirely, Chris's order; see
 ## bookend_fin_count in the smoke-support section.)
@@ -873,6 +911,14 @@ static var debug_gf17_nc: String = ""
 ## ArtWarmer.nc_sync_prioritize, set beside this) - so the
 ## bite smoke's ask-proof leg fails by name. Empty in every
 ## real run.
+## Negative-control seams for GRADFIX18 item A (the harness
+## env PVLDS_GF18_NC, set by Main before any room exists):
+## "nostream" disables stream-ahead - no lead window, no
+## travel applies, the GF17 cruise park returns - so the
+## streamahead smoke's arrival-census legs fail by name;
+## "nobudget" disables the travel budget - full viewport
+## renders run on the travel path again, unsliced - so its
+## frame legs fail by name. Empty in every real run.
 static var debug_gf18_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
@@ -4245,6 +4291,19 @@ func _fill_wall_textures(gen: int) -> void:
 ##      coroutine yielding a frame between faces, never a
 ##      call the travel path awaits.
 ## A picture may land late; the drum never waits for it.
+##
+## GRADFIX18 (item A) - STREAM-AHEAD. GF16's shape was
+## over-read in the field as "art never loads during
+## travel": applications parked for the whole cruise, so
+## the wall ahead stood bare until the drum stopped. The
+## pipeline now STREAMS during travel: the enqueue window
+## reaches STREAM_LEAD_COLS ahead of the drum, the pump
+## decodes + face-prepares on its thread without parking,
+## and the pass applies the cheap half (one texture
+## creation + swap, budgeted at STREAM_BUDGET_MS per travel
+## frame - see the decomposition there). The expensive
+## half (the composed viewport render, the power subject)
+## remains settle work, upgraded by the GF17 audit.
 ## The card a face belongs to keeps whatever honest texture
 ## it already wears (or the placeholder) until its staged
 ## face applies; the standing heal re-asks for anything the
@@ -4315,20 +4374,87 @@ func _fill_window_faces_sync(gen: int) -> void:
 ## The window's face indices, centre column outward - the
 ## one fill order both workers walk.
 func _window_fill_order() -> Array[int]:
-	var order: Array[int] = []
 	if _panel_window_lo < 0:
+		return []
+	return _fill_order_for(_panel_window_lo, _panel_window_hi)
+
+
+## Face indices over an explicit column span, centre column
+## outward (the window order's general shape; GRADFIX18's
+## stream walks its span in arrival order instead - see
+## _stream_fill_order - and only falls back to this at a
+## standstill inside a stream span).
+func _fill_order_for(lo: int, hi: int) -> Array[int]:
+	var order: Array[int] = []
+	if lo < 0 or hi < lo or _centre_index < 0:
 		return order
 	var centre_col: int = _grid_coord(_centre_index).x
-	for dist: int in range(0, centre_col + VISIBLE_HALF_COLUMNS + 1):
+	var max_dist: int = maxi(centre_col - lo, hi - centre_col)
+	for dist: int in range(0, max_dist + 1):
 		for c: int in [centre_col - dist, centre_col + dist]:
 			if dist == 0 and c != centre_col:
 				continue
-			if c < _panel_window_lo or c > _panel_window_hi:
+			if c < lo or c > hi:
 				continue
 			for row: int in range(3):
 				var idx: int = _raw_index(c, row)
 				if idx >= 0 and idx < _panels.size():
 					order.append(idx)
+	return order
+
+
+## GRADFIX18 (item A): face indices over the stream span in
+## ARRIVAL order - the order the drum reaches them: the
+## drawn window's leading edge first (those faces are on
+## screen now and stay on screen longest), then the lead
+## columns in the order they will enter, then the trail.
+## The centre-out order above is right at rest and wrong
+## for the stream: the streamahead bench runs 1-4 convicted
+## it - with a bounded decode supply the queue spent itself
+## mid-window (faces already passed) and the leading edge,
+## the faces the entry census samples, was bare on every
+## single run (69 of 69), however the pump was pooled or
+## prioritized. Arrival order spends the same supply on
+## the faces the drum reaches first.
+func _stream_fill_order(lo: int, hi: int) -> Array[int]:
+	var order: Array[int] = []
+	if lo < 0 or hi < lo or _panel_window_lo < 0:
+		return order
+	var dir: int = int(_travel_dir_speed()[0])
+	if dir == 0:
+		return _fill_order_for(lo, hi)
+	var cols: Array[int] = []
+	if dir > 0:
+		var c: int = _panel_window_hi
+		while c >= _panel_window_lo:
+			cols.append(c)
+			c -= 1
+		c = _panel_window_hi + 1
+		while c <= hi:
+			cols.append(c)
+			c += 1
+		c = _panel_window_lo - 1
+		while c >= lo:
+			cols.append(c)
+			c -= 1
+	else:
+		var c2: int = _panel_window_lo
+		while c2 <= _panel_window_hi:
+			cols.append(c2)
+			c2 += 1
+		c2 = _panel_window_lo - 1
+		while c2 >= lo:
+			cols.append(c2)
+			c2 -= 1
+		c2 = _panel_window_hi + 1
+		while c2 <= hi:
+			cols.append(c2)
+			c2 += 1
+	for cc: int in cols:
+		for row: int in range(3):
+			var idx: int = _raw_index(cc, row)
+			if idx >= 0 and idx < _panels.size():
+				order.append(idx)
 	return order
 
 
@@ -4446,6 +4572,148 @@ func _face_is_standing_memo(idx: int) -> bool:
 	return str(_panel_face_key.get(game.game_id, "")) == _face_key_for_memo(idx)
 
 
+## GRADFIX18 (item A): the travel state the stream window
+## keys on: [dir, speed_deg_s, travelling]. The cruise's dir
+## and standing cap while one stands; a swing's dir from its
+## remaining travel (or its velocity), its speed the drum's
+## own. At rest, dir 0.
+func _travel_dir_speed() -> Array:
+	var travelling: bool = _cruise_dir != 0 or _swing_active or page_slide_active()
+	if _cruise_dir != 0:
+		return [_cruise_dir, rad_to_deg(_swing_cruise_rad), true]
+	if _swing_active:
+		var dir: int = 0
+		var rest: float = _swing_to - _drum_yaw
+		if absf(rest) > 0.0001:
+			dir = 1 if rest > 0.0 else -1
+		elif absf(_swing_vel) > 0.0001:
+			dir = 1 if _swing_vel > 0.0 else -1
+		return [dir, maxf(rad_to_deg(absf(_swing_vel)), 36.0), true]
+	return [0, 0.0, travelling]
+
+
+## GRADFIX18 (item A): the stream window's column span: the
+## drawn window at rest; while travelling, extended by
+## STREAM_LEAD_COLS beyond the drawn edge on the travel side
+## and STREAM_TRAIL_COLS behind it - the wall ahead is asked
+## for before the drum can arrive (see the STREAM_LEAD_COLS
+## arithmetic). Under the nostream NC the drawn window stands.
+func _stream_cols() -> Vector2i:
+	if _panel_window_lo < 0:
+		return Vector2i(_panel_window_lo, _panel_window_hi)
+	var lo: int = _panel_window_lo
+	var hi: int = _panel_window_hi
+	if debug_gf18_nc == "nostream" or _columns <= 0:
+		return Vector2i(lo, hi)
+	var ts: Array = _travel_dir_speed()
+	var dir: int = int(ts[0])
+	if bool(ts[2]) and dir != 0:
+		if dir > 0:
+			hi = mini(_columns - 1, hi + STREAM_LEAD_COLS)
+			lo = maxi(0, lo - STREAM_TRAIL_COLS)
+		else:
+			lo = maxi(0, lo - STREAM_LEAD_COLS)
+			hi = mini(_columns - 1, hi + STREAM_TRAIL_COLS)
+	return Vector2i(lo, hi)
+
+
+## GRADFIX18 (item A): whether a panel already wears its
+## streamed face for the key the memo now asks (real art
+## texture, honest aspect, the |stream stamp) - dressed for
+## arrival, still owed its full render at settle.
+func _face_is_stream_dressed(idx: int) -> bool:
+	if idx < 0 or idx >= _visible_games.size() or idx >= _panels.size():
+		return false
+	var game: GameEntry = _visible_games[idx]
+	if str(_panel_face_key.get(game.game_id, "")) != _face_key_for_memo(idx) + STREAM_STAMP_SUFFIX:
+		return false
+	var tex: Texture2D = _panels[idx].current_texture()
+	return tex != null and _tex_is_real(tex) and idx < _panel_art_aspect.size() and _panel_art_aspect[idx] > 0.0
+
+
+## GRADFIX18 (item A): re-order the decode pump's queue to
+## the standing stream window's arrival order - the window's
+## needy paths first, in enqueue (arrival) order,
+## everything else behind in its standing
+## order. Without this the pump chews FIFO through whatever
+## earlier windows queued (a boot seat's whole backlog), and
+## the lead faces the drum is approaching wait behind faces
+## nobody is travelling toward - the first streamahead bench
+## run's conviction: 210 lifetime decodes, the cruise's own
+## faces stuck behind ~100 stale entries, 12 stream applies
+## in the whole cruise. Queue surgery only: membership and
+## the pending set are untouched, so no decode is lost or
+## duplicated - the stale faces still decode, just after
+## the wall the player is actually approaching.
+func _stream_prioritize_pump_queue(needy: Array[int]) -> void:
+	if needy.is_empty():
+		return
+	var want: Dictionary = {}
+	var front: Array[String] = []
+	for idx: int in needy:
+		if idx < 0 or idx >= _visible_games.size():
+			continue
+		var path: String = _face_path_memoized(_visible_games[idx])
+		if path != "" and not want.has(path):
+			want[path] = true
+			front.append(path)
+	_art_decode_mutex.lock()
+	if _art_decode_queue.size() > 1:
+		var back: Array[String] = []
+		var have: Dictionary = {}
+		for queued: String in _art_decode_queue:
+			have[queued] = true
+			if not want.has(queued):
+				back.append(queued)
+		var rebuilt: Array[String] = []
+		for fp: String in front:
+			if have.has(fp):
+				rebuilt.append(fp)
+		rebuilt.append_array(back)
+		_art_decode_queue = rebuilt
+	_art_decode_mutex.unlock()
+
+
+## GRADFIX18 (item A): ask Main's warmer to bring the LEAD
+## slice's extractions forward - a lead face whose art has
+## not extracted yet has no ready path to stream, so its
+## extraction must land ahead of the drum too. Deduped by
+## the slice's identity: the ask fires when the lead moves,
+## not on every crossing inside it.
+func _stream_ask_lead_warmer(stream_cols: Vector2i) -> void:
+	if _panel_window_lo < 0:
+		return
+	var ts: Array = _travel_dir_speed()
+	var dir: int = int(ts[0])
+	if dir == 0:
+		return
+	var lead_games: Array = []
+	if dir > 0:
+		for c: int in range(_panel_window_hi + 1, stream_cols.y + 1):
+			for row: int in range(3):
+				var idx: int = _raw_index(c, row)
+				if idx >= 0 and idx < _visible_games.size():
+					lead_games.append(_visible_games[idx])
+	else:
+		for c2: int in range(stream_cols.x, _panel_window_lo):
+			for row2: int in range(3):
+				var idx2: int = _raw_index(c2, row2)
+				if idx2 >= 0 and idx2 < _visible_games.size():
+					lead_games.append(_visible_games[idx2])
+	if lead_games.is_empty():
+		return
+	var key: String = str((lead_games[0] as GameEntry).game_id) + "|" + str(lead_games.size()) + "|" + str(dir)
+	if key == _stream_prefetch_key:
+		return
+	_stream_prefetch_key = key
+	_art_event("stream_prefetch", {
+		"col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+		"cruise_dir": _cruise_dir, "games": lead_games.size(),
+		"first": (lead_games[0] as GameEntry).game_id,
+	})
+	art_prefetch_requested.emit(lead_games)
+
+
 ## Enqueue the standing window's faces for the staged
 ## pipeline (centre-out). Called on every centre change:
 ## the queue is REBUILT from the standing window each time,
@@ -4466,7 +4734,14 @@ func _art_pipe_enqueue_window() -> void:
 	# individually - the order walk, the standing filter (the
 	# probe chain's seat: on a memo miss it runs the full
 	# face_path_ready probe per face), and the decode dispatch.
-	var order: Array[int] = _window_fill_order()
+	# GRADFIX18: the queue is built over the STREAM window -
+	# at rest that is the drawn window exactly (the shipped
+	# shape); while travelling it reaches STREAM_LEAD_COLS
+	# ahead, so the faces the drum is approaching are queued,
+	# decoded and dressed before they enter the drawn window.
+	var stream_cols: Vector2i = _stream_cols()
+	var streaming: bool = stream_cols.x != _panel_window_lo or stream_cols.y != _panel_window_hi
+	var order: Array[int] = _stream_fill_order(stream_cols.x, stream_cols.y) if streaming else _window_fill_order()
 	var tel_order_done: int = Time.get_ticks_usec()
 	var needy: Array[int] = []
 	var tel_filter_ms: float = 0.0
@@ -4490,7 +4765,8 @@ func _art_pipe_enqueue_window() -> void:
 	# GRADFIX17 telemetry: the enqueue's own account - which
 	# faces it found needy (identity = game + art file), on
 	# which column, under which travel state. GRADFIX18 adds
-	# the sub-step costs and the residency gauge.
+	# the sub-step costs, the residency gauge, and the stream
+	# span the queue was built over.
 	var tel_faces: Array = []
 	for nidx: int in needy:
 		var ngame: GameEntry = _visible_games[nidx]
@@ -4509,15 +4785,28 @@ func _art_pipe_enqueue_window() -> void:
 		"filter_max_game": tel_filter_max_game,
 		"memo_miss": tel_memo_miss,
 		"faces_ms": tel_faces_ms,
+		"stream_lo": stream_cols.x, "stream_hi": stream_cols.y,
 	}
 	var gauge: Dictionary = gf18_residency()
 	for gkey: Variant in gauge.keys():
 		tel_rec[gkey] = gauge[gkey]
 	_art_event("enqueue", tel_rec)
-	var pre: Array[int] = []
-	for i: int in range(mini(6, needy.size())):
-		pre.append(needy[i])
-	_art_pipe_dispatch_decodes(pre)
+	if streaming:
+		# Travelling: every needy face's decode is dispatched
+		# now (the pump pool is deduped - the queue note is
+		# cheap), the pump queue is RE-ORDERED to this
+		# window's arrival order (below), and the warmer is
+		# asked for the lead slice's extractions. At rest the
+		# shipped shape stands: the first few dispatch here,
+		# the rest as the pass pops them.
+		_art_pipe_dispatch_decodes(needy)
+		_stream_prioritize_pump_queue(needy)
+		_stream_ask_lead_warmer(stream_cols)
+	else:
+		var pre: Array[int] = []
+		for i: int in range(mini(6, needy.size())):
+			pre.append(needy[i])
+		_art_pipe_dispatch_decodes(pre)
 	if TextureFactory.probe_enabled:
 		TextureFactory.probe_note("pipe_enqueue_window", Time.get_ticks_usec() - probe_t)
 
@@ -4544,8 +4833,11 @@ func _art_pipe_dispatch_one(path: String) -> void:
 	var start_pump: bool = false
 	if not known:
 		_art_decode_pending[path] = true
+		if not _art_decode_target.has(path):
+			_art_decode_target[path] = _panel_face_px ## GRADFIX18: the pump face-prepares at the standing face size
 		_art_decode_queue.append(path)
-		if not _art_decode_pump_active:
+		if _art_decode_workers < ART_DECODE_WORKERS:
+			_art_decode_workers += 1
 			_art_decode_pump_active = true
 			start_pump = true
 	_art_decode_mutex.unlock()
@@ -4555,36 +4847,36 @@ func _art_pipe_dispatch_one(path: String) -> void:
 		WorkerThreadPool.add_task(Callable(self, "_art_decode_pump"))
 
 
-## The background decode pump (ONE worker task): drains the
-## decode queue one file at a time - load + downscale into
-## an Image, handed back through the mutex-guarded
-## dictionaries. No texture creation, no cache writes, no
-## node access: everything the pump touches is either its
-## own local Image or the guarded dictionaries. One at a
-## time is deliberate (the first staged runs dispatched a
-## task per face, and the decode swarm fought the renderer
-## for cores - the cruise crawled and the spikes came back;
-## the ArtWarmer's one-worker discipline is the house's
-## proven answer).
+## The background decode pump (a BOUNDED pool of worker
+## tasks, ART_DECODE_WORKERS): drains the decode queue -
+## load + downscale + face-prep into Images, handed back
+## through the mutex-guarded dictionaries. No texture
+## creation, no cache writes, no node access: everything a
+## pump task touches is either its own local Image or the
+## guarded dictionaries. GF16 ran ONE task (a task per face
+## - the unbounded swarm - fought the renderer for cores);
+## GRADFIX18's stream needs decode throughput above the
+## cruise's arrival rate on heavy art too, so the pool is
+## bounded at three - the swarm stays banned, the serial
+## cap goes.
 func _art_decode_pump() -> void:
 	while true:
 		if _art_stopping:
 			_art_decode_mutex.lock()
-			_art_decode_pump_active = false
+			_art_decode_workers -= 1
+			_art_decode_pump_active = _art_decode_workers > 0
 			_art_decode_mutex.unlock()
 			return
-		# While a cruise stands the pump parks too: on a
-		# CPU-bound renderer even a background decode thread
-		# competes with the travel frames (measured on the
-		# harness box - cold-cruise frames ran ~3x the warm
-		# cruise's with applications already paused). The
-		# pump sleeps and resumes the moment the cruise ends;
-		# its queue keeps every staged path in order.
-		while _cruise_dir != 0 and not _art_stopping:
-			OS.delay_msec(8)
+		# GRADFIX18: the pump no longer parks for a cruise -
+		# stream-ahead lives on decodes landing DURING travel
+		# (the GF17 park was the mechanism that left the wall
+		# ahead bare). It stays ONE decode at a time, and
+		# everything it does is worker-thread Image work: no
+		# texture creation, no node access, no frame contact.
 		_art_decode_mutex.lock()
 		if _art_decode_queue.is_empty():
-			_art_decode_pump_active = false
+			_art_decode_workers -= 1
+			_art_decode_pump_active = _art_decode_workers > 0
 			_art_decode_mutex.unlock()
 			return
 		var path: String = _art_decode_queue.pop_front()
@@ -4592,11 +4884,25 @@ func _art_decode_pump() -> void:
 		_art_event("decode_start", {"path": path, "thread": OS.get_thread_caller_id(), "wall_ms": Time.get_ticks_msec()})
 		var tel_t0: int = Time.get_ticks_usec()
 		var img: Image = TextureFactory.decode_art_image(path)
-		_art_event("decode_end", {"path": path, "thread": OS.get_thread_caller_id(), "wall_ms": Time.get_ticks_msec(), "cost_ms": float(Time.get_ticks_usec() - tel_t0) / 1000.0, "ok": img != null})
+		# GRADFIX18: face-prep rides the same worker pass -
+		# cover-crop + resize to the face size here, so the
+		# main thread's stream apply is one texture creation.
+		var prepared: Image = null
+		var prep_ms: float = 0.0
+		if img != null:
+			_art_decode_mutex.lock()
+			var target: Vector2i = _art_decode_target.get(path, CARD_FACE_PX) as Vector2i
+			_art_decode_mutex.unlock()
+			var prep_t0: int = Time.get_ticks_usec()
+			prepared = TextureFactory.prepare_face_image(img, target)
+			prep_ms = float(Time.get_ticks_usec() - prep_t0) / 1000.0
+		_art_event("decode_end", {"path": path, "thread": OS.get_thread_caller_id(), "wall_ms": Time.get_ticks_msec(), "cost_ms": float(Time.get_ticks_usec() - tel_t0) / 1000.0, "ok": img != null, "prep_ms": prep_ms})
 		_art_decode_mutex.lock()
 		_art_decode_pending.erase(path)
 		if img != null:
 			_art_decoded_ready[path] = img
+			if prepared != null:
+				_art_prepared_ready[path] = prepared
 		else:
 			_art_decoded_failed[path] = true
 		_art_decode_mutex.unlock()
@@ -4604,16 +4910,19 @@ func _art_decode_pump() -> void:
 
 ## The staged pipeline pass: a deferred coroutine (started
 ## via call_deferred from _run_art_pipe, so it never runs
-## inside a _set_centre call), walking the queue one face
-## per frame at most. A face whose decode is still in
-## flight is SKIPPED this pass - never waited on - and
-## re-queued behind the rest; the pass ends only when the
-## queue holds nothing but in-flight decodes, and even then
-## it polls on its own frames until they land or the
-## generation changes. Faces are applied by the same
+## inside a _set_centre call). At rest it walks the queue
+## one full face per frame at most, applied by the same
 ## _fill_one_face_sync the serial worker uses, with
 ## _art_pipe_in_stage set so its decode branch consumes the
 ## staged result instead of paying a synchronous decode.
+## During travel (GRADFIX18) it takes the stream path
+## instead: budgeted direct applies of the pump's prepared
+## images, no renders (see _art_pipe_pass). A face whose
+## decode is still in flight is SKIPPED this pass - never
+## waited on - and re-queued behind the rest; the pass ends
+## only when the queue holds nothing but in-flight decodes,
+## and even then it polls on its own frames until they land
+## or the generation changes.
 func _run_art_pipe() -> void:
 	_art_pipe_busy = true
 	_window_fill_busy = true
@@ -4634,6 +4943,7 @@ func art_pipeline_idle() -> bool:
 func _art_pipe_pass() -> void:
 	var gen: int = _gen
 	var deferred: Array[int] = []
+	var stream_frame_t0: int = Time.get_ticks_usec() ## GRADFIX18: the current travel frame's stream-spend clock (reset at every budget yield and every frame the pass awaits)
 	while gen == _gen:
 		while not _art_pipe_queue.is_empty():
 			if gen != _gen:
@@ -4642,36 +4952,89 @@ func _art_pipe_pass() -> void:
 			if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
 				continue
 			var cc: int = _grid_coord(idx).x
-			if cc < _panel_window_lo or cc > _panel_window_hi:
-				continue # the window left this card behind mid-pass
-			# While a held CRUISE stands, the pipeline
-			# applies NOTHING: sustained travel is the
-			# convicted case, and on any renderer a face
-			# capture landing mid-cruise is a hitch the
-			# drum pays for art. Background decodes keep
-			# running (they touch no frame), so the faces
-			# are staged and ready; applications resume
-			# the frame the cruise ends - a picture lands
-			# a beat after the drum stops, never during
-			# its travel. Ordinary swings keep the halved
-			# rate below (short travels, the shipped cost
-			# class).
-			var was_cruise_parked: bool = false
-			var tel_park_msec: int = Time.get_ticks_msec()
-			while _cruise_dir != 0 and gen == _gen:
-				was_cruise_parked = true
-				await get_tree().process_frame
-			if was_cruise_parked:
-				_art_event("pipe_park", {"parked_ms": Time.get_ticks_msec() - tel_park_msec, "col": cc, "game": _visible_games[idx].game_id})
-			if was_cruise_parked and gen == _gen:
-				# The release settle gets three frames of
-				# clear road before the first staged face
-				# lands - the resumed-work burst must not
-				# ride the very frame the drum stops on.
-				for grace_i: int in range(3):
+			var sc: Vector2i = _stream_cols()
+			if cc < sc.x or cc > sc.y:
+				continue # the (stream) window left this card behind mid-pass
+			var travelling_now: bool = bool(_travel_dir_speed()[2])
+			if debug_gf18_nc == "nostream":
+				# The GF17 law, restored by the NC: while a
+				# held CRUISE stands the pipeline applies
+				# NOTHING (background decodes continue); the
+				# release settle gets three clear frames.
+				var was_cruise_parked: bool = false
+				var tel_park_msec: int = Time.get_ticks_msec()
+				while _cruise_dir != 0 and gen == _gen:
+					was_cruise_parked = true
 					await get_tree().process_frame
-			if gen != _gen:
-				break
+				if was_cruise_parked:
+					_art_event("pipe_park", {"parked_ms": Time.get_ticks_msec() - tel_park_msec, "col": cc, "game": _visible_games[idx].game_id})
+				if was_cruise_parked and gen == _gen:
+					for grace_i: int in range(3):
+						await get_tree().process_frame
+				if gen != _gen:
+					break
+			elif travelling_now and not _tournament and debug_gf18_nc != "nobudget":
+				# GRADFIX18 STREAM PATH: no viewport render
+				# ever runs here - only work the budget
+				# affords (see the decomposition at
+				# STREAM_BUDGET_MS). A face already wearing
+				# its full render or its streamed face costs
+				# a key comparison; a cached full render
+				# applies as a texture swap; a landed
+				# prepared decode stream-applies; anything
+				# else is dispatched and deferred, never
+				# waited on. Travel input never waits on art.
+				if _face_is_stream_dressed(idx):
+					continue
+				var sgame: GameEntry = _visible_games[idx]
+				var memo_key: String = _face_key_for_memo(idx)
+				if str(_panel_face_key.get(sgame.game_id, "")) == memo_key:
+					continue # fully standing (a stale queue entry)
+				var spath: String = _face_path_memoized(sgame)
+				if spath == "":
+					continue # no ready art: its styled card is settle work, never travel work
+				if not _face_cache_get(memo_key).is_empty():
+					_art_pipe_in_stage = true
+					_art_apply_branch = ""
+					_art_apply_load_ms = 0.0
+					_art_apply_render_ms = 0.0
+					var ctel_t0: int = Time.get_ticks_usec()
+					await _fill_one_face_sync(idx, gen)
+					_art_pipe_in_stage = false
+					_art_event("apply", {
+						"game": sgame.game_id, "path": spath, "col": cc,
+						"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+						"cruise_dir": _cruise_dir, "swing": _swing_active,
+						"cost_ms": float(Time.get_ticks_usec() - ctel_t0) / 1000.0,
+						"branch": _art_apply_branch, "load_ms": _art_apply_load_ms, "render_ms": _art_apply_render_ms,
+						"via": "stream-cache",
+					})
+					stream_frame_t0 = Time.get_ticks_usec()
+					continue
+				_art_decode_mutex.lock()
+				var prepared_ready: bool = _art_prepared_ready.has(spath)
+				var decode_failed: bool = _art_decoded_failed.has(spath)
+				_art_decode_mutex.unlock()
+				if decode_failed:
+					continue # the background decode produced nothing: the styled card lands at settle
+				if not prepared_ready:
+					_art_pipe_dispatch_one(spath)
+					deferred.append(idx)
+					continue
+				var s_t0: int = Time.get_ticks_usec()
+				_stream_apply_face(idx, gen)
+				var s_ms: float = float(Time.get_ticks_usec() - s_t0) / 1000.0
+				if s_ms > _stream_max_apply_ms:
+					_stream_max_apply_ms = s_ms
+				var frame_spend: float = float(Time.get_ticks_usec() - stream_frame_t0) / 1000.0
+				if frame_spend > _stream_max_frame_spend_ms:
+					_stream_max_frame_spend_ms = frame_spend
+				if frame_spend >= STREAM_BUDGET_MS:
+					_stream_budget_yields += 1
+					_art_event("stream_yield", {"col": cc, "spend_ms": frame_spend, "applied": _stream_applied_count, "cruise_dir": _cruise_dir})
+					await get_tree().process_frame
+					stream_frame_t0 = Time.get_ticks_usec()
+				continue
 			var path: String = _face_path_memoized(_visible_games[idx])
 			if path != "" and not TextureFactory.art_decode_is_cached(path):
 				_art_decode_mutex.lock()
@@ -4703,7 +5066,14 @@ func _art_pipe_pass() -> void:
 				TextureFactory.probe_note("fill_col_%d" % cc, gf16_us)
 			if gen != _gen:
 				break
+			if debug_gf18_nc == "nobudget" and travelling_now:
+				# The NC's shape: the budget gate is GONE -
+				# full renders pile onto travel frames with
+				# no yield between faces, the pre-budget law.
+				stream_frame_t0 = Time.get_ticks_usec()
+				continue
 			await get_tree().process_frame # the budget: at most one staged face per frame, ever
+			stream_frame_t0 = Time.get_ticks_usec()
 			if _cruise_dir != 0 or _swing_active:
 				# Travelling: halve the application rate -
 				# one face per two frames. A cruise demands
@@ -4711,6 +5081,7 @@ func _art_pipe_pass() -> void:
 				# halved rate supplies ~30, and the frames
 				# between applications are the drum's alone.
 				await get_tree().process_frame
+				stream_frame_t0 = Time.get_ticks_usec()
 		if gen != _gen:
 			break
 		if deferred.is_empty():
@@ -4720,6 +5091,7 @@ func _art_pipe_pass() -> void:
 		_art_pipe_queue = deferred
 		deferred = []
 		await get_tree().process_frame
+		stream_frame_t0 = Time.get_ticks_usec()
 	_art_pipe_busy = false
 	_window_fill_busy = false
 	if gen == _gen:
@@ -4731,6 +5103,88 @@ func _art_pipe_pass() -> void:
 			_art_pipe_enqueue_window()
 			_run_art_pipe()
 
+
+## GRADFIX18 (item A): stream-apply ONE face - the travel
+## path's whole main-thread art act. Consumes the pump's
+## face-prepared image (the original decode stays staged for
+## the settle-time full render), creates its texture, swaps
+## it on, and stamps the interim |stream key with the art's
+## honest aspect: the face is DRESSED (real art, real
+## texture) from this frame, and owed only its composed
+## render (badges) at settle. No viewport render, no
+## readback, no power subject - those are settle work by
+## the decomposition at STREAM_BUDGET_MS. Synchronous: the
+## caller times it into the frame's stream budget.
+func _stream_apply_face(idx: int, gen: int) -> void:
+	if gen != _gen or idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
+		return
+	var game: GameEntry = _visible_games[idx]
+	var quad: ClickableQuad = _panels[idx]
+	var art_file: String = _face_path_for(game)
+	_face_path_memo[game.game_id] = art_file # every apply refreshes the filter memo from its fresh probe, like a fill
+	if art_file == "":
+		return
+	var fav: bool = _store != null and _store.is_favorite(game.game_id)
+	var pup: bool = game.is_pup_tagged()
+	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+	if str(_panel_face_key.get(game.game_id, "")) == fkey:
+		return # the full render landed first - nothing to stream
+	_art_decode_mutex.lock()
+	var prepared: Image = _art_prepared_ready.get(art_file, null) as Image
+	var orig: Image = _art_decoded_ready.get(art_file, null) as Image
+	if prepared != null:
+		_art_prepared_ready.erase(art_file)
+	_art_decode_mutex.unlock()
+	if prepared == null:
+		return
+	var create_t0: int = Time.get_ticks_usec()
+	var tex: Texture2D = TextureFactory.art_texture_from_image(prepared)
+	var create_ms: float = float(Time.get_ticks_usec() - create_t0) / 1000.0
+	if tex == null or not _tex_is_real(tex):
+		return
+	var aspect: float = float(orig.get_width()) / float(orig.get_height()) if orig != null else float(prepared.get_width()) / float(prepared.get_height())
+	quad.set_texture(tex)
+	_panel_face_key[game.game_id] = fkey + STREAM_STAMP_SUFFIX
+	_panel_art_aspect[idx] = aspect
+	# The nameplate shows only over an art face (the fill's
+	# law): a streamed face IS an art face.
+	if idx < _panel_plates.size() and _panel_plates[idx] != null:
+		_panel_plates[idx].visible = true
+		_panel_labels[idx].visible = true
+		if OS.get_environment("PVLDS_GRAD_NC") == "noplate":
+			_panel_plates[idx].visible = false
+		if idx == _flip_idx and _flip_t >= 0.5:
+			_apply_flip_side(idx, true)
+	# The fill's power debt, cheap half only: a performance
+	# that skipped this card for wearing the placeholder
+	# retries now. The subject render itself is settle work.
+	if quad == _power_missed:
+		_power_missed = null
+		if _power_candidate == quad:
+			_power_candidate_t = POWER_SETTLE_SEC
+	if idx < _panel_pop.size() and _panel_pop[idx] > 0.0:
+		_panel_pop_applied[idx] = -1.0
+	_rederive_card_plate(idx, game)
+	_stream_applied_count += 1
+	_art_event("stream_apply", {
+		"game": game.game_id, "path": art_file, "col": _grid_coord(idx).x,
+		"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+		"cruise_dir": _cruise_dir, "swing": _swing_active,
+		"cost_ms": create_ms, "create_ms": create_ms, "via": "stream",
+	})
+
+
+## GRADFIX18 harness surface: the stream's standing account
+## (the streamahead smoke judges the budget from this).
+func stream_stats() -> Dictionary:
+	return {
+		"applied": _stream_applied_count,
+		"yields": _stream_budget_yields,
+		"max_apply_ms": _stream_max_apply_ms,
+		"max_frame_spend_ms": _stream_max_frame_spend_ms,
+		"budget_ms": STREAM_BUDGET_MS,
+		"lead_cols": STREAM_LEAD_COLS,
+	}
 
 ## The fill path's face read (GRADFIX6 items 2+3): the
 ## READY probe - art that already sits on disk - never the
@@ -5244,6 +5698,7 @@ func face_state() -> Array:
 			"title": _visible_games[idx].title,
 			"col": cc,
 			"key_stamped": _panel_face_key.has(_visible_games[idx].game_id),
+			"is_stream": str(_panel_face_key.get(_visible_games[idx].game_id, "")).ends_with(STREAM_STAMP_SUFFIX),
 			"tex_w": tex.get_width() if tex != null else 0,
 			"is_placeholder": tex != null and tex == _placeholder_tex,
 			"is_unreal": tex == null or tex == _placeholder_tex or not _tex_is_real(tex),
@@ -5265,8 +5720,9 @@ func face_state() -> Array:
 func landing_census() -> Dictionary:
 	var missing: Array[String] = []
 	var total: int = 0
+	var streamed: int = 0 ## GRADFIX18: faces standing dressed on their streamed interim (counted landed, named here)
 	if _panel_window_lo < 0:
-		return {"total": 0, "missing": missing}
+		return {"total": 0, "missing": missing, "streamed": 0}
 	for idx: int in range(_panels.size()):
 		if idx >= _visible_games.size():
 			continue
@@ -5284,13 +5740,19 @@ func landing_census() -> Dictionary:
 		var stamped: String = str(_panel_face_key.get(game.game_id, ""))
 		var art_ready: bool = fresh_key.split("|").size() > 1 and fresh_key.split("|")[1] != ""
 		var from_art: bool = idx < _panel_art_aspect.size() and _panel_art_aspect[idx] > 0.0
+		# GRADFIX18: a streamed face (fresh key + |stream)
+		# wearing real art IS landed for this census - its
+		# composed render is settle work, not missing art.
+		if stamped == fresh_key + STREAM_STAMP_SUFFIX and tex != null and tex != _placeholder_tex and _tex_is_real(tex) and from_art:
+			streamed += 1
+			continue
 		if tex == null or tex == _placeholder_tex or not _tex_is_real(tex):
 			missing.append(game.title)
 		elif stamped != fresh_key:
 			missing.append(game.title)
 		elif art_ready and not from_art:
 			missing.append(game.title)
-	return {"total": total, "missing": missing}
+	return {"total": total, "missing": missing, "streamed": streamed}
 
 
 ## The state row's fill (the Tournament redesign): when the

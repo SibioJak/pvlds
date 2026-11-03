@@ -513,3 +513,48 @@ static func load_art_texture(path: String) -> Texture2D:
 	if probe_enabled:
 		probe_note("decode_miss_total", Time.get_ticks_usec() - probe_total_t)
 	return tex
+
+
+## GRADFIX18 (stream-ahead): prepare a decoded art Image as a
+## FACE-ready image on the caller's thread (the art pipeline's
+## background pump): cover-crop to the face's aspect exactly as
+## CardFace's art TextureRect does at render time
+## (STRETCH_KEEP_ASPECT_COVERED - centre crop of the long axis),
+## then resize to the face's pixel size. The result can stand
+## on a card as-is: the main thread's only remaining work is
+## one ImageTexture creation (~0.3 ms measured on the field
+## rig - see art_texture_from_image). Pure Image work, no
+## texture creation, no node access: worker-thread safe, like
+## decode_art_image.
+static func prepare_face_image(img: Image, face_px: Vector2i) -> Image:
+	if img == null or img.is_empty() or face_px.x <= 0 or face_px.y <= 0:
+		return null
+	var work: Image = img.duplicate() as Image
+	var target_aspect: float = float(face_px.x) / float(face_px.y)
+	var aspect: float = float(work.get_width()) / float(work.get_height())
+	if aspect > target_aspect + 0.001:
+		var crop_w: int = maxi(1, int(round(float(work.get_height()) * target_aspect)))
+		var x0: int = maxi(0, (work.get_width() - crop_w) / 2)
+		work = work.get_region(Rect2i(x0, 0, crop_w, work.get_height()))
+	elif aspect < target_aspect - 0.001:
+		var crop_h: int = maxi(1, int(round(float(work.get_width()) / target_aspect)))
+		var y0: int = maxi(0, (work.get_height() - crop_h) / 2)
+		work = work.get_region(Rect2i(0, y0, work.get_width(), crop_h))
+	if work.get_size() != face_px:
+		work.resize(face_px.x, face_px.y, Image.INTERPOLATE_LANCZOS)
+	return work
+
+
+## GRADFIX18 (stream-ahead): create a texture from an already
+## face-prepared Image WITHOUT touching the decoded-art cache
+## (the prepared image is cropped to the face; the cache's
+## contract is the game's full art, which the settle-time
+## full render still needs). Main thread only.
+static func art_texture_from_image(img: Image) -> Texture2D:
+	if img == null or img.is_empty():
+		return null
+	var probe_t: int = Time.get_ticks_usec() if probe_enabled else 0
+	var tex: Texture2D = ImageTexture.create_from_image(img)
+	if probe_enabled:
+		probe_note("stream_create_texture", Time.get_ticks_usec() - probe_t)
+	return tex
