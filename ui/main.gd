@@ -345,6 +345,27 @@ var _motion_hold_saw_cruise: bool = false ## held-scroll leg: the room cruised d
 var _motion_hold_start_col: int = 0 ## held-scroll leg: the column the hold started from
 var _motion_hold_rest_frames: int = 0 ## held-scroll leg: consecutive settled frames after release
 var _smoke_artstream: bool = false ## --pvlds-smoke-artstream: GRADFIX16 item 2 - sustained held cruise through the real input path on a cold-art fixture, recording travel frame deltas (worst + count over 50 ms), base vs fixed on the same fixture
+var _smoke_hitchhunt: bool = false ## --pvlds-smoke-hitchhunt: GRADFIX17 item 2 - cold held cruises in BOTH directions over one long stretch of the same cold-art fixture (the field residue was one-directional: leftward bursts through one shelf region), judged per direction, plus the alpha-write count the window pass spends per column
+var _hh_phase: int = 0
+var _hh_wait: int = 0
+var _hh_failures: int = 0
+var _hh_settle_frames: int = 0
+var _hh_start_col: int = -1
+var _hh_last_usec: int = 0
+var _hh_pacing_ms: float = 16.7
+var _hh_pace_stamps: Array = []
+var _hh_leg: int = 0 ## 0 = cold left, 1 = cold right, 2 = warm left (the baseline)
+var _hh_deltas: Array = [[], [], []] ## per leg: every cruise frame delta
+var _hh_worst: Array = [0.0, 0.0, 0.0]
+var _hh_over50: Array = [0, 0, 0]
+var _hh_spikes: Array = [[], [], []] ## per leg: [centre_col, delta_ms] over 40 ms
+var _hh_saw_cruise: Array = [false, false, false]
+var _hh_released: Array = [false, false, false]
+var _hh_rest_frames: int = 0
+var _hh_release_col: int = -1
+var _hh_alpha_at_leg_start: int = 0
+var _hh_alpha_per_col: Array = [0.0, 0.0, 0.0] ## wall-alpha writes per column travelled, per leg
+var _hh_heal_deadline_msec: int = 0
 var _art_phase: int = 0
 var _art_wait: int = 0
 var _art_failures: int = 0
@@ -584,6 +605,8 @@ func _ready() -> void:
 		_smoke_motion = true
 	if user_args.has("--pvlds-smoke-artstream"):
 		_smoke_artstream = true
+	if user_args.has("--pvlds-smoke-hitchhunt"):
+		_smoke_hitchhunt = true
 	if user_args.has("--pvlds-smoke-swingprobe"):
 		_smoke_swingprobe = true
 	if user_args.has("--pvlds-smoke-jumpbench"):
@@ -716,6 +739,7 @@ func _ready() -> void:
 	# legs fail by name; PVLDS_GF16_PROBE turns on the
 	# per-operation timing census in TextureFactory/Room.
 	RoomView.debug_gf16_nc = OS.get_environment("PVLDS_GF16_NC")
+	RoomView.debug_gf17_nc = OS.get_environment("PVLDS_GF17_NC")
 	TextureFactory.probe_enabled = OS.has_environment("PVLDS_GF16_PROBE")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
@@ -751,7 +775,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_swingprobe or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_artstream or _smoke_hitchhunt or _smoke_swingprobe or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -931,6 +955,8 @@ func _process(_delta: float) -> void:
 		_drive_motion_smoke()
 	if _smoke_artstream:
 		_drive_artstream_smoke()
+	if _smoke_hitchhunt:
+		_drive_hitchhunt_smoke()
 	if _smoke_swingprobe:
 		_drive_swingprobe_smoke()
 	if _smoke_jumpbench:
@@ -12518,6 +12544,228 @@ func _judge_artstream_travel() -> void:
 	# pacing cannot stand in for a moving wall's frame cost
 	# on a CPU renderer, so the cold cruise is compared to
 	# the same wall in motion with warm art, same run.
+
+
+## -------------------------------------------------- hitchhunt smoke (GRADFIX17 item 2)
+##
+## --pvlds-smoke-hitchhunt: the GF16 A/B residue hunt. The
+## field log's residue was one-directional - bursts of
+## ~125 ms frames on LEFTWARD cruises through one shelf
+## region, while rightward cruises over the same shelf ran
+## clean - so this smoke cruises BOTH directions cold over
+## one long stretch of the artstream fixture (40 columns:
+## long enough that the 96-face rendered cache and the
+## 64-entry decode cache both turn over mid-stretch, the
+## field shape of a full-shelf traverse), then once more
+## warm for the baseline. Legs (all named "hitchhunt:"):
+## each cold cruise stood and spanned its stretch; each
+## cold direction's travel frames judge against the warm
+## baseline exactly as the artstream judge does (hitch =
+## baseline + 60 ms, allowance 2; worst within baseline +
+## 75 ms); and the wall-alpha writes the window pass spends
+## stay under a per-column bound - the per-column write
+## storm the hunt convicted (see RoomView._apply_wall_alpha)
+## spends ~3 writes per panel per column under the pre-fix
+## law, restored by PVLDS_GF17_NC=hazeall so this leg fails
+## by name against it.
+func _hh_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - hitchhunt smoke: ", label)
+	else:
+		_hh_failures += 1
+		printerr("  FAIL - hitchhunt smoke: ", label)
+
+
+func _finish_hitchhunt_smoke() -> void:
+	_input_feed_stick_x(0.0)
+	if _hh_failures == 0:
+		print("PVLDS HITCHHUNT SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS HITCHHUNT SMOKE: FAIL (%d)" % _hh_failures)
+		get_tree().quit(1)
+
+
+func _hh_begin_leg(leg: int, feed: float) -> void:
+	_hh_leg = leg
+	if leg != 2:
+		# The cold legs pay the artstream cold reset; the
+		# warm baseline leg (2) runs over the stretch the
+		# cold legs just dressed, no reset.
+		TextureFactory.clear_art_decode_cache()
+	TextureFactory.probe_reset()
+	_hh_released[leg] = false
+	_hh_rest_frames = 0
+	_hh_release_col = -1
+	_hh_alpha_at_leg_start = _room.alpha_write_count()
+	_hh_last_usec = Time.get_ticks_usec()
+	_input_feed_stick_x(feed)
+	_hh_phase = 2
+	_hh_wait = 0
+
+
+func _hh_record_frame() -> void:
+	var now_usec: int = Time.get_ticks_usec()
+	var delta_ms: float = float(now_usec - _hh_last_usec) / 1000.0
+	_hh_last_usec = now_usec
+	var leg: int = _hh_leg
+	(_hh_deltas[leg] as Array).append(delta_ms)
+	if delta_ms > float(_hh_worst[leg]):
+		_hh_worst[leg] = delta_ms
+	if delta_ms > 50.0:
+		_hh_over50[leg] = int(_hh_over50[leg]) + 1
+	var col_now: int = _room._grid_coord(_room.centre_index()).x
+	if delta_ms > 40.0:
+		(_hh_spikes[leg] as Array).append([col_now, snappedf(delta_ms, 0.1)])
+	if _room.cruise_active():
+		_hh_saw_cruise[leg] = true
+
+
+func _hh_print_leg(leg: int, from_col: int, to_col: int) -> void:
+	var names: Array = ["LEFT-COLD", "RIGHT-COLD", "LEFT-WARM"]
+	var spikes_line: String = ""
+	for sv: Variant in (_hh_spikes[leg] as Array):
+		var sp: Array = sv as Array
+		spikes_line += " [col %d: %.1f ms]" % [int(sp[0]), float(sp[1])]
+	print("HITCHHUNT %s: from col %d to col %d, frames %d, worst frame %.1f ms, frames >50 ms: %d, alpha writes per column %.0f; spikes (>40 ms):%s" % [
+		str(names[leg]), from_col, to_col, (_hh_deltas[leg] as Array).size(), float(_hh_worst[leg]), int(_hh_over50[leg]), float(_hh_alpha_per_col[leg]), spikes_line if spikes_line != "" else " none"])
+
+
+func _drive_hitchhunt_smoke() -> void:
+	match _hh_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and not _scan_active \
+					and (_art_warmer == null or _art_warmer.is_idle()):
+				Input.warp_mouse(Vector2(4, 372))
+				if _room._columns < 56:
+					_hh_expect(false, "hitchhunt: the fixture shelf holds %d columns (the two-direction hunt needs at least 56)" % _room._columns)
+					_finish_hitchhunt_smoke()
+					return
+				_hh_phase = 1
+				_hh_wait = 0
+				_hh_settle_frames = 0
+			else:
+				_hh_wait += 1
+				if _hh_wait > 21600:
+					_hh_expect(false, "hitchhunt: the room never came up (scan/warm never settled)")
+					_finish_hitchhunt_smoke()
+		1:
+			# Seat the start near the shelf's right end: the
+			# cold LEFT cruise crosses the long stretch from
+			# here, the field residue's own shape.
+			_hh_wait += 1
+			var pace_now: int = Time.get_ticks_usec()
+			if _hh_last_usec > 0:
+				_hh_pace_stamps.append(float(pace_now - _hh_last_usec) / 1000.0)
+				if _hh_pace_stamps.size() > 40:
+					_hh_pace_stamps.pop_front()
+			_hh_last_usec = pace_now
+			if _hh_wait == 1:
+				var want_col: int = _room._columns - 18
+				var start_idx: int = -1
+				for i: int in range(_room._panels.size()):
+					if _room._grid_coord(i).x == want_col and _room._grid_coord(i).y == 1:
+						start_idx = i
+						break
+				if start_idx < 0:
+					start_idx = _room._panels.size() / 2
+				_room.set_wall_motion_mode("smooth")
+				_room._set_centre(start_idx, true)
+				_room._set_focused(_room._panels[start_idx])
+			if _room.wall_ready and not _room._window_fill_busy and not _room.page_slide_active():
+				_hh_settle_frames += 1
+			else:
+				_hh_settle_frames = 0
+			if _hh_settle_frames >= 5:
+				if _hh_pace_stamps.size() >= 6:
+					var sorted_pace: Array = _hh_pace_stamps.duplicate()
+					sorted_pace.sort()
+					_hh_pacing_ms = float(sorted_pace[sorted_pace.size() / 2])
+				print("HITCHHUNT PACING: median frame %.1f ms during the start settle" % _hh_pacing_ms)
+				_hh_start_col = _room._grid_coord(_room.centre_index()).x
+				_hh_begin_leg(0, -1.0)
+			elif _hh_wait > 7200:
+				_hh_expect(false, "hitchhunt: the start window never settled")
+				_finish_hitchhunt_smoke()
+		2:
+			_hh_wait += 1
+			_hh_record_frame()
+			var col_now2: int = _room._grid_coord(_room.centre_index()).x
+			var leg2: int = _hh_leg
+			if not bool(_hh_released[leg2]):
+				var done_travelling: bool = false
+				if leg2 == 0 and col_now2 <= _hh_start_col - 40:
+					done_travelling = true
+				elif leg2 == 1 and col_now2 >= _hh_start_col - 2:
+					done_travelling = true
+				elif leg2 == 2 and col_now2 <= _hh_start_col - 40:
+					done_travelling = true
+				if done_travelling:
+					_hh_released[leg2] = true
+					_hh_release_col = col_now2
+					_input_feed_stick_x(0.0)
+			if bool(_hh_released[leg2]):
+				if not _room.swing_active():
+					_hh_rest_frames += 1
+				else:
+					_hh_rest_frames = 0
+				if _hh_rest_frames >= 3:
+					var end_col: int = _room._grid_coord(_room.centre_index()).x
+					var travelled: int = maxi(1, absi(end_col - (_hh_start_col if leg2 != 1 else _hh_start_col - 40)))
+					_hh_alpha_per_col[leg2] = float(_room.alpha_write_count() - _hh_alpha_at_leg_start) / float(travelled)
+					_hh_print_leg(leg2, _hh_start_col if leg2 != 1 else _hh_start_col - 40, end_col)
+					if leg2 == 0:
+						_hh_phase = 3
+						_hh_wait = 0
+						_hh_heal_deadline_msec = Time.get_ticks_msec() + 30000
+					elif leg2 == 1:
+						_hh_begin_leg(2, -1.0)
+					else:
+						_judge_hitchhunt()
+						_finish_hitchhunt_smoke()
+			elif _hh_wait > 14400:
+				_input_feed_stick_x(0.0)
+				_hh_expect(false, "hitchhunt: leg %d never spanned its stretch and settled" % leg2)
+				_finish_hitchhunt_smoke()
+		3:
+			# The landing wait between the cold legs (the
+			# artstream heal discipline): every face in the
+			# standing window lands before the return cruise,
+			# so the return pays decode-cold only where the
+			# caches turned over, exactly as the field does.
+			_hh_wait += 1
+			var states: Array = _room.face_state()
+			var landed: int = 0
+			for sv2: Variant in states:
+				var st: Dictionary = sv2 as Dictionary
+				if bool(st.get("key_stamped", false)) and not bool(st.get("is_unreal", true)) and bool(st.get("from_art", false)):
+					landed += 1
+			if (not states.is_empty() and landed == states.size()) or Time.get_ticks_msec() > _hh_heal_deadline_msec:
+				_hh_begin_leg(1, 1.0)
+			elif _hh_wait > 7200:
+				_hh_begin_leg(1, 1.0)
+
+
+func _judge_hitchhunt() -> void:
+	var warm: Array = _hh_deltas[2] as Array
+	if warm.size() < 6:
+		_hh_expect(false, "hitchhunt: the warm baseline cruise produced too few frames to judge against (%d)" % warm.size())
+		return
+	var sorted_warm: Array = warm.duplicate()
+	sorted_warm.sort()
+	var warm_median: float = float(sorted_warm[sorted_warm.size() / 2])
+	var baseline: float = maxf(_hh_pacing_ms, warm_median)
+	print("HITCHHUNT BASELINE: %.1f ms (max of settle pacing %.1f and warm median %.1f)" % [baseline, _hh_pacing_ms, warm_median])
+	for leg: int in [0, 1]:
+		var dir_name: String = "leftward" if leg == 0 else "rightward"
+		_hh_expect(bool(_hh_saw_cruise[leg]), "hitchhunt: the %s cold leg cruised on the real input path" % dir_name)
+		var hitches: int = 0
+		for dv: Variant in (_hh_deltas[leg] as Array):
+			if float(dv) > baseline + 60.0:
+				hitches += 1
+		_hh_expect(hitches <= 2, "hitchhunt: %s cold cruise travel frames never wait on art - %d hitch frames (over the judge baseline %.1f ms + 60 ms; worst cold frame %.1f ms; allowance 2 for harness pacing)" % [dir_name, hitches, baseline, float(_hh_worst[leg])])
+		_hh_expect(float(_hh_worst[leg]) <= baseline + 75.0, "hitchhunt: the %s cold cruise's worst frame stayed within the judge baseline + 75 ms (worst %.1f ms against baseline %.1f ms)" % [dir_name, float(_hh_worst[leg]), baseline])
+		_hh_expect(float(_hh_alpha_per_col[leg]) <= 220.0, "hitchhunt: the %s cruise's window pass wrote %.0f wall-alpha values per column (bound 220 - the write-on-change law; the pre-fix law writes every panel, launch and label every column)" % [dir_name, float(_hh_alpha_per_col[leg])])
 
 
 func _drive_bootfocus_smoke() -> void:
