@@ -4484,6 +4484,49 @@ func _face_is_stream_dressed(idx: int) -> bool:
 	return tex != null and _tex_is_real(tex) and idx < _panel_art_aspect.size() and _panel_art_aspect[idx] > 0.0
 
 
+## GRADFIX18 (item A): re-order the decode pump's queue to
+## the standing stream window's arrival order - the window's
+## needy paths first, in enqueue (centre-out, lead-behind-
+## window) order, everything else behind in its standing
+## order. Without this the pump chews FIFO through whatever
+## earlier windows queued (a boot seat's whole backlog), and
+## the lead faces the drum is approaching wait behind faces
+## nobody is travelling toward - the first streamahead bench
+## run's conviction: 210 lifetime decodes, the cruise's own
+## faces stuck behind ~100 stale entries, 12 stream applies
+## in the whole cruise. Queue surgery only: membership and
+## the pending set are untouched, so no decode is lost or
+## duplicated - the stale faces still decode, just after
+## the wall the player is actually approaching.
+func _stream_prioritize_pump_queue(needy: Array[int]) -> void:
+	if needy.is_empty():
+		return
+	var want: Dictionary = {}
+	var front: Array[String] = []
+	for idx: int in needy:
+		if idx < 0 or idx >= _visible_games.size():
+			continue
+		var path: String = _face_path_memoized(_visible_games[idx])
+		if path != "" and not want.has(path):
+			want[path] = true
+			front.append(path)
+	_art_decode_mutex.lock()
+	if _art_decode_queue.size() > 1:
+		var back: Array[String] = []
+		var have: Dictionary = {}
+		for queued: String in _art_decode_queue:
+			have[queued] = true
+			if not want.has(queued):
+				back.append(queued)
+		var rebuilt: Array[String] = []
+		for fp: String in front:
+			if have.has(fp):
+				rebuilt.append(fp)
+		rebuilt.append_array(back)
+		_art_decode_queue = rebuilt
+	_art_decode_mutex.unlock()
+
+
 ## GRADFIX18 (item A): ask Main's warmer to bring the LEAD
 ## slice's extractions forward - a lead face whose art has
 ## not extracted yet has no ready path to stream, so its
@@ -4571,12 +4614,14 @@ func _art_pipe_enqueue_window() -> void:
 	})
 	if streaming:
 		# Travelling: every needy face's decode is dispatched
-		# now (the pump is serial and deduped - the queue note
-		# is cheap), and the warmer is asked for the lead
-		# slice's extractions. At rest the shipped shape
-		# stands: the first few dispatch here, the rest as
-		# the pass pops them.
+		# now (the pump pool is deduped - the queue note is
+		# cheap), the pump queue is RE-ORDERED to this
+		# window's arrival order (below), and the warmer is
+		# asked for the lead slice's extractions. At rest the
+		# shipped shape stands: the first few dispatch here,
+		# the rest as the pass pops them.
 		_art_pipe_dispatch_decodes(needy)
+		_stream_prioritize_pump_queue(needy)
 		_stream_ask_lead_warmer(stream_cols)
 	else:
 		var pre: Array[int] = []
