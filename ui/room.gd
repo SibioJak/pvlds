@@ -628,6 +628,20 @@ var _mat_frame_amber: StandardMaterial3D = null ## the centred card's amber fram
 var _mat_plate: StandardMaterial3D = null ## the shared nameplate/status plate material (the marquee fade drives its alpha)
 var _window_fill_busy: bool = false ## a window face-fill pass is running (centre changes coalesce through _window_fill_dirty)
 var _window_fill_dirty: bool = false
+## GRADFIX16 (item 2) art pipeline state: the staged face
+## fill that replaced the serial window fill on the travel
+## path (see the pipeline block at _request_window_fill).
+var _art_pipe_busy: bool = false ## a staged pipeline pass is running
+var _art_pipe_queue: Array[int] = [] ## panel indices awaiting a staged face, centre-out order, revalidated at pop time
+var _art_pipe_in_stage: bool = false ## the pipeline is inside _fill_one_face_sync: its decode branch reads staged results instead of paying a synchronous decode
+var _art_decode_pending: Dictionary = {} ## art path -> true while a background decode is queued for or in flight on the decode pump
+var _art_decoded_ready: Dictionary = {} ## art path -> Image: a finished background decode awaiting texture creation on the pipeline's own frames
+var _art_decoded_failed: Dictionary = {} ## art path -> true: a background decode finished and produced no image (the staged face falls through to its styled card, exactly as a synchronous load failure did)
+var _art_decode_mutex: Mutex = Mutex.new() ## guards the decode dictionaries and the pump's queue against the worker thread
+var _art_decode_queue: Array[String] = [] ## art paths awaiting the decode pump (mutex-guarded)
+var _art_decode_pump_active: bool = false ## a pump task is draining _art_decode_queue (mutex-guarded): ONE decode at a time, ever - the ArtWarmer's proven discipline, so background decode can never swarm the renderer's cores
+var _art_stopping: bool = false ## the room is leaving the tree: the pipeline starts no new face and the pump returns after its current decode - art work must wind down at exit, not continue into engine teardown (the harness's swing probe segfaulted at quit with fills in flight; the serial worker it replaced was almost always idle by quit, the pipeline by design is not)
+var _face_path_memo: Dictionary = {} ## game_id -> art path, for the pipeline's per-centre-change filter ONLY: _face_path_for probes the filesystem per game, and asking it for all 63 window faces on every column crossing put a measurable burst on the crossing frame (healthy-box runs: 1-2 spikes of 50-90 ms per column with all art work parked). The memo is rewritten by every fill from its own fresh probe, erased on shot refresh, and cleared on rebuild; the heal and the fills themselves always probe fresh, so an upgrade the memo missed is still caught and filled by them, and the fill then corrects the memo.
 var _power_subject_inflight: Dictionary = {} ## game_id -> true while its power-on subject renders
 var _power_prefetch_asked: Dictionary = {} ## game_id -> true once the warmer has been asked for its cold backglass (GRADFIX6)
 var _face_heal_retries: Dictionary = {} ## GRADFIX6 item 2: "game_id|art_file" -> art-render retries already spent by the panel heal
@@ -792,14 +806,19 @@ static var debug_gf13_nc: String = ""
 ## shape) - each so the input smoke's gf14 grammar legs
 ## fail by name. Empty in every real run.
 static var debug_gf14_nc: String = ""
-## Negative-control seam for GRADFIX16 item 1 (the harness
-## env PVLDS_GF16_NC, set by Main before any room exists):
+## Negative-control seams for GRADFIX16 (the harness env
+## PVLDS_GF16_NC, set by Main before any room exists; one
+## var, two values, the GF14 pattern): item 1's
 ## "refreshgate" restores the shipped gating - REFRESH is
 ## pickable only while the Tournament Room stands, so it
 ## drops out of the library rail's focus walk, bumper and
 ## trigger lists, pointer pick and lift, and the input
-## smoke's gf16 refresh legs fail by name. Empty in every
-## real run.
+## smoke's gf16 refresh legs fail by name. Item 2's
+## "syncfill" restores the pre-fix fill law - a window fill
+## awaited from _set_centre's travel path pays decode +
+## render inline, serially, exactly as the base build did -
+## so the artstream smoke's travel-frame legs fail by name.
+## Empty in every real run.
 static var debug_gf16_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
@@ -961,6 +980,16 @@ var _joy_prev_lt: bool = false ## trigger edge tracking (GRADFIX10 item 4): the 
 var _joy_prev_rt: bool = false
 var _joy_prev_right: bool = false ## D-pad Right edge tracking: the room's BACK-out press (see _process)
 var _joy_right_armed: bool = false ## baseline-release arming: set once THIS room instance has observed D-pad Right released; until then no right-press edge can exit (see _process)
+## Scroll telemetry (the diagnostic build's witness -
+## core/scroll_telemetry.gd): observation only. The logger
+## is started lazily on the room's first visible frame (by
+## then Main's config apply has named the boot wall-motion
+## mode), and every hook below only READS the standing
+## state - no hook assigns scroll/input state, returns a
+## value a decision can consume, or runs when the room is
+## hidden. Deleting the hooks restores the shipped build.
+var _scroll_telemetry: ScrollTelemetry = ScrollTelemetry.new()
+var _scroll_telemetry_started: bool = false
 
 
 func setup(factory: TextureFactory, scanner: LibraryScanner, store: StateStore, xr_enabled: bool) -> void:
@@ -1356,6 +1385,7 @@ func starfield_mode() -> String:
 ## from the drum's current angle in both modes (the planetarium
 ## speed-gate law). Default "smooth" (Chris's pick).
 func set_wall_motion_mode(mode: String) -> void:
+	var telemetry_old_mode: String = _wall_motion_mode ## scroll telemetry: the dial event's before (read-only)
 	_wall_motion_mode = mode if ["smooth", "stepped"].has(mode) else "smooth"
 	if not _wall_boot_mode_captured:
 		# The first call on a room is Main's config apply at
@@ -1363,6 +1393,17 @@ func set_wall_motion_mode(mode: String) -> void:
 		# nolive NC's driver would be stuck with.
 		_wall_boot_mode = _wall_motion_mode
 		_wall_boot_mode_captured = true
+	# Scroll telemetry: a real change of the dial is an
+	# event (the boot config apply above precedes the
+	# logger's start, so the header carries the boot mode
+	# and only live changes land here; the SETUP panel's
+	# turns are the ones with setup_panel_up standing).
+	if _scroll_telemetry_started and telemetry_old_mode != _wall_motion_mode:
+		var dial_fields: Dictionary = _telemetry_context()
+		dial_fields["old_mode"] = telemetry_old_mode
+		dial_fields["new_mode"] = _wall_motion_mode
+		dial_fields["source"] = "setup_panel" if _setup_panel_up else "set_wall_motion_mode"
+		_telemetry_record("wall_motion_mode_changed", dial_fields)
 	# A dial turn mid-travel hands the standing travel to the
 	# newly chosen driver from the drum's current angle and
 	# velocity - no snap, no restart.
@@ -1370,7 +1411,7 @@ func set_wall_motion_mode(mode: String) -> void:
 		# A held-stick cruise is a SMOOTH-only travel: a dial
 		# turn away from SMOOTH ends it here, settling at the
 		# nearest column under the newly chosen driver.
-		_stop_cruise(true)
+		_stop_cruise(true, "wall_motion_mode_changed_away_from_smooth")
 	if _swing_active:
 		_swing_smooth_retarget()
 
@@ -1400,6 +1441,81 @@ func wall_driver_mode() -> String:
 ## wall-motion driver: the smooth driver re-anchors its
 ## travel on the drum's current angle and standing target
 ## (the real definition stands beside _update_swing).
+
+
+## ------------------------------------------------ scroll telemetry hooks
+## The witness's read-only hooks (see the state block at
+## _scroll_telemetry). _telemetry_context snapshots the
+## standing scroll state for a record; nothing here assigns
+## anything outside the logger.
+
+func _telemetry_start_if_needed() -> void:
+	if _scroll_telemetry_started or not visible:
+		return
+	_scroll_telemetry_started = _scroll_telemetry.start({
+		"build_stamp": ScrollTelemetry.BUILD_STAMP,
+		"base_commit": ScrollTelemetry.BASE_COMMIT,
+		"log_path": ScrollTelemetry.LOG_PATH,
+		"wall_motion_mode_at_boot": wall_motion_mode(),
+		"wall_driver_mode_at_boot": _wall_driver_mode(),
+		"view_at_room_entry": "tournament" if _tournament else "library",
+		"filter_at_room_entry": _filter,
+		"sort_at_room_entry": _sort,
+		"room_mode_at_entry": _mode,
+		"visible_games_at_entry": _visible_games.size(),
+		"columns_at_entry": _columns,
+		"centre_index_at_entry": _centre_index,
+	})
+
+
+func _telemetry_context() -> Dictionary:
+	var centre_col: int = -1
+	if _centre_index >= 0 and _centre_index < _panels.size():
+		centre_col = _grid_coord(_centre_index).x
+	return {
+		"wall_motion_mode": _wall_motion_mode,
+		"wall_driver_mode": _wall_driver_mode(),
+		"room_mode": _mode,
+		"tournament": _tournament,
+		"setup_panel_up": _setup_panel_up,
+		"placard_up": _placard_up,
+		"launch_wait": _launching_game_id != "",
+		"focused_panel_index": _panels.find(_focused) if _focused != null else -1,
+		"centre_index": _centre_index,
+		"centre_column": centre_col,
+		"columns": _columns,
+		"swing_active": _swing_active,
+		"swing_target_yaw_deg": rad_to_deg(_swing_to),
+		"drum_yaw_deg": rad_to_deg(_drum_yaw),
+		"applied_yaw_deg": rad_to_deg(_wall.rotation.y) if _wall != null else rad_to_deg(_drum_yaw),
+		"angular_velocity_deg_s": rad_to_deg(_swing_vel),
+		"cruise_dir": _cruise_dir,
+		"hold_dir_x": _joy_hold_dir.x,
+		"hold_dir_y": _joy_hold_dir.y,
+		"hold_steps": _joy_hold_steps,
+	}
+
+
+func _telemetry_record(kind: String, fields: Dictionary) -> void:
+	if not _scroll_telemetry_started or not visible:
+		return
+	_scroll_telemetry.record(kind, fields)
+
+
+## A cruise exit that happens by direct assignment rather
+## than through _stop_cruise (a centre snap, a wall
+## rebuild): the exit is recorded BEFORE the assignment
+## clears the state, so the log sees the cruise that died.
+func _telemetry_cruise_cleared(reason: String) -> void:
+	if not _scroll_telemetry_started or _cruise_dir == 0:
+		return
+	var fields: Dictionary = _telemetry_context()
+	fields["transition"] = "exit"
+	fields["reason"] = reason
+	fields["from_cruise_dir"] = _cruise_dir
+	fields["to_cruise_dir"] = 0
+	fields["settle"] = false
+	_telemetry_record("cruise_transition", fields)
 
 
 func _apply_starfield_mode() -> void:
@@ -2576,6 +2692,7 @@ func _set_centre(index: int, snap: bool = false) -> void:
 		_swing_vel = 0.0
 		_swing_active = false
 		_swing_journey = false
+		_telemetry_cruise_cleared("centre_snap_teleport") ## scroll telemetry: witness the cruise this teleport kills (read-only)
 		_cruise_dir = 0 ## a teleport kills any held-stick cruise outright (GRADFIX13 item 3)
 		if _wall != null:
 			_wall.rotation.y = target
@@ -2751,6 +2868,16 @@ func _begin_cruise(step: int) -> void:
 	_swing_active = true
 	_swing_journey = false
 	_swing_to = _yaw_for_column(maxi(0, _columns - 1) if step > 0 else 0)
+	# Scroll telemetry: the cruise's birth, with the
+	# counter state that fired it (read-only).
+	if _scroll_telemetry_started:
+		var fields: Dictionary = _telemetry_context()
+		fields["transition"] = "enter"
+		fields["reason"] = "hold_second_step"
+		fields["threshold"] = "same-direction hold reaches its second step (hold_steps >= 1 at the step tick)"
+		fields["cruise_band"] = _cruise_band
+		fields["cruise_speed_deg_s"] = SWING_SMOOTH_CRUISE_DEG
+		_telemetry_record("cruise_transition", fields)
 
 
 ## The cruise's per-frame centre follow: the centre column
@@ -2782,10 +2909,21 @@ func _cruise_follow() -> void:
 ## snap - owns the settle, unchanged). Without settle (a
 ## reversal), nothing is seated here: the caller's fresh
 ## step retargets mid-travel in the same frame.
-func _stop_cruise(settle: bool) -> void:
+func _stop_cruise(settle: bool, reason: String = "unspecified") -> void:
 	if _cruise_dir == 0:
 		return
+	var telemetry_ended_dir: int = _cruise_dir ## scroll telemetry: the cruise that is ending (read-only)
 	_cruise_dir = 0
+	# Scroll telemetry: the cruise's death, recorded before
+	# the settle below retargets anything (read-only).
+	if _scroll_telemetry_started:
+		var fields: Dictionary = _telemetry_context()
+		fields["transition"] = "exit"
+		fields["reason"] = reason
+		fields["from_cruise_dir"] = telemetry_ended_dir
+		fields["to_cruise_dir"] = 0
+		fields["settle"] = settle
+		_telemetry_record("cruise_transition", fields)
 	if not settle or _panels.is_empty() or _columns <= 0:
 		return
 	var col: int = clampi(int(roundf(_drum_yaw / deg_to_rad(ANGLE_STEP_DEG))), 0, maxi(0, _columns - 1))
@@ -2814,7 +2952,7 @@ func _update_cruise(delta: float) -> void:
 	_swing_vel += (desired - _swing_vel) * blend
 	_drum_yaw = clampf(_drum_yaw + _swing_vel * delta, lo, hi)
 	if (_cruise_dir > 0 and _drum_yaw >= hi - 0.0001) or (_cruise_dir < 0 and _drum_yaw <= lo + 0.0001):
-		_stop_cruise(true)
+		_stop_cruise(true, "shelf_end_reached")
 	else:
 		_cruise_follow()
 	var applied_yaw: float = _drum_yaw
@@ -3062,12 +3200,14 @@ func _rebuild_wall() -> void:
 	# adopt_library) - but the confinement law is general.
 	var panel_focus: ClickableQuad = _focused if _setup_panel_up else null
 	_plates_pending = true ## the new wall's nameplates re-derive once their labels shape (see _refresh_card_plate)
+	_face_path_memo.clear() # a rebuilt wall re-derives its paths (the pipeline filter's memo, see _face_path_memo)
 	_gen += 1
 	var gen: int = _gen
 	wall_ready = false
 	_swing_active = false
 	_swing_vel = 0.0
 	_swing_journey = false
+	_telemetry_cruise_cleared("wall_rebuilt") ## scroll telemetry: witness the cruise this rebuild kills (read-only)
 	_cruise_dir = 0 ## a rebuild kills any held-stick cruise with the wall it travelled (GRADFIX13 item 3)
 	# Standing cards return to the pool (they are NOT freed:
 	# a rebuild re-seats the same nodes at the new view's
@@ -3893,27 +4033,93 @@ func _fill_wall_textures(gen: int) -> void:
 ## one library adoption, cached like the furniture's faces
 ## (the pick-latency fix): pooled cards keep their faces
 ## across rebuilds, so a revisit usually costs nothing at all.
+##
+## GRADFIX16 (item 2) - THE STAGED PIPELINE. The conviction
+## (Chris's scroll telemetry + the harness probe, same
+## fixture before/after): during a held cruise each incoming
+## column made the travel path itself pay, serially per face,
+## a synchronous PNG decode (~7.5 ms) + Lanczos resize
+## (~8 ms) in TextureFactory.load_art_texture and a GPU
+## readback in TextureFactory.render_texture - per-column
+## fill totals of 54-105 ms on the harness box, ~125 ms a
+## hitch on the field rig, one hitch per column at cruise
+## cadence. The fill now runs OFF the travel frame:
+## _set_centre only ENQUEUES the window's faces (below) and
+## returns; a deferred pipeline pass does the work on its
+## own frames, one face per frame at most -
+##   1. DECODE stages on a WorkerThreadPool thread
+##      (TextureFactory.decode_art_image: load + resize, no
+##      texture creation), dispatched for every queued face
+##      up front, so decodes overlap travel instead of
+##      punctuating it;
+##   2. RENDER + APPLY run in the pipeline pass when the
+##      decode has landed (or immediately, for cache hits
+##      and styled faces), still through the factory's
+##      serial capture queue - but the pass is a background
+##      coroutine yielding a frame between faces, never a
+##      call the travel path awaits.
+## A picture may land late; the drum never waits for it.
+## The card a face belongs to keeps whatever honest texture
+## it already wears (or the placeholder) until its staged
+## face applies; the standing heal re-asks for anything the
+## pipeline skipped, exactly as before. Under the NC
+## PVLDS_GF16_NC=syncfill the pre-fix serial worker below
+## runs instead and _set_centre's callers pay inline again,
+## so the artstream smoke's travel legs fail by name.
 func _request_window_fill() -> void:
-	if _window_fill_busy:
-		_window_fill_dirty = true
+	if debug_gf16_nc == "syncfill":
+		if _window_fill_busy:
+			_window_fill_dirty = true
+			return
+		_run_window_fill_sync()
 		return
-	_run_window_fill()
+	if _art_pipe_busy:
+		_window_fill_dirty = true
+	_art_pipe_enqueue_window()
+	if not _art_pipe_busy:
+		_run_art_pipe()
 
 
-func _run_window_fill() -> void:
+## The pre-GRADFIX16 serial worker (the NC's restored shape,
+## and nothing else's): a centre change's pass is awaited
+## inline, face by face, decode + render on the caller's
+## frames.
+func _run_window_fill_sync() -> void:
 	_window_fill_busy = true
 	_window_fill_dirty = false
 	var gen: int = _gen
-	await _fill_window_faces(gen)
+	await _fill_window_faces_sync(gen)
 	_window_fill_busy = false
 	if _window_fill_dirty and gen == _gen:
-		_run_window_fill()
+		_run_window_fill_sync()
 
 
-func _fill_window_faces(gen: int) -> void:
+func _fill_window_faces_sync(gen: int) -> void:
 	if _panel_window_lo < 0:
 		return
+	var order: Array[int] = _window_fill_order()
+	for idx: int in order:
+		if gen != _gen:
+			return
+		var cc: int = _grid_coord(idx).x
+		if cc < _panel_window_lo or cc > _panel_window_hi:
+			continue
+		var gf16_probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
+		await _fill_one_face_sync(idx, gen)
+		if TextureFactory.probe_enabled:
+			var gf16_us: int = Time.get_ticks_usec() - gf16_probe_t
+			TextureFactory.probe_note("fill_face_total", gf16_us)
+			TextureFactory.probe_note("fill_col_%d" % cc, gf16_us)
+	if gen == _gen:
+		_on_window_fill_drained(gen)
+
+
+## The window's face indices, centre column outward - the
+## one fill order both workers walk.
+func _window_fill_order() -> Array[int]:
 	var order: Array[int] = []
+	if _panel_window_lo < 0:
+		return order
 	var centre_col: int = _grid_coord(_centre_index).x
 	for dist: int in range(0, centre_col + VISIBLE_HALF_COLUMNS + 1):
 		for c: int in [centre_col - dist, centre_col + dist]:
@@ -3925,35 +4131,301 @@ func _fill_window_faces(gen: int) -> void:
 				var idx: int = _raw_index(c, row)
 				if idx >= 0 and idx < _panels.size():
 					order.append(idx)
-	for idx: int in order:
-		if gen != _gen:
-			return
-		# A fast sweep moves the window mid-pass (centre
-		# changes do not bump the generation): never spend a
-		# render on a card the window has already left.
-		var cc: int = _grid_coord(idx).x
-		if cc < _panel_window_lo or cc > _panel_window_hi:
+	return order
+
+
+## A fill pass resolved the standing window: the wall is
+## ready, and Main's warmer is asked to bring the columns
+## just outside the window forward (GRADFIX6's widened ask -
+## on the staged path the extraction lookahead plus the
+## pipeline's own queue are what stand between a fast sweep
+## and a wall of title cards).
+func _on_window_fill_drained(gen: int) -> void:
+	if gen != _gen:
+		return
+	wall_ready = true
+	var near: Array = []
+	for c: int in [_panel_window_lo - 2, _panel_window_lo - 1, _panel_window_hi + 1, _panel_window_hi + 2]:
+		if c < 0 or c >= _columns:
 			continue
-		await _fill_one_face(idx, gen)
-	if gen == _gen:
-		wall_ready = true
-		# The window is dressed: ask Main's warmer to bring
-		# the columns just outside it forward, so a swing
-		# lands on warm art even mid-warm-up. GRADFIX6 widens
-		# the ask from one column to two - the fill path no
-		# longer extracts inline, so the warmer's lookahead
-		# is the only thing standing between a fast sweep and
-		# a wall of title cards.
-		var near: Array = []
-		for c: int in [_panel_window_lo - 2, _panel_window_lo - 1, _panel_window_hi + 1, _panel_window_hi + 2]:
-			if c < 0 or c >= _columns:
+		for row: int in range(3):
+			var idx: int = _raw_index(c, row)
+			if idx >= 0 and idx < _visible_games.size():
+				near.append(_visible_games[idx])
+	if not near.is_empty():
+		art_prefetch_requested.emit(near)
+
+
+## The face key a panel's fill would compute right now
+## (game, its ready art file, favorite flag, PuP flag) -
+## the one stamp the fill and the heal both judge by.
+func _face_key_for(idx: int) -> String:
+	if idx < 0 or idx >= _visible_games.size():
+		return ""
+	var game: GameEntry = _visible_games[idx]
+	var art_file: String = _face_path_for(game)
+	var fav: bool = _store != null and _store.is_favorite(game.game_id)
+	var pup: bool = game.is_pup_tagged()
+	return game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+
+
+## Whether a panel's standing face is honestly the face its
+## key asks for (the fill's own already-wearing test, asked
+## without rendering anything).
+func _face_is_standing(idx: int) -> bool:
+	if idx < 0 or idx >= _visible_games.size():
+		return true
+	var game: GameEntry = _visible_games[idx]
+	return str(_panel_face_key.get(game.game_id, "")) == _face_key_for(idx)
+
+
+## The pipeline filter's key: _face_key_for with the art
+## path read through the memo (see _face_path_memo). Only
+## the enqueue filter and the pass's dispatch/landed checks
+## use it - never the heal, never a fill.
+func _face_key_for_memo(idx: int) -> String:
+	if idx < 0 or idx >= _visible_games.size():
+		return ""
+	var game: GameEntry = _visible_games[idx]
+	var art_file: String = _face_path_memoized(game)
+	var fav: bool = _store != null and _store.is_favorite(game.game_id)
+	var pup: bool = game.is_pup_tagged()
+	return game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+
+
+func _face_path_memoized(game: GameEntry) -> String:
+	if _face_path_memo.has(game.game_id):
+		return str(_face_path_memo[game.game_id])
+	var p: String = _face_path_for(game)
+	_face_path_memo[game.game_id] = p
+	return p
+
+
+## The filter's standing test (memoized path): a face whose
+## memo key matches its stamp needs no pipeline work.
+func _face_is_standing_memo(idx: int) -> bool:
+	if idx < 0 or idx >= _visible_games.size():
+		return true
+	var game: GameEntry = _visible_games[idx]
+	return str(_panel_face_key.get(game.game_id, "")) == _face_key_for_memo(idx)
+
+
+## Enqueue the standing window's faces for the staged
+## pipeline (centre-out). Called on every centre change:
+## the queue is REBUILT from the standing window each time,
+## holding ONLY the faces that are not honestly standing -
+## a stamped face costs the rebuild one key comparison, so
+## the pipeline's one-face-per-frame budget is spent on
+## real work, never on re-walking the dressed window. A
+## face the window left is dropped before it can spend a
+## render. Background decodes for the first few queued
+## faces dispatch here; the rest dispatch as the pass pops
+## them (see _art_pipe_pass), so this call itself stays
+## cheap on the travel path that calls it.
+func _art_pipe_enqueue_window() -> void:
+	var probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
+	var order: Array[int] = _window_fill_order()
+	var needy: Array[int] = []
+	for idx: int in order:
+		if not _face_is_standing_memo(idx):
+			needy.append(idx)
+	_art_pipe_queue = needy
+	var pre: Array[int] = []
+	for i: int in range(mini(6, needy.size())):
+		pre.append(needy[i])
+	_art_pipe_dispatch_decodes(pre)
+	if TextureFactory.probe_enabled:
+		TextureFactory.probe_note("pipe_enqueue_window", Time.get_ticks_usec() - probe_t)
+
+
+func _art_pipe_dispatch_decodes(idxs: Array[int]) -> void:
+	for idx: int in idxs:
+		if idx < 0 or idx >= _visible_games.size():
+			continue
+		var path: String = _face_path_memoized(_visible_games[idx])
+		if path == "":
+			continue
+		if TextureFactory.art_decode_is_cached(path):
+			continue
+		_art_pipe_dispatch_one(path)
+
+
+## Queue one art path for the background decode pump
+## (deduplicated against queued / in-flight / landed /
+## failed decodes, and against the standing decode cache's
+## own hits at stage time). Starts the pump when it is idle.
+func _art_pipe_dispatch_one(path: String) -> void:
+	_art_decode_mutex.lock()
+	var known: bool = _art_decode_pending.has(path) or _art_decoded_ready.has(path) or _art_decoded_failed.has(path)
+	var start_pump: bool = false
+	if not known:
+		_art_decode_pending[path] = true
+		_art_decode_queue.append(path)
+		if not _art_decode_pump_active:
+			_art_decode_pump_active = true
+			start_pump = true
+	_art_decode_mutex.unlock()
+	if start_pump:
+		WorkerThreadPool.add_task(Callable(self, "_art_decode_pump"))
+
+
+## The background decode pump (ONE worker task): drains the
+## decode queue one file at a time - load + downscale into
+## an Image, handed back through the mutex-guarded
+## dictionaries. No texture creation, no cache writes, no
+## node access: everything the pump touches is either its
+## own local Image or the guarded dictionaries. One at a
+## time is deliberate (the first staged runs dispatched a
+## task per face, and the decode swarm fought the renderer
+## for cores - the cruise crawled and the spikes came back;
+## the ArtWarmer's one-worker discipline is the house's
+## proven answer).
+func _art_decode_pump() -> void:
+	while true:
+		if _art_stopping:
+			_art_decode_mutex.lock()
+			_art_decode_pump_active = false
+			_art_decode_mutex.unlock()
+			return
+		# While a cruise stands the pump parks too: on a
+		# CPU-bound renderer even a background decode thread
+		# competes with the travel frames (measured on the
+		# harness box - cold-cruise frames ran ~3x the warm
+		# cruise's with applications already paused). The
+		# pump sleeps and resumes the moment the cruise ends;
+		# its queue keeps every staged path in order.
+		while _cruise_dir != 0 and not _art_stopping:
+			OS.delay_msec(8)
+		_art_decode_mutex.lock()
+		if _art_decode_queue.is_empty():
+			_art_decode_pump_active = false
+			_art_decode_mutex.unlock()
+			return
+		var path: String = _art_decode_queue.pop_front()
+		_art_decode_mutex.unlock()
+		var img: Image = TextureFactory.decode_art_image(path)
+		_art_decode_mutex.lock()
+		_art_decode_pending.erase(path)
+		if img != null:
+			_art_decoded_ready[path] = img
+		else:
+			_art_decoded_failed[path] = true
+		_art_decode_mutex.unlock()
+
+
+## The staged pipeline pass: a deferred coroutine (started
+## via call_deferred from _run_art_pipe, so it never runs
+## inside a _set_centre call), walking the queue one face
+## per frame at most. A face whose decode is still in
+## flight is SKIPPED this pass - never waited on - and
+## re-queued behind the rest; the pass ends only when the
+## queue holds nothing but in-flight decodes, and even then
+## it polls on its own frames until they land or the
+## generation changes. Faces are applied by the same
+## _fill_one_face_sync the serial worker uses, with
+## _art_pipe_in_stage set so its decode branch consumes the
+## staged result instead of paying a synchronous decode.
+func _run_art_pipe() -> void:
+	_art_pipe_busy = true
+	_window_fill_busy = true
+	call_deferred("_art_pipe_pass")
+
+
+## True when no pipeline pass is running and the decode
+## pump has drained (quiescence - the smokes wait for this
+## before quitting, and it is the honest test that staged
+## work has fully landed or been dropped).
+func art_pipeline_idle() -> bool:
+	_art_decode_mutex.lock()
+	var pump_active: bool = _art_decode_pump_active
+	_art_decode_mutex.unlock()
+	return not _art_pipe_busy and not pump_active
+
+
+func _art_pipe_pass() -> void:
+	var gen: int = _gen
+	var deferred: Array[int] = []
+	while gen == _gen:
+		while not _art_pipe_queue.is_empty():
+			if gen != _gen:
+				break
+			var idx: int = _art_pipe_queue.pop_front()
+			if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
 				continue
-			for row: int in range(3):
-				var idx: int = _raw_index(c, row)
-				if idx >= 0 and idx < _visible_games.size():
-					near.append(_visible_games[idx])
-		if not near.is_empty():
-			art_prefetch_requested.emit(near)
+			var cc: int = _grid_coord(idx).x
+			if cc < _panel_window_lo or cc > _panel_window_hi:
+				continue # the window left this card behind mid-pass
+			# While a held CRUISE stands, the pipeline
+			# applies NOTHING: sustained travel is the
+			# convicted case, and on any renderer a face
+			# capture landing mid-cruise is a hitch the
+			# drum pays for art. Background decodes keep
+			# running (they touch no frame), so the faces
+			# are staged and ready; applications resume
+			# the frame the cruise ends - a picture lands
+			# a beat after the drum stops, never during
+			# its travel. Ordinary swings keep the halved
+			# rate below (short travels, the shipped cost
+			# class).
+			var was_cruise_parked: bool = false
+			while _cruise_dir != 0 and gen == _gen:
+				was_cruise_parked = true
+				await get_tree().process_frame
+			if was_cruise_parked and gen == _gen:
+				# The release settle gets three frames of
+				# clear road before the first staged face
+				# lands - the resumed-work burst must not
+				# ride the very frame the drum stops on.
+				for grace_i: int in range(3):
+					await get_tree().process_frame
+			if gen != _gen:
+				break
+			var path: String = _face_path_memoized(_visible_games[idx])
+			if path != "" and not TextureFactory.art_decode_is_cached(path):
+				_art_decode_mutex.lock()
+				var decode_landed: bool = _art_decoded_ready.has(path) or _art_decoded_failed.has(path)
+				_art_decode_mutex.unlock()
+				if not decode_landed:
+					_art_pipe_dispatch_one(path)
+					deferred.append(idx)
+					continue
+			var gf16_probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
+			_art_pipe_in_stage = true
+			await _fill_one_face_sync(idx, gen)
+			_art_pipe_in_stage = false
+			if TextureFactory.probe_enabled:
+				var gf16_us: int = Time.get_ticks_usec() - gf16_probe_t
+				TextureFactory.probe_note("fill_face_total", gf16_us)
+				TextureFactory.probe_note("fill_col_%d" % cc, gf16_us)
+			if gen != _gen:
+				break
+			await get_tree().process_frame # the budget: at most one staged face per frame, ever
+			if _cruise_dir != 0 or _swing_active:
+				# Travelling: halve the application rate -
+				# one face per two frames. A cruise demands
+				# ~16 faces a second at full speed; even the
+				# halved rate supplies ~30, and the frames
+				# between applications are the drum's alone.
+				await get_tree().process_frame
+		if gen != _gen:
+			break
+		if deferred.is_empty():
+			break
+		# Only in-flight decodes remain: poll on the
+		# pipeline's own frames until they land.
+		_art_pipe_queue = deferred
+		deferred = []
+		await get_tree().process_frame
+	_art_pipe_busy = false
+	_window_fill_busy = false
+	if gen == _gen:
+		_on_window_fill_drained(gen)
+		if _window_fill_dirty:
+			# A centre change landed while this pass ran:
+			# one more pass for the window as it now stands.
+			_window_fill_dirty = false
+			_art_pipe_enqueue_window()
+			_run_art_pipe()
 
 
 ## The fill path's face read (GRADFIX6 items 2+3): the
@@ -4012,7 +4484,28 @@ func _rederive_card_plate(idx: int, game: GameEntry) -> void:
 ## title there), and a second name painted into the art would
 ## fight it. The favorite star stays inside the rendered
 ## face, exactly as the shipped art_spec draws it.
+## The one-face fill entry every direct caller uses
+## (refresh_shot_faces, the X-press re-render, the heal via
+## the window worker). GRADFIX16: on the staged path a
+## direct ask never pays inline either - the face joins the
+## pipeline's queue (at the front: it was asked for by name)
+## and lands when the pipeline reaches it, a frame or two
+## later. The NC's syncfill path, and the pipeline's own
+## stage step, call _fill_one_face_sync directly.
 func _fill_one_face(idx: int, gen: int) -> void:
+	if debug_gf16_nc == "syncfill" or _art_pipe_in_stage:
+		await _fill_one_face_sync(idx, gen)
+		return
+	if idx < 0 or idx >= _panels.size():
+		return
+	if not _art_pipe_queue.has(idx):
+		_art_pipe_queue.push_front(idx)
+		_art_pipe_dispatch_decodes([idx])
+	if not _art_pipe_busy:
+		_run_art_pipe()
+
+
+func _fill_one_face_sync(idx: int, gen: int) -> void:
 	if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
 		return
 	if _tournament and idx < _tournament_rows.size() \
@@ -4021,6 +4514,7 @@ func _fill_one_face(idx: int, gen: int) -> void:
 	var game: GameEntry = _visible_games[idx]
 	var quad: ClickableQuad = _panels[idx]
 	var art_file: String = _face_path_for(game)
+	_face_path_memo[game.game_id] = art_file # every fill refreshes the pipeline filter's memo from its own fresh probe
 	var fav: bool = _store != null and _store.is_favorite(game.game_id)
 	var pup: bool = game.is_pup_tagged()
 	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
@@ -4047,7 +4541,29 @@ func _fill_one_face(idx: int, gen: int) -> void:
 		from_art = art_aspect > 0.0
 	else:
 		if art_file != "":
-			var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
+			var art_tex: Texture2D = null
+			if _art_pipe_in_stage:
+				# GRADFIX16 staged decode: consume the
+				# background decode's Image (texture
+				# creation only - the ~2 ms tail), or the
+				# decode cache's standing texture. A decode
+				# that failed in the background falls
+				# through with art_tex null, exactly as a
+				# synchronous load failure did.
+				_art_decode_mutex.lock()
+				var staged_img: Image = _art_decoded_ready.get(art_file, null) as Image
+				var staged_failed: bool = _art_decoded_failed.has(art_file)
+				if staged_img != null:
+					_art_decoded_ready.erase(art_file)
+				if staged_failed:
+					_art_decoded_failed.erase(art_file)
+				_art_decode_mutex.unlock()
+				if staged_img != null:
+					art_tex = TextureFactory.art_texture_from_decoded(art_file, staged_img)
+				elif not staged_failed and TextureFactory.art_decode_is_cached(art_file):
+					art_tex = TextureFactory.load_art_texture(art_file)
+			else:
+				art_tex = TextureFactory.load_art_texture(art_file)
 			if art_tex != null:
 				art_aspect = float(art_tex.get_width()) / float(art_tex.get_height())
 				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store, false), _panel_face_px)
@@ -4166,6 +4682,7 @@ func _fill_one_face(idx: int, gen: int) -> void:
 func refresh_shot_faces(game: GameEntry) -> void:
 	if game == null:
 		return
+	_face_path_memo.erase(game.game_id) # the shot changed this game's art path; the fill below re-memoizes it fresh
 	var idx: int = _visible_games.find(game)
 	if idx < 0 or idx >= _panels.size():
 		return
@@ -7918,6 +8435,17 @@ func _unhandled_input(event: InputEvent) -> void:
 					_detail.handle_escape()
 
 
+## Scroll telemetry: the witness closes its file (final
+## flush + footer) as the room leaves the tree, so a normal
+## exit always lands the complete log.
+func _exit_tree() -> void:
+	_art_stopping = true
+	_gen += 1 # the pipeline pass breaks at its next await; no new face starts
+	if _scroll_telemetry_started:
+		_scroll_telemetry.close()
+		_scroll_telemetry_started = false
+
+
 func _process(delta: float) -> void:
 	# The flat (non-XR) camera is STATIC at the seated viewpoint - the
 	# mouse is a pure pointer there, never a look control. A view that
@@ -7964,6 +8492,13 @@ func _process(delta: float) -> void:
 	# the SETUP placard the press also does nothing: BACK is the
 	# only way off the placard.
 	# The loading marquee animates on this same per-frame beat.
+	# Scroll telemetry (observation only): start the witness
+	# on the room's first visible frame, and snapshot the
+	# drum's motion state BEFORE this frame's swing update -
+	# the frame record below reads it against the after.
+	_telemetry_start_if_needed()
+	var telemetry_motion_was_active: bool = _swing_active or _cruise_dir != 0 or absf(_swing_vel) > 0.0001
+	var telemetry_applied_yaw_before: float = _wall.rotation.y if _wall != null else _drum_yaw
 	if _marquee_up:
 		_update_marquee(delta)
 	_update_background(delta) ## the starfield drift (GRADFIX4 item 5d) - its own beat, ungated
@@ -7981,8 +8516,26 @@ func _process(delta: float) -> void:
 	_update_pop(delta)
 	_update_rail_lift(delta)
 	_update_swing(delta)
+	# Scroll telemetry (observation only): one frame record
+	# per rendered frame in which the drum was moving when
+	# the frame began or still is when its swing update has
+	# run - target, actual and applied yaw, velocity, and
+	# the driver state that produced them.
+	if _scroll_telemetry_started and visible and (telemetry_motion_was_active or _swing_active or _cruise_dir != 0 \
+			or absf(_swing_vel) > 0.0001 or absf((_wall.rotation.y if _wall != null else _drum_yaw) - telemetry_applied_yaw_before) > 0.0000001):
+		var frame_fields: Dictionary = _telemetry_context()
+		frame_fields["engine_frame"] = Engine.get_process_frames()
+		frame_fields["frame_delta_ms"] = delta * 1000.0
+		frame_fields["phase"] = "after_swing_update"
+		frame_fields["swing_journey"] = _swing_journey
+		frame_fields["swing_cols"] = _swing_cols
+		frame_fields["swing_duration_s"] = _swing_duration
+		frame_fields["cruise_cap_deg_s"] = rad_to_deg(_swing_cruise_rad)
+		_telemetry_record("frame", frame_fields)
 	_update_power(delta)
 	var deaf: bool = _launching_game_id != ""
+	var telemetry_cooldown_before: float = _joy_cooldown ## scroll telemetry: the poll's before (read-only)
+	var telemetry_cruise_before_poll: int = _cruise_dir ## scroll telemetry: the cruise state as this poll began (read-only)
 	_joy_cooldown = maxf(0.0, _joy_cooldown - delta)
 	var ax: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)
 	var ay: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_Y)
@@ -8016,7 +8569,7 @@ func _process(delta: float) -> void:
 	# seated here).
 	if _cruise_dir != 0 and (_mode != "wall" or _tournament or _placard_up or _setup_panel_up \
 			or deaf or _focused == null or _panels.find(_focused) < 0):
-		_stop_cruise(not deaf)
+		_stop_cruise(not deaf, "cruise_context_lost")
 	# The hold bookkeeping (GRADFIX13 item 3 - see the
 	# cruise block above _cruise_wanted for the conviction):
 	# the poll counts the discrete steps of ONE continuous
@@ -8026,27 +8579,74 @@ func _process(delta: float) -> void:
 	# fresh step below retargets mid-travel, the prime law).
 	if dir == Vector2.ZERO:
 		if _cruise_dir != 0:
-			_stop_cruise(true)
+			_stop_cruise(true, "stick_released")
 		_joy_hold_dir = Vector2.ZERO
 		_joy_hold_steps = 0
 	elif dir != _joy_hold_dir:
 		if _cruise_dir != 0:
-			_stop_cruise(false)
+			_stop_cruise(false, "stick_direction_changed")
 		_joy_hold_dir = dir
 		_joy_hold_steps = 0
+	# Scroll telemetry (observation only): this poll's step
+	# decision, named as the branches below take it. The
+	# locals are written by the branches and read only by
+	# the record after them - they steer nothing.
+	var telemetry_decision: String = "none"
+	var telemetry_decision_source: String = "poll"
+	var telemetry_decision_reason: String = "stick_neutral" if dir == Vector2.ZERO else "cooldown_active"
+	var telemetry_hold_steps_before_decision: int = _joy_hold_steps
+	var telemetry_cooldown_at_poll: float = _joy_cooldown
 	if dir != Vector2.ZERO and _joy_cooldown <= 0.0:
 		if not deaf:
 			if _cruise_dir != 0:
+				telemetry_decision = "none_discrete_step"
+				telemetry_decision_source = "standing_cruise"
+				telemetry_decision_reason = "cruise_owns_hold_travel"
 				pass ## the cruise IS this hold's travel: no discrete step fires under it
 			elif _joy_hold_steps >= 1 and _cruise_wanted(dir):
 				# The hold's second same-direction step: under
 				# SMOOTH the hold becomes a cruise instead of
 				# another per-column retarget.
+				telemetry_decision = "begin_cruise"
+				telemetry_decision_source = "hold_counter"
+				telemetry_decision_reason = "second_same_direction_step"
 				_begin_cruise(1 if dir.x > 0.0 else -1)
 			else:
+				telemetry_decision = "step"
+				telemetry_decision_source = "move_focus"
+				telemetry_decision_reason = "discrete_step_fired"
 				_move_focus(dir)
 				_joy_hold_steps += 1
+		else:
+			telemetry_decision = "suppressed"
+			telemetry_decision_source = "poll"
+			telemetry_decision_reason = "launch_wait_deaf"
 		_joy_cooldown = 0.24
+	# Scroll telemetry (observation only): the poll record -
+	# one per rendered frame, at the product's own cadence,
+	# with the raw axes exactly as the poll read them.
+	if _scroll_telemetry_started and visible:
+		var poll_fields: Dictionary = _telemetry_context()
+		poll_fields["engine_frame"] = Engine.get_process_frames()
+		poll_fields["frame_delta_ms"] = delta * 1000.0
+		poll_fields["joy_axis_x"] = ax
+		poll_fields["joy_axis_y"] = ay
+		poll_fields["dir_x"] = dir.x
+		poll_fields["dir_y"] = dir.y
+		poll_fields["deadzone_threshold"] = 0.55
+		poll_fields["step_decision"] = telemetry_decision
+		poll_fields["step_source"] = telemetry_decision_source
+		poll_fields["step_reason"] = telemetry_decision_reason
+		poll_fields["cooldown_before_s"] = telemetry_cooldown_before
+		poll_fields["cooldown_at_poll_s"] = telemetry_cooldown_at_poll
+		poll_fields["cooldown_after_s"] = _joy_cooldown
+		poll_fields["repeat_cooldown_s"] = 0.24
+		poll_fields["hold_steps_before_decision"] = telemetry_hold_steps_before_decision
+		poll_fields["hold_steps_after"] = _joy_hold_steps
+		poll_fields["cruise_dir_before_poll"] = telemetry_cruise_before_poll
+		poll_fields["cruise_dir_after_poll"] = _cruise_dir
+		poll_fields["deaf"] = deaf
+		_telemetry_record("poll", poll_fields)
 	var a_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_A)
 	if a_now and not _joy_prev_a and _focused != null and not deaf:
 		_a_press()
