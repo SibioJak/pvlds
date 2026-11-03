@@ -639,7 +639,9 @@ var _art_decoded_ready: Dictionary = {} ## art path -> Image: a finished backgro
 var _art_decoded_failed: Dictionary = {} ## art path -> true: a background decode finished and produced no image (the staged face falls through to its styled card, exactly as a synchronous load failure did)
 var _art_decode_mutex: Mutex = Mutex.new() ## guards the decode dictionaries and the pump's queue against the worker thread
 var _art_decode_queue: Array[String] = [] ## art paths awaiting the decode pump (mutex-guarded)
-var _art_decode_pump_active: bool = false ## a pump task is draining _art_decode_queue (mutex-guarded): ONE decode at a time, ever - the ArtWarmer's proven discipline, so background decode can never swarm the renderer's cores
+var _art_decode_pump_active: bool = false ## a pump task is draining _art_decode_queue (mutex-guarded)
+var _art_decode_workers: int = 0 ## pump tasks currently draining (mutex-guarded) - GRADFIX18: a BOUNDED pool (ART_DECODE_WORKERS), replacing GF16's one-at-a-time law: a serial pump caps stream dressing at one face per decode cost (field 3.5 ms = ~285/s, ample; the heavy-art bench fixture ~100-300 ms = 3-10/s against a cruise's ~16 faces/s demand, impossible) - the pool is what lets the stream hold its lead on heavy art. Unbounded per-face tasks stay banned (the GF16 swarm); the pool is three, ever.
+const ART_DECODE_WORKERS: int = 3 ## the decode pool's bound (see _art_decode_workers)
 var _art_stopping: bool = false ## the room is leaving the tree: the pipeline starts no new face and the pump returns after its current decode - art work must wind down at exit, not continue into engine teardown (the harness's swing probe segfaulted at quit with fills in flight; the serial worker it replaced was almost always idle by quit, the pipeline by design is not)
 ## GRADFIX17 (hitch hunt) art-pipeline telemetry staging:
 ## the pipeline's seams (enqueue, decode pump, apply, heal,
@@ -4610,7 +4612,8 @@ func _art_pipe_dispatch_one(path: String) -> void:
 		if not _art_decode_target.has(path):
 			_art_decode_target[path] = _panel_face_px ## GRADFIX18: the pump face-prepares at the standing face size
 		_art_decode_queue.append(path)
-		if not _art_decode_pump_active:
+		if _art_decode_workers < ART_DECODE_WORKERS:
+			_art_decode_workers += 1
 			_art_decode_pump_active = true
 			start_pump = true
 	_art_decode_mutex.unlock()
@@ -4620,22 +4623,24 @@ func _art_pipe_dispatch_one(path: String) -> void:
 		WorkerThreadPool.add_task(Callable(self, "_art_decode_pump"))
 
 
-## The background decode pump (ONE worker task): drains the
-## decode queue one file at a time - load + downscale into
-## an Image, handed back through the mutex-guarded
-## dictionaries. No texture creation, no cache writes, no
-## node access: everything the pump touches is either its
-## own local Image or the guarded dictionaries. One at a
-## time is deliberate (the first staged runs dispatched a
-## task per face, and the decode swarm fought the renderer
-## for cores - the cruise crawled and the spikes came back;
-## the ArtWarmer's one-worker discipline is the house's
-## proven answer).
+## The background decode pump (a BOUNDED pool of worker
+## tasks, ART_DECODE_WORKERS): drains the decode queue -
+## load + downscale + face-prep into Images, handed back
+## through the mutex-guarded dictionaries. No texture
+## creation, no cache writes, no node access: everything a
+## pump task touches is either its own local Image or the
+## guarded dictionaries. GF16 ran ONE task (a task per face
+## - the unbounded swarm - fought the renderer for cores);
+## GRADFIX18's stream needs decode throughput above the
+## cruise's arrival rate on heavy art too, so the pool is
+## bounded at three - the swarm stays banned, the serial
+## cap goes.
 func _art_decode_pump() -> void:
 	while true:
 		if _art_stopping:
 			_art_decode_mutex.lock()
-			_art_decode_pump_active = false
+			_art_decode_workers -= 1
+			_art_decode_pump_active = _art_decode_workers > 0
 			_art_decode_mutex.unlock()
 			return
 		# GRADFIX18: the pump no longer parks for a cruise -
@@ -4646,7 +4651,8 @@ func _art_decode_pump() -> void:
 		# texture creation, no node access, no frame contact.
 		_art_decode_mutex.lock()
 		if _art_decode_queue.is_empty():
-			_art_decode_pump_active = false
+			_art_decode_workers -= 1
+			_art_decode_pump_active = _art_decode_workers > 0
 			_art_decode_mutex.unlock()
 			return
 		var path: String = _art_decode_queue.pop_front()
