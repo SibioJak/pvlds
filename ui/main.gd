@@ -12325,25 +12325,28 @@ func _land_tour_titles() -> Array[String]:
 func _drive_landing_smoke() -> void:
 	match _land_phase:
 		0:
+			if not _land_warm_held and _room != null:
+				# Hold the warm pass for the travel: the
+				# field shape is a library whose warmer runs
+				# far behind the player's cruise, so the
+				# named neighbourhood's art lands only when
+				# the driver releases the pass after the
+				# travel (phase 4). The stop must land on
+				# the first frame the room exists - the scan
+				# started the pass in the same frame the
+				# room was entered, and a later stop would
+				# find a drained queue on a slow box.
+				# Prefetch may still jump near-window
+				# sources during travel - each races its
+				# own first fill, exactly as on the field rig.
+				_land_warm_held = true
+				if _art_warmer != null:
+					_art_warmer.request_stop()
 			if _room != null and _room.visible and _room.wall_ready and not _scan_active:
 				_land_wait += 1
 				if _land_wait > 21600:
 					_landing_expect(false, "landing guarantee: the start window never settled")
 					_finish_landing_smoke()
-					return
-				if not _land_warm_held:
-					# Hold the warm pass for the travel: the
-					# field shape is a library whose warmer
-					# runs far behind the player's cruise, so
-					# the named neighbourhood's art lands
-					# only when the driver releases the pass
-					# after the travel (phase 4). Prefetch
-					# may still jump near-window sources -
-					# each races its own first fill, exactly
-					# as on the field rig.
-					_land_warm_held = true
-					if _art_warmer != null:
-						_art_warmer.request_stop()
 					return
 				if not _land_filter_forced:
 					# The room boots on the VR filter; the
