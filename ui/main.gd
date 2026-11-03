@@ -337,12 +337,12 @@ var _opt_train_start_col: int = 0 ## OPTIMIZE applies leg: the column the step t
 var _opt_train_t0_msec: int = 0 ## OPTIMIZE applies leg: when the train's stick was fed
 var _opt_train_dir: float = 1.0 ## OPTIMIZE applies leg: the train's direction (toward the shelf's far half)
 var _opt_letter_key: String = "" ## OPTIMIZE applies leg: the letter the journey jumped to
-var _smoke_landing: bool = false ## --pvlds-smoke-landing: GRADFIX17 item 1 - hard travel (long cruises both directions + letter swings) over a shelf whose named neighbourhood resolves its art LATE (extraction chain / pair / embedded / author shot), then a per-stop census of visible faces still missing art a beat after settle; the census must read ZERO
+var _smoke_landing: bool = false ## --pvlds-smoke-landing: GRADFIX17 item 1 - hard travel (long stepped travels both directions + letter swings) over a shelf whose named neighbourhood resolves its art LATE (extraction chain / pair / embedded / author shot), then a per-stop census of visible faces still missing art a beat after settle; the census must read ZERO. OPTIMIZE adds the "optimize: eviction keeps the census" leg after the tour
 var _land_phase: int = 0
 var _land_wait: int = 0
 var _land_failures: int = 0
 var _land_start_col: int = -1
-var _land_saw_cruise: bool = false
+var _land_saw_travel: bool = false ## a hold actually travelled (swing stood / centre moved) on the real input path
 var _land_released: bool = false
 var _land_rest_frames: int = 0
 var _land_settle_frames: int = 0
@@ -648,18 +648,18 @@ func _ready() -> void:
 	RoomView.debug_gf8_nc = OS.get_environment("PVLDS_GRADFIX8_NC")
 	# GRADFIX10's negative-control seams (PVLDS_GRADFIX10_NC=
 	# steppop | stepswing): steppop restores the convicted pop
-	# stepping, stepswing restores slot-stepping under the
-	# SMOOTH wall-motion dial - the motion smoke's smoothness
-	# legs fail against them by name. Set here, before any
-	# room exists.
+	# stepping, stepswing restores slot-stepping in the swing
+	# - the pop/travel legs fail against them by name. Set
+	# here, before any room exists.
 	RoomView.debug_gf10_nc = OS.get_environment("PVLDS_GRADFIX10_NC")
 	# GRADFIX13's negative-control seams (PVLDS_GF13_NC=
 	# steprepeat | oldascent): steprepeat restores the
-	# per-repeat discrete stepping under SMOOTH (item 3, the
-	# held-cruise leg fails by name); oldascent restores the
-	# projection-walk rail->rows ascent (item 4, the
-	# vertical-wall-law legs fail by name). Set here, before
-	# any room exists.
+	# per-repeat discrete stepping (item 3 - its held-cruise
+	# judge retired with the dial in the OPTIMIZE round; the
+	# seam itself is the room's and the wiring stays);
+	# oldascent restores the projection-walk rail->rows
+	# ascent (item 4, the vertical-wall-law legs fail by
+	# name). Set here, before any room exists.
 	RoomView.debug_gf13_nc = OS.get_environment("PVLDS_GF13_NC")
 	# GRADFIX14's adoption negative-control seam (PVLDS_
 	# GF14_NC=oldadopt): restores the pre-fix adoption
@@ -11824,7 +11824,7 @@ func _finish_motion_smoke() -> void:
 		get_tree().quit(1)
 
 
-var _smoke_swingprobe: bool = false ## --pvlds-smoke-swingprobe: GRADFIX16 item 2, the swing A/B - one letter pick through the real pad path (focus the strip slot, press A) after the same cold reset the artstream cruise gets, recording the swing's travel frame deltas on the same fixture. A reading, not a verdict: the field evidence says a letter swing travels smoothly on Chris's rig while the held cruise slots, and this probe shows whether the harness reproduces the contrast and which difference it convicts.
+var _smoke_swingprobe: bool = false ## --pvlds-smoke-swingprobe: GRADFIX16 item 2, the swing A/B - one letter pick through the real pad path (focus the strip slot, press A) after a cold reset of the decode cache, recording the swing's travel frame deltas on the same fixture. A reading, not a verdict. (Its pair, the artstream cruise smoke, retired in the OPTIMIZE round; the probe stands alone now.)
 var _swp_phase: int = 0
 var _swp_wait: int = 0
 var _swp_failures: int = 0
@@ -11864,11 +11864,9 @@ func _finish_swingprobe_smoke() -> void:
 
 
 ## The swing A/B driver (see _smoke_swingprobe): boot and
-## seat exactly as the artstream cruise does, cold-reset
-## the decode cache the same way, then make ONE letter pick
-## the pad's way and record every frame delta until the
-## swing settles. The cruise's numbers come from the
-## artstream smoke on the same fixture; this is its pair.
+## seat, cold-reset the decode cache, then make ONE letter
+## pick the pad's way and record every frame delta until
+## the swing settles.
 func _drive_swingprobe_smoke() -> void:
 	match _swp_phase:
 		0:
@@ -12002,20 +12000,28 @@ func _drive_swingprobe_smoke() -> void:
 ## -------------------------------------------------- landing smoke (GRADFIX17 item 1)
 ##
 ## --pvlds-smoke-landing: hard travel through the room path -
-## long held cruises BOTH directions, then letter swings -
-## over a shelf whose named neighbourhood (the field report's
-## shape: Medieval Madness, KISS, Ice Fever, Indianapolis 500)
-## resolves its art LATE: big .directb2s extractions the warmer
-## lands seconds after the first fill, a pair backglass, an
-## embedded-.vpx face, and author shots that fetch in flight.
-## After the travel, once the warmer and the fetcher have
-## landed everything they will ever land, the driver tours
-## the named tables and every travel stop: at each stop the
-## room's landing census (fresh probes, the heal's read) must
-## read ZERO visible faces still missing art, and a rendered
-## grab is saved per stop. Legs are named "landing guarantee:".
-## Under PVLDS_GF17_NC=noguarantee the room's settle audit is
-## disabled and the census legs fail by name.
+## long held stepped travels BOTH directions, then letter
+## swings - over a shelf whose named neighbourhood (the field
+## report's shape: Medieval Madness, KISS, Ice Fever,
+## Indianapolis 500) resolves its art LATE: big .directb2s
+## extractions the warmer lands seconds after the first fill,
+## a pair backglass, an embedded-.vpx face, and author shots
+## that fetch in flight. After the travel, once the warmer and
+## the fetcher have landed everything they will ever land, the
+## driver tours the named tables and every travel stop: at
+## each stop the room's landing census (fresh probes, the
+## heal's read) must read ZERO visible faces still missing
+## art, and a rendered grab is saved per stop. Legs are named
+## "landing guarantee:". Under PVLDS_GF17_NC=noguarantee the
+## room's settle audit is disabled and the census legs fail
+## by name. The OPTIMIZE round adds one leg after the tour,
+## "optimize: eviction keeps the census": after the hard
+## travel + settle + the room's eviction pass, the visible
+## census still reads zero, residency stands within its cap,
+## and at least one far face was actually evicted on the run
+## (the leg cannot pass vacuously). Under PVLDS_OPT_NC=
+## evictvis the eviction eats a visible face and the census
+## part fails by that name.
 func _landing_expect(cond: bool, label: String) -> void:
 	if cond:
 		print("  ok - landing smoke: ", label)
@@ -12089,7 +12095,7 @@ func _drive_landing_smoke() -> void:
 					if _room._grid_coord(i).x == want_col and _room._grid_coord(i).y == _room._grid_coord(mid).y:
 						start_idx = i
 						break
-				_room.set_wall_motion_mode("smooth")
+				_room.set_wall_motion_mode("stepped")
 				_room._set_centre(start_idx, true)
 				_room._set_focused(_room._panels[start_idx])
 				if not _room._window_fill_busy and not _room.page_slide_active():
@@ -12098,7 +12104,7 @@ func _drive_landing_smoke() -> void:
 					_land_settle_frames = 0
 				if _land_settle_frames >= 5:
 					TextureFactory.clear_art_decode_cache()
-					print("LANDING: room up, %d columns, seating and cruising right" % _room._columns)
+					print("LANDING: room up, %d columns, seating and travelling right" % _room._columns)
 					_land_start_col = _room._grid_coord(_room.centre_index()).x
 					_input_feed_stick_x(1.0)
 					_land_phase = 1
@@ -12109,10 +12115,13 @@ func _drive_landing_smoke() -> void:
 					_landing_expect(false, "landing guarantee: the room never came up (scan never settled)")
 					_finish_landing_smoke()
 		1:
-			# Cruise RIGHT through the real input path.
+			# Travel RIGHT through the real input path (a
+			# held stick under the stepped gait: repeated
+			# steps - travel is the swing standing and the
+			# centre moving, the cruise seam is deleted).
 			_land_wait += 1
-			if _room.cruise_active():
-				_land_saw_cruise = true
+			if _room.swing_active() or _room._grid_coord(_room.centre_index()).x != _land_start_col:
+				_land_saw_travel = true
 			var col_now: int = _room._grid_coord(_room.centre_index()).x
 			if not _land_released and col_now >= _land_start_col + 15:
 				_land_released = true
@@ -12123,9 +12132,9 @@ func _drive_landing_smoke() -> void:
 				else:
 					_land_rest_frames = 0
 				if _land_rest_frames >= 3:
-					_landing_expect(_land_saw_cruise, "landing guarantee: the rightward hold became a cruise on the real input path")
-					_landing_expect(col_now - _land_start_col >= 12, "landing guarantee: the rightward cruise spanned %d columns (a long travel)" % (col_now - _land_start_col))
-					_land_saw_cruise = false
+					_landing_expect(_land_saw_travel, "landing guarantee: the rightward hold became stepped travel on the real input path")
+					_landing_expect(col_now - _land_start_col >= 12, "landing guarantee: the rightward travel spanned %d columns (a long travel)" % (col_now - _land_start_col))
+					_land_saw_travel = false
 					_land_released = false
 					_land_rest_frames = 0
 					_input_feed_stick_x(-1.0)
@@ -12133,13 +12142,13 @@ func _drive_landing_smoke() -> void:
 					_land_wait = 0
 			elif _land_wait > 7200:
 				_input_feed_stick_x(0.0)
-				_landing_expect(false, "landing guarantee: the rightward cruise never spanned and settled")
+				_landing_expect(false, "landing guarantee: the rightward travel never spanned and settled")
 				_finish_landing_smoke()
 		2:
-			# Cruise LEFT, back past the start.
+			# Travel LEFT, back past the start.
 			_land_wait += 1
-			if _room.cruise_active():
-				_land_saw_cruise = true
+			if _room.swing_active() or _room._grid_coord(_room.centre_index()).x != _land_start_col:
+				_land_saw_travel = true
 			var col_now2: int = _room._grid_coord(_room.centre_index()).x
 			if not _land_released and col_now2 <= maxi(2, _land_start_col - 10):
 				_land_released = true
@@ -12150,7 +12159,7 @@ func _drive_landing_smoke() -> void:
 				else:
 					_land_rest_frames = 0
 				if _land_rest_frames >= 3:
-					_landing_expect(_land_saw_cruise, "landing guarantee: the leftward hold became a cruise on the real input path")
+					_landing_expect(_land_saw_travel, "landing guarantee: the leftward hold became stepped travel on the real input path")
 					_land_swing_keys = ["I", "K", "M", "E"]
 					_land_swing_i = 0
 					_land_saw_swing = false
@@ -12160,7 +12169,7 @@ func _drive_landing_smoke() -> void:
 					_land_wait = 0
 			elif _land_wait > 7200:
 				_input_feed_stick_x(0.0)
-				_landing_expect(false, "landing guarantee: the leftward cruise never spanned and settled")
+				_landing_expect(false, "landing guarantee: the leftward travel never spanned and settled")
 				_finish_landing_smoke()
 		3:
 			# Letter swings through the strip, the pad's way.
@@ -12221,8 +12230,9 @@ func _drive_landing_smoke() -> void:
 			# with the missing titles printed.
 			_land_wait += 1
 			if _land_tour_i >= _land_tour.size():
-				_land_phase = 6
+				_land_phase = 7
 				_land_wait = 0
+				_land_settle_frames = 0
 				return
 			var title: String = _land_tour[_land_tour_i]
 			if _land_census_deadline_msec == 0:
@@ -12268,6 +12278,35 @@ func _drive_landing_smoke() -> void:
 				_land_tour_grab(title)
 				_land_tour_i += 1
 				_land_census_deadline_msec = 0
+				_land_wait = 0
+		7:
+			# OPTIMIZE: eviction keeps the census. The tour
+			# travelled the shelf and settled at its last
+			# stop; give the room's eviction pass a beat at
+			# rest, then judge all three parts at the
+			# standing window: the census still zero,
+			# residency within its cap, and at least one far
+			# face actually evicted on the run - a leg that
+			# cannot pass vacuously. Under PVLDS_OPT_NC=
+			# evictvis the eviction eats a visible face and
+			# the census part fails by this leg's name.
+			_land_wait += 1
+			if not _room.swing_active() and not _room.page_slide_active() and _room.art_pipeline_idle():
+				_land_settle_frames += 1
+			else:
+				_land_settle_frames = 0
+			if _land_settle_frames >= 10 or _land_wait > 3600:
+				var census7: Dictionary = _room.landing_census()
+				var missing7: Array = census7.get("missing", []) as Array
+				var total7: int = int(census7.get("total", 0))
+				_landing_expect(missing7.is_empty() and total7 > 0,
+					"optimize: eviction keeps the census: after hard travel + settle + the eviction pass, the visible census still reads zero missing (%d of %d faces missing)" % [missing7.size(), total7])
+				var res7: Dictionary = _room.residency_stats()
+				_landing_expect(int(res7.get("resident_faces", -1)) >= 0 and int(res7.get("resident_faces", 0)) <= int(res7.get("cap_faces", 0)),
+					"optimize: eviction keeps the census: residency stands within its cap (%d resident faces, cap %d, %d resident bytes, margin %d cols)" % [int(res7.get("resident_faces", 0)), int(res7.get("cap_faces", 0)), int(res7.get("resident_bytes", 0)), int(res7.get("margin_cols", 0))])
+				_landing_expect(int(res7.get("evicted_total", 0)) > 0,
+					"optimize: eviction keeps the census: at least one far game's face was actually evicted during the run (evicted_total %d after travelling the full shelf)" % int(res7.get("evicted_total", 0)))
+				_land_phase = 6
 				_land_wait = 0
 		6:
 			_land_wait += 1
