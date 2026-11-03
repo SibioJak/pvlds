@@ -641,6 +641,22 @@ var _art_decode_mutex: Mutex = Mutex.new() ## guards the decode dictionaries and
 var _art_decode_queue: Array[String] = [] ## art paths awaiting the decode pump (mutex-guarded)
 var _art_decode_pump_active: bool = false ## a pump task is draining _art_decode_queue (mutex-guarded): ONE decode at a time, ever - the ArtWarmer's proven discipline, so background decode can never swarm the renderer's cores
 var _art_stopping: bool = false ## the room is leaving the tree: the pipeline starts no new face and the pump returns after its current decode - art work must wind down at exit, not continue into engine teardown (the harness's swing probe segfaulted at quit with fills in flight; the serial worker it replaced was almost always idle by quit, the pipeline by design is not)
+## GRADFIX17 (hitch hunt) art-pipeline telemetry staging:
+## the pipeline's seams (enqueue, decode pump, apply, heal,
+## prefetch) stage event dictionaries here through
+## _art_event (mutex-guarded: the decode pump stages from
+## its worker thread), and the main thread drains them into
+## the scroll telemetry log (see _telemetry_drain_art_events).
+## Observation only: staging is one mutex + one array
+## append per event; no pipeline decision reads it.
+## PVLDS_GF17_TEL=off disables the staging entirely (the
+## overhead A/B seam: same build, witness muted).
+var _art_tel_mutex: Mutex = Mutex.new()
+var _art_tel_pending: Array[Dictionary] = []
+var _art_tel_mode: int = -1 ## -1 unknown, 0 off, 1 on (the env read is cached on first use)
+var _art_apply_branch: String = "" ## the branch the running _fill_one_face_sync took (written by the fill, read by its caller's telemetry wrap)
+var _art_apply_load_ms: float = 0.0 ## the running fill's art-load cost (same wrap)
+var _art_apply_render_ms: float = 0.0 ## the running fill's face-render cost (same wrap)
 var _face_path_memo: Dictionary = {} ## game_id -> art path, for the pipeline's per-centre-change filter ONLY: _face_path_for probes the filesystem per game, and asking it for all 63 window faces on every column crossing put a measurable burst on the crossing frame (healthy-box runs: 1-2 spikes of 50-90 ms per column with all art work parked). The memo is rewritten by every fill from its own fresh probe, erased on shot refresh, and cleared on rebuild. GRADFIX17 (item 1): a fill is NOT the only corrector any more - the heal and the settle audit probe fresh and rewrite the memo from that probe whenever their fresh key disagrees with the stamp, because a memo written while a face's art was still cold otherwise vetoed every later pass for that face (the filter judged it standing; the fill that would have corrected the memo was the very thing being filtered out).
 var _power_subject_inflight: Dictionary = {} ## game_id -> true while its power-on subject renders
 var _power_prefetch_asked: Dictionary = {} ## game_id -> true once the warmer has been asked for its cold backglass (GRADFIX6)
@@ -832,6 +848,13 @@ static var debug_gf16_nc: String = ""
 ## exactly the GRADFIX16 field defect - so the landing smoke's
 ## "landing guarantee:" census legs fail by name. Empty in
 ## every real run.
+## GRADFIX17 (item 2) negative-control seam (harness env
+## PVLDS_GF17_NC): "hazeall" restores the pre-fix wall-alpha
+## law - _apply_wall_alpha rewrites every panel's, launch's
+## and label's alpha on every centre change, changed or not
+## (the per-column write storm the hitchhunt convicted) -
+## so the hitchhunt smoke's alpha-write leg fails by name.
+## Empty in every real run.
 static var debug_gf17_nc: String = ""
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
@@ -900,6 +923,28 @@ var _marquee_name: Label3D = null
 var _marquee_up: bool = false
 var _marquee_t: float = 0.0 ## seconds since the marquee rose
 var _wall_alpha_applied: float = 1.0 ## the wall fade's last applied alpha (change guard)
+## GRADFIX17 (item 2): the wall-alpha pass's write-on-change
+## bookkeeping. The pass used to rewrite every panel's,
+## launch's and label's alpha on EVERY centre change (the
+## haze "follows the centre", so _refresh_window defeated
+## the change guard by resetting it) - some 3 renderer
+## writes per panel per column crossing, ~99% of them
+## writing the value already standing (a panel's haze
+## factor moves materially only while it crosses the
+## 6-to-10-column band around the centre). The pass now
+## writes only what changed by at least its own standing
+## epsilon (0.002, the guard's own threshold - a smaller
+## change is invisible by the code's own standard), and
+## _alpha_write_count counts the writes so the hitchhunt
+## smoke can judge the law structurally. PVLDS_GF17_NC=
+## hazeall restores the write-everything law (debug_gf17_nc).
+var _alpha_write_count: int = 0 ## wall-alpha values written since boot (the hitchhunt smoke reads the cruise deltas)
+var _alpha_haze_centre: int = -999 ## the centre column the standing per-panel alphas were computed for
+var _panel_alpha_applied: Array[float] = [] ## per panel: the content alpha last written (-1 = never)
+var _launch_alpha_applied: Array[float] = [] ## per launch quad: same
+var _label_alpha_applied: Array[float] = [] ## per panel label: same
+var _board_alpha_applied: Array[float] = [] ## per board node: same
+var _alpha_flat_applied: Dictionary = {} ## rail/strip/status/plate/border key -> the alpha last written (these ride the global fade only, never the haze)
 var _placard: Node3D = null ## the setup placard's holder; in the tree only while the placard stands
 var _placard_face: ClickableQuad = null
 var _placard_back: ClickableQuad = null
@@ -1512,7 +1557,46 @@ func _telemetry_context() -> Dictionary:
 func _telemetry_record(kind: String, fields: Dictionary) -> void:
 	if not _scroll_telemetry_started or not visible:
 		return
+	_telemetry_drain_art_events()
 	_scroll_telemetry.record(kind, fields)
+
+
+## GRADFIX17: stage one art-pipeline event for the scroll
+## telemetry log. Callable from any thread (the decode pump
+## stages its decode start/end here): the whole cost is one
+## mutex, one dictionary append, one unlock. Costs and wall
+## stamps are measured BY THE SEAM and carried in fields -
+## the record's own t_ms is the drain time (within a frame
+## on the main thread, a frame or two for the pump), never
+## the evidence. The pending array is capped: a witness
+## that grows without bound would become the fault it hunts.
+func _art_event(event: String, fields: Dictionary) -> void:
+	if _art_tel_mode < 0:
+		_art_tel_mode = 0 if OS.get_environment("PVLDS_GF17_TEL") == "off" else 1
+	if _art_tel_mode == 0:
+		return
+	var rec: Dictionary = {"event": event}
+	for key: Variant in fields.keys():
+		rec[key] = fields[key]
+	_art_tel_mutex.lock()
+	if _art_tel_pending.size() < 1024:
+		_art_tel_pending.append(rec)
+	_art_tel_mutex.unlock()
+
+
+## Main thread only: move staged art events into the log as
+## kind "art" records (a NEW kind - the shipped kinds keep
+## their exact shape for Chris's A/B reads). Called from
+## _telemetry_record, so drains ride the log's own cadence.
+func _telemetry_drain_art_events() -> void:
+	if not _scroll_telemetry_started:
+		return
+	_art_tel_mutex.lock()
+	var staged: Array[Dictionary] = _art_tel_pending.duplicate()
+	_art_tel_pending.clear()
+	_art_tel_mutex.unlock()
+	for rec: Dictionary in staged:
+		_scroll_telemetry.record("art", rec)
 
 
 ## A cruise exit that happens by direct assignment rather
@@ -2752,9 +2836,24 @@ func _set_centre(index: int, snap: bool = false) -> void:
 				# STEPPED dial keeps, untouched).
 				_swing_smooth_retarget()
 	if changed:
+		# GRADFIX17 telemetry: a centre change's parts, timed
+		# - this block is the per-column work a cruise pays,
+		# and a slow part names itself in the log.
+		var tel_c_t0: int = Time.get_ticks_usec()
 		_refresh_window()
+		var tel_c_t1: int = Time.get_ticks_usec()
 		_refresh_card_frames()
+		var tel_c_t2: int = Time.get_ticks_usec()
 		_request_window_fill()
+		var tel_c_ms: float = float(Time.get_ticks_usec() - tel_c_t0) / 1000.0
+		if tel_c_ms >= 4.0:
+			_art_event("seg", {
+				"seg": "set_centre", "cost_ms": tel_c_ms,
+				"window_ms": float(tel_c_t1 - tel_c_t0) / 1000.0,
+				"frames_ms": float(tel_c_t2 - tel_c_t1) / 1000.0,
+				"fill_ms": float(Time.get_ticks_usec() - tel_c_t2) / 1000.0,
+				"col": col, "cruise_dir": _cruise_dir, "snap": snap,
+			})
 		# No companion follows the centre any more (the flip
 		# replaced the wing/board): a centre change is one of
 		# the flip's closing conditions, and _update_flip
@@ -3117,7 +3216,14 @@ func _refresh_card_frames() -> void:
 			break
 		var f: MeshInstance3D = _panel_frames[idx]
 		if f != null:
-			f.material_override = _frame_mat(idx == _centre_index)
+			# GRADFIX17: only the old and new centre frames
+			# ever change material (two shared materials,
+			# centre or dark) - assigning the standing one
+			# again is a renderer write for nothing, per
+			# panel per column. Compare and skip.
+			var want_mat: StandardMaterial3D = _frame_mat(idx == _centre_index)
+			if f.material_override != want_mat:
+				f.material_override = want_mat
 
 
 ## The drawn window: cards within VISIBLE_HALF_COLUMNS of the
@@ -3149,9 +3255,12 @@ func _refresh_window() -> void:
 		bnode2.visible = bc2.x >= _panel_window_lo and bc2.x <= _panel_window_hi
 	# The haze follows the centre (see _haze_for): re-apply
 	# the standing wall fade with the new centre's factors.
-	var keep_alpha: float = _wall_alpha_applied
-	_wall_alpha_applied = -1.0
-	_apply_wall_alpha(keep_alpha)
+	# GRADFIX17: the pass itself now knows the haze moved
+	# (it watches the centre column) and writes only the
+	# alphas that actually change - the old shape defeated
+	# its change guard here (resetting it to -1) so EVERY
+	# centre change rewrote every alpha on the wall.
+	_apply_wall_alpha(_wall_alpha_applied)
 
 
 ## Whether a Tournament panel may launch: only a challenge row
@@ -3253,6 +3362,12 @@ func _rebuild_wall() -> void:
 	_panel_window_lo = -1
 	_panel_window_hi = -1
 	_wall_alpha_applied = 1.0 ## fresh quads start opaque; the marquee fade re-applies from there
+	_panel_alpha_applied.clear() ## GRADFIX17: the alpha pass's write-on-change caches reset with the wall (fresh materials stand at their own defaults)
+	_launch_alpha_applied.clear()
+	_label_alpha_applied.clear()
+	_board_alpha_applied.clear()
+	_alpha_flat_applied.clear()
+	_alpha_haze_centre = -999
 	_set_focused(null)
 
 	_placeholder_tex = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
@@ -4118,7 +4233,19 @@ func _fill_window_faces_sync(gen: int) -> void:
 		if cc < _panel_window_lo or cc > _panel_window_hi:
 			continue
 		var gf16_probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
+		_art_apply_branch = ""
+		_art_apply_load_ms = 0.0
+		_art_apply_render_ms = 0.0
+		var tel_apply_t0: int = Time.get_ticks_usec()
 		await _fill_one_face_sync(idx, gen)
+		_art_event("apply", {
+			"game": _visible_games[idx].game_id, "path": _face_path_memoized(_visible_games[idx]), "col": cc,
+			"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+			"cruise_dir": _cruise_dir, "swing": _swing_active,
+			"cost_ms": float(Time.get_ticks_usec() - tel_apply_t0) / 1000.0,
+			"branch": _art_apply_branch, "load_ms": _art_apply_load_ms, "render_ms": _art_apply_render_ms,
+			"via": "syncfill",
+		})
 		if TextureFactory.probe_enabled:
 			var gf16_us: int = Time.get_ticks_usec() - gf16_probe_t
 			TextureFactory.probe_note("fill_face_total", gf16_us)
@@ -4166,6 +4293,11 @@ func _on_window_fill_drained(gen: int) -> void:
 			if idx >= 0 and idx < _visible_games.size():
 				near.append(_visible_games[idx])
 	if not near.is_empty():
+		_art_event("prefetch", { ## GRADFIX17 telemetry: the warmer ask that follows a drained pass
+			"col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+			"cruise_dir": _cruise_dir, "games": near.size(),
+			"first": (near[0] as GameEntry).game_id,
+		})
 		art_prefetch_requested.emit(near)
 
 
@@ -4236,6 +4368,7 @@ func _face_is_standing_memo(idx: int) -> bool:
 ## them (see _art_pipe_pass), so this call itself stays
 ## cheap on the travel path that calls it.
 func _art_pipe_enqueue_window() -> void:
+	var tel_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the enqueue's own cost, measured unconditionally
 	var probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
 	var order: Array[int] = _window_fill_order()
 	var needy: Array[int] = []
@@ -4243,6 +4376,21 @@ func _art_pipe_enqueue_window() -> void:
 		if not _face_is_standing_memo(idx):
 			needy.append(idx)
 	_art_pipe_queue = needy
+	# GRADFIX17 telemetry: the enqueue's own account - which
+	# faces it found needy (identity = game + art file), on
+	# which column, under which travel state.
+	var tel_faces: Array = []
+	for nidx: int in needy:
+		var ngame: GameEntry = _visible_games[nidx]
+		tel_faces.append({"g": ngame.game_id, "p": _face_path_memoized(ngame)})
+	_art_event("enqueue", {
+		"col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+		"cruise_dir": _cruise_dir,
+		"swing": _swing_active,
+		"needy": needy.size(),
+		"faces": tel_faces,
+		"cost_ms": float(Time.get_ticks_usec() - tel_t0) / 1000.0,
+	})
 	var pre: Array[int] = []
 	for i: int in range(mini(6, needy.size())):
 		pre.append(needy[i])
@@ -4278,6 +4426,8 @@ func _art_pipe_dispatch_one(path: String) -> void:
 			_art_decode_pump_active = true
 			start_pump = true
 	_art_decode_mutex.unlock()
+	if not known:
+		_art_event("decode_queue", {"path": path, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
 	if start_pump:
 		WorkerThreadPool.add_task(Callable(self, "_art_decode_pump"))
 
@@ -4316,7 +4466,10 @@ func _art_decode_pump() -> void:
 			return
 		var path: String = _art_decode_queue.pop_front()
 		_art_decode_mutex.unlock()
+		_art_event("decode_start", {"path": path, "thread": OS.get_thread_caller_id(), "wall_ms": Time.get_ticks_msec()})
+		var tel_t0: int = Time.get_ticks_usec()
 		var img: Image = TextureFactory.decode_art_image(path)
+		_art_event("decode_end", {"path": path, "thread": OS.get_thread_caller_id(), "wall_ms": Time.get_ticks_msec(), "cost_ms": float(Time.get_ticks_usec() - tel_t0) / 1000.0, "ok": img != null})
 		_art_decode_mutex.lock()
 		_art_decode_pending.erase(path)
 		if img != null:
@@ -4381,9 +4534,12 @@ func _art_pipe_pass() -> void:
 			# rate below (short travels, the shipped cost
 			# class).
 			var was_cruise_parked: bool = false
+			var tel_park_msec: int = Time.get_ticks_msec()
 			while _cruise_dir != 0 and gen == _gen:
 				was_cruise_parked = true
 				await get_tree().process_frame
+			if was_cruise_parked:
+				_art_event("pipe_park", {"parked_ms": Time.get_ticks_msec() - tel_park_msec, "col": cc, "game": _visible_games[idx].game_id})
 			if was_cruise_parked and gen == _gen:
 				# The release settle gets three frames of
 				# clear road before the first staged face
@@ -4404,8 +4560,20 @@ func _art_pipe_pass() -> void:
 					continue
 			var gf16_probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
 			_art_pipe_in_stage = true
+			_art_apply_branch = ""
+			_art_apply_load_ms = 0.0
+			_art_apply_render_ms = 0.0
+			var tel_apply_t0: int = Time.get_ticks_usec()
 			await _fill_one_face_sync(idx, gen)
 			_art_pipe_in_stage = false
+			_art_event("apply", {
+				"game": _visible_games[idx].game_id, "path": path, "col": cc,
+				"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+				"cruise_dir": _cruise_dir, "swing": _swing_active,
+				"cost_ms": float(Time.get_ticks_usec() - tel_apply_t0) / 1000.0,
+				"branch": _art_apply_branch, "load_ms": _art_apply_load_ms, "render_ms": _art_apply_render_ms,
+				"via": "pipe",
+			})
 			if TextureFactory.probe_enabled:
 				var gf16_us: int = Time.get_ticks_usec() - gf16_probe_t
 				TextureFactory.probe_note("fill_face_total", gf16_us)
@@ -4509,6 +4677,13 @@ func _fill_one_face(idx: int, gen: int) -> void:
 	if debug_gf16_nc == "syncfill" or _art_pipe_in_stage:
 		await _fill_one_face_sync(idx, gen)
 		return
+	# GRADFIX17 telemetry: a direct ask (shot landing, X-press
+	# re-render, the heal's window worker) joins the queue.
+	if idx >= 0 and idx < _visible_games.size():
+		_art_event("fill_direct", {
+			"game": _visible_games[idx].game_id, "col": _grid_coord(idx).x,
+			"cruise_dir": _cruise_dir, "swing": _swing_active,
+		})
 	if idx < 0 or idx >= _panels.size():
 		return
 	if not _art_pipe_queue.has(idx):
@@ -4532,6 +4707,7 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 	var pup: bool = game.is_pup_tagged()
 	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
 	if str(_panel_face_key.get(game.game_id, "")) == fkey:
+		_art_apply_branch = "standing" ## GRADFIX17 telemetry (read by the caller's apply wrap)
 		# Already wearing exactly this face - but a rebuild
 		# since the fill reset this seat's art aspect to 0
 		# and re-derived its plate under the styled law, so
@@ -4552,9 +4728,11 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 		tex = cached_face[0] as Texture2D
 		art_aspect = float(cached_face[1])
 		from_art = art_aspect > 0.0
+		_art_apply_branch = "facecache" ## GRADFIX17 telemetry
 	else:
 		if art_file != "":
 			var art_tex: Texture2D = null
+			var tel_load_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry
 			if _art_pipe_in_stage:
 				# GRADFIX16 staged decode: consume the
 				# background decode's Image (texture
@@ -4572,14 +4750,20 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 					_art_decoded_failed.erase(art_file)
 				_art_decode_mutex.unlock()
 				if staged_img != null:
+					_art_apply_branch = "staged" ## GRADFIX17 telemetry
 					art_tex = TextureFactory.art_texture_from_decoded(art_file, staged_img)
 				elif not staged_failed and TextureFactory.art_decode_is_cached(art_file):
+					_art_apply_branch = "decodecache" ## GRADFIX17 telemetry
 					art_tex = TextureFactory.load_art_texture(art_file)
 			else:
+				_art_apply_branch = "syncload" ## GRADFIX17 telemetry
 				art_tex = TextureFactory.load_art_texture(art_file)
+			_art_apply_load_ms = float(Time.get_ticks_usec() - tel_load_t0) / 1000.0 ## GRADFIX17 telemetry
 			if art_tex != null:
 				art_aspect = float(art_tex.get_width()) / float(art_tex.get_height())
+				var tel_render_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry
 				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store, false), _panel_face_px)
+				_art_apply_render_ms = float(Time.get_ticks_usec() - tel_render_t0) / 1000.0 ## GRADFIX17 telemetry
 				from_art = tex != null
 				if from_art and _blackface_nc(game):
 					# NC (PVLDS_GRADFIX6_NC=blackface, target in
@@ -4601,7 +4785,10 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 					tex = null
 					from_art = false
 		if tex == null:
+			_art_apply_branch = "styled" if _art_apply_branch == "" else _art_apply_branch + "+styled" ## GRADFIX17 telemetry
+			var tel_styled_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry
 			tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), _panel_face_px)
+			_art_apply_render_ms += float(Time.get_ticks_usec() - tel_styled_t0) / 1000.0 ## GRADFIX17 telemetry
 			from_art = false
 		if gen != _gen:
 			return
@@ -4742,6 +4929,9 @@ func _heal_panel_faces() -> void:
 	if now - _face_heal_msec < BOARD_TEX_RETRY_MS:
 		return
 	_face_heal_msec = now
+	var tel_heal_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the sweep's own cost + findings
+	var tel_mismatch: Array = []
+	var tel_unreal: Array = []
 	var needs_pass: bool = false
 	for idx: int in range(_panels.size()):
 		if idx >= _visible_games.size():
@@ -4777,7 +4967,9 @@ func _heal_panel_faces() -> void:
 			if debug_gf17_nc != "noguarantee":
 				_face_path_memo[game.game_id] = art_file
 			needs_pass = true # an upgrade is ready (or the face never landed); never budget-charged
+			tel_mismatch.append(game.game_id) ## GRADFIX17 telemetry
 		elif tex == null or tex == _placeholder_tex or not _tex_is_real(tex):
+			tel_unreal.append(game.game_id) ## GRADFIX17 telemetry
 			# Stamped as this face, yet not honestly standing
 			# (a rebuild re-dressed the pooled panel, a race):
 			# clear the stamp so the worker re-renders it,
@@ -4800,6 +4992,18 @@ func _heal_panel_faces() -> void:
 				_face_cache_evict(stamped)
 				_panel_face_key.erase(game.game_id)
 				needs_pass = true
+	# GRADFIX17 telemetry: every sweep that asks for a pass,
+	# and any sweep whose own probe walk costs real time -
+	# the heal reads fresh filesystem probes for all 63
+	# window faces, so its cost belongs in the log by name.
+	var tel_heal_ms: float = float(Time.get_ticks_usec() - tel_heal_t0) / 1000.0
+	if needs_pass or tel_heal_ms >= 8.0:
+		_art_event("heal", {
+			"col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+			"cruise_dir": _cruise_dir, "swing": _swing_active,
+			"needs_pass": needs_pass, "cost_ms": tel_heal_ms,
+			"mismatch": tel_mismatch, "unreal": tel_unreal,
+		})
 	if needs_pass:
 		_request_window_fill()
 
@@ -5417,6 +5621,7 @@ func _set_focused(q: ClickableQuad) -> void:
 
 
 func _refresh_quad_states() -> void:
+	var tel_q_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the focus-change sweep's cost, timed below
 	var hovered: ClickableQuad = _rig.hovered if _rig != null else null
 	var all: Array[ClickableQuad] = []
 	all.append_array(_panels)
@@ -5466,6 +5671,12 @@ func _refresh_quad_states() -> void:
 		all.append(_setup_panel_back_btn)
 	for q: ClickableQuad in all:
 		q.set_visual_state(q == hovered, q == _focused)
+	# GRADFIX17 telemetry: this sweep walks every quad in
+	# the room on every focus change (once per cruise
+	# column) - a slow one names itself.
+	var tel_q_ms: float = float(Time.get_ticks_usec() - tel_q_t0) / 1000.0
+	if tel_q_ms >= 4.0:
+		_art_event("seg", {"seg": "quad_states", "cost_ms": tel_q_ms, "quads": all.size(), "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
 
 
 func _on_hover_changed(_quad: ClickableQuad) -> void:
@@ -5621,6 +5832,7 @@ func _follow_centre() -> void:
 ## (it is a child), so it stays glued to the card face and
 ## clickable while popped.
 func _update_pop(delta: float) -> void:
+	var tel_pop_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the pop block's cost, timed below
 	_follow_centre()
 	if _panels.is_empty():
 		return
@@ -5684,6 +5896,13 @@ func _update_pop(delta: float) -> void:
 		_guarantee_audit()
 	_heal_panel_faces()
 	_heal_tournament_boards()
+	# GRADFIX17 telemetry: the pop block runs every frame
+	# and carries the follow, the flip and both heals - a
+	# slow one names itself (its parts have their own
+	# segments where they are separately convicted).
+	var tel_pop_ms: float = float(Time.get_ticks_usec() - tel_pop_t0) / 1000.0
+	if tel_pop_ms >= 8.0:
+		_art_event("seg", {"seg": "update_pop", "cost_ms": tel_pop_ms, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
 
 
 ## The machined strip's lift (GRADFIX14 item 1), driven
@@ -7781,48 +8000,110 @@ func _update_marquee(delta: float) -> void:
 ## every frame of the wait. Each card's fade is multiplied by
 ## its haze (the background stack's fourth layer): the marquee
 ## dims the whole wall, the haze dims the far columns further.
+## The wall-alpha write counter (the hitchhunt smoke reads
+## the deltas across its cruises: the write-on-change law's
+## structural proof, immune to harness-box pacing).
+func alpha_write_count() -> int:
+	return _alpha_write_count
+
+
+## Grow an alpha cache to index i with the never-written
+## stamp (-1: every real alpha is >= 0, so the first pass
+## always writes).
+func _alpha_cache_ensure(cache: Array[float], i: int) -> void:
+	while cache.size() <= i:
+		cache.append(-1.0)
+
+
 func _apply_wall_alpha(a: float) -> void:
-	if absf(a - _wall_alpha_applied) < 0.002:
+	# GRADFIX17 (item 2): the pass runs when the global fade
+	# moved OR the haze's centre moved - and then writes
+	# only the alphas that actually change (see the state
+	# block at _alpha_write_count). The pre-fix law, restored
+	# by PVLDS_GF17_NC=hazeall, writes everything on both
+	# triggers: that per-column write storm is what the
+	# hitchhunt smoke's alpha leg fails against by name.
+	var nc_all: bool = debug_gf17_nc == "hazeall"
+	var centre_col: int = _grid_coord(_centre_index).x if _centre_index >= 0 and _centre_index < _panels.size() else -1
+	if not nc_all and absf(a - _wall_alpha_applied) < 0.002 and centre_col == _alpha_haze_centre:
 		return
 	_wall_alpha_applied = a
+	_alpha_haze_centre = centre_col
 	for i: int in range(_panels.size()):
-		_panels[i].set_content_alpha(a * _haze_for(i))
+		var want_p: float = a * _haze_for(i)
+		_alpha_cache_ensure(_panel_alpha_applied, i)
+		if nc_all or absf(want_p - _panel_alpha_applied[i]) >= 0.002:
+			_panel_alpha_applied[i] = want_p
+			_panels[i].set_content_alpha(want_p)
+			_alpha_write_count += 1
 	for i2: int in range(_panel_launches.size()):
 		if _panel_launches[i2] != null:
-			_panel_launches[i2].set_content_alpha(a * _haze_for(i2))
+			var want_l: float = a * _haze_for(i2)
+			_alpha_cache_ensure(_launch_alpha_applied, i2)
+			if nc_all or absf(want_l - _launch_alpha_applied[i2]) >= 0.002:
+				_launch_alpha_applied[i2] = want_l
+				_panel_launches[i2].set_content_alpha(want_l)
+				_alpha_write_count += 1
 	for bi2: int in range(_board_nodes.size()):
 		var bnode3: MeshInstance3D = _board_nodes[bi2] as MeshInstance3D
 		if bnode3 != null and bi2 < _board_nodes.size():
 			var bmat3: StandardMaterial3D = bnode3.material_override as StandardMaterial3D
 			if bmat3 != null:
-				bmat3.albedo_color = Color(1.0, 1.0, 1.0, a * _haze_for(bi2))
+				var want_b: float = a * _haze_for(bi2)
+				_alpha_cache_ensure(_board_alpha_applied, bi2)
+				if nc_all or absf(want_b - _board_alpha_applied[bi2]) >= 0.002:
+					_board_alpha_applied[bi2] = want_b
+					bmat3.albedo_color = Color(1.0, 1.0, 1.0, want_b)
+					_alpha_write_count += 1
 	for k: Variant in _rail_quads.keys():
 		var rq: ClickableQuad = _rail_quads[k] as ClickableQuad
 		if rq != null:
-			rq.set_content_alpha(a)
+			var rkey: String = "rail:" + str(k)
+			if nc_all or absf(a - float(_alpha_flat_applied.get(rkey, -1.0))) >= 0.002:
+				_alpha_flat_applied[rkey] = a
+				rq.set_content_alpha(a)
+				_alpha_write_count += 1
 	for skey: Variant in _strip_quads.keys():
 		var sq: ClickableQuad = _strip_quads[skey] as ClickableQuad
 		if sq != null:
-			sq.set_content_alpha(a)
+			var skey2: String = "strip:" + str(skey)
+			if nc_all or absf(a - float(_alpha_flat_applied.get(skey2, -1.0))) >= 0.002:
+				_alpha_flat_applied[skey2] = a
+				sq.set_content_alpha(a)
+				_alpha_write_count += 1
 	# The status line fades with the wall, and so do the
 	# cards' nameplates (plate + label ride their cards).
 	# The plates all share one material, so its alpha is
 	# set once, here.
 	if _status_label != null:
-		_status_label.modulate = Color(0.92, 0.95, 1.0, a)
-		_status_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * a)
-	_plate_mat().albedo_color = Color(0.0, 0.0, 0.0, 0.66 * a)
+		if nc_all or absf(a - float(_alpha_flat_applied.get("status", -1.0))) >= 0.002:
+			_alpha_flat_applied["status"] = a
+			_status_label.modulate = Color(0.92, 0.95, 1.0, a)
+			_status_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * a)
+			_alpha_write_count += 1
+	if nc_all or absf(a - float(_alpha_flat_applied.get("plate", -1.0))) >= 0.002:
+		_alpha_flat_applied["plate"] = a
+		_plate_mat().albedo_color = Color(0.0, 0.0, 0.0, 0.66 * a)
+		_alpha_write_count += 1
 	# The tournie borders fade with the wall too (GRADFIX8
 	# item 4): their materials are shared per type, so the
 	# global alpha is set once per type here - the same
 	# shared-material terms the nameplates already ride.
 	for bk: Variant in _border_mats.keys():
-		(_border_mats[bk] as ShaderMaterial).set_shader_parameter("global_alpha", clampf(a, 0.0, 1.0))
+		var bkey2: String = "border:" + str(bk)
+		if nc_all or absf(a - float(_alpha_flat_applied.get(bkey2, -1.0))) >= 0.002:
+			_alpha_flat_applied[bkey2] = a
+			(_border_mats[bk] as ShaderMaterial).set_shader_parameter("global_alpha", clampf(a, 0.0, 1.0))
+			_alpha_write_count += 1
 	for idx: int in range(_panels.size()):
 		if idx < _panel_labels.size() and _panel_labels[idx] != null:
 			var la: float = a * _haze_for(idx)
-			_panel_labels[idx].modulate = Color(0.96, 0.97, 1.0, la)
-			_panel_labels[idx].outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * la)
+			_alpha_cache_ensure(_label_alpha_applied, idx)
+			if nc_all or absf(la - _label_alpha_applied[idx]) >= 0.002:
+				_label_alpha_applied[idx] = la
+				_panel_labels[idx].modulate = Color(0.96, 0.97, 1.0, la)
+				_panel_labels[idx].outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * la)
+				_alpha_write_count += 1
 
 
 ## Load-wait queries (the lockout smoke reads the room the way the
@@ -8622,6 +8903,7 @@ func _exit_tree() -> void:
 
 
 func _process(delta: float) -> void:
+	var tel_proc_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: this frame's room-side segment clock
 	# The flat (non-XR) camera is STATIC at the seated viewpoint - the
 	# mouse is a pure pointer there, never a look control. A view that
 	# drifts with the cursor makes every click target swim (field
@@ -8707,6 +8989,14 @@ func _process(delta: float) -> void:
 		frame_fields["swing_duration_s"] = _swing_duration
 		frame_fields["cruise_cap_deg_s"] = rad_to_deg(_swing_cruise_rad)
 		_telemetry_record("frame", frame_fields)
+	# GRADFIX17 telemetry: the motion half of this frame's
+	# room work (background, plates, pop, swing) as one
+	# segment - slow frames name it, so a hitch the art
+	# seams did not cause still lands in the log with an
+	# address.
+	var tel_proc_a_ms: float = float(Time.get_ticks_usec() - tel_proc_t0) / 1000.0
+	if tel_proc_a_ms >= 10.0:
+		_art_event("seg", {"seg": "process_motion", "cost_ms": tel_proc_a_ms, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
 	_update_power(delta)
 	var deaf: bool = _launching_game_id != ""
 	var telemetry_cooldown_before: float = _joy_cooldown ## scroll telemetry: the poll's before (read-only)
@@ -8914,6 +9204,13 @@ func _process(delta: float) -> void:
 		elif not _placard_up:
 			_handle_rail("exit")
 	_joy_prev_right = right_now
+	# GRADFIX17 telemetry: the whole _process as one segment
+	# (see process_motion above) - the poll half's cost is
+	# the difference, and a slow poll names itself here when
+	# the motion half was cheap.
+	var tel_proc_all_ms: float = float(Time.get_ticks_usec() - tel_proc_t0) / 1000.0
+	if tel_proc_all_ms >= 10.0:
+		_art_event("seg", {"seg": "process_all", "cost_ms": tel_proc_all_ms, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
 
 
 func _cycle_focus(step: int) -> void:
