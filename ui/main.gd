@@ -390,6 +390,8 @@ var _land_tour_i: int = 0
 var _land_census_deadline_msec: int = 0
 var _land_grabbed: bool = false
 var _land_filter_forced: bool = false
+var _land_warm_held: bool = false
+var _land_rewarm_done: bool = false
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -12329,6 +12331,20 @@ func _drive_landing_smoke() -> void:
 					_landing_expect(false, "landing guarantee: the start window never settled")
 					_finish_landing_smoke()
 					return
+				if not _land_warm_held:
+					# Hold the warm pass for the travel: the
+					# field shape is a library whose warmer
+					# runs far behind the player's cruise, so
+					# the named neighbourhood's art lands
+					# only when the driver releases the pass
+					# after the travel (phase 4). Prefetch
+					# may still jump near-window sources -
+					# each races its own first fill, exactly
+					# as on the field rig.
+					_land_warm_held = true
+					if _art_warmer != null:
+						_art_warmer.request_stop()
+					return
 				if not _land_filter_forced:
 					# The room boots on the VR filter; the
 					# fixture shelf is judged whole, through
@@ -12451,10 +12467,16 @@ func _drive_landing_smoke() -> void:
 				_landing_expect(false, "landing guarantee: the letter swing to %s never settled" % _land_swing_keys[_land_swing_i])
 				_finish_landing_smoke()
 		4:
-			# Every art source lands: warmer drained, pipeline
-			# idle, and both author shots in their cache. Only
+			# Every art source lands: release the held warm
+			# pass (the full library ask, Main's own call),
+			# then wait for warmer drained, pipeline idle,
+			# and both author shots in their cache. Only
 			# then is a still-missing face a NEVER, not a late.
 			_land_wait += 1
+			if not _land_rewarm_done:
+				_land_rewarm_done = true
+				if _art_warmer != null and _scanner != null:
+					_art_warmer.warm_library(_scanner.games)
 			var shots_in: bool = true
 			if _scanner != null:
 				for g: GameEntry in _scanner.games:
