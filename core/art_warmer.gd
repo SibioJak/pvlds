@@ -32,32 +32,17 @@ var _stop_requested: bool = false
 var _pass_started_msec: int = 0
 var _pass_items: int = 0
 
-## GRADFIX18 (item B) - the asking chain moves off the asking
-## thread. GF17's field log convicted the prefetch ASK by
-## correlation (every ~140 ms cruise spike follows a prefetch
-## event; the ask itself was the pipeline's only untimed seam),
-## and prioritize() ran its whole cost - per-game source
-## gathering plus erase/push surgery over the library queue -
-## synchronously on the caller's (main) thread, inside the
-## travel frame's drained pass. The ask is now a note:
-## prioritize() appends the games to _prio_pending under
-## _prio_mutex and returns; ONE warmer-side worker performs
-## the gathering + surgery (_prioritize_apply) and starts the
-## extraction pass. The main thread only ever receives
-## finished faces, as before - it now also never pays for
-## asking. last_ask / last_prio_worker are the GF18 telemetry
-## breakdowns (statics: the room reads them after the emit
-## without holding a warmer reference; prioritize is only
-## ever called from the main thread, the worker breakdown is
-## written only by the prio worker).
+## OPTIMIZE round: the asking chain is a synchronous queue
+## note again. GF18 moved prioritize()'s gathering + queue
+## surgery onto a WorkerThreadPool prio task (its field
+## conviction was correlation, never a measured ask cost);
+## the optimized ratchet returns to the GF17 shape:
+## prioritize() gathers the games' sources and re-orders the
+## extraction queue on the caller's thread, synchronously -
+## the ask IS the note, and its cost is the caller's to see
+## in last_ask. No prio worker, no pending batching, no NC
+## sync seam.
 static var last_ask: Dictionary = {} ## {ask_ms, games, mode} of the most recent prioritize() call
-static var last_prio_worker: Dictionary = {} ## {front_ms, queue_ms, total_ms, sources, batches} of the prio worker's most recent applied batch
-static var nc_sync_prioritize: bool = false ## GF18 NC seam (PVLDS_GF18_NC=askmain, set by Main): prioritize applies synchronously on the caller's thread again, the pre-fix shape
-static var prio_test_hold: bool = false ## harness seam: while true the prio worker parks before draining, so the bite smoke can prove surgery never lands on the caller's thread
-var prio_applied_batches: int = 0 ## batches whose queue surgery has landed (the bite smoke's structural witness)
-var _prio_mutex: Mutex = Mutex.new()
-var _prio_pending: Array = [] ## Array of Array[GameEntry] asks awaiting the prio worker
-var _prio_worker_active: bool = false
 
 
 ## Queue every uncached backglass in the library (replacing any
@@ -125,64 +110,18 @@ func warm_library(games: Array[GameEntry]) -> void:
 ## Move these games' art sources to the front of the queue
 ## (order preserved) so a page flip lands on warm art. Paths not
 ## yet queued are added; cached or panel-claimed ones are skipped
-## by the worker. GRADFIX18: the call itself is only a note (see
-## the state block above) - the gathering and queue surgery run
-## on the prio worker, never on the caller's thread. Under the
-## NC (nc_sync_prioritize) the pre-fix synchronous shape runs
-## instead, so the bite smoke's proof leg fails by name.
+## by the worker. OPTIMIZE: the call itself does the gathering
+## and queue surgery synchronously (see the state block above).
 func prioritize(games: Array[GameEntry]) -> void:
 	var tel_t0: int = Time.get_ticks_usec()
-	if nc_sync_prioritize:
-		_prioritize_apply(games)
-		last_ask = {"ask_ms": float(Time.get_ticks_usec() - tel_t0) / 1000.0, "games": games.size(), "mode": "sync-nc"}
-		return
-	_prio_mutex.lock()
-	_prio_pending.append(games.duplicate())
-	var start_worker: bool = false
-	if not _prio_worker_active:
-		_prio_worker_active = true
-		start_worker = true
-	_prio_mutex.unlock()
-	if start_worker:
-		WorkerThreadPool.add_task(Callable(self, "_prio_run"))
-	last_ask = {"ask_ms": float(Time.get_ticks_usec() - tel_t0) / 1000.0, "games": games.size(), "mode": "async"}
+	_prioritize_apply(games)
+	last_ask = {"ask_ms": float(Time.get_ticks_usec() - tel_t0) / 1000.0, "games": games.size(), "mode": "sync"}
 
 
-## The prio worker (ONE WorkerThreadPool task): drains the
-## pending asks in batches - each batch's source gathering and
-## queue surgery happen here, on the warmer's side, however
-## long the library queue stands. Asks that land while a batch
-## applies are coalesced into the next batch.
-func _prio_run() -> void:
-	while true:
-		while prio_test_hold and not _stop_requested:
-			OS.delay_msec(2)
-		_prio_mutex.lock()
-		if _stop_requested or _prio_pending.is_empty():
-			_prio_pending.clear()
-			_prio_worker_active = false
-			_prio_mutex.unlock()
-			return
-		var batch: Array = []
-		for pending: Variant in _prio_pending:
-			var ask_games: Array = pending as Array
-			for gv: Variant in ask_games:
-				if gv is GameEntry:
-					var ge: GameEntry = gv as GameEntry
-					if not batch.has(ge):
-						batch.append(ge)
-		_prio_pending.clear()
-		_prio_mutex.unlock()
-		_prioritize_apply(batch)
-
-
-## One batch's real work, timed for the GF18 telemetry: the
-## front gathering (front_ms) and the queue surgery under
-## _mutex (queue_ms). Runs on the prio worker, or - under the
-## NC - on prioritize()'s caller, exactly as the pre-fix code
-## ran it on the main thread.
+## One ask's real work: the front gathering and the queue
+## surgery under _mutex. Runs on prioritize()'s caller,
+## synchronously - the GF17 shape the OPTIMIZE round restores.
 func _prioritize_apply(games: Array) -> void:
-	var tel_t0: int = Time.get_ticks_usec()
 	var front: Array[String] = []
 	for gv: Variant in games:
 		if not (gv is GameEntry):
@@ -191,7 +130,6 @@ func _prioritize_apply(games: Array) -> void:
 		for src: String in g.art_sources():
 			if not front.has(src):
 				front.append(src)
-	var tel_front: int = Time.get_ticks_usec()
 	_mutex.lock()
 	for src: String in front:
 		_queue.erase(src)
@@ -200,36 +138,13 @@ func _prioritize_apply(games: Array) -> void:
 		_queue.push_front(front[i])
 	_start_locked()
 	_mutex.unlock()
-	var tel_end: int = Time.get_ticks_usec()
-	prio_applied_batches += 1
-	last_prio_worker = {
-		"front_ms": float(tel_front - tel_t0) / 1000.0,
-		"queue_ms": float(tel_end - tel_front) / 1000.0,
-		"total_ms": float(tel_end - tel_t0) / 1000.0,
-		"sources": front.size(),
-		"batches": prio_applied_batches,
-	}
-
-
-## Asks still waiting for the prio worker (the bite smoke's
-## structural witness, read with prio_applied_batches).
-func prio_pending_count() -> int:
-	_prio_mutex.lock()
-	var n: int = _prio_pending.size()
-	_prio_mutex.unlock()
-	return n
 
 
 func is_idle() -> bool:
 	_mutex.lock()
 	var idle: bool = not _worker_active and _queue.is_empty()
 	_mutex.unlock()
-	if not idle:
-		return false
-	_prio_mutex.lock()
-	var prio_idle: bool = not _prio_worker_active and _prio_pending.is_empty()
-	_prio_mutex.unlock()
-	return prio_idle
+	return idle
 
 
 ## Ask the running pass to abandon its queue at the next item
