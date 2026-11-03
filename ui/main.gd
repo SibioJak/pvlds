@@ -12909,9 +12909,9 @@ func _drive_costume_smoke() -> void:
 						_cs_art_presented += 1
 					if not bool(st2.get("wearing", false)):
 						_cs_unworn += 1
-				if _cs_cruise_frames == 30:
+				if _cs_cruise_frames == 12:
 					_cs_grab("costume_midcruise_a.png")
-				if _cs_cruise_frames == 70:
+				if _cs_cruise_frames == 26:
 					_cs_grab("costume_midcruise_b.png")
 			_cs_last_yaw = _room.drum_yaw_rad()
 			var col_now4: int = _room._grid_coord(_room.centre_index()).x
@@ -12953,7 +12953,8 @@ func _drive_costume_smoke() -> void:
 			var census5: Dictionary = _room.landing_census()
 			var missing5: Array = census5.get("missing", []) as Array
 			var streamed5: int = int(census5.get("streamed", 0))
-			if missing5.is_empty() and streamed5 == 0 and _room.art_pipeline_idle():
+			if missing5.is_empty() and streamed5 == 0 and _room.art_pipeline_idle() \
+					and int(_room.costume_stats().get("dress_count", 0)) >= 2:
 				_cs_settle_frames += 1
 			else:
 				_cs_settle_frames = 0
