@@ -12826,8 +12826,74 @@ func _drive_costume_smoke() -> void:
 				_cs_expect(false, "costume: the start window never settled dressed + costume-covered")
 				_finish_costume_smoke()
 		2:
-			# The no-stop cruise: every frame, sample the
-			# drawn window - no card may present real art
+			# WARM-UP cruise (the field regime, mirroring the
+			# streamahead smoke's shape): one no-stop cruise
+			# right through unvisited shelf - it visits and
+			# dresses the stretch the measured cruise then
+			# re-crosses. Chris's painful cruises were through
+			# visited, dressed wall (the GF17 paradox), so the
+			# costume is judged there, not on a cold first
+			# pass. Counters here are printed, not legged.
+			_cs_wait += 1
+			if _room.cruise_active():
+				_cs_saw_cruise = true
+			if _cs_saw_cruise:
+				_cs_cruise_frames += 1
+			var col_now: int = _room._grid_coord(_room.centre_index()).x
+			if not _cs_released and col_now >= _cs_start_col + 22:
+				_cs_released = true
+				_input_feed_stick_x(0.0)
+			if _cs_released:
+				if not _room.swing_active():
+					_cs_rest_frames += 1
+				else:
+					_cs_rest_frames = 0
+				if _cs_rest_frames >= 3:
+					_cs_expect(_cs_saw_cruise, "costume: holding the stick under SMOOTH became a cruise on the real input path")
+					_cs_expect(col_now - _cs_start_col >= 20, "costume: the warm-up cruise spanned %d columns" % (col_now - _cs_start_col))
+					_cs_deadline_msec = Time.get_ticks_msec() + 90000
+					_cs_phase = 3
+					_cs_wait = 0
+					_cs_settle_frames = 0
+			elif _cs_wait > 7200:
+				_input_feed_stick_x(0.0)
+				_cs_expect(false, "costume: the warm-up cruise never spanned 22 columns and settled")
+				_finish_costume_smoke()
+		3:
+			# Dress after the warm-up, and pre-generation
+			# re-covering the window - then the measured
+			# cruise starts from a dressed, costume-ready
+			# seat, the field's standing state.
+			_cs_wait += 1
+			var census3: Dictionary = _room.landing_census()
+			var missing3: Array = census3.get("missing", []) as Array
+			var streamed3: int = int(census3.get("streamed", 0))
+			var seat_col3: int = _room._grid_coord(_room.centre_index()).x
+			var coverage3: Dictionary = _room.costume_coverage_for(maxi(0, seat_col3 - 27), seat_col3 + 10)
+			if missing3.is_empty() and streamed3 == 0 and _room.art_pipeline_idle() \
+					and int(coverage3.get("covered", 0)) >= int(coverage3.get("total", 1)):
+				_cs_settle_frames += 1
+			else:
+				_cs_settle_frames = 0
+			if _cs_settle_frames >= 5:
+				_cs_expect(true, "costume: dress at rest - settle census zero missing after the warm-up cruise")
+				_cs_start_col = _room._grid_coord(_room.centre_index()).x
+				_cs_art_presented = 0
+				_cs_unworn = 0
+				_cs_cruise_frames = 0
+				_cs_saw_cruise = false
+				_cs_released = false
+				_cs_rest_frames = 0
+				_input_feed_stick_x(-1.0)
+				_cs_phase = 4
+				_cs_wait = 0
+			elif Time.get_ticks_msec() > _cs_deadline_msec:
+				_cs_expect(false, "costume: dress at rest - settle census zero missing after the warm-up cruise (%d still missing, %d interim)" % [missing3.size(), streamed3])
+				_finish_costume_smoke()
+		4:
+			# THE MEASURED CRUISE: back left through the
+			# visited, dressed stretch. Every frame samples
+			# the drawn window - no card may present real art
 			# while the drum moves, and every card must wear
 			# the costume.
 			_cs_wait += 1
@@ -12842,12 +12908,12 @@ func _drive_costume_smoke() -> void:
 						_cs_art_presented += 1
 					if not bool(st2.get("wearing", false)):
 						_cs_unworn += 1
-				if _cs_cruise_frames == 45:
+				if _cs_cruise_frames == 30:
 					_cs_grab("costume_midcruise_a.png")
-				if _cs_cruise_frames == 110:
+				if _cs_cruise_frames == 70:
 					_cs_grab("costume_midcruise_b.png")
-			var col_now: int = _room._grid_coord(_room.centre_index()).x
-			if not _cs_released and col_now >= _cs_start_col + 22:
+			var col_now4: int = _room._grid_coord(_room.centre_index()).x
+			if not _cs_released and col_now4 <= _cs_start_col - 16:
 				_cs_released = true
 				_input_feed_stick_x(0.0)
 			if _cs_released:
@@ -12858,58 +12924,62 @@ func _drive_costume_smoke() -> void:
 				if _cs_rest_frames >= 3:
 					var stats: Dictionary = _room.costume_stats()
 					print("COSTUME CRUISE: start col %d, final col %d, cruise frames %d, art-presented card-frames %d, unworn card-frames %d, engagements %d, on-cost last %.2f ms max %.2f ms, swapped last %d total %d, grabs %d" % [
-						_cs_start_col, col_now, _cs_cruise_frames, _cs_art_presented, _cs_unworn,
+						_cs_start_col, col_now4, _cs_cruise_frames, _cs_art_presented, _cs_unworn,
 						int(stats.get("engagements", 0)), float(stats.get("last_on_cost_ms", 0.0)),
 						float(stats.get("max_on_cost_ms", 0.0)), int(stats.get("last_swapped", 0)),
 						int(stats.get("total_swapped", 0)), _cs_grabs])
-					_cs_expect(_cs_saw_cruise, "costume: holding the stick under SMOOTH became a cruise on the real input path")
-					_cs_expect(col_now - _cs_start_col >= 20, "costume: the no-stop cruise spanned %d columns" % (col_now - _cs_start_col))
-					_cs_expect(int(stats.get("engagements", 0)) >= 1, "costume: the costume engaged for SMOOTH travel (engagements %d)" % int(stats.get("engagements", 0)))
+					_cs_expect(_cs_saw_cruise, "costume: the measured return became a cruise on the real input path")
+					_cs_expect(_cs_start_col - col_now4 >= 14, "costume: the measured cruise spanned %d columns" % (_cs_start_col - col_now4))
+					_cs_expect(int(stats.get("engagements", 0)) >= 2, "costume: the costume engaged for SMOOTH travel (engagements %d)" % int(stats.get("engagements", 0)))
 					_cs_expect(_cs_art_presented == 0, "costume: no real-art face was presented on a moving card (%d art-presented card-frames sampled over %d cruise frames)" % [_cs_art_presented, _cs_cruise_frames])
 					_cs_expect(_cs_unworn == 0, "costume: every drawn card wore the costume on every cruise frame (%d unworn card-frames)" % _cs_unworn)
 					_cs_expect(float(stats.get("max_on_cost_ms", 999.0)) <= 60.0, "costume: the costume-on swap stayed cheap (worst %.2f ms - a ~140 ms costume-change frame is this round's named failure)" % float(stats.get("max_on_cost_ms", 0.0)))
 					_cs_expect(not bool(stats.get("on", true)), "costume: the costume came off when travel ended")
 					_cs_expect(int(stats.get("wearing", -1)) == 0, "costume: no card still wears the costume at rest (%d)" % int(stats.get("wearing", -1)))
 					_cs_deadline_msec = Time.get_ticks_msec() + 90000
-					_cs_phase = 3
+					_cs_phase = 5
 					_cs_wait = 0
+					_cs_settle_frames = 0
 			elif _cs_wait > 7200:
 				_input_feed_stick_x(0.0)
-				_cs_expect(false, "costume: the held cruise never spanned 22 columns and settled")
+				_cs_expect(false, "costume: the measured cruise never spanned 16 columns and settled")
 				_finish_costume_smoke()
-		3:
-			# DRESS AT REST: the settle census must read zero
-			# missing, nothing left interim, and the room's
-			# own dress latency must have been measured.
+		5:
+			# DRESS AT REST after the measured cruise: census
+			# zero, and the room's own dress latency measured.
 			_cs_wait += 1
-			var census3: Dictionary = _room.landing_census()
-			var missing3: Array = census3.get("missing", []) as Array
-			var streamed3: int = int(census3.get("streamed", 0))
-			if missing3.is_empty() and streamed3 == 0 and _room.art_pipeline_idle():
-				var stats3: Dictionary = _room.costume_stats()
+			var census5: Dictionary = _room.landing_census()
+			var missing5: Array = census5.get("missing", []) as Array
+			var streamed5: int = int(census5.get("streamed", 0))
+			if missing5.is_empty() and streamed5 == 0 and _room.art_pipeline_idle():
+				_cs_settle_frames += 1
+			else:
+				_cs_settle_frames = 0
+			if _cs_settle_frames >= 5:
+				var stats5: Dictionary = _room.costume_stats()
 				print("COSTUME DRESS: census %d faces zero missing, dress latency %.0f ms (measurement %d)" % [
-					int(census3.get("total", 0)), float(stats3.get("last_dress_ms", -1.0)), int(stats3.get("dress_count", 0))])
-				_cs_expect(true, "costume: dress at rest - settle census zero missing after the cruise")
-				_cs_expect(float(stats3.get("last_dress_ms", -1.0)) > 0.0, "costume: dress-at-rest latency was measured from travel end (%.0f ms)" % float(stats3.get("last_dress_ms", -1.0)))
+					int(census5.get("total", 0)), float(stats5.get("last_dress_ms", -1.0)), int(stats5.get("dress_count", 0))])
+				_cs_expect(true, "costume: dress at rest - settle census zero missing after the measured cruise")
+				_cs_expect(float(stats5.get("last_dress_ms", -1.0)) > 0.0, "costume: dress-at-rest latency was measured from travel end (%.0f ms)" % float(stats5.get("last_dress_ms", -1.0)))
 				_cs_grab("costume_rest_dressed.png")
 				# STEPPED: a swing under the stepped driver
 				# must never engage the costume.
-				_cs_stepped_engagements = int(stats3.get("engagements", 0))
+				_cs_stepped_engagements = int(stats5.get("engagements", 0))
 				_room.set_wall_motion_mode("stepped")
 				var target_idx: int = -1
 				for i2: int in range(_room._panels.size()):
-					if _room._grid_coord(i2).x == _cs_start_col + 26 and _room._grid_coord(i2).y == 1:
+					if _room._grid_coord(i2).x == _cs_start_col + 4 and _room._grid_coord(i2).y == 1:
 						target_idx = i2
 						break
 				if target_idx >= 0:
 					_room._set_centre(target_idx)
 					_room._set_focused(_room._panels[target_idx])
-				_cs_phase = 4
+				_cs_phase = 6
 				_cs_wait = 0
 			elif Time.get_ticks_msec() > _cs_deadline_msec:
-				_cs_expect(false, "costume: dress at rest - settle census zero missing after the cruise (%d still missing, %d interim)" % [missing3.size(), streamed3])
+				_cs_expect(false, "costume: dress at rest - settle census zero missing after the measured cruise (%d still missing, %d interim)" % [missing5.size(), streamed5])
 				_finish_costume_smoke()
-		4:
+		6:
 			_cs_wait += 1
 			var stats4: Dictionary = _room.costume_stats()
 			if bool(stats4.get("on", false)):

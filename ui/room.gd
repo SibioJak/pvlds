@@ -749,8 +749,8 @@ var _stream_prefetch_key: String = "" ## the lead slice the warmer was last aske
 ## a lead span each side), so travel start swaps standing
 ## textures, never renders.
 const COSTUME_STAMP_SUFFIX: String = "|costume" ## bookkeeping only: costume swaps never touch _panel_face_key (the dress stamps stay honest underneath); the suffix names the costume's own saved-state entries in reports
-const COSTUME_CACHE_MAX: int = 168 ## styled textures kept (the drawn window is 63 faces; the cache holds it plus a cruise's lead on both sides)
-const COSTUME_LEAD_COLS: int = 10 ## columns each side of the drawn window whose styled faces pre-generate at rest, so a cruise's entering cards already wear the costume
+const COSTUME_CACHE_MAX: int = 192 ## styled textures kept (the drawn window is 63 faces; the cache holds it plus a cruise's lead on both sides)
+const COSTUME_LEAD_COLS: int = 17 ## columns each side of the drawn window whose styled faces pre-generate at rest, so a cruise's entering cards already wear the costume
 var _costume_on: bool = false ## the travel costume stands (SMOOTH travel only)
 var _costume_saved: Dictionary = {} ## panel idx -> {tex, aspect, plate_vis, label_vis}: the dressed state a costumed card hands back at costume-off
 var _costume_tex_cache: Dictionary = {} ## face key -> Texture2D: styled face textures, captured from fills and pre-generated at rest
@@ -764,6 +764,7 @@ var _costume_total_swapped: int = 0 ## cards swapped into the costume since boot
 var _costume_travel_end_msec: int = 0 ## when the last travel ended (the dress latency's zero)
 var _costume_last_dress_ms: float = -1.0 ## ms from the last travel end to its settle census reading zero missing (-1 = no completed settle measured yet)
 var _costume_dress_count: int = 0 ## completed dress-at-rest measurements since boot
+var _costume_dress_check_msec: int = 0 ## the dress measurement's census throttle stamp
 ## (The shelf's bookend fins stood here until GRADFIX8
 ## item 5 - removed entirely, Chris's order; see
 ## bookend_fin_count in the smoke-support section.)
@@ -5439,17 +5440,21 @@ func _costume_tick() -> void:
 				continue
 			_costume_swap_in(idx)
 	if not _costume_on and _costume_travel_end_msec > 0:
-		# Dress-at-rest latency: the first frame the settle
+		# Dress-at-rest latency: the first check the settle
 		# census reads zero missing AND the pipeline has
-		# drained is the window fully dressed. The audit's
-		# own sweeps run on the heal cadence while it stands
-		# armed; this check runs only once it has disarmed
-		# (or given its bound), and gives up after 120 s so a
-		# persistently failing face cannot make the census
-		# walk a per-frame cost forever.
+		# drained is the window fully dressed. Gives up after
+		# 120 s so a persistently failing face cannot make
+		# the census walk a standing cost forever.
 		if Time.get_ticks_msec() - _costume_travel_end_msec > 120000:
 			_costume_travel_end_msec = 0
-		elif not _gf17_audit_armed:
+		elif Time.get_ticks_msec() - _costume_dress_check_msec >= 500:
+			# The census IS the completion definition (the
+			# audit is only the mechanism that gets there -
+			# gating the measurement on the audit's disarm
+			# made it a cadence race the first bench run
+			# lost). Throttled to twice a second: the census
+			# walks fresh probes for the whole window.
+			_costume_dress_check_msec = Time.get_ticks_msec()
 			var census: Dictionary = landing_census()
 			if int(census.get("total", 0)) > 0 and (census.get("missing", ["x"]) as Array).is_empty() \
 					and int(census.get("streamed", 0)) == 0 and art_pipeline_idle():
@@ -5572,6 +5577,15 @@ func costume_window_state() -> Array:
 ## the regime the field hits because pre-generation runs
 ## from the moment the wall seats.
 func costume_window_coverage() -> Dictionary:
+	if _panel_window_lo < 0:
+		return {"total": 0, "covered": 0}
+	return costume_coverage_for(_panel_window_lo, _panel_window_hi)
+
+
+## GRADFIX19 harness surface: costume coverage over an
+## explicit column span (the costume smoke waits for the
+## measured cruise's whole entry span to stand ready).
+func costume_coverage_for(lo: int, hi: int) -> Dictionary:
 	var total: int = 0
 	var covered: int = 0
 	if _panel_window_lo < 0:
@@ -5580,7 +5594,7 @@ func costume_window_coverage() -> Dictionary:
 		if idx >= _visible_games.size():
 			continue
 		var cc: int = _grid_coord(idx).x
-		if cc < _panel_window_lo or cc > _panel_window_hi:
+		if cc < lo or cc > hi:
 			continue
 		if not _costume_panel_ok(idx):
 			continue
