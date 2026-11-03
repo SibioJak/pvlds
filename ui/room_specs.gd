@@ -56,10 +56,11 @@ const BUTTON_BG_ACCENT: Color = Color(0.36, 0.25, 0.06)
 ## so art page and text page share top and bottom edges and
 ## the hinge reads. The headroom the GRADFIX3 inch was
 ## buying comes from the wall's move back instead
-## (RoomView.WALL_RADIUS 3.40): the book floats its proud
-## 0.30 in front of a 3.40 wall - 3.10 from the eye - where
-## a 1.08 page spans 19.8 degrees against the bands' 20
-## degree pitch, INSIDE its slot, where the old 1.00 page
+## (RoomView.WALL_RADIUS, 3.40 in the GRADFIX5 round, 3.60
+## since the OPTIMIZE round): the book floats its proud
+## 0.30 in front of the wall - 3.30 from the eye at 3.60 -
+## where a 1.08 page spans 18.6 degrees against the bands'
+## 20 degree pitch, INSIDE its slot, where the old 1.00 page
 ## at the old radius (2.75 from the eye) spanned 20.6. The
 ## census's flush leg measures the equality (page vs card
 ## extents, 1 mm tolerance); the pre-fix short page stands
@@ -71,14 +72,15 @@ const BUTTON_BG_ACCENT: Color = Color(0.36, 0.25, 0.06)
 ## the deadline line fits (with CardFace's scale-to-fit as
 ## the guarantee). The width is absorbed INSIDE the pair
 ## block's own span: boards stand in grid columns 4-9, one
-## per column slot, and a column slot at WALL_RADIUS 3.40
-## on the 13.5-degree pitch is 2*pi*3.40*13.5/360 = 0.801 m
+## per column slot, and a column slot at WALL_RADIUS 3.60
+## on the 13.5-degree pitch is 2*pi*3.60*13.5/360 = 0.848 m
 ## of arc wide. A 0.72 board's half (0.36) stays inside its
-## slot's half (0.400) with 0.040 m to spare, so no board
+## slot's half (0.424) with 0.064 m to spare, so no board
 ## crosses its slot's edge - not the wall's edge at the
 ## block's ends, not its neighbour's slot - and the gap to
 ## the neighbouring card (half 0.31) along the arc is
-## 0.801 - 0.36 - 0.31 = 0.131 m, against 0.179 before. The
+## 0.848 - 0.36 - 0.31 = 0.178 m, against 0.131 at the old
+## 3.40 radius. The
 ## face keeps the family's 1000 px per metre: 720 x 1080.
 const BOARD_PANEL_SIZE: Vector2 = Vector2(0.72, 1.08)
 const BOARD_FACE_PX: Vector2i = Vector2i(720, 1080)

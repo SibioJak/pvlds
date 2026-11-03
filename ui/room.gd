@@ -30,7 +30,7 @@ signal display_settings_changed ## a SETUP display dial turned (the starfield): 
 const PAGE_COLS: int = 4
 const PAGE_ROWS: int = 3
 const PAGE_SIZE: int = PAGE_COLS * PAGE_ROWS
-static var WALL_RADIUS: float = 3.40 ## GRADFIX5 (item 4): the wall pushed back a step from the dome's 3.05 (the user's ask: "push back a bit, fit a few more cards into your central vision"). +0.35 m (+11%): the census's wall measure reads the centre card at 10.72 degrees across against 11.98 on the old radius (same arithmetic both sides), the air between columns grows from ~1.5 to ~2.8 degrees, and every drawn column's frame overflow shrinks - while the column CENTRES stay pitch-fixed at 13.5 degrees, so the step buys size and air, not new columns. The step is also item 1's headroom: the flush book floats 0.30 proud of a 3.40 wall - 3.10 from the eye, the old wall's own distance - so the full-height page spans inside its band pitch. Cards keep their physical size; everything seated on the wall (book, fins, tournament block, pop) derives from this one value and re-seats with it. A static, not a const, so the harness's oldwall NC can restore the shipped geometry wholesale.
+static var WALL_RADIUS: float = 3.60 ## OPTIMIZE round: 3.40 -> 3.60, locked by Chris, fixed, no dial. GRADFIX5 (item 4) history: the wall pushed back a step from the dome's 3.05 (the user's ask: "push back a bit, fit a few more cards into your central vision"). +0.35 m (+11%): the census's wall measure reads the centre card at 10.72 degrees across against 11.98 on the old radius (same arithmetic both sides), the air between columns grows from ~1.5 to ~2.8 degrees, and every drawn column's frame overflow shrinks - while the column CENTRES stay pitch-fixed at 13.5 degrees, so the step buys size and air, not new columns. The step is also item 1's headroom: the flush book floats 0.30 proud of a 3.40 wall - 3.10 from the eye, the old wall's own distance - so the full-height page spans inside its band pitch. Cards keep their physical size; everything seated on the wall (book, fins, tournament block, pop) derives from this one value and re-seats with it. A static, not a const, so the harness's oldwall NC can restore the shipped geometry wholesale.
 static var WALL_LIFT: float = 0.06 ## GRADFIX5 (item 4): the wall's rise with its push-back - the seats ride a sphere around the eye, so the farther wall's bottom band hangs lower; the lift keeps its labels and nameplates on the heights the field-passed build held them at (the census's floor datum is the retired floor slab's old surface).
 const EYE: Vector3 = Vector3(0.0, 1.25, 0.0)
 const FILTERS: Array[String] = ["all", "vr", "favorites", "recents", "new"]
@@ -50,7 +50,7 @@ const SORT_LABELS: Dictionary = {"name": "NAME", "year": "YEAR", "manufacturer":
 const MARQUEE_FADE_SEC: float = 0.6 ## wall fade-down duration
 const MARQUEE_WALL_ALPHA: float = 0.16 ## the wall's alpha while the marquee stands
 const MARQUEE_FLY_IN_SEC: float = 1.4 ## the letters' travel time, wall -> settle
-static var MARQUEE_START_Z: float = -3.40 ## fly-in start depth (at the wall - tracks WALL_RADIUS; a static beside it so the oldwall NC restores both)
+static var MARQUEE_START_Z: float = -3.60 ## fly-in start depth (at the wall - tracks WALL_RADIUS; a static beside it so the oldwall NC restores both)
 const MARQUEE_SETTLE_POS: Vector3 = Vector3(0.0, 1.42, -2.30) ## reading distance, on the view axis (retuned 2026-10-22: first pass sat too close)
 const MARQUEE_PIXEL_SIZE: float = 0.005 ## Label3D world scale
 const MARQUEE_YEAR_FONT_SIZE: int = 110 ## retuned 2026-10-22: 170 read too big in the headset
@@ -334,36 +334,9 @@ const LABEL_WIDTH_PX: float = 246.0 ## wrapped-title width: a long name takes up
 ## drum's current angle (the prototype's speed-gate law).
 const SWING_MIN_SEC: float = 0.16
 const SWING_MAX_SEC: float = 0.72
-## The SMOOTH wall-motion dial (GRADFIX10 item 3, retuned
-## GRADFIX12 item 1): the drum rolls CONTINUOUSLY - a
-## velocity-commanded cruise with an exponential approach.
-## GRADFIX12: Chris's field verdict on the GRADFIX10 tuning
-## was "no difference. Still column to column" - and the
-## traces convicted it: at tau 0.14 / lag 0.09 a one-column
-## SMOOTH glide settled in ~0.32 s against STEPPED's ~0.25 s
-## spring, both short glides that start and end at rest on a
-## column, so their characters converged in the hand. The
-## retune makes SMOOTH a ROLL by construction: a heavy
-## velocity lag (SWING_SMOOTH_VEL_LAG_SEC) melts it off the
-## mark, SWING_SMOOTH_TAU stretches the approach so a single
-## column takes ~0.9 s (over 2.5x the spring's settle) at a
-## peak near 20 deg/s against the spring's ~175 deg/s snap,
-## and the cruise (SWING_SMOOTH_CRUISE_DEG, grown with the
-## journey's length in _swing_smooth_retarget so a letter
-## jump still crosses the shelf) carries multi-column travel
-## as one sustained body with no per-column notching. Inside
-## the last SWING_SMOOTH_LAND_DEG the approach stiffens
-## (SWING_SMOOTH_LAND_TAU) so the long tail still lands
-## bounded and exact on the standing snap thresholds. The
-## duration law (in _swing_smooth_retarget) replaces the
-## stepped spring's recalibration for this mode only; the
-## STEPPED dial keeps the spring above, byte-for-byte.
-const SWING_SMOOTH_CRUISE_DEG: float = 72.0 ## the smooth roll's cruise speed, degrees per second (~5.3 columns/s), for journeys up to six columns; longer journeys grow it (see _swing_smooth_retarget)
-const SWING_SMOOTH_MIN_SEC: float = 0.30 ## the smooth travel's shortest calibrated duration (one column)
-const SWING_SMOOTH_TAU: float = 0.42 ## the smooth approach's distance constant, seconds: desired speed = remaining / tau, capped at cruise
-const SWING_SMOOTH_VEL_LAG_SEC: float = 0.30 ## the smooth roll's velocity relax lag, seconds: the drum's speed eases toward the command over this - the slow melt off the mark (GRADFIX12; was a hard-coded 0.09)
-const SWING_SMOOTH_LAND_DEG: float = 3.0 ## inside this remaining distance the approach stiffens to SWING_SMOOTH_LAND_TAU, so the roll's long tail still lands bounded
-const SWING_SMOOTH_LAND_TAU: float = 0.09 ## the landing window's distance constant, seconds
+## OPTIMIZE round: the SMOOTH driver is deleted - STEPPED (the
+## spring above) is the only gait, and its constants die with it.
+
 ## Stage B - the background stack (all WORLD-LOCKED; see
 ## _build_background) and the focused card's flip.
 const BG_STAR_RADIUS: float = 30.0 ## the starfield shell's radius around the eye
@@ -640,8 +613,9 @@ var _art_decoded_failed: Dictionary = {} ## art path -> true: a background decod
 var _art_decode_mutex: Mutex = Mutex.new() ## guards the decode dictionaries and the pump's queue against the worker thread
 var _art_decode_queue: Array[String] = [] ## art paths awaiting the decode pump (mutex-guarded)
 var _art_decode_pump_active: bool = false ## a pump task is draining _art_decode_queue (mutex-guarded)
-var _art_decode_workers: int = 0 ## pump tasks currently draining (mutex-guarded) - GRADFIX18: a BOUNDED pool (ART_DECODE_WORKERS), replacing GF16's one-at-a-time law: a serial pump caps stream dressing at one face per decode cost (field 3.5 ms = ~285/s, ample; the heavy-art bench fixture ~100-300 ms = 3-10/s against a cruise's ~16 faces/s demand, impossible) - the pool is what lets the stream hold its lead on heavy art. Unbounded per-face tasks stay banned (the GF16 swarm); the pool is three, ever.
-const ART_DECODE_WORKERS: int = 3 ## the decode pool's bound (see _art_decode_workers)
+var _art_decode_workers: int = 0 ## pump tasks currently draining (mutex-guarded) - OPTIMIZE: back to GF16's one-at-a-time law (the GF18 pool existed to feed stream-ahead, which is deleted)
+const ART_DECODE_WORKERS: int = 1 ## the decode pump's bound: SERIAL, one drain at a time (GF16's law, restored by the OPTIMIZE round)
+const APPLY_CAP_PER_FRAME: int = 1 ## staged applies allowed per frame, ever - the pipeline pass yields a frame between faces; only the debug_opt_nc="streamahead" seam ignores it
 var _art_stopping: bool = false ## the room is leaving the tree: the pipeline starts no new face and the pump returns after its current decode - art work must wind down at exit, not continue into engine teardown (the harness's swing probe segfaulted at quit with fills in flight; the serial worker it replaced was almost always idle by quit, the pipeline by design is not)
 ## GRADFIX17 (hitch hunt) art-pipeline telemetry staging:
 ## the pipeline's seams (enqueue, decode pump, apply, heal,
@@ -668,106 +642,22 @@ var _gf17_was_travelling: bool = false ## GRADFIX17 item 1: the drum was travell
 var _gf17_audit_armed: bool = false ## GRADFIX17 item 1: a settle audit is owed: the standing window is re-audited against fresh probes until every visible face honestly stands or its heal budget is spent
 var _gf17_audit_msec: int = 0 ## GRADFIX17 item 1: the settle audit's throttle stamp (one sweep per BOARD_TEX_RETRY_MS, the heal's cadence)
 var _gf17_audit_runs: int = 0 ## GRADFIX17 item 1: sweeps spent on the current settle (bounded - see _guarantee_audit)
-## GRADFIX18 (item B) bite-hunt state: the prefetch ask's
-## main-thread cost witnesses (read by the bite smoke) and the
-## last enqueue's stamp (the prefetch event reports its lag
-## behind the enqueue that bred it).
-var _gf18_last_enqueue_msec: int = 0
-var gf18_prefetch_count: int = 0 ## prefetch asks emitted since boot
-var gf18_ask_emit_max_ms: float = 0.0 ## worst main-thread emit (the synchronous prioritize ask) inside a drained pass
-var gf18_ask_emit_last_ms: float = 0.0 ## the most recent drained pass's emit cost (the bite smoke attributes emits to legs by the prefetch count)
-var gf18_ask_total_max_ms: float = 0.0 ## worst whole drained-handler cost on the main thread
-## GRADFIX18 (item A, stream-ahead) state and laws. THE
-## DECOMPOSITION (Chris's GF17 session log, 202 applies, all
-## at rest): enqueue p50 0.27 ms; background decode_end p50
-## 3.5 ms; apply p50 33.4 ms of which load (texture creation
-## from the staged decode) is p50 0.34 ms and the viewport
-## render is p50 33.3 ms - the render IS the apply. Its
-## sub-steps (TextureFactory._render_now): apply_spec
-## (sub-ms), one process-frame wait, UPDATE_ONCE +
-## frame_post_draw (the SubViewport's own draw), get_image()
-## readback (GPU->CPU copy of the CARD_FACE_PX face), and
-## ImageTexture creation for the capture. The waits and the
-## readback cannot be sliced under a frame budget - a render
-## is atomic - so NO viewport render runs on a travel frame.
-## What runs during travel instead: the background pump
-## decodes AND face-prepares (cover-crop + resize to the
-## face size, replicating CardFace's KEEP_ASPECT_COVERED) on
-## its worker thread, and the main thread only creates one
-## texture from the prepared image (~0.34 ms) and swaps it
-## on. The full rendered face (favorite star / PuP badges
-## composed by CardFace) and the power-on overlay/subject
-## are SETTLE work: a streamed face is stamped fkey+|stream,
-## counts as dressed in the landing census (real art, real
-## texture, honest aspect), and the GF17 settle audit /
-## pipeline upgrade it to the full render after the drum
-## stops (their stamped != want test fires on the suffix).
-const STREAM_LEAD_COLS: int = 8 ## columns of stream window beyond the drawn window's edge on the travel side: at the 72 deg/s cruise (13.5 deg/col = 5.33 col/s, one column per 187 ms) a lead column is asked 8 x 187 ms = 1.50 s before it enters the drawn window - the serial pump (decode ~3.5 ms field / ~15 ms bench + prep) drains the 24 lead faces in well under that
-const STREAM_TRAIL_COLS: int = 2 ## columns kept dressed behind the travel side (a reversal re-enters dressed wall)
-const STREAM_BUDGET_MS: float = 4.0 ## the travel frame's total main-thread stream budget: every stream apply is timed into the frame's spend and the pass yields the frame the moment the spend reaches this - one apply (~0.34 ms texture creation + node writes) can never reach it unsliced
-const STREAM_STAMP_SUFFIX: String = "|stream" ## the interim stamp a streamed face wears (see above)
-var _art_prepared_ready: Dictionary = {} ## art path -> Image: a face-prepared decode awaiting a stream apply (mutex-guarded with the decode dictionaries)
-var _art_decode_target: Dictionary = {} ## art path -> Vector2i: the face size its prepared sibling is made at (mutex-guarded)
-var _stream_applied_count: int = 0 ## faces stream-applied since boot (the streamahead smoke's witness)
-var _stream_budget_yields: int = 0 ## travel frames the budget yielded mid-pass
-var _stream_max_apply_ms: float = 0.0 ## the most expensive single stream apply
-var _stream_max_frame_spend_ms: float = 0.0 ## the fullest travel frame's stream spend
-var _stream_prefetch_key: String = "" ## the lead slice the warmer was last asked for (dedup for the per-crossing asks)
-## GRADFIX19 (the travel costume) state. THE DEAL (Chris's
-## call after the HALFRES verdict acquitted texture size):
-## the wall rolls clean exactly when it wears the cheap
-## styled faces and bites in proportion to how much of it
-## wears real art while moving - so in SMOOTH travel the
-## whole drawn window wears the styled state, and the GF17
-## guarantee dresses it the instant travel ends. THE COSTUME
-## IS THE STYLED STATE, EXACTLY AS _fill_one_face_sync's
-## styled branch stands it (no new "lite" face is invented):
-##   - the face texture is the RoomSpecs.panel_spec render
-##     (maker band, title, year-designer line, file line,
-##     chips - VR / PuP / builds / FAVORITE as a chip);
-##   - the nameplate plate + label stand HIDDEN (the styled
-##     face carries its own title; a title under a title
-##     would double it - the fill's law);
-##   - the art aspect reads 0 (no art face stands);
-##   - the art face's favorite STAR badge and PuP badge do
-##     NOT exist here (they are art_spec furniture; the
-##     styled face's FAVORITE chip carries the same fact);
-##   - no power-on overlay stands (the standing travel law:
-##     _update_power nulls its candidate while a swing
-##     stands and restores a standing performance on the
-##     swing - the costume builds no overlay and the mimic
-##     shader never evaluates on a moving card).
-## The tournie border, the frame and the flip back are not
-## face state and are untouched. STEPPED never sees the
-## costume (gated on the SMOOTH driver). While the costume
-## stands, NO face upgrade lands (the pipeline's applies
-## park, GF16-style; background decodes continue - they
-## were acquitted). The swap is a texture swap against the
-## costume cache below: styled textures are captured from
-## the fill's own styled renders and pre-generated at rest
-## (spread one render per frame over the drawn window plus
-## a lead span each side), so travel start swaps standing
-## textures, never renders.
-const COSTUME_STAMP_SUFFIX: String = "|costume" ## bookkeeping only: costume swaps never touch _panel_face_key (the dress stamps stay honest underneath); the suffix names the costume's own saved-state entries in reports
-const COSTUME_CACHE_MAX: int = 192 ## styled textures kept (the drawn window is 63 faces; the cache holds it plus a cruise's lead on both sides)
-const COSTUME_LEAD_COLS: int = 17 ## columns each side of the drawn window whose styled faces pre-generate at rest, so a cruise's entering cards already wear the costume
-var _costume_on: bool = false ## the travel costume stands (SMOOTH travel only)
-var _costume_saved: Dictionary = {} ## panel idx -> {tex, aspect, plate_vis, label_vis}: the dressed state a costumed card hands back at costume-off
-var _costume_tex_cache: Dictionary = {} ## face key -> Texture2D: styled face textures, captured from fills and pre-generated at rest
-var _costume_cache_order: Array[String] = [] ## the costume cache's LRU order (oldest first)
-var _costume_pregen_busy: bool = false ## a styled pre-generation render is in flight (one at a time, ever - the factory is serial)
-var _costume_on_count: int = 0 ## costume engagements since boot (the costume smoke's witness)
-var _costume_last_on_cost_ms: float = 0.0 ## the most recent costume-on swap's measured cost
-var _costume_max_on_cost_ms: float = 0.0 ## the worst costume-on swap cost since boot
-var _costume_last_swapped: int = 0 ## cards swapped by the most recent costume-on
-var _costume_total_swapped: int = 0 ## cards swapped into the costume since boot (on + mid-travel entries)
-var _costume_travel_end_msec: int = 0 ## when the last travel ended (the dress latency's zero)
-var _costume_last_dress_ms: float = -1.0 ## ms from the last travel end to its settle census reading zero missing (-1 = no completed settle measured yet)
-var _costume_dress_count: int = 0 ## completed dress-at-rest measurements since boot
-var _costume_dress_check_msec: int = 0 ## the dress measurement's census throttle stamp
-## (The shelf's bookend fins stood here until GRADFIX8
-## item 5 - removed entirely, Chris's order; see
-## bookend_fin_count in the smoke-support section.)
+## OPTIMIZE round: the GF18 stream-ahead machinery and the
+## GF19 travel costume are deleted wholesale. What stands here
+## instead: the apply-cap account, the settle audit's dress
+## stamp, and the eviction law's state.
+const EVICT_MARGIN_COLS: int = 6 ## after a settle audit completes, resident faces outside the drawn window +/- this many columns are evicted
+const RESIDENT_FACES_CAP: int = 108 ## resident face cap (drawn window 63 + margin): the face cache's LRU enforces it in _face_cache_put
+var _evicted_total: int = 0 ## faces evicted since boot (margin pass + LRU cap drops)
+var _applies_total: int = 0 ## staged applies since boot (art_frame_stats)
+var _applies_during_travel: int = 0 ## staged applies that landed while the drum travelled
+var _applies_max_one_frame: int = 0 ## most applies landed in any single engine frame
+var _applies_frame_id: int = -1 ## the engine frame the running apply count belongs to
+var _applies_this_frame: int = 0 ## applies landed in _applies_frame_id so far
+var _settle_travel_end_msec: int = 0 ## when the last travel ended (the settle audit's dress_ms zero)
+var _nc_costume_saved: Dictionary = {} ## debug_opt_nc="costume" seam only: panel idx -> texture it wore before the blank swap
+var _nc_costume_on: bool = false ## debug_opt_nc="costume" seam only: the blank swap stands
+
 var _power_panel: ClickableQuad = null ## the card currently performing (or holding) the power-on
 var _power_candidate: ClickableQuad = null ## the pop target the settle debounce is timing
 var _power_candidate_t: float = 0.0 ## seconds the candidate has rested
@@ -955,37 +845,25 @@ static var debug_gf16_nc: String = ""
 ## so the hitchhunt smoke's alpha-write leg fails by name.
 ## Empty in every real run.
 static var debug_gf17_nc: String = ""
-## Negative-control seam for GRADFIX18 (item B, harness env
-## PVLDS_GF18_NC, set by Main before any room exists):
-## "askmain" restores the pre-fix asking chain - the warmer's
-## prioritize applies its source gathering + queue surgery
-## synchronously on the caller's (main) thread again (via
-## ArtWarmer.nc_sync_prioritize, set beside this) - so the
-## bite smoke's ask-proof leg fails by name. Empty in every
-## real run.
-## Negative-control seams for GRADFIX18 item A (the harness
-## env PVLDS_GF18_NC, set by Main before any room exists):
-## "nostream" disables stream-ahead - no lead window, no
-## travel applies, the GF17 cruise park returns - so the
-## streamahead smoke's arrival-census legs fail by name;
-## "nobudget" disables the travel budget - full viewport
-## renders run on the travel path again, unsliced - so its
-## frame legs fail by name. Empty in every real run.
-static var debug_gf18_nc: String = ""
-## Negative-control seam for GRADFIX19 (the harness env
-## PVLDS_GF19_NC, set by Main before any room exists):
-## "no-costume" disables the travel costume - SMOOTH travel
-## wears the dressed wall again exactly as GF18 shipped -
-## so the costume smoke's legs fail by name. Empty in every
-## real run.
-static var debug_gf19_nc: String = ""
+## Negative-control seam for the OPTIMIZE round (the harness
+## env PVLDS_OPT_NC, set by Main before any room exists):
+## "smoothcruise" restores a continuous roll on a held stick
+## (the deleted SMOOTH gait's shape, minimal seam in
+## _update_swing / the _process poll), "costume" blanks the
+## drawn window's faces while a swing travels, "streamahead"
+## lifts the pipeline's per-frame apply cap on travel frames,
+## "evictvis" drops the eviction pass's visible-window guard,
+## "oldradius" is Main's (it assigns WALL_RADIUS before the
+## room exists). Empty in every real run.
+static var debug_opt_nc: String = ""
+
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
 var _bg_starfield: MeshInstance3D = null
 var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD FIX round's depth layer)
 var _starfield_mode: String = "layered" ## the SETUP dial: "layered" | "flat" | "off" (see set_starfield_mode)
-var _wall_motion_mode: String = "smooth" ## the SETUP dial (GRADFIX10 item 3): "smooth" | "stepped" (see set_wall_motion_mode)
+var _wall_motion_mode: String = "stepped" ## OPTIMIZE: STEPPED is the only gait - the field stands for the SETUP panel's label, and set_wall_motion_mode coerces every value to "stepped"
 var _bg_ring: MeshInstance3D = null ## always null since GRADFIX4 removed the orbit ring (item 5e); background_layers() skips it
 ## The card flip's standing state (GRADFIX6 item 1): one
 ## card at a time wears the turn - the one the player
@@ -1062,6 +940,24 @@ var _wall_alpha_applied: float = 1.0 ## the wall fade's last applied alpha (chan
 ## smoke can judge the law structurally. PVLDS_GF17_NC=
 ## hazeall restores the write-everything law (debug_gf17_nc).
 var _alpha_write_count: int = 0 ## wall-alpha values written since boot (the hitchhunt smoke reads the cruise deltas)
+## OPTIMIZE round (item 5) standing-cost audit counters:
+## observation only - no product decision reads them. They
+## count work the room does for cards that are NOT changing:
+## mimic evaluations (_apply_power calls), label/nameplate
+## texture reassignments (rail/strip dress set_texture calls
+## + status-label text sets), panel face-texture assignments
+## whose texture equals the standing one (no-op swaps),
+## wall-alpha writes (the standing _alpha_write_count above),
+## and pop-loop panel visits made while the room is at rest.
+## standing_cost_stats() reports totals plus per-second rates
+## over the accumulated at-rest time.
+var _sc_mimic_evals: int = 0 ## _apply_power calls since boot
+var _sc_label_reassign: int = 0 ## label/nameplate texture-or-text reassignments since boot
+var _sc_noop_face_swaps: int = 0 ## panel face assignments where new tex == standing tex (attempted no-ops)
+var _sc_face_assigns: int = 0 ## panel face assignments total (the no-op rate's denominator)
+var _sc_pop_visits_rest: int = 0 ## pop-loop panel visits while at rest since boot
+var _sc_rest_msec: int = 0 ## accumulated wall time with the room at rest (no swing, no pop motion, no cascade, no pipeline work)
+var _sc_rest_since: int = 0 ## msec stamp the current rest stretch began (0 = not at rest)
 var _alpha_haze_centre: int = -999 ## the centre column the standing per-panel alphas were computed for
 var _panel_alpha_applied: Array[float] = [] ## per panel: the content alpha last written (-1 = never)
 var _launch_alpha_applied: Array[float] = [] ## per launch quad: same
@@ -1081,7 +977,7 @@ var _setup_panel_dl_btn: ClickableQuad = null
 var _setup_panel_wovp_paste_btn: ClickableQuad = null ## PASTE KEY: reads the WoVP key off the PC clipboard (VR has no keyboard - the paste IS the field)
 var _setup_panel_wovp_test_btn: ClickableQuad = null ## TEST KEY: Main validates the saved key and names whose it is
 var _setup_panel_stars_btn: ClickableQuad = null ## STARS: LAYERED/FLAT/OFF - the display dial (the GRAD FIX round)
-var _setup_panel_wall_btn: ClickableQuad = null ## WALL MOTION: SMOOTH/STEPPED - the wall-motion dial (GRADFIX10 item 3)
+var _setup_panel_wall_btn: ClickableQuad = null ## WALL MOTION: STEPPED - the panel's gait label (OPTIMIZE: the dial is gone, STEPPED is the only gait)
 var _setup_panel_back_btn: ClickableQuad = null
 var _setup_panel_up: bool = false
 var _setup_panel_gen: int = 0
@@ -1111,7 +1007,7 @@ var _strip_tex_cache: Dictionary = {} ## "key|state" -> Texture2D: every strip s
 var _btn_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: the panels' Launch/Failed button faces - two textures in existence, once rendered per panel per rebuild before the pick-latency fix. GRADFIX13 (item 2): dormant in the shipped build (no plinth is dressed); the plinth NC's minted buttons use it as before
 var _face_tex_cache: Dictionary = {} ## "game_id|art_path|fav" -> [Texture2D, art_aspect]: rendered panel faces (the pick-latency fix - a revisit re-rendered every face from scratch)
 var _face_cache_order: Array[String] = [] ## the face cache's LRU order (oldest first)
-const FACE_CACHE_MAX: int = 96 ## the drawn window is 63 faces; the cache holds it plus a swing's worth of margin
+const FACE_CACHE_MAX: int = RESIDENT_FACES_CAP ## OPTIMIZE: the resident cap IS the cache cap (108 = window 63 + eviction margin)
 var _strip_has_number: bool = false ## the library holds a non-letter title, so the "#" slot is laid out (see _refresh_strip)
 var _letter_net: String = "" ## "" | "THE" | "#": the standing net view - the wall shows exactly that net's games, in title order (see _jump_to_letter)
 var _tournament: bool = false ## the Tournament Room view stands: the wall shows WoVP challenge boards, not the library (see _build_tournament_rows)
@@ -1130,13 +1026,13 @@ var _swing_vel: float = 0.0 ## drum yaw velocity (rad/s), carried across retarge
 var _swing_cols: float = 1.0 ## the live swing's remaining travel in columns (the spring stiffens with distance: its settle tail grows logarithmically, the duration law only as a square root)
 var _swing_journey: bool = false ## a retarget arrived mid-travel in the travel's own direction: the spring softens to the stepping cadence so a held scroll builds to a cruise instead of settling between steps
 var _swing_active: bool = false
-var _swing_from: float = 0.0 ## the smooth travel's anchor yaw (GRADFIX10 item 3): where the standing continuous travel began, re-anchored at every retarget
-var _swing_cruise_sign: float = 1.0 ## the smooth travel's direction from its anchor toward its target
-var _swing_cruise_rad: float = 1.2566371 ## the smooth roll's standing cruise cap, radians/s (72 deg/s at rest; _swing_smooth_retarget grows it with the travel's length)
-var _cruise_dir: int = 0 ## GRADFIX13 item 3: the held-stick cruise's direction (-1/+1) while it stands, 0 = no cruise (see _begin_cruise)
-var _cruise_band: int = 0 ## GRADFIX13 item 3: the band focus stood on when the cruise began - the cruise's centre follow and its release settle keep it
-var _wall_boot_mode: String = "smooth" ## the wall-motion mode the room booted with (the first set_wall_motion_mode call - Main's config apply at room build); only the GRADFIX12 nolive NC reads it
-var _wall_boot_mode_captured: bool = false ## the boot mode above has been captured
+var _nc_roll_dir: int = 0 ## debug_opt_nc="smoothcruise" seam only: the continuous roll's direction while it stands (0 in every production run - STEPPED never rolls)
+var _step_from_col: int = -1 ## OPTIMIZE telemetry: the standing step record's origin column (-1 = no step in flight)
+var _step_to_col: int = -1 ## OPTIMIZE telemetry: the standing step record's target column
+var _step_start_msec: int = 0 ## OPTIMIZE telemetry: when the standing step's travel began
+var _pop_awake: bool = true ## OPTIMIZE standing-cost cut: the pop spring loop runs only while awake (a target change, a face landing under a popped card, or motion in flight wakes it; all-settled puts it to sleep)
+var _pop_last_target: ClickableQuad = null ## OPTIMIZE standing-cost cut: the pop target the sleeping loop last settled under
+
 var _drum_yaw: float = 0.0 ## the drum's current yaw, radians (== _swing_to at rest)
 var _panel_pool: Dictionary = {} ## game_id -> {root, launch, frame, plate, label, mode, plate_done}: card nodes built once per library adoption and re-seated per view (a rebuild that freed and rebuilt 300+ cards would tax every letter pick - the pick-latency law)
 var _plates_pending: bool = false ## a rebuild stood new cards: their nameplates re-derive from the labels' live AABBs until every one settles (see _refresh_card_plate)
@@ -1150,7 +1046,7 @@ var _focusables: Array[ClickableQuad] = []
 var _focused: ClickableQuad = null
 var _joy_cooldown: float = 0.0
 var _joy_hold_dir: Vector2 = Vector2.ZERO ## GRADFIX13 item 3: the direction of the stick hold in progress (ZERO = no hold) - the poll's hold bookkeeping (see the poll in _process)
-var _joy_hold_steps: int = 0 ## GRADFIX13 item 3: discrete steps fired inside the current continuous hold; the second same-direction step under SMOOTH becomes the cruise instead
+var _joy_hold_steps: int = 0 ## discrete steps fired inside the current continuous hold (OPTIMIZE: every step is discrete; the count survives only for the debug_opt_nc="smoothcruise" seam, which arms its roll on the second step)
 var _joy_prev_a: bool = false
 var _joy_prev_b: bool = false
 var _joy_prev_y: bool = false ## Y edge tracking: open the focused card's info (see _process)
@@ -1556,72 +1452,34 @@ func starfield_mode() -> String:
 	return _starfield_mode
 
 
-## The wall-motion dial (GRADFIX10 item 3 - Chris: "can we
-## make the wall actually roll smoothly instead of advancing
-## one slot at a time?"): "smooth" rolls the drum
-## CONTINUOUSLY to its target (see _update_swing's smooth
-## branch - one travel, no slot cadence); "stepped" is the
-## shipped swing/spring exactly as field-approved. The dial
-## never gates input either way: a press mid-travel retargets
-## from the drum's current angle in both modes (the planetarium
-## speed-gate law). Default "smooth" (Chris's pick).
+## The wall motion (OPTIMIZE round): STEPPED is the only
+## gait - the smooth-cruise saga is closed by the user's
+## ruling and the drum advances on the stepped spring alone
+## (see _update_swing). The SETUP panel's WALL MOTION button
+## stands as a label; its action lands here and coerces to
+## "stepped" like every other call. The driver mode is the
+## same word, always.
 func set_wall_motion_mode(mode: String) -> void:
 	var telemetry_old_mode: String = _wall_motion_mode ## scroll telemetry: the dial event's before (read-only)
-	_wall_motion_mode = mode if ["smooth", "stepped"].has(mode) else "smooth"
-	if not _wall_boot_mode_captured:
-		# The first call on a room is Main's config apply at
-		# room build: that is the boot mode the GRADFIX12
-		# nolive NC's driver would be stuck with.
-		_wall_boot_mode = _wall_motion_mode
-		_wall_boot_mode_captured = true
-	# Scroll telemetry: a real change of the dial is an
-	# event (the boot config apply above precedes the
-	# logger's start, so the header carries the boot mode
-	# and only live changes land here; the SETUP panel's
-	# turns are the ones with setup_panel_up standing).
+	_wall_motion_mode = "stepped" ## OPTIMIZE: any value coerces to the one gait
 	if _scroll_telemetry_started and telemetry_old_mode != _wall_motion_mode:
 		var dial_fields: Dictionary = _telemetry_context()
 		dial_fields["old_mode"] = telemetry_old_mode
 		dial_fields["new_mode"] = _wall_motion_mode
 		dial_fields["source"] = "setup_panel" if _setup_panel_up else "set_wall_motion_mode"
 		_telemetry_record("wall_motion_mode_changed", dial_fields)
-	# A dial turn mid-travel hands the standing travel to the
-	# newly chosen driver from the drum's current angle and
-	# velocity - no snap, no restart.
-	if _cruise_dir != 0 and _wall_driver_mode() != "smooth":
-		# A held-stick cruise is a SMOOTH-only travel: a dial
-		# turn away from SMOOTH ends it here, settling at the
-		# nearest column under the newly chosen driver.
-		_stop_cruise(true, "wall_motion_mode_changed_away_from_smooth")
-	if _swing_active:
-		_swing_smooth_retarget()
 
 
 func wall_motion_mode() -> String:
 	return _wall_motion_mode
 
 
-## The mode the swing DRIVER actually obeys this frame. In
-## every real run it is the dial's standing mode - flipping
-## the SETUP dial changes the wall's behaviour in the same
-## session, no room re-entry (the live-apply law, proven by
-## the motion smoke's live toggle leg). Only the GRADFIX12
-## nolive NC severs the seam: the panel still reads the new
-## mode above, but the driver keeps the boot mode.
 func _wall_driver_mode() -> String:
-	if debug_gf12_nc == "nolive" and _wall_boot_mode_captured:
-		return _wall_boot_mode
-	return _wall_motion_mode
+	return "stepped"
 
 
 func wall_driver_mode() -> String:
 	return _wall_driver_mode()
-
-
-## Hand the standing travel to the (possibly newly chosen)
-## wall-motion driver: the smooth driver re-anchors its
-## travel on the drum's current angle and standing target
-## (the real definition stands beside _update_swing).
 
 
 ## ------------------------------------------------ scroll telemetry hooks
@@ -1640,6 +1498,8 @@ func _telemetry_start_if_needed() -> void:
 		"log_path": ScrollTelemetry.LOG_PATH,
 		"wall_motion_mode_at_boot": wall_motion_mode(),
 		"wall_driver_mode_at_boot": _wall_driver_mode(),
+		"wall_radius": WALL_RADIUS, ## OPTIMIZE telemetry header
+		"gait": "stepped", ## OPTIMIZE telemetry header
 		"view_at_room_entry": "tournament" if _tournament else "library",
 		"filter_at_room_entry": _filter,
 		"sort_at_room_entry": _sort,
@@ -1671,7 +1531,8 @@ func _telemetry_context() -> Dictionary:
 		"drum_yaw_deg": rad_to_deg(_drum_yaw),
 		"applied_yaw_deg": rad_to_deg(_wall.rotation.y) if _wall != null else rad_to_deg(_drum_yaw),
 		"angular_velocity_deg_s": rad_to_deg(_swing_vel),
-		"cruise_dir": _cruise_dir,
+		"gait": "stepped",
+		"nc_roll_dir": _nc_roll_dir,
 		"hold_dir_x": _joy_hold_dir.x,
 		"hold_dir_y": _joy_hold_dir.y,
 		"hold_steps": _joy_hold_steps,
@@ -1723,16 +1584,13 @@ func _telemetry_drain_art_events() -> void:
 		_scroll_telemetry.record("art", rec)
 
 
-## GRADFIX18 (item B): the wall's residency gauge - what the
-## wall holds at this moment, in live face textures: the
-## rendered face cache (count + estimated bytes from pixel
-## size), the factory's decoded-art cache, and the pipeline's
-## staged images awaiting texture creation. Sampled by the
-## enqueue and prefetch telemetry at column crossings, so a
-## cruise spike can be read against the residency that stood
-## when it bit. Pure arithmetic over standing dictionaries -
-## no image data is touched. The bite smoke reads it too.
-func gf18_residency() -> Dictionary:
+## OPTIMIZE round: the wall's residency account - what the
+## room's face cache holds at this moment, measured the way
+## the GF18 gauge measured it (live face textures, bytes
+## estimated from pixel size at 4 bytes/px). This is the
+## eviction law's own gauge: resident faces/bytes, the
+## evictions since boot, and the law's margin and cap.
+func residency_stats() -> Dictionary:
 	var face_bytes: int = 0
 	for key: Variant in _face_tex_cache.keys():
 		var entry: Variant = _face_tex_cache[key]
@@ -1741,42 +1599,63 @@ func gf18_residency() -> Dictionary:
 			if earr.size() > 0 and earr[0] is Texture2D:
 				var tex: Texture2D = earr[0] as Texture2D
 				face_bytes += tex.get_width() * tex.get_height() * 4
-	var art_stats: Dictionary = TextureFactory.art_decode_cache_stats()
-	_art_decode_mutex.lock()
-	var ready_images: int = _art_decoded_ready.size()
-	var ready_bytes: int = 0
-	for rkey: Variant in _art_decoded_ready.keys():
-		var img: Image = _art_decoded_ready[rkey] as Image
-		if img != null:
-			ready_bytes += img.get_width() * img.get_height() * 4
-	var pending_decodes: int = _art_decode_pending.size()
-	_art_decode_mutex.unlock()
 	return {
-		"res_face_count": _face_tex_cache.size(),
-		"res_face_bytes": face_bytes,
-		"res_art_count": int(art_stats.get("count", 0)),
-		"res_art_bytes": int(art_stats.get("bytes", 0)),
-		"res_ready_images": ready_images,
-		"res_ready_bytes": ready_bytes,
-		"res_pending_decodes": pending_decodes,
-		"res_pipe_queue": _art_pipe_queue.size(),
+		"resident_faces": _face_tex_cache.size(),
+		"resident_bytes": face_bytes,
+		"evicted_total": _evicted_total,
+		"margin_cols": EVICT_MARGIN_COLS,
+		"cap_faces": RESIDENT_FACES_CAP,
 	}
 
 
-## A cruise exit that happens by direct assignment rather
-## than through _stop_cruise (a centre snap, a wall
-## rebuild): the exit is recorded BEFORE the assignment
-## clears the state, so the log sees the cruise that died.
-func _telemetry_cruise_cleared(reason: String) -> void:
-	if not _scroll_telemetry_started or _cruise_dir == 0:
+## OPTIMIZE round: the staged pipeline's apply account -
+## applies since boot, how many landed while the drum
+## travelled, and the most that ever landed in one engine
+## frame (APPLY_CAP_PER_FRAME is the law; the
+## debug_opt_nc="streamahead" seam exists to break it).
+func art_frame_stats() -> Dictionary:
+	return {
+		"applies_total": _applies_total,
+		"applies_during_travel": _applies_during_travel,
+		"max_applies_one_frame": _applies_max_one_frame,
+	}
+
+
+## Count one landed staged apply (the apply-cap account).
+func _note_apply(travelling: bool) -> void:
+	_applies_total += 1
+	if travelling:
+		_applies_during_travel += 1
+	var fid: int = Engine.get_process_frames()
+	if fid != _applies_frame_id:
+		_applies_frame_id = fid
+		_applies_this_frame = 0
+	_applies_this_frame += 1
+	_applies_max_one_frame = maxi(_applies_max_one_frame, _applies_this_frame)
+
+
+## OPTIMIZE telemetry: a step's travel began (from _set_centre's
+## retarget). Chained retargets mid-swing extend the standing
+## step's target; the record lands when the swing lands.
+func _step_begin(from_col: int, to_col: int) -> void:
+	if _step_from_col < 0:
+		_step_from_col = from_col
+		_step_start_msec = Time.get_ticks_msec()
+	_step_to_col = to_col
+
+
+## OPTIMIZE telemetry: the standing step landed - emit its
+## record with the measured settle duration.
+func _step_landed() -> void:
+	if _step_from_col < 0:
 		return
 	var fields: Dictionary = _telemetry_context()
-	fields["transition"] = "exit"
-	fields["reason"] = reason
-	fields["from_cruise_dir"] = _cruise_dir
-	fields["to_cruise_dir"] = 0
-	fields["settle"] = false
-	_telemetry_record("cruise_transition", fields)
+	fields["from_centre"] = _step_from_col
+	fields["to_centre"] = _step_to_col
+	fields["settle_ms"] = float(Time.get_ticks_msec() - _step_start_msec)
+	_telemetry_record("step", fields)
+	_step_from_col = -1
+	_step_to_col = -1
 
 
 func _apply_starfield_mode() -> void:
@@ -2945,30 +2824,24 @@ func _set_centre(index: int, snap: bool = false) -> void:
 	var col: int = _grid_coord(clamped).x
 	var target: float = _yaw_for_column(col)
 	var changed: bool = clamped != _centre_index
+	var from_col: int = _grid_coord(_centre_index).x if _centre_index >= 0 and _centre_index < _panels.size() else col
 	_centre_index = clamped
 	_page = _centre_index / PAGE_SIZE
 	if snap or _wall == null:
 		_drum_yaw = target
-		_swing_from = target
+		_swing_to = target
 		_swing_vel = 0.0
 		_swing_active = false
 		_swing_journey = false
-		_telemetry_cruise_cleared("centre_snap_teleport") ## scroll telemetry: witness the cruise this teleport kills (read-only)
-		_cruise_dir = 0 ## a teleport kills any held-stick cruise outright (GRADFIX13 item 3)
+		_nc_roll_dir = 0 ## a teleport kills the NC seam's roll outright (production never rolls)
+		_step_from_col = -1 ## a teleport is not a step: no settle record
+		_step_to_col = -1
 		if _wall != null:
 			_wall.rotation.y = target
-	elif _cruise_dir != 0:
-		# A held-stick cruise owns the swing state (GRADFIX13
-		# item 3): the centre bookkeeping above stands - the
-		# cruise's own follow calls this per column it crosses
-		# - but no retarget may re-anchor the travel or
-		# re-derive its cruise cap; _swing_to stays the cruise's
-		# far-end yaw until the cruise ends.
-		pass
 	elif target != _swing_to or not _swing_active:
 		if absf(target - _drum_yaw) < 0.0001 and absf(_swing_vel) < 0.001:
 			_drum_yaw = target
-			_swing_from = target
+			_swing_to = target
 			_swing_vel = 0.0
 			_swing_active = false
 			_swing_journey = false
@@ -2983,8 +2856,12 @@ func _set_centre(index: int, snap: bool = false) -> void:
 			# retarget that arrives while the drum is already
 			# travelling the same way marks a journey: the
 			# spring softens to the stepping cadence, so a
-			# held scroll builds to a cruise rather than
-			# settling between steps.
+			# held scroll chains discrete steps instead of
+			# settling between them - a train of steps with
+			# settle plateaus, never a cruise (OPTIMIZE: the
+			# held-stick cruise is deleted with the SMOOTH
+			# driver; the poll's repeat cadence retargets
+			# through this same path).
 			if _swing_active and absf(_swing_vel) > 0.05 \
 					and signf(target - _drum_yaw) == signf(_swing_vel):
 				_swing_journey = true
@@ -2993,15 +2870,10 @@ func _set_centre(index: int, snap: bool = false) -> void:
 			_swing_cols = cols
 			_swing_duration = clampf(0.14 + 0.055 * sqrt(maxf(cols, 1.0)), SWING_MIN_SEC, SWING_MAX_SEC)
 			_swing_active = true
-			if _wall_driver_mode() == "smooth":
-				# The SMOOTH dial's travel re-anchors here:
-				# its duration law and cruise replace the
-				# spring's recalibration above (which the
-				# STEPPED dial keeps, untouched).
-				_swing_smooth_retarget()
+			_step_begin(from_col, col) ## OPTIMIZE telemetry: the step record opens (it lands in _update_swing)
 	if changed:
 		# GRADFIX17 telemetry: a centre change's parts, timed
-		# - this block is the per-column work a cruise pays,
+		# - this block is the per-column work travel pays,
 		# and a slow part names itself in the log.
 		var tel_c_t0: int = Time.get_ticks_usec()
 		_refresh_window()
@@ -3016,7 +2888,7 @@ func _set_centre(index: int, snap: bool = false) -> void:
 				"window_ms": float(tel_c_t1 - tel_c_t0) / 1000.0,
 				"frames_ms": float(tel_c_t2 - tel_c_t1) / 1000.0,
 				"fill_ms": float(Time.get_ticks_usec() - tel_c_t2) / 1000.0,
-				"col": col, "cruise_dir": _cruise_dir, "snap": snap,
+				"col": col, "nc_roll_dir": _nc_roll_dir, "snap": snap,
 			})
 		# No companion follows the centre any more (the flip
 		# replaced the wing/board): a centre change is one of
@@ -3024,15 +2896,11 @@ func _set_centre(index: int, snap: bool = false) -> void:
 		# reads it per frame - no hook needed here.
 
 
-## Per-frame swing drive, from _process. TWO drivers stand
-## behind the wall-motion dial (GRADFIX10 item 3): SMOOTH
-## (the default) is the continuous roll in
-## _update_swing_smooth above; STEPPED is the shipped spring
-## below, untouched. What follows describes the STEPPED
-## driver: a critically damped
-## spring (the classic smooth-damp form) carries the drum to
-## its target, velocity included. The prototype's per-step
-## cubic ease-out restarted its curve at every retarget, so a
+## Per-frame swing drive, from _process. ONE driver stands
+## (OPTIMIZE round): STEPPED - the critically damped spring
+## (the classic smooth-damp form) carries the drum to its
+## target, velocity included. The prototype's per-step cubic
+## ease-out restarted its curve at every retarget, so a
 ## stepped journey - or a laser hover sweeping the shelf -
 ## moved as dart-and-settle, dart-and-settle: the ratchet the
 ## player reported (the GRAD FIX round). The spring never
@@ -3043,314 +2911,17 @@ func _set_centre(index: int, snap: bool = false) -> void:
 ## envelope the law always promised - motion never gates
 ## input and no journey takes longer than it used to - and
 ## the landing is exact: inside a hair of the target the drum
-## snaps onto it, at rest, like it always did.
-## ------------------------------------------------ held-stick cruise (GRADFIX13 item 3)
-##
-## Chris, verbatim: "If you do one tap in a direction, you
-## get a little roll. If you hold thumb stick in direction,
-## it doesn't roll, it slots."
-##
-## THE CONVICTION (from the input code): the product
-## receives a held stick ONLY as this room's per-frame axis
-## poll in _process - Input.get_joy_axis beyond the 0.55
-## deadzone becomes a unit direction, and when the 0.24 s
-## _joy_cooldown lapses the poll calls _move_focus(dir)
-## once and re-arms the cooldown. A hold is therefore a
-## train of DISCRETE focus steps at the auto-repeat
-## cadence; there is no continuous-push channel anywhere
-## in the product. Each sideways step moves focus one
-## column, _follow_centre seats the centre on it, and
-## _set_centre under SMOOTH ran _swing_smooth_retarget()
-## PER REPEAT - re-anchoring the travel and re-deriving the
-## cruise cap from the ~one column then remaining. The drum
-## could never outrun the repeat cadence (13.5 deg per
-## 0.24 s = a 56 deg/s ceiling on target advance) and its
-## velocity chased a target one column away at a time: slot
-## by slot, exactly as reported. GRADFIX12's held-scroll
-## harness leg modelled the hold as a continuous push and
-## so never saw this; its discrete taps were fixed, its
-## hold was not.
-##
-## THE FIX: the poll now counts the discrete steps of one
-## continuous hold (same direction, stick never released).
-## The FIRST step of a hold is the shipped discrete step,
-## byte for byte - a tap is a one-step hold, so tap
-## behaviour is preserved exactly, on both dial positions.
-## When the SECOND same-direction step of a hold would
-## fire and _cruise_wanted agrees (SMOOTH driver, plain
-## library wall, focus on a card), the hold becomes a
-## CRUISE instead: continuous travel at the roll's standing
-## cruise - SWING_SMOOTH_CRUISE_DEG, 72 deg/s, the same
-## pace a short roll cruises at - for as long as the stick
-## is held. Deflection does NOT scale the speed: the
-## discrete path the product ships discards axis magnitude
-## beyond the deadzone (the poll reads a unit direction),
-## so there is no deflection signal to scale by; the
-## cruise speed is the roll's own standing cruise. While
-## the cruise stands, _update_cruise drives the drum
-## directly (no per-column retarget exists to restart a
-## melt/settle profile: there is no settle profile, only
-## the velocity lag easing the drum up to cruise and the
-## release settle below), and the centre follows the drum -
-## focus rides the centre column on the band the cruise
-## began on, one discrete centre per column crossed, just
-## as the repeat steps used to move it. On release (or at
-## the shelf's end) the cruise stops and the release
-## settles at the NEAREST column through the ordinary
-## _set_centre retarget - the unchanged snap/landing law
-## of the standing SMOOTH driver. A direction change
-## mid-hold ends the cruise WITHOUT a settle stop: the
-## fresh direction's first step retargets mid-travel in
-## the same frame (the prime law - input answers
-## mid-travel, motion never gates input). STEPPED never
-## cruises: its repeat-step character is that pole of the
-## dial, and its poll path below is byte-identical to the
-## shipped one. The NC value "steprepeat"
-## (PVLDS_GF13_NC) makes _cruise_wanted always refuse, so
-## the motion smoke's "held cruise:" leg fails by name
-## against the restored per-column repeat path.
-
-## Whether this hold step may become a cruise: SMOOTH
-## driver only, horizontal only (a vertical hold steps
-## bands discretely as shipped - three bands have no
-## cruise to give), the plain library wall with a card
-## focused, and none of the room's standing gates standing.
-func _cruise_wanted(dir: Vector2) -> bool:
-	if debug_gf13_nc == "steprepeat":
-		return false
-	if _wall_driver_mode() != "smooth":
-		return false
-	if absf(dir.x) <= 0.5:
-		return false
-	if _mode != "wall" or _tournament or _placard_up or _setup_panel_up or _launching_game_id != "":
-		return false
-	if _focused == null or _panels.find(_focused) < 0:
-		return false
-	return true
-
-
-## Begin the cruise: the swing's target becomes the shelf
-## end's yaw in the hold's direction (a virtual far target -
-## the cruise drives toward it at the standing cruise and
-## stops at the shelf's end or on release, whichever comes
-## first). The velocity is NOT reset: the first step's roll
-## is already moving, and the cruise's velocity lag bends
-## it up to cruise speed exactly as a retarget bends a roll.
-func _begin_cruise(step: int) -> void:
-	_cruise_dir = step
-	var pidx: int = _panels.find(_focused)
-	_cruise_band = _grid_coord(pidx).y if pidx >= 0 else 0
-	_swing_cruise_rad = deg_to_rad(SWING_SMOOTH_CRUISE_DEG)
-	_swing_active = true
-	_swing_journey = false
-	_swing_to = _yaw_for_column(maxi(0, _columns - 1) if step > 0 else 0)
-	# Scroll telemetry: the cruise's birth, with the
-	# counter state that fired it (read-only).
-	if _scroll_telemetry_started:
-		var fields: Dictionary = _telemetry_context()
-		fields["transition"] = "enter"
-		fields["reason"] = "hold_second_step"
-		fields["threshold"] = "same-direction hold reaches its second step (hold_steps >= 1 at the step tick)"
-		fields["cruise_band"] = _cruise_band
-		fields["cruise_speed_deg_s"] = SWING_SMOOTH_CRUISE_DEG
-		_telemetry_record("cruise_transition", fields)
-
-
-## The cruise's per-frame centre follow: the centre column
-## is the column nearest the drum's standing yaw; when it
-## changes, the centre and the focus ride to that column's
-## card on the cruise's band (a partial column lands on its
-## nearest card, never a neighbouring column - the shared
-## _panel_in_column shape). _set_centre during a cruise is
-## bookkeeping only (see its cruise branch): the window,
-## the centred frame and the fill follow the centre exactly
-## as they did under the repeat steps.
-func _cruise_follow() -> void:
-	if _panels.is_empty() or _columns <= 0:
-		return
-	var col: int = clampi(int(roundf(_drum_yaw / deg_to_rad(ANGLE_STEP_DEG))), 0, maxi(0, _columns - 1))
-	if col == _grid_coord(_centre_index).x:
-		return
-	var idx: int = _panel_in_column(col, _cruise_band)
-	if idx >= 0:
-		_set_centre(idx)
-		_set_focused(_panels[idx])
-
-
-## End the cruise. With settle, the release law: the drum
-## settles at the column nearest its standing yaw, through
-## the ordinary retarget (the cruise is cleared FIRST, so
-## _set_centre takes its normal path and the standing
-## SMOOTH landing law - approach tau, landing window, exact
-## snap - owns the settle, unchanged). Without settle (a
-## reversal), nothing is seated here: the caller's fresh
-## step retargets mid-travel in the same frame.
-func _stop_cruise(settle: bool, reason: String = "unspecified") -> void:
-	if _cruise_dir == 0:
-		return
-	var telemetry_ended_dir: int = _cruise_dir ## scroll telemetry: the cruise that is ending (read-only)
-	_cruise_dir = 0
-	# Scroll telemetry: the cruise's death, recorded before
-	# the settle below retargets anything (read-only).
-	if _scroll_telemetry_started:
-		var fields: Dictionary = _telemetry_context()
-		fields["transition"] = "exit"
-		fields["reason"] = reason
-		fields["from_cruise_dir"] = telemetry_ended_dir
-		fields["to_cruise_dir"] = 0
-		fields["settle"] = settle
-		_telemetry_record("cruise_transition", fields)
-	if not settle or _panels.is_empty() or _columns <= 0:
-		return
-	var col: int = clampi(int(roundf(_drum_yaw / deg_to_rad(ANGLE_STEP_DEG))), 0, maxi(0, _columns - 1))
-	var idx: int = _panel_in_column(col, _cruise_band)
-	if idx < 0:
-		idx = _centre_index
-	if idx >= 0 and idx < _panels.size():
-		_set_centre(idx)
-		_set_focused(_panels[idx])
-
-
-## The cruise's per-frame drive (from _update_swing_smooth
-## while a cruise stands): the drum's velocity relaxes
-## toward the standing cruise speed over the roll's own
-## velocity lag - the same melt off the mark a roll has -
-## and the yaw advances, clamped to the shelf's span. There
-## is no target approach and no landing window in here: the
-## cruise is sustained travel, and the landing belongs to
-## the release settle in _stop_cruise. Reaching the shelf's
-## end stops the cruise and settles there.
-func _update_cruise(delta: float) -> void:
-	var lo: float = _yaw_for_column(0)
-	var hi: float = _yaw_for_column(maxi(0, _columns - 1))
-	var desired: float = float(_cruise_dir) * deg_to_rad(SWING_SMOOTH_CRUISE_DEG)
-	var blend: float = 1.0 - exp(-delta / SWING_SMOOTH_VEL_LAG_SEC)
-	_swing_vel += (desired - _swing_vel) * blend
-	_drum_yaw = clampf(_drum_yaw + _swing_vel * delta, lo, hi)
-	if (_cruise_dir > 0 and _drum_yaw >= hi - 0.0001) or (_cruise_dir < 0 and _drum_yaw <= lo + 0.0001):
-		_stop_cruise(true, "shelf_end_reached")
-	else:
-		_cruise_follow()
-	var applied_yaw: float = _drum_yaw
-	if debug_gf10_nc == "stepswing":
-		applied_yaw = snappedf(_drum_yaw, deg_to_rad(ANGLE_STEP_DEG))
-		if not _swing_active:
-			applied_yaw = _swing_to
-	_wall.rotation.y = applied_yaw
-
-
-## The SMOOTH dial's retarget (GRADFIX10 item 3): anchor the
-## continuous travel at the drum's current angle, name its
-## direction, and calibrate its duration from the distance
-## left - a lower bound only (the cruise + approach below
-## is what actually paces the roll; the bound keeps the
-## standing duration bookkeeping honest for any reader).
-## The drum's velocity is NOT reset: a retarget bends the
-## roll, exactly as the spring's retarget bends its glide.
-func _swing_smooth_retarget() -> void:
-	_swing_from = _drum_yaw
-	_swing_cruise_sign = signf(_swing_to - _drum_yaw)
-	if _swing_cruise_sign == 0.0:
-		_swing_cruise_sign = 1.0
-	var cols: float = absf(_swing_to - _drum_yaw) / deg_to_rad(ANGLE_STEP_DEG)
-	_swing_cols = cols
-	_swing_duration = clampf(0.30 + 0.16 * cols, SWING_SMOOTH_MIN_SEC, 2.8)
-	# The cruise cap (GRADFIX12): a travel up to six columns
-	# rolls at SWING_SMOOTH_CRUISE_DEG - the pace the traces
-	# calibrate. A longer travel (a letter jump across a big
-	# library) grows the cap with its length, so crossing the
-	# whole shelf does not take a minute at the short-roll
-	# pace. The cap is set here, at the retarget: nothing
-	# recomputes it mid-roll, so it never sags under the drum
-	# as the remaining distance shrinks - only a new press
-	# (a new retarget) re-paces the roll, from the distance
-	# then remaining.
-	var cruise_deg: float = SWING_SMOOTH_CRUISE_DEG
-	if cols > 6.0:
-		cruise_deg = minf(SWING_SMOOTH_CRUISE_DEG * sqrt(cols / 6.0), 240.0)
-	_swing_cruise_rad = deg_to_rad(cruise_deg)
-
-
-## The SMOOTH dial's per-frame drive: a velocity-commanded
-## roll. The commanded speed is the remaining distance over
-## SWING_SMOOTH_TAU, capped at the cruise - so far from the
-## target the drum rolls at one steady cruise (no per-slot
-## cadence, no pauses at column boundaries), and inside the
-## last ~tau of travel the command itself decays
-## exponentially into the landing. The drum's velocity
-## relaxes toward the command over SWING_SMOOTH_VEL_LAG_SEC
-## (GRADFIX12: 0.30 s, was 0.09 - the heavy lag is what
-## melts the roll off the mark instead of snapping it up to
-## speed like the spring), so setting off and arriving are
-## both eased without any ease curve ever restarting: a
-## retarget - same direction, farther column, or a full
-## reversal from a mid-roll press - just changes the
-## command, and the roll bends. Inside the last
-## SWING_SMOOTH_LAND_DEG the approach stiffens to
-## SWING_SMOOTH_LAND_TAU, bounding the long tail the big
-## tau would otherwise trail into the landing; the snap
-## thresholds below are the standing ones, so the landing
-## stays exact. Input is never gated: _set_centre retargets
-## this drive the frame a press lands (the planetarium
-## speed-gate law). The NC seam (PVLDS_GRADFIX10_NC=
-## stepswing) quantises the APPLIED rotation to whole
-## slots, restoring the slot-stepping under SMOOTH so the
-## motion smoke's smooth-travel leg fails by name; the
-## travel state itself stays continuous, exactly like the
-## pop's NC.
-func _update_swing_smooth(delta: float) -> void:
-	if _cruise_dir != 0:
-		# A held-stick cruise stands (GRADFIX13 item 3): it
-		# owns the drive until it ends - no approach, no
-		# landing window, no per-column retarget (see
-		# _update_cruise).
-		_update_cruise(delta)
-		return
-	var remaining: float = _swing_to - _drum_yaw
-	var dist: float = absf(remaining)
-	if dist < 0.00035 and absf(_swing_vel) < 0.05:
-		_drum_yaw = _swing_to
-		_swing_vel = 0.0
-		_swing_active = false
-		_swing_journey = false
-		_wall.rotation.y = _swing_to
-		return
-	var cruise: float = _swing_cruise_rad
-	var cap: float = cruise
-	if signf(_swing_vel) == -signf(remaining) and absf(_swing_vel) > cruise:
-		# A reversal in flight: the approach law keeps full
-		# authority while the drum swings back through zero.
-		cap = absf(_swing_vel)
-	var tau: float = SWING_SMOOTH_TAU
-	if dist < deg_to_rad(SWING_SMOOTH_LAND_DEG):
-		tau = SWING_SMOOTH_LAND_TAU
-	var desired: float = signf(remaining) * minf(dist / tau, cap)
-	var blend: float = 1.0 - exp(-delta / SWING_SMOOTH_VEL_LAG_SEC)
-	_swing_vel += (desired - _swing_vel) * blend
-	var step: float = _swing_vel * delta
-	if absf(step) >= dist:
-		_drum_yaw = _swing_to
-		_swing_vel *= 0.25 ## the landing absorbs the roll's speed
-	else:
-		_drum_yaw += step
-	if absf(_swing_to - _drum_yaw) < 0.00035 and absf(_swing_vel) < 0.35:
-		_drum_yaw = _swing_to
-		_swing_vel = 0.0
-		_swing_active = false
-		_swing_journey = false
-	var applied_yaw: float = _drum_yaw
-	if debug_gf10_nc == "stepswing":
-		applied_yaw = snappedf(_drum_yaw, deg_to_rad(ANGLE_STEP_DEG))
-		if not _swing_active:
-			applied_yaw = _swing_to
-	_wall.rotation.y = applied_yaw
-
-
+## snaps onto it, at rest, like it always did. The SMOOTH
+## driver and the held-stick cruise that rode it are deleted
+## (the OPTIMIZE round, the user's ruling closing the
+## smooth-cruise saga): a held stick repeats discrete steps
+## at the poll's step-repeat cadence, each retargeting
+## through _set_centre's journey logic above, so a hold is a
+## train of discrete steps with settle plateaus.
 func _update_swing(delta: float) -> void:
+	if _nc_roll_dir != 0:
+		_nc_roll_drive() ## debug_opt_nc="smoothcruise" seam only (never armed in production)
 	if not _swing_active or _wall == null:
-		return
-	if _wall_driver_mode() == "smooth":
-		_update_swing_smooth(delta)
 		return
 	var tau: float = maxf(_swing_duration / (3.5 + 0.55 * log(maxf(_swing_cols, 1.0))), 0.02)
 	if _swing_journey:
@@ -3367,7 +2938,77 @@ func _update_swing(delta: float) -> void:
 		_swing_vel = 0.0
 		_swing_active = false
 		_swing_journey = false
+		_step_landed() ## OPTIMIZE telemetry: the step record closes with its settle duration
 	_wall.rotation.y = _drum_yaw
+
+
+## debug_opt_nc="smoothcruise" seam ONLY (PVLDS_OPT_NC, set by
+## Main before the room exists; empty in every real run): the
+## deleted SMOOTH gait's shape in miniature - while the seam's
+## roll stands, the swing's target keeps extending column by
+## column ahead of the drum, so the spring never lands and no
+## settle plateau forms. Armed by the _process poll when a
+## held stick's second same-direction step would fire; ends
+## on release or at the shelf's end, where the ordinary
+## stepped landing settles the drum. Production code never
+## sets _nc_roll_dir.
+func _nc_roll_drive() -> void:
+	if _columns <= 0:
+		_nc_roll_dir = 0
+		return
+	var step_rad: float = deg_to_rad(ANGLE_STEP_DEG)
+	var target_col: int = clampi(int(roundf(_swing_to / step_rad)), 0, _columns - 1)
+	if absf(_drum_yaw - _swing_to) < step_rad * 0.6:
+		var next_col: int = clampi(target_col + _nc_roll_dir, 0, _columns - 1)
+		if next_col == target_col:
+			_nc_roll_dir = 0 ## the shelf's end: the standing target settles through the spring
+			return
+		_swing_to = _yaw_for_column(next_col)
+		_swing_cols = absf(_swing_to - _drum_yaw) / step_rad
+		_swing_duration = clampf(0.14 + 0.055 * sqrt(maxf(_swing_cols, 1.0)), SWING_MIN_SEC, SWING_MAX_SEC)
+		_swing_active = true
+		# The centre follows the extending target, one column
+		# at a time - bookkeeping only, no retarget.
+		var idx: int = _panel_in_column(next_col, _grid_coord(_centre_index).y if _centre_index >= 0 else 0)
+		if idx >= 0:
+			_centre_index = idx
+			_page = _centre_index / PAGE_SIZE
+			_refresh_window()
+			_refresh_card_frames()
+			_request_window_fill()
+
+
+## debug_opt_nc="costume" seam ONLY (empty in every real
+## run): the deleted GF19 costume's symptom in miniature -
+## while a swing travels, the drawn window's panel faces are
+## swapped to blank (the clear texture) and restored at
+## settle, so the dressed-during-step leg fails by name.
+## Hooks: called per frame from _update_pop where the GF19
+## tick stood.
+func _nc_costume_tick() -> void:
+	if debug_opt_nc != "costume":
+		return
+	var travelling: bool = _swing_active or page_slide_active()
+	if travelling:
+		if _panel_window_lo >= 0:
+			for idx: int in range(_panels.size()):
+				if _nc_costume_saved.has(idx):
+					continue
+				var cc: int = _grid_coord(idx).x
+				if cc < _panel_window_lo or cc > _panel_window_hi:
+					continue
+				_nc_costume_saved[idx] = _panels[idx].current_texture()
+				_panels[idx].set_texture(clear_tex())
+		_nc_costume_on = true
+	elif _nc_costume_on:
+		for idx_v: Variant in _nc_costume_saved.keys():
+			var idx: int = int(idx_v)
+			if idx >= 0 and idx < _panels.size():
+				var tex: Texture2D = _nc_costume_saved[idx_v] as Texture2D
+				if tex != null:
+					_panels[idx].set_texture(tex)
+		_nc_costume_saved.clear()
+		_nc_costume_on = false
 
 
 ## The centred card's frame goes amber; every other card's
@@ -3425,22 +3066,6 @@ func _refresh_window() -> void:
 	# its change guard here (resetting it to -1) so EVERY
 	# centre change rewrote every alpha on the wall.
 	_apply_wall_alpha(_wall_alpha_applied)
-	# GRADFIX19: the window just changed - any card that
-	# entered it mid-travel wears the costume from this
-	# frame, not from the next _update_pop tick (the cruise's
-	# centre follow widens the window inside the swing
-	# update, after the tick: the first bench run sampled
-	# entering cards in art for exactly that one frame).
-	if _costume_on:
-		for cidx: int in range(_panels.size()):
-			if _costume_saved.has(cidx):
-				continue
-			var cc2: int = _grid_coord(cidx).x
-			if cc2 < _panel_window_lo or cc2 > _panel_window_hi:
-				continue
-			_costume_swap_in(cidx)
-
-
 ## Whether a Tournament panel may launch: only a challenge row
 ## he owns (a state row and a not-owned board carry no launch
 ## at all - the fill also hides their buttons; this is the
@@ -3479,12 +3104,11 @@ func _refresh_pickable() -> bool:
 
 
 func _rebuild_wall() -> void:
-	# GRADFIX19: the costume belongs to the wall being torn
-	# down too - drop it without restoring (the rebuild
-	# re-dresses every face itself).
-	_costume_on = false
-	_costume_saved.clear()
-	_costume_travel_end_msec = 0
+	# The NC costume seam's blank swap belongs to the wall
+	# being torn down too - drop it without restoring (the
+	# rebuild re-dresses every face itself).
+	_nc_costume_saved.clear()
+	_nc_costume_on = false
 	# The power-on's performer and its overlay die with
 	# the wall being torn down: drop the state without
 	# touching the (about to be freed) nodes.
@@ -3513,8 +3137,11 @@ func _rebuild_wall() -> void:
 	_swing_active = false
 	_swing_vel = 0.0
 	_swing_journey = false
-	_telemetry_cruise_cleared("wall_rebuilt") ## scroll telemetry: witness the cruise this rebuild kills (read-only)
-	_cruise_dir = 0 ## a rebuild kills any held-stick cruise with the wall it travelled (GRADFIX13 item 3)
+	_nc_roll_dir = 0 ## a rebuild kills the NC seam's roll with the wall it travelled
+	_step_from_col = -1
+	_step_to_col = -1
+	_pop_awake = true ## OPTIMIZE standing-cost cut: a rebuilt wall's pops start awake
+	_pop_last_target = null
 	# Standing cards return to the pool (they are NOT freed:
 	# a rebuild re-seats the same nodes at the new view's
 	# places, faces and all - freeing and re-minting 300+
@@ -3914,8 +3541,15 @@ func _banner_line() -> String:
 func _refresh_banner() -> void:
 	if _status_label == null or _scanner == null:
 		return
-	_status_text = _banner_line()
-	_status_label.text = _status_text
+	var new_line: String = _banner_line()
+	if new_line != _status_text:
+		# OPTIMIZE standing-cost cut: the status label's text
+		# is re-assigned only when the line actually changes
+		# (a Label3D text set re-shapes the label; the banner
+		# refresh runs on every fill and centre change).
+		_status_text = new_line
+		_sc_label_reassign += 1 ## OPTIMIZE standing-cost audit (observation only)
+		_status_label.text = _status_text
 
 
 ## A rail stop's [label, accent] under the room's current
@@ -4115,7 +3749,13 @@ func _apply_strip_textures(presence: Dictionary) -> void:
 		var ls: Array = _strip_label_state(key, presence)
 		var ck: String = str(ls[0]) + "|" + str(ls[1])
 		if _strip_tex_cache.has(ck):
-			quad.set_texture(_strip_tex_cache[ck] as Texture2D)
+			var want_tex: Texture2D = _strip_tex_cache[ck] as Texture2D
+			if quad.current_texture() != want_tex:
+				# OPTIMIZE standing-cost cut: a slot already
+				# wearing its face is not re-assigned it (the
+				# dress ran on every rebuild, same texture).
+				_sc_label_reassign += 1 ## OPTIMIZE standing-cost audit (observation only)
+				quad.set_texture(want_tex)
 
 
 ## A strip pick: the jump itself. An ordinary letter files
@@ -4228,6 +3868,7 @@ func _face_cache_put(key: String, tex: Texture2D, aspect: float) -> void:
 	while _face_cache_order.size() > FACE_CACHE_MAX:
 		var old: String = _face_cache_order.pop_front()
 		_face_tex_cache.erase(old)
+		_evicted_total += 1 ## OPTIMIZE: a cap drop is an eviction
 
 
 ## Drop one cached face (the panel heal's art retry: the
@@ -4372,21 +4013,14 @@ func _fill_wall_textures(gen: int) -> void:
 ##      call the travel path awaits.
 ## A picture may land late; the drum never waits for it.
 ##
-## GRADFIX18 (item A) - STREAM-AHEAD. GF16's shape was
-## over-read in the field as "art never loads during
-## travel": applications parked for the whole cruise, so
-## the wall ahead stood bare until the drum stopped. The
-## pipeline now STREAMS during travel: the enqueue window
-## reaches STREAM_LEAD_COLS ahead of the drum, the pump
-## decodes + face-prepares on its thread without parking,
-## and the pass applies the cheap half (one texture
-## creation + swap, budgeted at STREAM_BUDGET_MS per travel
-## frame - see the decomposition there). The expensive
-## half (the composed viewport render, the power subject)
-## remains settle work, upgraded by the GF17 audit.
-## The card a face belongs to keeps whatever honest texture
-## it already wears (or the placeholder) until its staged
-## face applies; the standing heal re-asks for anything the
+## OPTIMIZE round: the GF18 stream-ahead shape is deleted -
+## the pipeline is the GF17 shape above, whole: the drawn
+## window only, the serial decode pump, applies capped at
+## APPLY_CAP_PER_FRAME, and the GF17 settle guarantee
+## dressing whatever travel left behind. The card a face
+## belongs to keeps whatever honest texture it already
+## wears (or the placeholder) until its staged face
+## applies; the standing heal re-asks for anything the
 ## pipeline skipped, exactly as before. Under the NC
 ## PVLDS_GF16_NC=syncfill the pre-fix serial worker below
 ## runs instead and _set_centre's callers pay inline again,
@@ -4438,7 +4072,8 @@ func _fill_window_faces_sync(gen: int) -> void:
 		_art_event("apply", {
 			"game": _visible_games[idx].game_id, "path": _face_path_memoized(_visible_games[idx]), "col": cc,
 			"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
-			"cruise_dir": _cruise_dir, "swing": _swing_active,
+			"gait": "stepped",
+		"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
 			"cost_ms": float(Time.get_ticks_usec() - tel_apply_t0) / 1000.0,
 			"branch": _art_apply_branch, "load_ms": _art_apply_load_ms, "render_ms": _art_apply_render_ms,
 			"via": "syncfill",
@@ -4460,10 +4095,7 @@ func _window_fill_order() -> Array[int]:
 
 
 ## Face indices over an explicit column span, centre column
-## outward (the window order's general shape; GRADFIX18's
-## stream walks its span in arrival order instead - see
-## _stream_fill_order - and only falls back to this at a
-## standstill inside a stream span).
+## outward (the window order's general shape).
 func _fill_order_for(lo: int, hi: int) -> Array[int]:
 	var order: Array[int] = []
 	if lo < 0 or hi < lo or _centre_index < 0:
@@ -4483,61 +4115,6 @@ func _fill_order_for(lo: int, hi: int) -> Array[int]:
 	return order
 
 
-## GRADFIX18 (item A): face indices over the stream span in
-## ARRIVAL order - the order the drum reaches them: the
-## drawn window's leading edge first (those faces are on
-## screen now and stay on screen longest), then the lead
-## columns in the order they will enter, then the trail.
-## The centre-out order above is right at rest and wrong
-## for the stream: the streamahead bench runs 1-4 convicted
-## it - with a bounded decode supply the queue spent itself
-## mid-window (faces already passed) and the leading edge,
-## the faces the entry census samples, was bare on every
-## single run (69 of 69), however the pump was pooled or
-## prioritized. Arrival order spends the same supply on
-## the faces the drum reaches first.
-func _stream_fill_order(lo: int, hi: int) -> Array[int]:
-	var order: Array[int] = []
-	if lo < 0 or hi < lo or _panel_window_lo < 0:
-		return order
-	var dir: int = int(_travel_dir_speed()[0])
-	if dir == 0:
-		return _fill_order_for(lo, hi)
-	var cols: Array[int] = []
-	if dir > 0:
-		var c: int = _panel_window_hi
-		while c >= _panel_window_lo:
-			cols.append(c)
-			c -= 1
-		c = _panel_window_hi + 1
-		while c <= hi:
-			cols.append(c)
-			c += 1
-		c = _panel_window_lo - 1
-		while c >= lo:
-			cols.append(c)
-			c -= 1
-	else:
-		var c2: int = _panel_window_lo
-		while c2 <= _panel_window_hi:
-			cols.append(c2)
-			c2 += 1
-		c2 = _panel_window_lo - 1
-		while c2 >= lo:
-			cols.append(c2)
-			c2 -= 1
-		c2 = _panel_window_hi + 1
-		while c2 <= hi:
-			cols.append(c2)
-			c2 += 1
-	for cc: int in cols:
-		for row: int in range(3):
-			var idx: int = _raw_index(cc, row)
-			if idx >= 0 and idx < _panels.size():
-				order.append(idx)
-	return order
-
-
 ## A fill pass resolved the standing window: the wall is
 ## ready, and Main's warmer is asked to bring the columns
 ## just outside the window forward (GRADFIX6's widened ask -
@@ -4547,7 +4124,6 @@ func _stream_fill_order(lo: int, hi: int) -> Array[int]:
 func _on_window_fill_drained(gen: int) -> void:
 	if gen != _gen:
 		return
-	var tel_drain_t0: int = Time.get_ticks_usec() ## GRADFIX18 telemetry: the drained handler's own stamp (the prefetch legs time against it)
 	wall_ready = true
 	var near: Array = []
 	for c: int in [_panel_window_lo - 2, _panel_window_lo - 1, _panel_window_hi + 1, _panel_window_hi + 2]:
@@ -4558,41 +4134,23 @@ func _on_window_fill_drained(gen: int) -> void:
 			if idx >= 0 and idx < _visible_games.size():
 				near.append(_visible_games[idx])
 	if not near.is_empty():
-		# GRADFIX18 telemetry: the prefetch ask, timed at last.
-		# GF17's log left this event costless while every cruise
-		# spike followed one - so the whole drained handler is
-		# timed here in legs: building the near list (near_ms),
-		# the emit itself (emit_ms - the signal runs Main's
-		# handler and the warmer's prioritize SYNCHRONOUSLY on
-		# this thread, so emit_ms IS the ask's main-thread cost),
-		# and the total. ArtWarmer.last_ask / last_prio_worker
-		# carry the ask's own breakdown (the worker leg is the
-		# previous batch's - it lands asynchronously by design).
-		var tel_pf_t0: int = Time.get_ticks_usec()
-		var tel_near_ms: float = float(tel_pf_t0 - tel_drain_t0) / 1000.0
-		var tel_emit_t0: int = Time.get_ticks_usec()
+		# The prefetch ask is a queue note: the signal runs
+		# Main's handler and the warmer's prioritize
+		# synchronously on this thread (the OPTIMIZE shape -
+		# see ArtWarmer.prioritize), so emit_ms IS the ask's
+		# main-thread cost, timed here beside the residency
+		# the ask was made under.
+		var tel_drain_t0: int = Time.get_ticks_usec()
 		art_prefetch_requested.emit(near)
-		var tel_emit_ms: float = float(Time.get_ticks_usec() - tel_emit_t0) / 1000.0
-		var tel_total_ms: float = float(Time.get_ticks_usec() - tel_drain_t0) / 1000.0
-		gf18_prefetch_count += 1
-		gf18_ask_emit_last_ms = tel_emit_ms
-		gf18_ask_emit_max_ms = maxf(gf18_ask_emit_max_ms, tel_emit_ms)
-		gf18_ask_total_max_ms = maxf(gf18_ask_total_max_ms, tel_total_ms)
 		var tel_rec: Dictionary = {
 			"col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
-			"cruise_dir": _cruise_dir, "games": near.size(),
+			"nc_roll_dir": _nc_roll_dir, "games": near.size(),
 			"first": (near[0] as GameEntry).game_id,
-			"cost_ms": tel_total_ms,
-			"near_ms": tel_near_ms,
-			"emit_ms": tel_emit_ms,
-			"lag_ms": float(Time.get_ticks_msec() - _gf18_last_enqueue_msec) if _gf18_last_enqueue_msec > 0 else -1.0,
+			"emit_ms": float(Time.get_ticks_usec() - tel_drain_t0) / 1000.0,
 			"ask_ms": float(ArtWarmer.last_ask.get("ask_ms", -1.0)),
 			"ask_mode": str(ArtWarmer.last_ask.get("mode", "")),
-			"prio_front_ms": float(ArtWarmer.last_prio_worker.get("front_ms", -1.0)),
-			"prio_queue_ms": float(ArtWarmer.last_prio_worker.get("queue_ms", -1.0)),
-			"prio_sources": int(ArtWarmer.last_prio_worker.get("sources", -1)),
 		}
-		var gauge: Dictionary = gf18_residency()
+		var gauge: Dictionary = residency_stats()
 		for gkey: Variant in gauge.keys():
 			tel_rec[gkey] = gauge[gkey]
 		_art_event("prefetch", tel_rec)
@@ -4652,148 +4210,6 @@ func _face_is_standing_memo(idx: int) -> bool:
 	return str(_panel_face_key.get(game.game_id, "")) == _face_key_for_memo(idx)
 
 
-## GRADFIX18 (item A): the travel state the stream window
-## keys on: [dir, speed_deg_s, travelling]. The cruise's dir
-## and standing cap while one stands; a swing's dir from its
-## remaining travel (or its velocity), its speed the drum's
-## own. At rest, dir 0.
-func _travel_dir_speed() -> Array:
-	var travelling: bool = _cruise_dir != 0 or _swing_active or page_slide_active()
-	if _cruise_dir != 0:
-		return [_cruise_dir, rad_to_deg(_swing_cruise_rad), true]
-	if _swing_active:
-		var dir: int = 0
-		var rest: float = _swing_to - _drum_yaw
-		if absf(rest) > 0.0001:
-			dir = 1 if rest > 0.0 else -1
-		elif absf(_swing_vel) > 0.0001:
-			dir = 1 if _swing_vel > 0.0 else -1
-		return [dir, maxf(rad_to_deg(absf(_swing_vel)), 36.0), true]
-	return [0, 0.0, travelling]
-
-
-## GRADFIX18 (item A): the stream window's column span: the
-## drawn window at rest; while travelling, extended by
-## STREAM_LEAD_COLS beyond the drawn edge on the travel side
-## and STREAM_TRAIL_COLS behind it - the wall ahead is asked
-## for before the drum can arrive (see the STREAM_LEAD_COLS
-## arithmetic). Under the nostream NC the drawn window stands.
-func _stream_cols() -> Vector2i:
-	if _panel_window_lo < 0:
-		return Vector2i(_panel_window_lo, _panel_window_hi)
-	var lo: int = _panel_window_lo
-	var hi: int = _panel_window_hi
-	if debug_gf18_nc == "nostream" or _columns <= 0:
-		return Vector2i(lo, hi)
-	var ts: Array = _travel_dir_speed()
-	var dir: int = int(ts[0])
-	if bool(ts[2]) and dir != 0:
-		if dir > 0:
-			hi = mini(_columns - 1, hi + STREAM_LEAD_COLS)
-			lo = maxi(0, lo - STREAM_TRAIL_COLS)
-		else:
-			lo = maxi(0, lo - STREAM_LEAD_COLS)
-			hi = mini(_columns - 1, hi + STREAM_TRAIL_COLS)
-	return Vector2i(lo, hi)
-
-
-## GRADFIX18 (item A): whether a panel already wears its
-## streamed face for the key the memo now asks (real art
-## texture, honest aspect, the |stream stamp) - dressed for
-## arrival, still owed its full render at settle.
-func _face_is_stream_dressed(idx: int) -> bool:
-	if idx < 0 or idx >= _visible_games.size() or idx >= _panels.size():
-		return false
-	var game: GameEntry = _visible_games[idx]
-	if str(_panel_face_key.get(game.game_id, "")) != _face_key_for_memo(idx) + STREAM_STAMP_SUFFIX:
-		return false
-	var tex: Texture2D = _panels[idx].current_texture()
-	return tex != null and _tex_is_real(tex) and idx < _panel_art_aspect.size() and _panel_art_aspect[idx] > 0.0
-
-
-## GRADFIX18 (item A): re-order the decode pump's queue to
-## the standing stream window's arrival order - the window's
-## needy paths first, in enqueue (arrival) order,
-## everything else behind in its standing
-## order. Without this the pump chews FIFO through whatever
-## earlier windows queued (a boot seat's whole backlog), and
-## the lead faces the drum is approaching wait behind faces
-## nobody is travelling toward - the first streamahead bench
-## run's conviction: 210 lifetime decodes, the cruise's own
-## faces stuck behind ~100 stale entries, 12 stream applies
-## in the whole cruise. Queue surgery only: membership and
-## the pending set are untouched, so no decode is lost or
-## duplicated - the stale faces still decode, just after
-## the wall the player is actually approaching.
-func _stream_prioritize_pump_queue(needy: Array[int]) -> void:
-	if needy.is_empty():
-		return
-	var want: Dictionary = {}
-	var front: Array[String] = []
-	for idx: int in needy:
-		if idx < 0 or idx >= _visible_games.size():
-			continue
-		var path: String = _face_path_memoized(_visible_games[idx])
-		if path != "" and not want.has(path):
-			want[path] = true
-			front.append(path)
-	_art_decode_mutex.lock()
-	if _art_decode_queue.size() > 1:
-		var back: Array[String] = []
-		var have: Dictionary = {}
-		for queued: String in _art_decode_queue:
-			have[queued] = true
-			if not want.has(queued):
-				back.append(queued)
-		var rebuilt: Array[String] = []
-		for fp: String in front:
-			if have.has(fp):
-				rebuilt.append(fp)
-		rebuilt.append_array(back)
-		_art_decode_queue = rebuilt
-	_art_decode_mutex.unlock()
-
-
-## GRADFIX18 (item A): ask Main's warmer to bring the LEAD
-## slice's extractions forward - a lead face whose art has
-## not extracted yet has no ready path to stream, so its
-## extraction must land ahead of the drum too. Deduped by
-## the slice's identity: the ask fires when the lead moves,
-## not on every crossing inside it.
-func _stream_ask_lead_warmer(stream_cols: Vector2i) -> void:
-	if _panel_window_lo < 0:
-		return
-	var ts: Array = _travel_dir_speed()
-	var dir: int = int(ts[0])
-	if dir == 0:
-		return
-	var lead_games: Array = []
-	if dir > 0:
-		for c: int in range(_panel_window_hi + 1, stream_cols.y + 1):
-			for row: int in range(3):
-				var idx: int = _raw_index(c, row)
-				if idx >= 0 and idx < _visible_games.size():
-					lead_games.append(_visible_games[idx])
-	else:
-		for c2: int in range(stream_cols.x, _panel_window_lo):
-			for row2: int in range(3):
-				var idx2: int = _raw_index(c2, row2)
-				if idx2 >= 0 and idx2 < _visible_games.size():
-					lead_games.append(_visible_games[idx2])
-	if lead_games.is_empty():
-		return
-	var key: String = str((lead_games[0] as GameEntry).game_id) + "|" + str(lead_games.size()) + "|" + str(dir)
-	if key == _stream_prefetch_key:
-		return
-	_stream_prefetch_key = key
-	_art_event("stream_prefetch", {
-		"col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
-		"cruise_dir": _cruise_dir, "games": lead_games.size(),
-		"first": (lead_games[0] as GameEntry).game_id,
-	})
-	art_prefetch_requested.emit(lead_games)
-
-
 ## Enqueue the standing window's faces for the staged
 ## pipeline (centre-out). Called on every centre change:
 ## the queue is REBUILT from the standing window each time,
@@ -4809,19 +4225,10 @@ func _stream_ask_lead_warmer(stream_cols: Vector2i) -> void:
 func _art_pipe_enqueue_window() -> void:
 	var tel_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the enqueue's own cost, measured unconditionally
 	var probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
-	_gf18_last_enqueue_msec = Time.get_ticks_msec()
-	# GRADFIX18 telemetry: the enqueue's sub-steps, timed
-	# individually - the order walk, the standing filter (the
-	# probe chain's seat: on a memo miss it runs the full
-	# face_path_ready probe per face), and the decode dispatch.
-	# GRADFIX18: the queue is built over the STREAM window -
-	# at rest that is the drawn window exactly (the shipped
-	# shape); while travelling it reaches STREAM_LEAD_COLS
-	# ahead, so the faces the drum is approaching are queued,
-	# decoded and dressed before they enter the drawn window.
-	var stream_cols: Vector2i = _stream_cols()
-	var streaming: bool = stream_cols.x != _panel_window_lo or stream_cols.y != _panel_window_hi
-	var order: Array[int] = _stream_fill_order(stream_cols.x, stream_cols.y) if streaming else _window_fill_order()
+	# OPTIMIZE: the queue is built over the DRAWN window only -
+	# the GF17 shape. (GF18's stream window reached ahead of
+	# the drum; stream-ahead is deleted with the SMOOTH gait.)
+	var order: Array[int] = _window_fill_order()
 	var tel_order_done: int = Time.get_ticks_usec()
 	var needy: Array[int] = []
 	var tel_filter_ms: float = 0.0
@@ -4844,9 +4251,8 @@ func _art_pipe_enqueue_window() -> void:
 	var tel_filter_done: int = Time.get_ticks_usec()
 	# GRADFIX17 telemetry: the enqueue's own account - which
 	# faces it found needy (identity = game + art file), on
-	# which column, under which travel state. GRADFIX18 adds
-	# the sub-step costs, the residency gauge, and the stream
-	# span the queue was built over.
+	# which column, under which travel state, with the
+	# sub-step costs and the residency gauge.
 	var tel_faces: Array = []
 	for nidx: int in needy:
 		var ngame: GameEntry = _visible_games[nidx]
@@ -4854,7 +4260,7 @@ func _art_pipe_enqueue_window() -> void:
 	var tel_faces_ms: float = float(Time.get_ticks_usec() - tel_filter_done) / 1000.0
 	var tel_rec: Dictionary = {
 		"col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
-		"cruise_dir": _cruise_dir,
+		"nc_roll_dir": _nc_roll_dir,
 		"swing": _swing_active,
 		"needy": needy.size(),
 		"faces": tel_faces,
@@ -4865,28 +4271,15 @@ func _art_pipe_enqueue_window() -> void:
 		"filter_max_game": tel_filter_max_game,
 		"memo_miss": tel_memo_miss,
 		"faces_ms": tel_faces_ms,
-		"stream_lo": stream_cols.x, "stream_hi": stream_cols.y,
 	}
-	var gauge: Dictionary = gf18_residency()
+	var gauge: Dictionary = residency_stats()
 	for gkey: Variant in gauge.keys():
 		tel_rec[gkey] = gauge[gkey]
 	_art_event("enqueue", tel_rec)
-	if streaming:
-		# Travelling: every needy face's decode is dispatched
-		# now (the pump pool is deduped - the queue note is
-		# cheap), the pump queue is RE-ORDERED to this
-		# window's arrival order (below), and the warmer is
-		# asked for the lead slice's extractions. At rest the
-		# shipped shape stands: the first few dispatch here,
-		# the rest as the pass pops them.
-		_art_pipe_dispatch_decodes(needy)
-		_stream_prioritize_pump_queue(needy)
-		_stream_ask_lead_warmer(stream_cols)
-	else:
-		var pre: Array[int] = []
-		for i: int in range(mini(6, needy.size())):
-			pre.append(needy[i])
-		_art_pipe_dispatch_decodes(pre)
+	var pre: Array[int] = []
+	for i: int in range(mini(6, needy.size())):
+		pre.append(needy[i])
+	_art_pipe_dispatch_decodes(pre)
 	if TextureFactory.probe_enabled:
 		TextureFactory.probe_note("pipe_enqueue_window", Time.get_ticks_usec() - probe_t)
 
@@ -4913,8 +4306,6 @@ func _art_pipe_dispatch_one(path: String) -> void:
 	var start_pump: bool = false
 	if not known:
 		_art_decode_pending[path] = true
-		if not _art_decode_target.has(path):
-			_art_decode_target[path] = _panel_face_px ## GRADFIX18: the pump face-prepares at the standing face size
 		_art_decode_queue.append(path)
 		if _art_decode_workers < ART_DECODE_WORKERS:
 			_art_decode_workers += 1
@@ -4922,23 +4313,19 @@ func _art_pipe_dispatch_one(path: String) -> void:
 			start_pump = true
 	_art_decode_mutex.unlock()
 	if not known:
-		_art_event("decode_queue", {"path": path, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
+		_art_event("decode_queue", {"path": path, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "nc_roll_dir": _nc_roll_dir})
 	if start_pump:
 		WorkerThreadPool.add_task(Callable(self, "_art_decode_pump"))
 
 
-## The background decode pump (a BOUNDED pool of worker
-## tasks, ART_DECODE_WORKERS): drains the decode queue -
-## load + downscale + face-prep into Images, handed back
-## through the mutex-guarded dictionaries. No texture
-## creation, no cache writes, no node access: everything a
-## pump task touches is either its own local Image or the
-## guarded dictionaries. GF16 ran ONE task (a task per face
-## - the unbounded swarm - fought the renderer for cores);
-## GRADFIX18's stream needs decode throughput above the
-## cruise's arrival rate on heavy art too, so the pool is
-## bounded at three - the swarm stays banned, the serial
-## cap goes.
+## The background decode pump (ONE worker task,
+## ART_DECODE_WORKERS = 1 - GF16's serial law, restored by
+## the OPTIMIZE round): drains the decode queue - load +
+## downscale into Images, handed back through the
+## mutex-guarded dictionaries. No texture creation, no cache
+## writes, no node access: everything a pump task touches is
+## either its own local Image or the guarded dictionaries.
+## (A task per face - the unbounded swarm - stays banned.)
 func _art_decode_pump() -> void:
 	while true:
 		if _art_stopping:
@@ -4947,12 +4334,6 @@ func _art_decode_pump() -> void:
 			_art_decode_pump_active = _art_decode_workers > 0
 			_art_decode_mutex.unlock()
 			return
-		# GRADFIX18: the pump no longer parks for a cruise -
-		# stream-ahead lives on decodes landing DURING travel
-		# (the GF17 park was the mechanism that left the wall
-		# ahead bare). It stays ONE decode at a time, and
-		# everything it does is worker-thread Image work: no
-		# texture creation, no node access, no frame contact.
 		_art_decode_mutex.lock()
 		if _art_decode_queue.is_empty():
 			_art_decode_workers -= 1
@@ -4964,25 +4345,11 @@ func _art_decode_pump() -> void:
 		_art_event("decode_start", {"path": path, "thread": OS.get_thread_caller_id(), "wall_ms": Time.get_ticks_msec()})
 		var tel_t0: int = Time.get_ticks_usec()
 		var img: Image = TextureFactory.decode_art_image(path)
-		# GRADFIX18: face-prep rides the same worker pass -
-		# cover-crop + resize to the face size here, so the
-		# main thread's stream apply is one texture creation.
-		var prepared: Image = null
-		var prep_ms: float = 0.0
-		if img != null:
-			_art_decode_mutex.lock()
-			var target: Vector2i = _art_decode_target.get(path, CARD_FACE_PX) as Vector2i
-			_art_decode_mutex.unlock()
-			var prep_t0: int = Time.get_ticks_usec()
-			prepared = TextureFactory.prepare_face_image(img, target)
-			prep_ms = float(Time.get_ticks_usec() - prep_t0) / 1000.0
-		_art_event("decode_end", {"path": path, "thread": OS.get_thread_caller_id(), "wall_ms": Time.get_ticks_msec(), "cost_ms": float(Time.get_ticks_usec() - tel_t0) / 1000.0, "ok": img != null, "prep_ms": prep_ms})
+		_art_event("decode_end", {"path": path, "thread": OS.get_thread_caller_id(), "wall_ms": Time.get_ticks_msec(), "cost_ms": float(Time.get_ticks_usec() - tel_t0) / 1000.0, "ok": img != null})
 		_art_decode_mutex.lock()
 		_art_decode_pending.erase(path)
 		if img != null:
 			_art_decoded_ready[path] = img
-			if prepared != null:
-				_art_prepared_ready[path] = prepared
 		else:
 			_art_decoded_failed[path] = true
 		_art_decode_mutex.unlock()
@@ -4990,19 +4357,24 @@ func _art_decode_pump() -> void:
 
 ## The staged pipeline pass: a deferred coroutine (started
 ## via call_deferred from _run_art_pipe, so it never runs
-## inside a _set_centre call). At rest it walks the queue
-## one full face per frame at most, applied by the same
-## _fill_one_face_sync the serial worker uses, with
+## inside a _set_centre call). It walks the queue one full
+## face per frame at most (APPLY_CAP_PER_FRAME), applied by
+## the same _fill_one_face_sync the serial worker uses, with
 ## _art_pipe_in_stage set so its decode branch consumes the
 ## staged result instead of paying a synchronous decode.
-## During travel (GRADFIX18) it takes the stream path
-## instead: budgeted direct applies of the pump's prepared
-## images, no renders (see _art_pipe_pass). A face whose
-## decode is still in flight is SKIPPED this pass - never
-## waited on - and re-queued behind the rest; the pass ends
-## only when the queue holds nothing but in-flight decodes,
-## and even then it polls on its own frames until they land
-## or the generation changes.
+## This is the GF17 shape the OPTIMIZE round restores: no
+## stream path, no travel budget apparatus - during travel
+## the rate halves (one face per two frames) exactly as
+## GF17 shipped, and the GF17 settle audit dresses whatever
+## travel left behind. A face whose decode is still in
+## flight is SKIPPED this pass - never waited on - and
+## re-queued behind the rest; the pass ends only when the
+## queue holds nothing but in-flight decodes, and even then
+## it polls on its own frames until they land or the
+## generation changes. The ONE exception is the
+## debug_opt_nc="streamahead" seam: on travel frames it
+## skips the yield entirely, draining applies inline as
+## GF18 did, so the apply-cap leg fails by name.
 func _run_art_pipe() -> void:
 	_art_pipe_busy = true
 	_window_fill_busy = true
@@ -5023,112 +4395,16 @@ func art_pipeline_idle() -> bool:
 func _art_pipe_pass() -> void:
 	var gen: int = _gen
 	var deferred: Array[int] = []
-	var stream_frame_t0: int = Time.get_ticks_usec() ## GRADFIX18: the current travel frame's stream-spend clock (reset at every budget yield and every frame the pass awaits)
 	while gen == _gen:
 		while not _art_pipe_queue.is_empty():
 			if gen != _gen:
 				break
-			if _costume_on:
-				# GRADFIX19: no face upgrade lands while the
-				# costume stands - applies park for the
-				# costume's duration, GF16-style (background
-				# decodes continue on their own threads; they
-				# were acquitted). The job is DISCARDED, not
-				# held: the card wears the costume, its upgrade
-				# is settle work (costume-off re-enqueues the
-				# window fill), and letting the queue drain
-				# keeps the pass's own bookkeeping honest -
-				# the drained handler fires and Main's warmer
-				# ask goes out on travel exactly as shipped.
-				_art_pipe_queue.pop_front()
-				continue
 			var idx: int = _art_pipe_queue.pop_front()
 			if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
 				continue
 			var cc: int = _grid_coord(idx).x
-			var sc: Vector2i = _stream_cols()
-			if cc < sc.x or cc > sc.y:
-				continue # the (stream) window left this card behind mid-pass
-			var travelling_now: bool = bool(_travel_dir_speed()[2])
-			if debug_gf18_nc == "nostream":
-				# The GF17 law, restored by the NC: while a
-				# held CRUISE stands the pipeline applies
-				# NOTHING (background decodes continue); the
-				# release settle gets three clear frames.
-				var was_cruise_parked: bool = false
-				var tel_park_msec: int = Time.get_ticks_msec()
-				while _cruise_dir != 0 and gen == _gen:
-					was_cruise_parked = true
-					await get_tree().process_frame
-				if was_cruise_parked:
-					_art_event("pipe_park", {"parked_ms": Time.get_ticks_msec() - tel_park_msec, "col": cc, "game": _visible_games[idx].game_id})
-				if was_cruise_parked and gen == _gen:
-					for grace_i: int in range(3):
-						await get_tree().process_frame
-				if gen != _gen:
-					break
-			elif travelling_now and not _tournament and debug_gf18_nc != "nobudget":
-				# GRADFIX18 STREAM PATH: no viewport render
-				# ever runs here - only work the budget
-				# affords (see the decomposition at
-				# STREAM_BUDGET_MS). A face already wearing
-				# its full render or its streamed face costs
-				# a key comparison; a cached full render
-				# applies as a texture swap; a landed
-				# prepared decode stream-applies; anything
-				# else is dispatched and deferred, never
-				# waited on. Travel input never waits on art.
-				if _face_is_stream_dressed(idx):
-					continue
-				var sgame: GameEntry = _visible_games[idx]
-				var memo_key: String = _face_key_for_memo(idx)
-				if str(_panel_face_key.get(sgame.game_id, "")) == memo_key:
-					continue # fully standing (a stale queue entry)
-				var spath: String = _face_path_memoized(sgame)
-				if spath == "":
-					continue # no ready art: its styled card is settle work, never travel work
-				if not _face_cache_get(memo_key).is_empty():
-					_art_pipe_in_stage = true
-					_art_apply_branch = ""
-					_art_apply_load_ms = 0.0
-					_art_apply_render_ms = 0.0
-					var ctel_t0: int = Time.get_ticks_usec()
-					await _fill_one_face_sync(idx, gen)
-					_art_pipe_in_stage = false
-					_art_event("apply", {
-						"game": sgame.game_id, "path": spath, "col": cc,
-						"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
-						"cruise_dir": _cruise_dir, "swing": _swing_active,
-						"cost_ms": float(Time.get_ticks_usec() - ctel_t0) / 1000.0,
-						"branch": _art_apply_branch, "load_ms": _art_apply_load_ms, "render_ms": _art_apply_render_ms,
-						"via": "stream-cache",
-					})
-					stream_frame_t0 = Time.get_ticks_usec()
-					continue
-				_art_decode_mutex.lock()
-				var prepared_ready: bool = _art_prepared_ready.has(spath)
-				var decode_failed: bool = _art_decoded_failed.has(spath)
-				_art_decode_mutex.unlock()
-				if decode_failed:
-					continue # the background decode produced nothing: the styled card lands at settle
-				if not prepared_ready:
-					_art_pipe_dispatch_one(spath)
-					deferred.append(idx)
-					continue
-				var s_t0: int = Time.get_ticks_usec()
-				_stream_apply_face(idx, gen)
-				var s_ms: float = float(Time.get_ticks_usec() - s_t0) / 1000.0
-				if s_ms > _stream_max_apply_ms:
-					_stream_max_apply_ms = s_ms
-				var frame_spend: float = float(Time.get_ticks_usec() - stream_frame_t0) / 1000.0
-				if frame_spend > _stream_max_frame_spend_ms:
-					_stream_max_frame_spend_ms = frame_spend
-				if frame_spend >= STREAM_BUDGET_MS:
-					_stream_budget_yields += 1
-					_art_event("stream_yield", {"col": cc, "spend_ms": frame_spend, "applied": _stream_applied_count, "cruise_dir": _cruise_dir})
-					await get_tree().process_frame
-					stream_frame_t0 = Time.get_ticks_usec()
-				continue
+			if cc < _panel_window_lo or cc > _panel_window_hi:
+				continue # the drawn window left this card behind mid-pass
 			var path: String = _face_path_memoized(_visible_games[idx])
 			if path != "" and not TextureFactory.art_decode_is_cached(path):
 				_art_decode_mutex.lock()
@@ -5144,12 +4420,14 @@ func _art_pipe_pass() -> void:
 			_art_apply_load_ms = 0.0
 			_art_apply_render_ms = 0.0
 			var tel_apply_t0: int = Time.get_ticks_usec()
+			var travelling_now: bool = _swing_active or page_slide_active()
 			await _fill_one_face_sync(idx, gen)
 			_art_pipe_in_stage = false
+			_note_apply(travelling_now) ## OPTIMIZE: the apply-cap account
 			_art_event("apply", {
 				"game": _visible_games[idx].game_id, "path": path, "col": cc,
 				"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
-				"cruise_dir": _cruise_dir, "swing": _swing_active,
+				"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
 				"cost_ms": float(Time.get_ticks_usec() - tel_apply_t0) / 1000.0,
 				"branch": _art_apply_branch, "load_ms": _art_apply_load_ms, "render_ms": _art_apply_render_ms,
 				"via": "pipe",
@@ -5160,22 +4438,13 @@ func _art_pipe_pass() -> void:
 				TextureFactory.probe_note("fill_col_%d" % cc, gf16_us)
 			if gen != _gen:
 				break
-			if debug_gf18_nc == "nobudget" and travelling_now:
-				# The NC's shape: the budget gate is GONE -
-				# full renders pile onto travel frames with
-				# no yield between faces, the pre-budget law.
-				stream_frame_t0 = Time.get_ticks_usec()
-				continue
-			await get_tree().process_frame # the budget: at most one staged face per frame, ever
-			stream_frame_t0 = Time.get_ticks_usec()
-			if _cruise_dir != 0 or _swing_active:
+			if debug_opt_nc == "streamahead" and travelling_now:
+				continue ## NC seam: no yield on travel frames - applies drain inline, past the cap
+			await get_tree().process_frame # the cap: at most APPLY_CAP_PER_FRAME staged faces per frame, ever
+			if travelling_now:
 				# Travelling: halve the application rate -
-				# one face per two frames. A cruise demands
-				# ~16 faces a second at full speed; even the
-				# halved rate supplies ~30, and the frames
-				# between applications are the drum's alone.
+				# one face per two frames (the GF17 shape).
 				await get_tree().process_frame
-				stream_frame_t0 = Time.get_ticks_usec()
 		if gen != _gen:
 			break
 		if deferred.is_empty():
@@ -5185,7 +4454,6 @@ func _art_pipe_pass() -> void:
 		_art_pipe_queue = deferred
 		deferred = []
 		await get_tree().process_frame
-		stream_frame_t0 = Time.get_ticks_usec()
 	_art_pipe_busy = false
 	_window_fill_busy = false
 	if gen == _gen:
@@ -5196,434 +4464,6 @@ func _art_pipe_pass() -> void:
 			_window_fill_dirty = false
 			_art_pipe_enqueue_window()
 			_run_art_pipe()
-
-
-## GRADFIX18 (item A): stream-apply ONE face - the travel
-## path's whole main-thread art act. Consumes the pump's
-## face-prepared image (the original decode stays staged for
-## the settle-time full render), creates its texture, swaps
-## it on, and stamps the interim |stream key with the art's
-## honest aspect: the face is DRESSED (real art, real
-## texture) from this frame, and owed only its composed
-## render (badges) at settle. No viewport render, no
-## readback, no power subject - those are settle work by
-## the decomposition at STREAM_BUDGET_MS. Synchronous: the
-## caller times it into the frame's stream budget.
-func _stream_apply_face(idx: int, gen: int) -> void:
-	if gen != _gen or idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
-		return
-	var game: GameEntry = _visible_games[idx]
-	var quad: ClickableQuad = _panels[idx]
-	var art_file: String = _face_path_for(game)
-	_face_path_memo[game.game_id] = art_file # every apply refreshes the filter memo from its fresh probe, like a fill
-	if art_file == "":
-		return
-	var fav: bool = _store != null and _store.is_favorite(game.game_id)
-	var pup: bool = game.is_pup_tagged()
-	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
-	if str(_panel_face_key.get(game.game_id, "")) == fkey:
-		return # the full render landed first - nothing to stream
-	_art_decode_mutex.lock()
-	var prepared: Image = _art_prepared_ready.get(art_file, null) as Image
-	var orig: Image = _art_decoded_ready.get(art_file, null) as Image
-	if prepared != null:
-		_art_prepared_ready.erase(art_file)
-	_art_decode_mutex.unlock()
-	if prepared == null:
-		return
-	var create_t0: int = Time.get_ticks_usec()
-	var tex: Texture2D = TextureFactory.art_texture_from_image(prepared)
-	var create_ms: float = float(Time.get_ticks_usec() - create_t0) / 1000.0
-	if tex == null or not _tex_is_real(tex):
-		return
-	var aspect: float = float(orig.get_width()) / float(orig.get_height()) if orig != null else float(prepared.get_width()) / float(prepared.get_height())
-	quad.set_texture(tex)
-	_panel_face_key[game.game_id] = fkey + STREAM_STAMP_SUFFIX
-	_panel_art_aspect[idx] = aspect
-	# The nameplate shows only over an art face (the fill's
-	# law): a streamed face IS an art face.
-	if idx < _panel_plates.size() and _panel_plates[idx] != null:
-		_panel_plates[idx].visible = true
-		_panel_labels[idx].visible = true
-		if OS.get_environment("PVLDS_GRAD_NC") == "noplate":
-			_panel_plates[idx].visible = false
-		if idx == _flip_idx and _flip_t >= 0.5:
-			_apply_flip_side(idx, true)
-	# The fill's power debt, cheap half only: a performance
-	# that skipped this card for wearing the placeholder
-	# retries now. The subject render itself is settle work.
-	if quad == _power_missed:
-		_power_missed = null
-		if _power_candidate == quad:
-			_power_candidate_t = POWER_SETTLE_SEC
-	if idx < _panel_pop.size() and _panel_pop[idx] > 0.0:
-		_panel_pop_applied[idx] = -1.0
-	_rederive_card_plate(idx, game)
-	_stream_applied_count += 1
-	_art_event("stream_apply", {
-		"game": game.game_id, "path": art_file, "col": _grid_coord(idx).x,
-		"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
-		"cruise_dir": _cruise_dir, "swing": _swing_active,
-		"cost_ms": create_ms, "create_ms": create_ms, "via": "stream",
-	})
-
-
-## GRADFIX18 harness surface: the stream's standing account
-## (the streamahead smoke judges the budget from this).
-func stream_stats() -> Dictionary:
-	return {
-		"applied": _stream_applied_count,
-		"yields": _stream_budget_yields,
-		"max_apply_ms": _stream_max_apply_ms,
-		"max_frame_spend_ms": _stream_max_frame_spend_ms,
-		"budget_ms": STREAM_BUDGET_MS,
-		"lead_cols": STREAM_LEAD_COLS,
-	}
-
-## GRADFIX19 (the travel costume): whether travel stands
-## this frame under the costume's gate - the SMOOTH driver
-## only, the drum actually travelling (a held cruise or a
-## swing), the no-costume NC off. STEPPED travel never
-## satisfies this: the stepped path stays byte-identical.
-func _costume_travel_wanted() -> bool:
-	if debug_gf19_nc == "no-costume":
-		return false
-	if _wall_driver_mode() != "smooth":
-		return false
-	return _cruise_dir != 0 or _swing_active
-
-
-func _costume_cache_put(key: String, tex: Texture2D) -> void:
-	if key == "" or tex == null:
-		return
-	if _costume_tex_cache.has(key):
-		_costume_cache_order.erase(key)
-	elif _costume_tex_cache.size() >= COSTUME_CACHE_MAX:
-		var old: String = str(_costume_cache_order.pop_front())
-		_costume_tex_cache.erase(old)
-	_costume_tex_cache[key] = tex
-	_costume_cache_order.append(key)
-
-
-func _costume_cache_get(key: String) -> Texture2D:
-	var tex: Texture2D = _costume_tex_cache.get(key, null) as Texture2D
-	if tex != null:
-		_costume_cache_order.erase(key)
-		_costume_cache_order.append(key)
-	return tex
-
-
-## Whether a panel may wear the costume: a card-mode panel
-## (never the Tournament state row, which wears a board
-## face, and never a board-mode panel).
-func _costume_panel_ok(idx: int) -> bool:
-	if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
-		return false
-	if _tournament and idx < _tournament_rows.size() \
-			and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
-		return false
-	var nodes: Dictionary = _panel_pool.get(_visible_games[idx].game_id, {}) as Dictionary
-	return str(nodes.get("mode", "card")) == "card"
-
-
-## Swap ONE panel into the costume. The dressed state is
-## saved first, verbatim (texture, art aspect, nameplate
-## visibility), so costume-off hands it back untouched -
-## _panel_face_key is never rewritten, so the dress stamps
-## stay honest underneath. Returns false when no styled
-## texture stands for the card yet: its pre-generation is
-## owed and the card joins the costume the frame it lands
-## (see _costume_pregen_tick). A card already wearing its
-## styled face (filled styled, never upgraded) IS the
-## costume state: its standing texture is adopted.
-func _costume_swap_in(idx: int) -> bool:
-	if _costume_saved.has(idx):
-		return true
-	if not _costume_panel_ok(idx):
-		return false
-	var key: String = _face_key_for_memo(idx)
-	var tex: Texture2D = _costume_cache_get(key)
-	if tex == null and idx < _panel_art_aspect.size() and _panel_art_aspect[idx] <= 0.0:
-		var standing: Texture2D = _panels[idx].current_texture()
-		if standing != null and standing != _placeholder_tex and _tex_is_real(standing):
-			tex = standing
-			_costume_cache_put(key, tex)
-	if tex == null:
-		return false
-	_costume_saved[idx] = {
-		"tex": _panels[idx].current_texture(),
-		"aspect": _panel_art_aspect[idx] if idx < _panel_art_aspect.size() else 0.0,
-		"plate_vis": _panel_plates[idx].visible if idx < _panel_plates.size() and _panel_plates[idx] != null else false,
-		"label_vis": _panel_labels[idx].visible if idx < _panel_labels.size() and _panel_labels[idx] != null else false,
-	}
-	_panels[idx].set_texture(tex)
-	if idx < _panel_art_aspect.size():
-		_panel_art_aspect[idx] = 0.0
-	if idx < _panel_plates.size() and _panel_plates[idx] != null:
-		_panel_plates[idx].visible = false
-	if idx < _panel_labels.size() and _panel_labels[idx] != null:
-		_panel_labels[idx].visible = false
-	_costume_total_swapped += 1
-	return true
-
-
-## Travel start: every card in the drawn window swaps to
-## its styled face. Texture swaps only - the styled faces
-## pre-generate at rest (see _costume_pregen_tick) - and the
-## swap's cost is measured and telemetered by name: a lumpy
-## costume change is this round's own named failure.
-func _costume_on_now() -> void:
-	_costume_on = true
-	_costume_on_count += 1
-	var t0: int = Time.get_ticks_usec()
-	var swapped: int = 0
-	if _panel_window_lo >= 0:
-		for idx: int in range(_panels.size()):
-			var c: int = _grid_coord(idx).x
-			if c < _panel_window_lo or c > _panel_window_hi:
-				continue
-			if _costume_swap_in(idx):
-				swapped += 1
-	var cost_ms: float = float(Time.get_ticks_usec() - t0) / 1000.0
-	_costume_last_on_cost_ms = cost_ms
-	_costume_last_swapped = swapped
-	_costume_max_on_cost_ms = maxf(_costume_max_on_cost_ms, cost_ms)
-	var fields: Dictionary = _telemetry_context()
-	fields["event"] = "costume_on"
-	fields["cost_ms"] = cost_ms
-	fields["swapped"] = swapped
-	fields["window_cards"] = _costume_saved.size()
-	_telemetry_record("costume", fields)
-
-
-## Travel end: hand every costumed card its dressed state
-## back, verbatim, and stamp the dress latency's zero. The
-## GF17 settle audit (armed by the same falling edge in
-## _update_pop, running after this) and the pipeline then
-## dress the window exactly as they shipped.
-func _costume_off_now() -> void:
-	if not _costume_on:
-		return
-	_costume_on = false
-	var t0: int = Time.get_ticks_usec()
-	var restored: int = 0
-	for idx_v: Variant in _costume_saved.keys():
-		var idx: int = int(idx_v)
-		var saved: Dictionary = _costume_saved[idx_v] as Dictionary
-		if idx < 0 or idx >= _panels.size():
-			continue
-		var tex: Texture2D = saved.get("tex", null) as Texture2D
-		if tex != null:
-			_panels[idx].set_texture(tex)
-		if idx < _panel_art_aspect.size():
-			_panel_art_aspect[idx] = float(saved.get("aspect", 0.0))
-		if idx < _panel_plates.size() and _panel_plates[idx] != null:
-			_panel_plates[idx].visible = bool(saved.get("plate_vis", false))
-		if idx < _panel_labels.size() and _panel_labels[idx] != null:
-			_panel_labels[idx].visible = bool(saved.get("label_vis", false))
-		restored += 1
-	_costume_saved.clear()
-	_costume_travel_end_msec = Time.get_ticks_msec()
-	var fields: Dictionary = _telemetry_context()
-	fields["event"] = "costume_off"
-	fields["cost_ms"] = float(Time.get_ticks_usec() - t0) / 1000.0
-	fields["restored"] = restored
-	_telemetry_record("costume", fields)
-	_request_window_fill()
-
-
-## Per-frame costume upkeep (from _update_pop, beside the
-## GF17 arming): engage on travel's rising edge under the
-## SMOOTH gate, swap in cards that enter the drawn window
-## mid-travel, release on the falling edge, and - at rest
-## after a travel - measure the dress latency the moment
-## the settle census first reads zero missing, telemetered
-## as costume_dress. The pre-generation tick runs last.
-func _costume_tick() -> void:
-	var wanted: bool = _costume_travel_wanted()
-	if wanted and not _costume_on:
-		_costume_on_now()
-	elif _costume_on and not wanted:
-		_costume_off_now()
-	if _costume_on and _panel_window_lo >= 0:
-		# Cards entering the window mid-travel wear the
-		# costume from their first drawn frame - the state
-		# is continuous, not a snapshot of the window at
-		# travel start.
-		for idx: int in range(_panels.size()):
-			if _costume_saved.has(idx):
-				continue
-			var c: int = _grid_coord(idx).x
-			if c < _panel_window_lo or c > _panel_window_hi:
-				continue
-			_costume_swap_in(idx)
-	if not _costume_on and _costume_travel_end_msec > 0:
-		# Dress-at-rest latency: the first check the settle
-		# census reads zero missing AND the pipeline has
-		# drained is the window fully dressed. Gives up after
-		# 120 s so a persistently failing face cannot make
-		# the census walk a standing cost forever.
-		if Time.get_ticks_msec() - _costume_travel_end_msec > 120000:
-			_costume_travel_end_msec = 0
-		elif Time.get_ticks_msec() - _costume_dress_check_msec >= 500:
-			# The census IS the completion definition (the
-			# audit is only the mechanism that gets there -
-			# gating the measurement on the audit's disarm
-			# made it a cadence race the first bench run
-			# lost). Throttled to twice a second: the census
-			# walks fresh probes for the whole window.
-			_costume_dress_check_msec = Time.get_ticks_msec()
-			var census: Dictionary = landing_census()
-			if int(census.get("total", 0)) > 0 and (census.get("missing", ["x"]) as Array).is_empty() \
-					and int(census.get("streamed", 0)) == 0 and art_pipeline_idle():
-				_costume_last_dress_ms = float(Time.get_ticks_msec() - _costume_travel_end_msec)
-				_costume_dress_count += 1
-				_costume_travel_end_msec = 0
-				var fields: Dictionary = _telemetry_context()
-				fields["event"] = "costume_dress"
-				fields["dress_ms"] = _costume_last_dress_ms
-				_telemetry_record("costume", fields)
-	_costume_pregen_tick()
-
-
-## Styled-face pre-generation, spread one render per frame:
-## the drawn window plus COSTUME_LEAD_COLS each side, at
-## rest and (for the lead ahead) during travel - a costume
-## render is the styled face's own render, never an art
-## upgrade, and keeping the lead warm is what lets entering
-## cards wear the costume from their first drawn frame.
-## During travel the drawn window goes first (a card
-## showing art mid-travel is the defect this round exists
-## to remove); at rest the order is centre-out.
-func _costume_pregen_tick() -> void:
-	if _costume_pregen_busy or _panel_window_lo < 0 or _panels.is_empty():
-		return
-	if _tournament:
-		return # board faces and state rows are not costume work; library travel is the costume's home
-	var lo: int = maxi(0, _panel_window_lo - COSTUME_LEAD_COLS)
-	var hi: int = mini(_columns - 1, _panel_window_hi + COSTUME_LEAD_COLS)
-	var order: Array[int] = []
-	if _costume_on:
-		order = _stream_fill_order(lo, hi)
-	else:
-		order = _fill_order_for(lo, hi)
-	for idx: int in order:
-		if not _costume_panel_ok(idx):
-			continue
-		if _costume_saved.has(idx):
-			continue
-		var key: String = _face_key_for_memo(idx)
-		if _costume_cache_get(key) != null:
-			continue
-		if idx < _panel_art_aspect.size() and _panel_art_aspect[idx] <= 0.0:
-			var standing: Texture2D = _panels[idx].current_texture()
-			if standing != null and standing != _placeholder_tex and _tex_is_real(standing):
-				_costume_cache_put(key, standing)
-				continue
-		_costume_pregen_busy = true
-		_costume_pregen_one(idx, key)
-		return
-
-
-func _costume_pregen_one(idx: int, key: String) -> void:
-	var game: GameEntry = _visible_games[idx]
-	var gen: int = _gen
-	var tex: Texture2D = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), _panel_face_px)
-	_costume_pregen_busy = false
-	if gen != _gen or tex == null or not _tex_is_real(tex):
-		return
-	_costume_cache_put(key, tex)
-	# A card mid-travel whose styled face just landed joins
-	# the costume now (its first costumed frame).
-	if _costume_on:
-		_costume_swap_in(idx)
-
-
-## GRADFIX19 harness surface: the costume's standing
-## account (the costume smoke judges from this).
-func costume_stats() -> Dictionary:
-	return {
-		"on": _costume_on,
-		"engagements": _costume_on_count,
-		"last_on_cost_ms": _costume_last_on_cost_ms,
-		"max_on_cost_ms": _costume_max_on_cost_ms,
-		"last_swapped": _costume_last_swapped,
-		"total_swapped": _costume_total_swapped,
-		"wearing": _costume_saved.size(),
-		"cache": _costume_tex_cache.size(),
-		"last_dress_ms": _costume_last_dress_ms,
-		"dress_count": _costume_dress_count,
-	}
-
-
-## GRADFIX19 harness surface: per-panel costume state for
-## the standing window - which cards wear the costume right
-## now, and whether the face they present is the styled
-## state (real texture, no art aspect, nameplate hidden).
-func costume_window_state() -> Array:
-	var out: Array = []
-	if _panel_window_lo < 0:
-		return out
-	for idx: int in range(_panels.size()):
-		if idx >= _visible_games.size():
-			continue
-		var cc: int = _grid_coord(idx).x
-		if cc < _panel_window_lo or cc > _panel_window_hi:
-			continue
-		if _tournament and idx < _tournament_rows.size() \
-				and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
-			continue
-		var tex: Texture2D = _panels[idx].current_texture()
-		out.append({
-			"idx": idx,
-			"game_id": _visible_games[idx].game_id,
-			"col": cc,
-			"wearing": _costume_saved.has(idx),
-			"tex_real": tex != null and _tex_is_real(tex),
-			"is_placeholder": tex != null and tex == _placeholder_tex,
-			"from_art": _panel_art_aspect[idx] > 0.0 if idx < _panel_art_aspect.size() else false,
-			"plate_vis": _panel_plates[idx].visible if idx < _panel_plates.size() and _panel_plates[idx] != null else false,
-			"label_vis": _panel_labels[idx].visible if idx < _panel_labels.size() and _panel_labels[idx] != null else false,
-		})
-	return out
-
-
-## GRADFIX19 harness surface: how many of the drawn
-## window's cards could wear the costume right now (styled
-## texture cached, or already standing styled) - the
-## costume smoke waits for full coverage before cruising,
-## the regime the field hits because pre-generation runs
-## from the moment the wall seats.
-func costume_window_coverage() -> Dictionary:
-	if _panel_window_lo < 0:
-		return {"total": 0, "covered": 0}
-	return costume_coverage_for(_panel_window_lo, _panel_window_hi)
-
-
-## GRADFIX19 harness surface: costume coverage over an
-## explicit column span (the costume smoke waits for the
-## measured cruise's whole entry span to stand ready).
-func costume_coverage_for(lo: int, hi: int) -> Dictionary:
-	var total: int = 0
-	var covered: int = 0
-	if _panel_window_lo < 0:
-		return {"total": 0, "covered": 0}
-	for idx: int in range(_panels.size()):
-		if idx >= _visible_games.size():
-			continue
-		var cc: int = _grid_coord(idx).x
-		if cc < lo or cc > hi:
-			continue
-		if not _costume_panel_ok(idx):
-			continue
-		total += 1
-		if _costume_cache_get(_face_key_for_memo(idx)) != null:
-			covered += 1
-		elif idx < _panel_art_aspect.size() and _panel_art_aspect[idx] <= 0.0:
-			var standing: Texture2D = _panels[idx].current_texture()
-			if standing != null and standing != _placeholder_tex and _tex_is_real(standing):
-				covered += 1
-	return {"total": total, "covered": covered}
 
 
 ## The fill path's face read (GRADFIX6 items 2+3): the
@@ -5699,7 +4539,8 @@ func _fill_one_face(idx: int, gen: int) -> void:
 	if idx >= 0 and idx < _visible_games.size():
 		_art_event("fill_direct", {
 			"game": _visible_games[idx].game_id, "col": _grid_coord(idx).x,
-			"cruise_dir": _cruise_dir, "swing": _swing_active,
+			"gait": "stepped",
+		"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
 		})
 	if idx < 0 or idx >= _panels.size():
 		return
@@ -5818,13 +4659,15 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 			tex = null
 	if tex == null:
 		return
-	if not from_art and _tex_is_real(tex):
-		# GRADFIX19: every styled render that lands is also
-		# the costume's texture for this face key - captured
-		# here so travel start swaps a standing texture
-		# instead of paying a render (see the costume block).
-		_costume_cache_put(fkey, tex)
-	quad.set_texture(tex)
+	_sc_face_assigns += 1 ## OPTIMIZE standing-cost audit (observation only)
+	if quad.current_texture() == tex:
+		# OPTIMIZE standing-cost cut: a no-op face swap (the
+		# new texture IS the standing one) is counted and
+		# SKIPPED - the assignment and its renderer write
+		# never happen.
+		_sc_noop_face_swaps += 1
+	else:
+		quad.set_texture(tex)
 	_panel_face_key[game.game_id] = fkey
 	# The nameplate shows only over an art face: a generated
 	# title card carries its own title, and a title under a
@@ -5863,6 +4706,7 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 		# face streamed in): force the pop transform to
 		# re-apply next frame.
 		_panel_pop_applied[idx] = -1.0
+		_pop_awake = true ## OPTIMIZE standing-cost cut: a face landing under a popped card wakes the pop loop
 	# GRADFIX13 (item 2): this tail used to dress the card's
 	# Launch plinth (LAUNCH, or FAILED for the last failed
 	# game - the two cached button faces). The plinth is
@@ -5946,8 +4790,6 @@ func refresh_shot_faces(game: GameEntry) -> void:
 ## for a pass; the worker's key checks make the pass cheap
 ## for every honest face.
 func _heal_panel_faces() -> void:
-	if _costume_on:
-		return # GRADFIX19: the heal reads faces against their dress stamps; under the costume every window face wears the styled state on purpose - the heal resumes at costume-off, on the travel's falling edge below
 	if _panel_window_lo < 0 or _panels.is_empty():
 		return
 	var now: int = Time.get_ticks_msec()
@@ -6025,7 +4867,8 @@ func _heal_panel_faces() -> void:
 	if needs_pass or tel_heal_ms >= 8.0:
 		_art_event("heal", {
 			"col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
-			"cruise_dir": _cruise_dir, "swing": _swing_active,
+			"gait": "stepped",
+		"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
 			"needs_pass": needs_pass, "cost_ms": tel_heal_ms,
 			"mismatch": tel_mismatch, "unreal": tel_unreal,
 		})
@@ -6061,8 +4904,6 @@ func _heal_panel_faces() -> void:
 const GF17_AUDIT_MAX_RUNS: int = 40
 
 func _guarantee_audit() -> void:
-	if _costume_on:
-		return # GRADFIX19: the audit is dress-at-rest work; the costume hands control back at travel end (see _update_pop) and the audit then runs exactly as GF17/GF18 shipped it
 	if debug_gf17_nc == "noguarantee":
 		_gf17_audit_armed = false
 		return
@@ -6125,6 +4966,116 @@ func _guarantee_audit() -> void:
 	if missing == 0 or not actionable or _gf17_audit_runs >= GF17_AUDIT_MAX_RUNS:
 		_gf17_audit_armed = false
 		_gf17_audit_runs = 0
+		_on_settle_audit_complete(missing)
+
+
+## OPTIMIZE round: a settle audit completed (census zero, or
+## its budget spent). Two things land here, in order: the
+## settle_audit telemetry record - dress_ms is the audit's
+## own dress latency, travel end -> census zero (the measure
+## GF19 kept as costume_dress; -1 when the budget spent with
+## faces still missing) - carrying the residency the settle
+## landed under; and, on a clean census only, the eviction
+## pass. Under the debug_opt_nc="evictvis" seam the eviction
+## runs even here with its window guard dropped (see
+## _evict_after_settle), so the landing census that follows
+## in the same settle reads the window's faces missing.
+func _on_settle_audit_complete(missing: int) -> void:
+	var dress_ms: float = -1.0
+	if missing == 0 and _settle_travel_end_msec > 0:
+		dress_ms = float(Time.get_ticks_msec() - _settle_travel_end_msec)
+	var gauge: Dictionary = residency_stats()
+	var fields: Dictionary = _telemetry_context()
+	fields["event"] = "settle_audit"
+	fields["dress_ms"] = dress_ms
+	fields["missing"] = missing
+	fields["resident_faces"] = int(gauge["resident_faces"])
+	fields["resident_bytes"] = int(gauge["resident_bytes"])
+	_telemetry_record("settle_audit", fields)
+	_settle_travel_end_msec = 0
+	if missing == 0 or debug_opt_nc == "evictvis":
+		_evict_after_settle()
+
+
+## OPTIMIZE round (item 6): the eviction pass. Resident face
+## textures for games outside the drawn window +/-
+## EVICT_MARGIN_COLS columns are dropped from the face cache;
+## a non-window panel still wearing an evicted face has its
+## texture and stamp cleared too, so the evicted state reads
+## as missing to every later probe - the settle guarantee
+## re-fills any evicted face that becomes visible again (its
+## fresh-probe sweep sees stamp != want, exactly the heal's
+## first branch). NEVER evicted: drawn-window faces, the
+## focused card, a flipped/detail card in use (the standing
+## flip's card - the detail view renders its own faces, so
+## the flip is the in-use surface here), and tournament
+## board faces (they live in their own cache, untouched by
+## this pass). The RESIDENT_FACES_CAP LRU in _face_cache_put
+## is the second half of the law. The debug_opt_nc="evictvis"
+## seam drops the visible-window guard: window faces evict
+## too (their panels are cleared the same way), so the
+## landing census leg fails by name.
+func _evict_after_settle() -> void:
+	if _panel_window_lo < 0 or _columns <= 0:
+		return
+	var nc_vis: bool = debug_opt_nc == "evictvis"
+	var keep_lo: int = maxi(0, _panel_window_lo - EVICT_MARGIN_COLS)
+	var keep_hi: int = mini(_columns - 1, _panel_window_hi + EVICT_MARGIN_COLS)
+	var keep_games: Dictionary = {}
+	if not nc_vis:
+		for idx: int in range(_panels.size()):
+			if idx >= _visible_games.size():
+				continue
+			var cc: int = _grid_coord(idx).x
+			if cc >= keep_lo and cc <= keep_hi:
+				keep_games[_visible_games[idx].game_id] = true
+	# The focused card and the flipped card keep their faces
+	# whatever column they stand on.
+	if _focused != null:
+		var fidx: int = _panels.find(_focused)
+		if fidx >= 0 and fidx < _visible_games.size():
+			keep_games[_visible_games[fidx].game_id] = true
+	if _flip_idx >= 0 and _flip_idx < _visible_games.size():
+		keep_games[_visible_games[_flip_idx].game_id] = true
+	var evicted: int = 0
+	for key: String in _face_cache_order.duplicate():
+		var gid: String = key.split("|")[0]
+		if keep_games.has(gid):
+			continue
+		_face_cache_evict(key)
+		evicted += 1
+	_evicted_total += evicted
+	# Panels outside the keep span that still wear a face:
+	# clear them (texture to the placeholder, stamp erased)
+	# so the eviction is honest on the panels too. Under the
+	# NC the span is the whole shelf, window included.
+	for idx: int in range(_panels.size()):
+		if idx >= _visible_games.size():
+			continue
+		var cc2: int = _grid_coord(idx).x
+		var in_keep: bool = cc2 >= keep_lo and cc2 <= keep_hi
+		if nc_vis:
+			in_keep = false
+		if in_keep:
+			continue
+		var game: GameEntry = _visible_games[idx]
+		if keep_games.has(game.game_id):
+			continue
+		if str(_panel_face_key.get(game.game_id, "")) == "":
+			continue
+		_panel_face_key.erase(game.game_id)
+		_face_path_memo.erase(game.game_id)
+		if _panels[idx].current_texture() != _placeholder_tex:
+			_panels[idx].set_texture(_placeholder_tex)
+			if idx < _panel_art_aspect.size():
+				_panel_art_aspect[idx] = 0.0
+	var gauge2: Dictionary = residency_stats()
+	var fields: Dictionary = _telemetry_context()
+	fields["event"] = "evict"
+	fields["evicted_faces"] = evicted
+	fields["resident_faces"] = int(gauge2["resident_faces"])
+	fields["resident_bytes"] = int(gauge2["resident_bytes"])
+	_telemetry_record("evict", fields)
 
 
 ## Per-panel face state for the smokes (the sweep driver's
@@ -6148,8 +5099,7 @@ func face_state() -> Array:
 			"title": _visible_games[idx].title,
 			"col": cc,
 			"key_stamped": _panel_face_key.has(_visible_games[idx].game_id),
-			"costume": _costume_saved.has(idx), ## GRADFIX19: this face currently wears the travel costume
-			"is_stream": str(_panel_face_key.get(_visible_games[idx].game_id, "")).ends_with(STREAM_STAMP_SUFFIX),
+			"nc_blanked": _nc_costume_saved.has(idx), ## debug_opt_nc="costume" seam only: this face currently wears the blank swap
 			"tex_w": tex.get_width() if tex != null else 0,
 			"is_placeholder": tex != null and tex == _placeholder_tex,
 			"is_unreal": tex == null or tex == _placeholder_tex or not _tex_is_real(tex),
@@ -6171,7 +5121,7 @@ func face_state() -> Array:
 func landing_census() -> Dictionary:
 	var missing: Array[String] = []
 	var total: int = 0
-	var streamed: int = 0 ## GRADFIX18: faces standing dressed on their streamed interim (counted landed, named here)
+	var streamed: int = 0 ## OPTIMIZE: stream-ahead is deleted; the key stands at 0 for census readers
 	if _panel_window_lo < 0:
 		return {"total": 0, "missing": missing, "streamed": 0}
 	for idx: int in range(_panels.size()):
@@ -6191,12 +5141,6 @@ func landing_census() -> Dictionary:
 		var stamped: String = str(_panel_face_key.get(game.game_id, ""))
 		var art_ready: bool = fresh_key.split("|").size() > 1 and fresh_key.split("|")[1] != ""
 		var from_art: bool = idx < _panel_art_aspect.size() and _panel_art_aspect[idx] > 0.0
-		# GRADFIX18: a streamed face (fresh key + |stream)
-		# wearing real art IS landed for this census - its
-		# composed render is settle work, not missing art.
-		if stamped == fresh_key + STREAM_STAMP_SUFFIX and tex != null and tex != _placeholder_tex and _tex_is_real(tex) and from_art:
-			streamed += 1
-			continue
 		if tex == null or tex == _placeholder_tex or not _tex_is_real(tex):
 			missing.append(game.title)
 		elif stamped != fresh_key:
@@ -6712,7 +5656,7 @@ func _refresh_quad_states() -> void:
 	# column) - a slow one names itself.
 	var tel_q_ms: float = float(Time.get_ticks_usec() - tel_q_t0) / 1000.0
 	if tel_q_ms >= 4.0:
-		_art_event("seg", {"seg": "quad_states", "cost_ms": tel_q_ms, "quads": all.size(), "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
+		_art_event("seg", {"seg": "quad_states", "cost_ms": tel_q_ms, "quads": all.size(), "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "nc_roll_dir": _nc_roll_dir})
 
 
 func _on_hover_changed(_quad: ClickableQuad) -> void:
@@ -6786,13 +5730,10 @@ func _follow_centre() -> void:
 			_boot_guard = false
 		if _boot_guard or released_by_seat:
 			hovered = null
-	if _cruise_dir != 0:
-		# While a held-stick cruise stands (GRADFIX13 item
-		# 3), the cruise's own follow owns the centre: a
-		# held stick is a continuous deliberate point at the
-		# wall, and the pointer's resting hover must not
-		# fight the centre column to column. The follow
-		# resumes the frame the cruise ends.
+	if _nc_roll_dir != 0:
+		# While the NC seam's roll stands (debug only), its
+		# own drive owns the centre; the follow resumes the
+		# frame the roll ends.
 		return
 	var p: ClickableQuad = _panel_for(hovered)
 	if p == null:
@@ -6884,8 +5825,29 @@ func _update_pop(delta: float) -> void:
 	var ex: float = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
 	while _panel_pop_vel.size() < _panels.size():
 		_panel_pop_vel.append(0.0)
-	for i: int in range(_panels.size()):
+	# OPTIMIZE standing-cost cut: the spring loop SLEEPs at
+	# rest. Pre-cut measurement (scratch bench, same driver
+	# both times): the loop visited every panel every frame
+	# at rest - 700 visits over a 6 s rest window on a
+	# 10-card wall, ~116/s, scaling with wall size - doing
+	# spring math whose writes its own applied-guard then
+	# suppressed. The loop now runs only while awake: a pop
+	# target change wakes it, a face landing under a popped
+	# card wakes it (see _fill_one_face_sync), a rebuild
+	# wakes it, and it puts itself back to sleep the frame
+	# every panel stands settled at its target. The flip,
+	# the follow and the heals below run regardless - they
+	# are not the pop loop.
+	if target != _pop_last_target:
+		_pop_awake = true
+	var sc_at_rest: bool = not _swing_active and _power_phase != 1 and not _art_pipe_busy ## OPTIMIZE standing-cost audit
+	var sc_all_settled: bool = true
+	for i: int in range(_panels.size() if _pop_awake else 0):
+		if sc_at_rest:
+			_sc_pop_visits_rest += 1 ## OPTIMIZE standing-cost audit (observation only)
 		var want: float = 1.0 if _panels[i] == target else 0.0
+		if absf(_panel_pop[i] - want) >= 0.004 or absf(_panel_pop_vel[i]) >= 0.08:
+			sc_all_settled = false
 		var change: float = _panel_pop[i] - want
 		var temp: float = (_panel_pop_vel[i] + omega * change) * pdelta
 		_panel_pop_vel[i] = (_panel_pop_vel[i] - omega * temp) * ex
@@ -6915,25 +5877,30 @@ func _update_pop(delta: float) -> void:
 			if bnode != null and i < _board_base_pos.size():
 				bnode.position = (_board_base_pos[i] as Vector3) \
 					+ (_board_pop_dir[i] as Vector3) * (POP_OUT_DISTANCE * applied)
+	if _pop_awake and sc_all_settled:
+		_pop_awake = false
+		_pop_last_target = target
 	_update_flip(delta)
 	# GRADFIX17 (item 1): the landing guarantee's arming - a
-	# travel's falling edge (cruise, swing or page slide stood
-	# last frame, stands no longer) owes the standing window
-	# a settle audit. The audit runs BEFORE the heal so its
+	# travel's falling edge (swing or page slide stood last
+	# frame, stands no longer) owes the standing window a
+	# settle audit. The audit runs BEFORE the heal so its
 	# memo corrections ride the heal's own pass request too.
-	var gf17_travelling: bool = _cruise_dir != 0 or _swing_active or page_slide_active()
+	var gf17_travelling: bool = _swing_active or page_slide_active()
 	if gf17_travelling:
 		_gf17_was_travelling = true
 	elif _gf17_was_travelling:
 		_gf17_was_travelling = false
 		_gf17_audit_armed = true
 		_gf17_audit_runs = 0
-	# GRADFIX19: the travel costume's beat - it engages and
-	# releases on the same travel edges the guarantee arms
-	# on, and it runs BEFORE the audit below so a falling
-	# edge hands the dressed state back first and the audit
-	# then runs exactly as shipped.
-	_costume_tick()
+		if _settle_travel_end_msec == 0:
+			_settle_travel_end_msec = Time.get_ticks_msec() ## OPTIMIZE: the settle audit's dress_ms zero
+	# The NC costume seam's beat (debug only; a no-op in
+	# production): it engages and releases on the same travel
+	# edges the guarantee arms on, and it runs BEFORE the
+	# audit below so a falling edge hands the blanked faces
+	# back first and the audit then runs on dressed faces.
+	_nc_costume_tick()
 	if _gf17_audit_armed:
 		_guarantee_audit()
 	_heal_panel_faces()
@@ -6944,7 +5911,7 @@ func _update_pop(delta: float) -> void:
 	# segments where they are separately convicted).
 	var tel_pop_ms: float = float(Time.get_ticks_usec() - tel_pop_t0) / 1000.0
 	if tel_pop_ms >= 8.0:
-		_art_event("seg", {"seg": "update_pop", "cost_ms": tel_pop_ms, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
+		_art_event("seg", {"seg": "update_pop", "cost_ms": tel_pop_ms, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "nc_roll_dir": _nc_roll_dir})
 
 
 ## The machined strip's lift (GRADFIX14 item 1), driven
@@ -7476,7 +6443,7 @@ func _activate(quad: ClickableQuad) -> void:
 				_request_setup_panel_render(true)
 			"setup_setting_wall_motion":
 				quad.pulse()
-				set_wall_motion_mode("stepped" if _wall_motion_mode == "smooth" else "smooth")
+				set_wall_motion_mode("stepped") ## OPTIMIZE: STEPPED is the only gait - the button stands as the panel's label, its press re-affirms the one mode
 				display_settings_changed.emit()
 				_request_setup_panel_render(true)
 		return
@@ -9049,6 +8016,32 @@ func alpha_write_count() -> int:
 	return _alpha_write_count
 
 
+## OPTIMIZE round (item 5): the standing-cost audit's account.
+## Totals since boot plus per-second rates over the room's
+## accumulated at-rest time (see the counter block at
+## _alpha_write_count). Rates read 0.0 until a rest stretch
+## has accumulated.
+func standing_cost_stats() -> Dictionary:
+	var rest_s: float = float(_sc_rest_msec) / 1000.0
+	if _sc_rest_since > 0:
+		rest_s += float(Time.get_ticks_msec() - _sc_rest_since) / 1000.0
+	var denom: float = maxf(rest_s, 0.001)
+	return {
+		"mimic_evals_total": _sc_mimic_evals,
+		"mimic_evals_per_sec_at_rest": float(_sc_mimic_evals) / denom,
+		"label_reassign_total": _sc_label_reassign,
+		"label_reassign_per_sec_at_rest": float(_sc_label_reassign) / denom,
+		"alpha_writes_total": _alpha_write_count,
+		"alpha_writes_per_sec_at_rest": float(_alpha_write_count) / denom,
+		"face_assigns_total": _sc_face_assigns,
+		"noop_face_swaps_total": _sc_noop_face_swaps,
+		"noop_face_swaps_per_sec_at_rest": float(_sc_noop_face_swaps) / denom,
+		"pop_visits_at_rest_total": _sc_pop_visits_rest,
+		"pop_visits_per_sec_at_rest": float(_sc_pop_visits_rest) / denom,
+		"rest_seconds": rest_s,
+	}
+
+
 ## Grow an alpha cache to index i with the never-written
 ## stamp (-1: every real alpha is >= 0, so the first pass
 ## always writes).
@@ -9582,6 +8575,7 @@ func _build_power_overlay(panel: ClickableQuad, face_tex: Texture2D, on_tex: Tex
 func _apply_power() -> void:
 	if _power_mat == null:
 		return
+	_sc_mimic_evals += 1 ## OPTIMIZE standing-cost audit (observation only)
 	_power_mat.set_shader_parameter("power", mimic_power_at(_power_t))
 	_power_mat.set_shader_parameter("sweep", clampf(_power_t / MIMIC_SWEEP_SEC, 0.0, 1.0))
 	if _power_pair:
@@ -9871,12 +8865,6 @@ func swing_active() -> bool:
 	return _swing_active
 
 
-## Whether a held-stick cruise stands (GRADFIX13 item 3 -
-## the motion smoke's held-cruise leg reads it).
-func cruise_active() -> bool:
-	return _cruise_dir != 0
-
-
 ## The drum's standing swing velocity, degrees per second
 ## (the motion traces read it beside the yaw so a velocity
 ## spike and an external yaw jump are distinguishable).
@@ -9996,7 +8984,7 @@ func _process(delta: float) -> void:
 	# drum's motion state BEFORE this frame's swing update -
 	# the frame record below reads it against the after.
 	_telemetry_start_if_needed()
-	var telemetry_motion_was_active: bool = _swing_active or _cruise_dir != 0 or absf(_swing_vel) > 0.0001
+	var telemetry_motion_was_active: bool = _swing_active or _nc_roll_dir != 0 or absf(_swing_vel) > 0.0001
 	var telemetry_applied_yaw_before: float = _wall.rotation.y if _wall != null else _drum_yaw
 	if _marquee_up:
 		_update_marquee(delta)
@@ -10020,7 +9008,7 @@ func _process(delta: float) -> void:
 	# the frame began or still is when its swing update has
 	# run - target, actual and applied yaw, velocity, and
 	# the driver state that produced them.
-	if _scroll_telemetry_started and visible and (telemetry_motion_was_active or _swing_active or _cruise_dir != 0 \
+	if _scroll_telemetry_started and visible and (telemetry_motion_was_active or _swing_active or _nc_roll_dir != 0 \
 			or absf(_swing_vel) > 0.0001 or absf((_wall.rotation.y if _wall != null else _drum_yaw) - telemetry_applied_yaw_before) > 0.0000001):
 		var frame_fields: Dictionary = _telemetry_context()
 		frame_fields["engine_frame"] = Engine.get_process_frames()
@@ -10029,7 +9017,6 @@ func _process(delta: float) -> void:
 		frame_fields["swing_journey"] = _swing_journey
 		frame_fields["swing_cols"] = _swing_cols
 		frame_fields["swing_duration_s"] = _swing_duration
-		frame_fields["cruise_cap_deg_s"] = rad_to_deg(_swing_cruise_rad)
 		_telemetry_record("frame", frame_fields)
 	# GRADFIX17 telemetry: the motion half of this frame's
 	# room work (background, plates, pop, swing) as one
@@ -10038,11 +9025,21 @@ func _process(delta: float) -> void:
 	# address.
 	var tel_proc_a_ms: float = float(Time.get_ticks_usec() - tel_proc_t0) / 1000.0
 	if tel_proc_a_ms >= 10.0:
-		_art_event("seg", {"seg": "process_motion", "cost_ms": tel_proc_a_ms, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
+		_art_event("seg", {"seg": "process_motion", "cost_ms": tel_proc_a_ms, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "nc_roll_dir": _nc_roll_dir})
+	# OPTIMIZE standing-cost audit: accumulate at-rest time
+	# (observation only). Rest = no swing, no pop motion in
+	# flight, no power cascade, no pipeline pass.
+	var sc_resting: bool = not _swing_active and _nc_roll_dir == 0 and _power_phase != 1 and not _art_pipe_busy
+	if sc_resting:
+		if _sc_rest_since == 0:
+			_sc_rest_since = Time.get_ticks_msec()
+	elif _sc_rest_since > 0:
+		_sc_rest_msec += Time.get_ticks_msec() - _sc_rest_since
+		_sc_rest_since = 0
 	_update_power(delta)
 	var deaf: bool = _launching_game_id != ""
 	var telemetry_cooldown_before: float = _joy_cooldown ## scroll telemetry: the poll's before (read-only)
-	var telemetry_cruise_before_poll: int = _cruise_dir ## scroll telemetry: the cruise state as this poll began (read-only)
+	var telemetry_roll_before_poll: int = _nc_roll_dir ## scroll telemetry: the NC roll state as this poll began (read-only)
 	_joy_cooldown = maxf(0.0, _joy_cooldown - delta)
 	var ax: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)
 	var ay: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_Y)
@@ -10067,31 +9064,30 @@ func _process(delta: float) -> void:
 			dir = Vector2(0.0, -1.0)
 		elif Input.is_joy_button_pressed(0, JOY_BUTTON_DPAD_DOWN):
 			dir = Vector2(0.0, 1.0)
-	# The held-stick cruise's context law (GRADFIX13 item
-	# 3): a cruise stands only while its world stands - the
-	# plain library wall, no panel or placard up, no load
-	# wait, a card focused. Anything else ends it: settle at
-	# the nearest column, unless the load wait owns the wall
-	# (the launch seats the drum itself, so no settle is
-	# seated here).
-	if _cruise_dir != 0 and (_mode != "wall" or _tournament or _placard_up or _setup_panel_up \
+	# The NC roll's context law (debug_opt_nc="smoothcruise"
+	# only; production never rolls): the roll stands only
+	# while its world stands - the plain library wall, no
+	# panel or placard up, no load wait, a card focused.
+	# Anything else ends it, and the stepped landing settles
+	# the drum at the roll's standing target.
+	if _nc_roll_dir != 0 and (_mode != "wall" or _tournament or _placard_up or _setup_panel_up \
 			or deaf or _focused == null or _panels.find(_focused) < 0):
-		_stop_cruise(not deaf, "cruise_context_lost")
-	# The hold bookkeeping (GRADFIX13 item 3 - see the
-	# cruise block above _cruise_wanted for the conviction):
-	# the poll counts the discrete steps of ONE continuous
-	# hold. A release ends the hold (and settles a standing
-	# cruise at the nearest column); a direction change ends
-	# it too (and ends a cruise WITHOUT a settle stop - the
-	# fresh step below retargets mid-travel, the prime law).
+		_nc_roll_dir = 0
+	# The hold bookkeeping: the poll counts the discrete
+	# steps of ONE continuous hold (same direction, stick
+	# never released). OPTIMIZE: every step of a hold is a
+	# discrete _move_focus step at the repeat cadence - a
+	# hold is a train of steps, and no step ever arms a
+	# cruise. (The count survives for ONE reason: the
+	# debug_opt_nc="smoothcruise" seam arms its roll on the
+	# hold's second same-direction step.) A release or a
+	# direction change ends the hold and the seam's roll.
 	if dir == Vector2.ZERO:
-		if _cruise_dir != 0:
-			_stop_cruise(true, "stick_released")
+		_nc_roll_dir = 0
 		_joy_hold_dir = Vector2.ZERO
 		_joy_hold_steps = 0
 	elif dir != _joy_hold_dir:
-		if _cruise_dir != 0:
-			_stop_cruise(false, "stick_direction_changed")
+		_nc_roll_dir = 0
 		_joy_hold_dir = dir
 		_joy_hold_steps = 0
 	# Scroll telemetry (observation only): this poll's step
@@ -10105,19 +9101,24 @@ func _process(delta: float) -> void:
 	var telemetry_cooldown_at_poll: float = _joy_cooldown
 	if dir != Vector2.ZERO and _joy_cooldown <= 0.0:
 		if not deaf:
-			if _cruise_dir != 0:
+			if _nc_roll_dir != 0:
 				telemetry_decision = "none_discrete_step"
-				telemetry_decision_source = "standing_cruise"
-				telemetry_decision_reason = "cruise_owns_hold_travel"
-				pass ## the cruise IS this hold's travel: no discrete step fires under it
-			elif _joy_hold_steps >= 1 and _cruise_wanted(dir):
-				# The hold's second same-direction step: under
-				# SMOOTH the hold becomes a cruise instead of
-				# another per-column retarget.
-				telemetry_decision = "begin_cruise"
+				telemetry_decision_source = "nc_roll"
+				telemetry_decision_reason = "nc_roll_owns_hold_travel"
+				pass ## the NC seam's roll IS this hold's travel: no discrete step fires under it
+			elif debug_opt_nc == "smoothcruise" and _joy_hold_steps >= 1 and absf(dir.x) > 0.5 \
+					and _mode == "wall" and not _tournament and not _placard_up and not _setup_panel_up \
+					and _focused != null and _panels.find(_focused) >= 0:
+				# NC seam only: the hold's second same-direction
+				# step arms the continuous roll instead of
+				# another discrete step - the deleted SMOOTH
+				# gait's held-cruise shape, by name.
+				telemetry_decision = "begin_nc_roll"
 				telemetry_decision_source = "hold_counter"
 				telemetry_decision_reason = "second_same_direction_step"
-				_begin_cruise(1 if dir.x > 0.0 else -1)
+				_nc_roll_dir = 1 if dir.x > 0.0 else -1
+				_move_focus(dir)
+				_joy_hold_steps += 1
 			else:
 				telemetry_decision = "step"
 				telemetry_decision_source = "move_focus"
@@ -10150,8 +9151,8 @@ func _process(delta: float) -> void:
 		poll_fields["repeat_cooldown_s"] = 0.24
 		poll_fields["hold_steps_before_decision"] = telemetry_hold_steps_before_decision
 		poll_fields["hold_steps_after"] = _joy_hold_steps
-		poll_fields["cruise_dir_before_poll"] = telemetry_cruise_before_poll
-		poll_fields["cruise_dir_after_poll"] = _cruise_dir
+		poll_fields["nc_roll_dir_before_poll"] = telemetry_roll_before_poll
+		poll_fields["nc_roll_dir_after_poll"] = _nc_roll_dir
 		poll_fields["deaf"] = deaf
 		_telemetry_record("poll", poll_fields)
 	var a_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_A)
@@ -10252,7 +9253,7 @@ func _process(delta: float) -> void:
 	# the motion half was cheap.
 	var tel_proc_all_ms: float = float(Time.get_ticks_usec() - tel_proc_t0) / 1000.0
 	if tel_proc_all_ms >= 10.0:
-		_art_event("seg", {"seg": "process_all", "cost_ms": tel_proc_all_ms, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
+		_art_event("seg", {"seg": "process_all", "cost_ms": tel_proc_all_ms, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "nc_roll_dir": _nc_roll_dir})
 
 
 func _cycle_focus(step: int) -> void:
