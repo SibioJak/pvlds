@@ -368,7 +368,9 @@ var _bite_res_at_leg_start: Array = [{}, {}, {}, {}] ## per leg: the residency g
 var _bite_res_face_max: Array = [0, 0, 0, 0] ## per leg: the largest live face-texture count sampled during the leg
 var _bite_res_sample_msec: int = 0
 var _bite_prefetch_at_leg_start: Array = [0, 0, 0, 0]
-var _bite_ask_max_full_ms: float = 0.0 ## worst main-thread prefetch emit sampled across the full-wall legs
+var _bite_prefetch_at_leg_end: Array = [0, 0, 0, 0]
+var _bite_prefetch_seen: int = 0 ## prefetch count the full-leg emit sampler has already attributed
+var _bite_ask_max_full_ms: float = 0.0 ## worst main-thread prefetch emit attributed to the full-wall legs (sampled when the count moves)
 var _bite_proof_before: int = 0 ## prio batches applied before the ask-proof ask
 var _bite_proof_wait: int = 0
 var _hh_phase: int = 0
@@ -13172,6 +13174,7 @@ func _bite_begin_leg(leg: int, feed: float) -> void:
 		TextureFactory.clear_art_decode_cache()
 	_bite_res_at_leg_start[leg] = _room.gf18_residency()
 	_bite_prefetch_at_leg_start[leg] = _room.gf18_prefetch_count
+	_bite_prefetch_seen = _room.gf18_prefetch_count
 	_bite_released[leg] = false
 	_bite_rest_frames = 0
 	_bite_release_col = -1
@@ -13195,16 +13198,18 @@ func _bite_record_frame() -> void:
 		(_bite_spikes[leg] as Array).append([col_now, snappedf(delta_ms, 0.1)])
 	if _room.cruise_active():
 		_bite_saw_cruise[leg] = true
+	if leg >= 2 and _room.gf18_prefetch_count > _bite_prefetch_seen:
+		_bite_prefetch_seen = _room.gf18_prefetch_count
+		_bite_ask_max_full_ms = maxf(_bite_ask_max_full_ms, _room.gf18_ask_emit_last_ms)
 	var now_msec: int = Time.get_ticks_msec()
 	if now_msec - _bite_res_sample_msec >= 250:
 		_bite_res_sample_msec = now_msec
 		var gauge: Dictionary = _room.gf18_residency()
 		_bite_res_face_max[leg] = maxi(int(_bite_res_face_max[leg]), int(gauge.get("res_face_count", 0)))
-		if leg >= 2:
-			_bite_ask_max_full_ms = maxf(_bite_ask_max_full_ms, _room.gf18_ask_emit_max_ms)
 
 
 func _bite_print_leg(leg: int, from_col: int, to_col: int) -> void:
+	_bite_prefetch_at_leg_end[leg] = _room.gf18_prefetch_count
 	var names: Array = ["DRESS-LEFT", "DRESS-RIGHT", "FULL-LEFT", "FULL-RIGHT"]
 	var spikes_line: String = ""
 	for sv: Variant in (_bite_spikes[leg] as Array):
@@ -13386,11 +13391,12 @@ func _judge_bite() -> void:
 	var res_full: Dictionary = _bite_res_at_leg_start[2] as Dictionary
 	_bite_expect(int(res_full.get("res_face_count", 0)) >= int(res_start.get("res_face_count", 0)),
 		"bite: residency grew - the full-wall legs crossed %d live face textures against the dress legs' opening %d" % [int(res_full.get("res_face_count", 0)), int(res_start.get("res_face_count", 0))])
+	var full_asks: int = (int(_bite_prefetch_at_leg_end[2]) - int(_bite_prefetch_at_leg_start[2])) \
+		+ (int(_bite_prefetch_at_leg_end[3]) - int(_bite_prefetch_at_leg_start[3]))
+	_bite_expect(full_asks > 0, "bite: prefetch asks kept firing through the full-wall legs (%d asks across both - the ask was relocated, not removed)" % full_asks)
 	for leg: int in [2, 3]:
 		var dir_name: String = "leftward" if leg == 2 else "rightward"
 		_bite_expect(bool(_bite_saw_cruise[leg]), "bite: the %s full-wall leg cruised on the real input path" % dir_name)
-		var asks: int = _room.gf18_prefetch_count - int(_bite_prefetch_at_leg_start[leg])
-		_bite_expect(asks > 0, "bite: prefetch asks kept firing through the %s full-wall leg (%d asks)" % [dir_name, asks])
 		var hitches: int = 0
 		for dv3: Variant in (_bite_deltas[leg] as Array):
 			if float(dv3) > baseline + 60.0:

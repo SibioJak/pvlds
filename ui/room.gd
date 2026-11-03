@@ -673,6 +673,7 @@ var _gf17_audit_runs: int = 0 ## GRADFIX17 item 1: sweeps spent on the current s
 var _gf18_last_enqueue_msec: int = 0
 var gf18_prefetch_count: int = 0 ## prefetch asks emitted since boot
 var gf18_ask_emit_max_ms: float = 0.0 ## worst main-thread emit (the synchronous prioritize ask) inside a drained pass
+var gf18_ask_emit_last_ms: float = 0.0 ## the most recent drained pass's emit cost (the bite smoke attributes emits to legs by the prefetch count)
 var gf18_ask_total_max_ms: float = 0.0 ## worst whole drained-handler cost on the main thread
 ## (The shelf's bookend fins stood here until GRADFIX8
 ## item 5 - removed entirely, Chris's order; see
@@ -4368,6 +4369,7 @@ func _on_window_fill_drained(gen: int) -> void:
 		var tel_emit_ms: float = float(Time.get_ticks_usec() - tel_emit_t0) / 1000.0
 		var tel_total_ms: float = float(Time.get_ticks_usec() - tel_drain_t0) / 1000.0
 		gf18_prefetch_count += 1
+		gf18_ask_emit_last_ms = tel_emit_ms
 		gf18_ask_emit_max_ms = maxf(gf18_ask_emit_max_ms, tel_emit_ms)
 		gf18_ask_total_max_ms = maxf(gf18_ask_total_max_ms, tel_total_ms)
 		var tel_rec: Dictionary = {
