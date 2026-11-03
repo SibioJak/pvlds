@@ -389,6 +389,7 @@ var _land_tour: Array[String] = []
 var _land_tour_i: int = 0
 var _land_census_deadline_msec: int = 0
 var _land_grabbed: bool = false
+var _land_filter_forced: bool = false
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -12328,7 +12329,17 @@ func _drive_landing_smoke() -> void:
 					_landing_expect(false, "landing guarantee: the start window never settled")
 					_finish_landing_smoke()
 					return
-				Input.warp_mouse(Vector2(4, 372))
+				if not _land_filter_forced:
+					# The room boots on the VR filter; the
+					# fixture shelf is judged whole, through
+					# the room's own rail handler.
+					_land_filter_forced = true
+					_room._handle_rail("filter:all")
+					return
+				# Park the pointer in the sky corner: a
+				# resting ray over the wall would win the
+				# centre follow and fight every settle.
+				Input.warp_mouse(Vector2(2, 2))
 				if _room._columns < 40:
 					_landing_expect(false, "landing guarantee: the fixture shelf holds %d columns (hard travel needs at least 40)" % _room._columns)
 					_finish_landing_smoke()
@@ -12350,6 +12361,7 @@ func _drive_landing_smoke() -> void:
 					_land_settle_frames = 0
 				if _land_settle_frames >= 5:
 					TextureFactory.clear_art_decode_cache()
+					print("LANDING: room up, %d columns, seating and cruising right" % _room._columns)
 					_land_start_col = _room._grid_coord(_room.centre_index()).x
 					_input_feed_stick_x(1.0)
 					_land_phase = 1
@@ -12447,6 +12459,8 @@ func _drive_landing_smoke() -> void:
 					if g.shot_url != "" and not ArtProvider.shot_is_cached(g.shot_url):
 						shots_in = false
 			var warm_in: bool = _art_warmer == null or _art_warmer.is_idle()
+			if _land_wait == 2:
+				print("LANDING: travel done; waiting for every art source to land (warmer idle %s, shots in %s)" % [str(warm_in), str(shots_in)])
 			if warm_in and shots_in and _room.art_pipeline_idle():
 				_land_tour = _land_tour_titles()
 				_land_tour_i = 0
