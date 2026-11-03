@@ -1062,6 +1062,24 @@ var _wall_alpha_applied: float = 1.0 ## the wall fade's last applied alpha (chan
 ## smoke can judge the law structurally. PVLDS_GF17_NC=
 ## hazeall restores the write-everything law (debug_gf17_nc).
 var _alpha_write_count: int = 0 ## wall-alpha values written since boot (the hitchhunt smoke reads the cruise deltas)
+## OPTIMIZE round (item 5) standing-cost audit counters:
+## observation only - no product decision reads them. They
+## count work the room does for cards that are NOT changing:
+## mimic evaluations (_apply_power calls), label/nameplate
+## texture reassignments (rail/strip dress set_texture calls
+## + status-label text sets), panel face-texture assignments
+## whose texture equals the standing one (no-op swaps),
+## wall-alpha writes (the standing _alpha_write_count above),
+## and pop-loop panel visits made while the room is at rest.
+## standing_cost_stats() reports totals plus per-second rates
+## over the accumulated at-rest time.
+var _sc_mimic_evals: int = 0 ## _apply_power calls since boot
+var _sc_label_reassign: int = 0 ## label/nameplate texture-or-text reassignments since boot
+var _sc_noop_face_swaps: int = 0 ## panel face assignments where new tex == standing tex (attempted no-ops)
+var _sc_face_assigns: int = 0 ## panel face assignments total (the no-op rate's denominator)
+var _sc_pop_visits_rest: int = 0 ## pop-loop panel visits while at rest since boot
+var _sc_rest_msec: int = 0 ## accumulated wall time with the room at rest (no swing, no pop motion, no cascade, no pipeline work)
+var _sc_rest_since: int = 0 ## msec stamp the current rest stretch began (0 = not at rest)
 var _alpha_haze_centre: int = -999 ## the centre column the standing per-panel alphas were computed for
 var _panel_alpha_applied: Array[float] = [] ## per panel: the content alpha last written (-1 = never)
 var _launch_alpha_applied: Array[float] = [] ## per launch quad: same
@@ -3915,6 +3933,7 @@ func _refresh_banner() -> void:
 	if _status_label == null or _scanner == null:
 		return
 	_status_text = _banner_line()
+	_sc_label_reassign += 1 ## OPTIMIZE standing-cost audit (observation only)
 	_status_label.text = _status_text
 
 
@@ -4115,6 +4134,7 @@ func _apply_strip_textures(presence: Dictionary) -> void:
 		var ls: Array = _strip_label_state(key, presence)
 		var ck: String = str(ls[0]) + "|" + str(ls[1])
 		if _strip_tex_cache.has(ck):
+			_sc_label_reassign += 1 ## OPTIMIZE standing-cost audit (observation only)
 			quad.set_texture(_strip_tex_cache[ck] as Texture2D)
 
 
@@ -5824,6 +5844,9 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 		# here so travel start swaps a standing texture
 		# instead of paying a render (see the costume block).
 		_costume_cache_put(fkey, tex)
+	_sc_face_assigns += 1 ## OPTIMIZE standing-cost audit (observation only)
+	if quad.current_texture() == tex:
+		_sc_noop_face_swaps += 1 ## OPTIMIZE standing-cost audit (observation only)
 	quad.set_texture(tex)
 	_panel_face_key[game.game_id] = fkey
 	# The nameplate shows only over an art face: a generated
@@ -6884,7 +6907,10 @@ func _update_pop(delta: float) -> void:
 	var ex: float = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
 	while _panel_pop_vel.size() < _panels.size():
 		_panel_pop_vel.append(0.0)
+	var sc_at_rest: bool = not _swing_active and _power_phase != 1 and not _art_pipe_busy ## OPTIMIZE standing-cost audit
 	for i: int in range(_panels.size()):
+		if sc_at_rest:
+			_sc_pop_visits_rest += 1 ## OPTIMIZE standing-cost audit (observation only)
 		var want: float = 1.0 if _panels[i] == target else 0.0
 		var change: float = _panel_pop[i] - want
 		var temp: float = (_panel_pop_vel[i] + omega * change) * pdelta
@@ -9049,6 +9075,32 @@ func alpha_write_count() -> int:
 	return _alpha_write_count
 
 
+## OPTIMIZE round (item 5): the standing-cost audit's account.
+## Totals since boot plus per-second rates over the room's
+## accumulated at-rest time (see the counter block at
+## _alpha_write_count). Rates read 0.0 until a rest stretch
+## has accumulated.
+func standing_cost_stats() -> Dictionary:
+	var rest_s: float = float(_sc_rest_msec) / 1000.0
+	if _sc_rest_since > 0:
+		rest_s += float(Time.get_ticks_msec() - _sc_rest_since) / 1000.0
+	var denom: float = maxf(rest_s, 0.001)
+	return {
+		"mimic_evals_total": _sc_mimic_evals,
+		"mimic_evals_per_sec_at_rest": float(_sc_mimic_evals) / denom,
+		"label_reassign_total": _sc_label_reassign,
+		"label_reassign_per_sec_at_rest": float(_sc_label_reassign) / denom,
+		"alpha_writes_total": _alpha_write_count,
+		"alpha_writes_per_sec_at_rest": float(_alpha_write_count) / denom,
+		"face_assigns_total": _sc_face_assigns,
+		"noop_face_swaps_total": _sc_noop_face_swaps,
+		"noop_face_swaps_per_sec_at_rest": float(_sc_noop_face_swaps) / denom,
+		"pop_visits_at_rest_total": _sc_pop_visits_rest,
+		"pop_visits_per_sec_at_rest": float(_sc_pop_visits_rest) / denom,
+		"rest_seconds": rest_s,
+	}
+
+
 ## Grow an alpha cache to index i with the never-written
 ## stamp (-1: every real alpha is >= 0, so the first pass
 ## always writes).
@@ -9582,6 +9634,7 @@ func _build_power_overlay(panel: ClickableQuad, face_tex: Texture2D, on_tex: Tex
 func _apply_power() -> void:
 	if _power_mat == null:
 		return
+	_sc_mimic_evals += 1 ## OPTIMIZE standing-cost audit (observation only)
 	_power_mat.set_shader_parameter("power", mimic_power_at(_power_t))
 	_power_mat.set_shader_parameter("sweep", clampf(_power_t / MIMIC_SWEEP_SEC, 0.0, 1.0))
 	if _power_pair:
@@ -10039,6 +10092,16 @@ func _process(delta: float) -> void:
 	var tel_proc_a_ms: float = float(Time.get_ticks_usec() - tel_proc_t0) / 1000.0
 	if tel_proc_a_ms >= 10.0:
 		_art_event("seg", {"seg": "process_motion", "cost_ms": tel_proc_a_ms, "col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1, "cruise_dir": _cruise_dir})
+	# OPTIMIZE standing-cost audit: accumulate at-rest time
+	# (observation only). Rest = no swing, no cruise, no pop
+	# motion in flight, no power cascade, no pipeline pass.
+	var sc_resting: bool = not _swing_active and _cruise_dir == 0 and _power_phase != 1 and not _art_pipe_busy
+	if sc_resting:
+		if _sc_rest_since == 0:
+			_sc_rest_since = Time.get_ticks_msec()
+	elif _sc_rest_since > 0:
+		_sc_rest_msec += Time.get_ticks_msec() - _sc_rest_since
+		_sc_rest_since = 0
 	_update_power(delta)
 	var deaf: bool = _launching_game_id != ""
 	var telemetry_cooldown_before: float = _joy_cooldown ## scroll telemetry: the poll's before (read-only)
