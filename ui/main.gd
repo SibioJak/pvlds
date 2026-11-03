@@ -7933,10 +7933,17 @@ func _xpress_class_async(entry: Dictionary) -> void:
 	_xpress_expect(face_ok, "x-press census: %s face stands (want '%s')" % [cls, want_path])
 	var settled: bool = await _xpress_wait_settled(idx, 90.0)
 	_xpress_expect(settled, "x-press census: %s power performance settles before the press (phase %d)" % [cls, _room.power_phase()])
-	var face_f: float = float(RoomView.CARD_FACE_PX.x) / 496.0 ## xpress smoke fixture scale: badge rects are face pixels at the size in force (GF18-HALFRES: scales with the halved constant)
-	var badge_face: Rect2 = Rect2(386.0 * face_f, 0.0, 110.0 * face_f, 110.0 * face_f)
+	## xpress smoke fixture, in face pixels at the size in force. The
+	## badges are FIXED-pixel Control layout (the art star's box is a
+	## 62x62 box 14 px from the top-right corner; the panel chip row
+	## flows from the top at fixed font sizes) - they do NOT scale
+	## with the face, so the rects anchor to the face's edges at
+	## their fixed offsets. At 496x864 these are exactly the original
+	## literals; at the GF18-HALFRES 248x432 they still cover the
+	## badge and only the badge.
+	var badge_face: Rect2 = Rect2(float(RoomView.CARD_FACE_PX.x) - 110.0, 0.0, 110.0, 110.0)
 	if styled:
-		badge_face = Rect2(0.0, 240.0 * face_f, 496.0 * face_f, 110.0 * face_f) ## the styled face's badge is its FAVORITE chip row (base trace at 496x864: diff bbox (26,263)+(158,50))
+		badge_face = Rect2(0.0, 240.0, float(RoomView.CARD_FACE_PX.x), 110.0) ## the styled face's badge is its FAVORITE chip row (base trace at 496x864: diff bbox (26,263)+(158,50))
 	var quad_before: Image = _room._panels[idx].current_texture().get_image()
 	var grab_before: Image = await _xpress_grab()
 	_xpress_trace("before", cls, idx, g, quad_before, grab_before)
