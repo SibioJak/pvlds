@@ -13,6 +13,18 @@ extends RefCounted
 ## is real work too, so both happen on demand via
 ## GameEntry.ensure_art(), never here. Safe to run on a worker
 ## thread: pure data in, pure data out.
+##
+## IDENTITY: between the edition tier and the local fallback
+## sits the RESCUE tier (_rescue_match) - a last chance for
+## file names whose identity evidence is smeared by
+## decoration the equality tiers cannot see through: text
+## trailing the (Maker Year) paren, letters squished into a
+## single token, an acronym standing in for the title, a
+## db-unique version riding in the name. Every rescue road
+## ends at the parens referee with exactly one survivor, or
+## it does not land at all - rescue never relaxes the
+## discipline the tiers above it keep, it only reads the
+## evidence they could not parse.
 
 const MAX_SCAN_DEPTH: int = 12 ## Recursion cap - also the cycle backstop.
 const JUNK_FOLDERS: Array[String] = ["$recycle.bin", "system volume information", "recycler"]
@@ -24,13 +36,19 @@ var game_matched_files: int = 0 ## builds whose game is known but build is not i
 var match_tier_counts: Dictionary = {} ## match tier -> files resolved through it (every scanned file counted once, "local" included)
 var art_covered_games: int = 0
 var missing_b2s_files: Array[String] = [] ## .vpx files with no same-stem .directb2s beside them, from this scan's own listing - the missing-backglass list's raw material (see MissingB2sList).
+var unplaced_files: Array[String] = [] ## IDENTITY: .vpx files still local: after every tier, rescue included - the "files I couldn't place" list's raw material (see UnplacedFilesList).
+var inherited_shot_games: int = 0 ## IDENTITY: games whose recorded shot came from inheritance on the last scan (see _inherit_shot).
+var rescued_files: int = 0 ## IDENTITY: files the rescue tier landed on the last scan (also visible in match_tier_counts under "rescue").
 
 var _version_re: RegEx = null
+var _witness_re: RegEx = null ## IDENTITY: like _version_re but tolerates a trailing letter ("1.08a") - the version witness's net.
 
 
 func _init() -> void:
 	_version_re = RegEx.new()
 	_version_re.compile("(?i)\\bv?(\\d+\\.\\d+(?:\\.\\d+)?)\\b")
+	_witness_re = RegEx.new()
+	_witness_re.compile("(?i)\\bv?(\\d+\\.\\d+(?:\\.\\d+)?[a-z]?)\\b")
 
 
 func scan(folders: Array[String], db: VpsDatabase, progress: ScanProgress = null) -> void:
@@ -41,6 +59,9 @@ func scan(folders: Array[String], db: VpsDatabase, progress: ScanProgress = null
 	match_tier_counts.clear()
 	art_covered_games = 0
 	missing_b2s_files.clear()
+	unplaced_files.clear()
+	inherited_shot_games = 0
+	rescued_files = 0
 	if progress != null:
 		progress.begin("collecting", folders.size())
 	var files: Array[String] = []
@@ -74,6 +95,8 @@ func scan(folders: Array[String], db: VpsDatabase, progress: ScanProgress = null
 			game_matched_files += 1
 		var tier_key: String = build.match_tier if build.match_tier != "" else "local"
 		match_tier_counts[tier_key] = int(match_tier_counts.get(tier_key, 0)) + 1
+		if build.game_key.begins_with("local:"):
+			unplaced_files.append(path)
 		var entry: GameEntry = null
 		var existing: Variant = by_key.get(build.game_key, null)
 		if existing is GameEntry:
@@ -93,6 +116,24 @@ func scan(folders: Array[String], db: VpsDatabase, progress: ScanProgress = null
 		# data - no network on the worker thread).
 		var best: TableBuild = entry.current_build()
 		entry.shot_url = best.img_url if best != null else ""
+		entry.shot_from_build = best.table_file_id if best != null and best.matched_db else ""
+		entry.shot_inherited = false
+		# IDENTITY: game-level shot inheritance. A game the db
+		# knows whose current build carries no shot of its own
+		# inherits one from the game's builds (see _inherit_shot
+		# for the pick rule) - a build-unmatched file no longer
+		# stands shotless while its own game's author shots sit
+		# in the db. The donation is FLAGGED on the entry
+		# (shot_inherited + the donor's tableFile id), never
+		# silent, and it only ever fills an empty slot: a
+		# build-exact shot always wins.
+		if entry.shot_url == "" and db != null and db.games_by_id.has(entry.game_id) and _identity_nc() != "noinherit":
+			var inherited: Dictionary = _inherit_shot(db, entry.game_id)
+			if not inherited.is_empty():
+				entry.shot_url = str(inherited.get("url", ""))
+				entry.shot_from_build = str(inherited.get("from", ""))
+				entry.shot_inherited = true
+				inherited_shot_games += 1
 		# Covered = the listing proved art exists: a side image or
 		# a backglass. A game whose only source is the image inside
 		# its .vpx is NOT counted here - that art is real but
@@ -289,6 +330,14 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 		var ed_survivors: Array[String] = _referee_survivors(db, edition_ids, b.file_name)
 		if ed_survivors.size() == 1:
 			return _finish_game_match(b, db, ed_survivors[0], "edition", version_guess)
+		# 3c) IDENTITY rescue tier: the last chance before the
+		# local fallback, for decoration the equality tiers
+		# cannot parse (see _rescue_match). It runs only on
+		# files every tier above refused, so by construction it
+		# cannot move a file any earlier tier claimed.
+		if _rescue_match(b, db, version_guess):
+			rescued_files += 1
+			return b
 	# 4) Unknown to the db: group by normalized title from the filename.
 	b.game_key = "local:" + VpsDatabase.normalize_name(title_guess)
 	b.version = version_guess
@@ -318,6 +367,347 @@ func _finish_game_match(b: TableBuild, db: VpsDatabase, game_id: String, tier: S
 			return b
 	b.version = version_guess
 	return b
+
+
+## The IDENTITY round's negative-control seam, read the same
+## way the house reads its others - at call time, from the
+## environment: "norescue" disables the rescue tier (the
+## decorated fixtures must fall back to local), "noinherit"
+## disables shot inheritance (build-unmatched fixtures must
+## stand shotless). Production runs with the env unset.
+static func _identity_nc() -> String:
+	return OS.get_environment("PVLDS_IDENTITY_NC")
+
+
+## IDENTITY: the rescue tier. Four roads, each reading one
+## shape of smeared evidence, each ending at the referee with
+## exactly one survivor or not landing at all:
+##   A. post-paren strip - text trailing the (Maker Year)
+##      paren ("Tales from the Crypt (Data East 1993) VPW
+##      PATCHED") defeats every equality tier because the
+##      title guess keeps the tail or chokes on it; truncate
+##      the name at that paren's close and re-run the
+##      name/scrubbed/edition roads on the reduced name. The
+##      referee reads the same first paren from either name,
+##      so the year veto is untouched.
+##   B. squish - a one-word file name ("BlizzardOfOzz") keeps
+##      inside a single token the very letters the db's keys
+##      shed through author-token removal (the author
+##      vocabulary contains "of"); the joined-letters key
+##      removes nothing on either side, so the spellings meet.
+##   C. acronym - "BTILC 2026 Original 1": the title rides as
+##      initials; every remaining token must be explained by
+##      the candidate (decoration, author, number, the
+##      candidate's own maker or year, the rescue tail
+##      vocabulary), and a stated year token vetoes candidates
+##      whose db year differs - the paren-year veto's spirit
+##      for files that carry no parens.
+##   D. version witness - a version string owned by exactly
+##      ONE VPX build in the whole db (the field case:
+##      "1.08a", JP's Deadpool, whose plain-regex version
+##      guess the scanner cannot even read) corroborated by
+##      the game name's last token and one of the build's own
+##      author tokens both riding in the file name.
+## A road that finds candidates but no unique survivor falls
+## through to the next road; none of them relaxes a veto.
+func _rescue_match(b: TableBuild, db: VpsDatabase, version_guess: String) -> bool:
+	if _identity_nc() == "norescue":
+		return false
+	var reduced: String = _post_paren_reduced_name(b.file_name)
+	if reduced != "" and _rescue_post_paren(b, db, reduced, version_guess):
+		return true
+	var names: Array[String] = [b.file_name]
+	if reduced != "":
+		names.append(reduced)
+	if _rescue_squish(b, db, names, version_guess):
+		return true
+	if _rescue_acronym(b, db, version_guess):
+		return true
+	if _rescue_witness(b, db):
+		return true
+	return false
+
+
+## Rescue road A: re-run the name, scrubbed and edition roads
+## on the name truncated after its first year-carrying paren
+## group. The reduced name carries the file's own title+paren
+## evidence and nothing else; what trailed the paren - the
+## uploader's tags - is simply not part of the question.
+## DISCIPLINE (the Avengers lesson, corpus-censused): the
+## truncated tail is DISCARDED evidence, and a discarded word
+## can be another game's distinguishing word - "The Avengers
+## (Stern 2012) Pro" is the db's "The Avengers (Pro)", not
+## its "Avengers". So every tail token must be explained
+## before a landing stands: a decoration word, an author
+## token, the rescue tail vocabulary, digit-carrying version
+## debris - or a word of the LANDING candidate's own name
+## (the TMNT shape: "…(Original 2021) Stern - Data East
+## remix", where the db spells those same words inside the
+## game's own name). An unexplained tail token voids the
+## landing; the file falls through to the other roads.
+func _rescue_post_paren(b: TableBuild, db: VpsDatabase, reduced: String, version_guess: String) -> bool:
+	var stem: String = b.file_name.get_file().get_basename()
+	var reduced_stem: String = reduced.get_basename()
+	var tail: String = stem.substr(reduced_stem.length()) if stem.begins_with(reduced_stem) else ""
+	var unexplained: Array[String] = []
+	for t: String in VpsDatabase.raw_tokens(tail):
+		if VpsDatabase.DECORATION_TOKENS.has(t) or VpsDatabase.RESCUE_TAIL_TOKENS.has(t) or db.is_author_token(t) or _token_has_digit(t):
+			continue
+		unexplained.append(t)
+	var game_id: String = _match_game_id(db, _guess_title(reduced), reduced)
+	if game_id != "" and _tail_explained_by(db, game_id, unexplained):
+		return _finish_game_match(b, db, game_id, "rescue", version_guess) != null
+	var scrub_ids: Array[String] = db.find_game_ids_by_scrubbed_name(reduced)
+	var survivors: Array[String] = _referee_survivors(db, scrub_ids, reduced)
+	if survivors.size() == 1 and _tail_explained_by(db, survivors[0], unexplained):
+		return _finish_game_match(b, db, survivors[0], "rescue", version_guess) != null
+	var edition_ids: Array[String] = db.find_game_ids_by_edition(reduced)
+	var ed_survivors: Array[String] = _referee_survivors(db, edition_ids, reduced)
+	if ed_survivors.size() == 1 and _tail_explained_by(db, ed_survivors[0], unexplained):
+		return _finish_game_match(b, db, ed_survivors[0], "rescue", version_guess) != null
+	return false
+
+
+## Whether every unexplained tail token is a word of the
+## candidate game's own db name - see road A's discipline.
+func _tail_explained_by(db: VpsDatabase, game_id: String, unexplained: Array[String]) -> bool:
+	if unexplained.is_empty():
+		return true
+	var name_toks: PackedStringArray = VpsDatabase.raw_tokens(str(db.game_dict(game_id).get("name", "")))
+	for t: String in unexplained:
+		if not name_toks.has(t):
+			return false
+	return true
+
+
+## Whether a token carries a digit - version and copy debris
+## ("v1", "0f2", "mod1", "c2", "ext2k", bare numbers): shapes
+## that ride in file-name tails without naming anything.
+static func _token_has_digit(tok: String) -> bool:
+	for i: int in range(tok.length()):
+		if tok[i].is_valid_int():
+			return true
+	return false
+
+
+## Rescue road B: joined-letters equality, refereed against
+## the file's FULL name (its parens are its own evidence,
+## unchanged by the reduction).
+func _rescue_squish(b: TableBuild, db: VpsDatabase, names: Array[String], version_guess: String) -> bool:
+	var candidates: Array[String] = []
+	for nm: String in names:
+		for gid: String in db.find_game_ids_by_squish(nm):
+			if not candidates.has(gid):
+				candidates.append(gid)
+	if candidates.is_empty():
+		return false
+	var survivors: Array[String] = _referee_survivors(db, candidates, b.file_name)
+	if survivors.size() == 1:
+		return _finish_game_match(b, db, survivors[0], "rescue", version_guess) != null
+	return false
+
+
+## Rescue road C: the acronym. The file's first scrub token
+## (3+ letters) must equal a game's name initials; the
+## candidate must then explain EVERY remaining token (see
+## _acronym_token_explained), survive the stated-year veto,
+## and pass the parens referee. Exactly one survivor lands.
+func _rescue_acronym(b: TableBuild, db: VpsDatabase, version_guess: String) -> bool:
+	var toks: PackedStringArray = VpsDatabase.scrub_tokens(b.file_name)
+	if toks.size() < 2 or toks[0].length() < 3:
+		return false
+	var candidates: Array[String] = db.find_game_ids_by_initials(toks[0])
+	if candidates.is_empty():
+		return false
+	var stated_year: int = 0
+	for t: String in toks:
+		if _is_year_token(t):
+			stated_year = t.to_int()
+			break
+	var rest: PackedStringArray = toks.slice(1)
+	var survivors: Array[String] = []
+	for gid: String in candidates:
+		var g: Dictionary = db.game_dict(gid)
+		var game_year: int = int(g.get("year", 0))
+		if stated_year > 0 and game_year > 0 and game_year != stated_year:
+			continue
+		var explained: bool = true
+		for t2: String in rest:
+			if not _acronym_token_explained(db, t2, g):
+				explained = false
+				break
+		if not explained:
+			continue
+		if not _meta_consistent(db, gid, b.file_name):
+			continue
+		survivors.append(gid)
+	if survivors.size() == 1:
+		return _finish_game_match(b, db, survivors[0], "rescue", version_guess) != null
+	return false
+
+
+## Whether one trailing token of an acronym-named file is
+## accounted for by a candidate game: a shared decoration
+## word, a word from the rescue tail vocabulary, one of the
+## db's author tokens, a bare number, one of the candidate's
+## own maker tokens, or the candidate's own year. Anything
+## else is unexplained - it is part of some other name.
+func _acronym_token_explained(db: VpsDatabase, tok: String, game: Dictionary) -> bool:
+	if VpsDatabase.DECORATION_TOKENS.has(tok) or VpsDatabase.RESCUE_TAIL_TOKENS.has(tok):
+		return true
+	if tok.is_valid_int() or db.is_author_token(tok):
+		return true
+	if tok == str(int(game.get("year", 0))):
+		return true
+	return VpsDatabase.scrub_tokens(str(game.get("manufacturer", ""))).has(tok)
+
+
+## Rescue road D: the version witness. Collects every
+## version-shaped token in the file name (trailing letter
+## tolerated - the shape the plain version guess cannot
+## read), keeps those owned by exactly one VPX build in the
+## whole db, and corroborates each: the candidate game's
+## last name token rides in the file's scrub tokens AND at
+## least one of the build's own author tokens rides in the
+## file's raw tokens. Exactly one corroborated build in
+## total lands the file on that build itself. The shape the
+## road exists for, from the field: "Deadpool 1.08a Minimal
+## Hacksaw777 R&BMetals.vpx" - version 1.08a belongs to one
+## build db-wide (JP's Deadpool), "deadpool" is the game's
+## last name token, "hacksaw777" is that build's author.
+func _rescue_witness(b: TableBuild, db: VpsDatabase) -> bool:
+	var stem: String = b.file_name.get_basename()
+	var file_toks: PackedStringArray = VpsDatabase.scrub_tokens(b.file_name)
+	var file_raw: Dictionary = {}
+	for rt: String in VpsDatabase.raw_tokens(b.file_name):
+		file_raw[rt] = true
+	var seen_versions: Dictionary = {}
+	var corroborated: Array = []
+	for m: Variant in _witness_re.search_all(stem):
+		var rm: RegExMatch = m
+		var ver: String = rm.get_string(1)
+		if seen_versions.has(ver):
+			continue
+		seen_versions[ver] = true
+		var claims: Array = db.find_builds_by_version(ver)
+		if claims.size() != 1 or not (claims[0] is Dictionary):
+			continue
+		var claim: Dictionary = claims[0]
+		var gid: String = str(claim.get("game_id", ""))
+		var tfv: Variant = claim.get("table_file", {})
+		if gid == "" or not (tfv is Dictionary):
+			continue
+		var tf: Dictionary = tfv
+		var g: Dictionary = db.game_dict(gid)
+		var gtoks: PackedStringArray = VpsDatabase.scrub_tokens(str(g.get("name", "")))
+		if gtoks.is_empty() or not file_toks.has(gtoks[gtoks.size() - 1]):
+			continue
+		var author_hit: bool = false
+		for author: String in VpsDatabase.str_array(tf.get("authors", [])):
+			for atok: String in VpsDatabase.raw_tokens(author):
+				if file_raw.has(atok):
+					author_hit = true
+					break
+			if author_hit:
+				break
+		if not author_hit:
+			continue
+		if not _meta_consistent(db, gid, b.file_name):
+			continue
+		corroborated.append(claim)
+	if corroborated.size() == 1:
+		var hit: Dictionary = corroborated[0]
+		var htf: Variant = hit.get("table_file", {})
+		if htf is Dictionary:
+			_apply_table_file(b, str(hit.get("game_id", "")), htf)
+			b.match_tier = "rescue"
+			return true
+	return false
+
+
+## The name truncated at the close of its first
+## year-carrying paren group: "Tales from the Crypt (Data
+## East 1993) VPW PATCHED.vpx" -> "Tales from the Crypt
+## (Data East 1993).vpx". "" when no paren group carries a
+## year (nothing to truncate after) - a paren without a year
+## is not the (Maker Year) anchor the road keys on.
+static func _post_paren_reduced_name(file_name: String) -> String:
+	var stem: String = file_name.get_file().get_basename()
+	var depth: int = 0
+	var seg_start: int = -1
+	var i: int = 0
+	while i < stem.length():
+		var ch: String = stem[i]
+		if ch == "(":
+			if depth == 0:
+				seg_start = i
+			depth += 1
+		elif ch == ")":
+			depth -= 1
+			if depth == 0 and seg_start >= 0:
+				if _segment_carries_year(stem.substr(seg_start, i - seg_start + 1)):
+					return stem.substr(0, i + 1) + ".vpx"
+				seg_start = -1
+		i += 1
+	return ""
+
+
+## Whether one parenthesized segment states a year - the
+## same "(19|20)xx" shape the parens referee reads.
+static func _segment_carries_year(segment: String) -> bool:
+	var year_re: RegEx = RegEx.new()
+	year_re.compile("(19|20)\\d\\d")
+	return year_re.search(segment) != null
+
+
+## A bare 4-digit year token, 1950-2099 - the acronym road's
+## stated-year evidence.
+static func _is_year_token(tok: String) -> bool:
+	if tok.length() != 4 or not tok.is_valid_int():
+		return false
+	var y: int = tok.to_int()
+	return y >= 1950 and y <= 2099
+
+
+## IDENTITY: the shot a game-matched but build-unmatched
+## entry inherits. The pick rule, deterministic over the
+## game's VPX table files IN DB ORDER: the first build with
+## an imgUrl among the VR-tagged builds (the db's own VR /
+## Mixed Reality / MR vocabulary - this is a VR launcher, so
+## the shot framed for VR is the face to wear); failing that,
+## the first with an imgUrl among the Hybrid builds; failing
+## that, the first build with an imgUrl at all. Returns
+## {"url", "from"} (the donor's tableFile id, recorded so
+## the donation is auditable), or {} when the game carries
+## no shot anywhere.
+func _inherit_shot(db: VpsDatabase, game_id: String) -> Dictionary:
+	var vr_first: Dictionary = {}
+	var hybrid_first: Dictionary = {}
+	var any_first: Dictionary = {}
+	for item: Variant in db.vpx_table_files_of(game_id):
+		if not (item is Dictionary):
+			continue
+		var tf: Dictionary = item
+		var url: String = str(tf.get("imgUrl", "")).strip_edges()
+		if url == "":
+			continue
+		if any_first.is_empty():
+			any_first = tf
+		var is_vr: bool = false
+		var is_hybrid: bool = false
+		for f: String in VpsDatabase.str_array(tf.get("features", [])):
+			if f == "VR" or f == "Mixed Reality" or f == "MR":
+				is_vr = true
+			elif f == "Hybrid":
+				is_hybrid = true
+		if is_vr and vr_first.is_empty():
+			vr_first = tf
+		if is_hybrid and hybrid_first.is_empty():
+			hybrid_first = tf
+	for pick: Dictionary in [vr_first, hybrid_first, any_first]:
+		if not pick.is_empty():
+			return {"url": str(pick.get("imgUrl", "")), "from": str(pick.get("id", ""))}
+	return {}
 
 
 ## The parens referee over a whole candidate set. The unit

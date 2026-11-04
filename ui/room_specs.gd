@@ -413,6 +413,11 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 			lines.append("Missing backglass: %d table files have no .directb2s beside them. The list is missing_b2s.txt in the app data folder." % missing)
 		else:
 			lines.append("Missing backglass: none - every table file has a .directb2s beside it.")
+		var unplaced: int = int(health.get("unplaced", 0))
+		if unplaced > 0:
+			lines.append("Files I couldn't place: %d table files match no database game. The list is unplaced_files.txt in the app data folder." % unplaced)
+		else:
+			lines.append("Files I couldn't place: none - every table file matched a database game.")
 	# The WoVP line (the Tournament Room round): Main composes
 	# it in _setup_panel_health from the config + the last
 	# validation - whose key is saved here, in plain words.

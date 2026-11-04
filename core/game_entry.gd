@@ -14,6 +14,8 @@ var art_path: String = "" ## Loadable image (side image or extracted cache file)
 var art_source_path: String = "" ## The primary extraction source not yet extracted: a same-stem .directb2s, or the .vpx itself when the game has no backglass. "" when neither exists.
 var art_vpx_path: String = "" ## The game's first build's .vpx - the embedded-image fallback source, tried when the primary source holds no usable image. Set for every game; it is the table file itself, so it always exists.
 var shot_url: String = "" ## The VPS db's imgUrl for the CURRENT build: the author's screenshot of that exact build, the card face's primary source (the graduation round). "" when the db carries none. The bytes live in ArtProvider's cache once Main's ShotFetcher lands them; this entry only ever reads that cache.
+var shot_inherited: bool = false ## IDENTITY: true when shot_url did NOT come from any local build's exact db match but was inherited from the game's own builds (a build-unmatched file wearing its game's author shot - see LibraryScanner._inherit_shot). The flag rides wherever the shot is recorded (scan output, telemetry) - an inherited shot is never passed off as the build's own.
+var shot_from_build: String = "" ## IDENTITY: the db tableFile id shot_url came from - the matched build's own, or the donor build under inheritance. "" when there is no shot.
 var _art_attempted: bool = false
 
 
@@ -101,6 +103,27 @@ func _ensure_from_source(src: String) -> String:
 		# prevented a duplicate; it does not get to prevent art.
 		return ArtProvider.extract_art_image(src)
 	return ""
+
+
+## IDENTITY: how the shot this entry wears was obtained -
+## "build" (its own build's imgUrl, exact or ladder match),
+## "inherited" (a donor build of the same game, under the
+## inheritance rule), or "" (no shot). Telemetry's apply
+## events stamp this beside the face path so a field log can
+## audit per game which cards wear inherited art.
+func shot_origin() -> String:
+	if shot_url == "":
+		return ""
+	return "inherited" if shot_inherited else "build"
+
+
+## Whether a face path IS this entry's recorded author shot
+## (its ArtProvider cache path) - the room's apply events use
+## it to stamp shot_origin only on applies that actually put
+## the shot on the card, never on chain-art or title-card
+## applies for the same game.
+func is_shot_path(path: String) -> bool:
+	return shot_url != "" and path != "" and path == ArtProvider.shot_cache_path_for(shot_url)
 
 
 ## The face the card wears, in the graduation round's order:

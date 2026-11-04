@@ -19,6 +19,9 @@ var _author_tokens: Dictionary = {} ## token -> true, from every db table file's
 var _files_by_slug_key: Dictionary = {} ## slug match key of a VPX table file's download URL -> Array of {game_id, table_file} claiming it
 var _games_by_scrub_name: Dictionary = {} ## match key of a db game name -> Array of game ids
 var _games_by_edition_key: Dictionary = {} ## edition key (full name, edition words kept) of a db game name -> Array of game ids
+var _games_by_squish_key: Dictionary = {} ## IDENTITY rescue: joined-letters key (scrub tokens concatenated, NO author removal) of a db game name -> Array of game ids
+var _games_by_initials: Dictionary = {} ## IDENTITY rescue: initials of a db game's name tokens (names of 3+ tokens) -> Array of game ids
+var _builds_by_version: Dictionary = {} ## IDENTITY rescue: a VPX table file's exact version string -> Array of {game_id, table_file}
 var loaded: bool = false
 var source_path: String = ""
 
@@ -40,6 +43,21 @@ const DECORATION_TOKENS: Dictionary = {
 ## side only, on top of the shared decoration vocabulary.
 const SLUG_EXTRA_TOKENS: Dictionary = {
 	"conversion": true, "room": true, "vrroom": true,
+}
+
+## IDENTITY (the rescue tier's tail vocabulary): uploader/mod words
+## the field's real file names trail behind a title without naming
+## any game - censused from the user's own library (his local:
+## telemetry keys, 2026-11-04): "VPW PATCHED", "Physics Sound",
+## "LW <word>", "Minimal", "Ext2k Conversion". The acronym road
+## accepts a file's trailing tokens only when every one is
+## explained - a decoration word, an author token, a number, the
+## candidate's own maker/year tokens, or one of these. A word
+## being here never identifies a game by itself; it only stops
+## disqualifying one the rest of the evidence already named.
+const RESCUE_TAIL_TOKENS: Dictionary = {
+	"patched": true, "minimal": true, "physics": true,
+	"sound": true, "lw": true, "conversion": true, "ext2k": true,
 }
 
 
@@ -137,6 +155,34 @@ static func _tokens_of(t: String) -> PackedStringArray:
 		out.remove_at(out.size() - 1)
 		if not out.is_empty() and out[out.size() - 1] == "w":
 			out.remove_at(out.size() - 1)
+	return out
+
+
+## IDENTITY rescue (the squish road): a name reduced to its
+## letters alone - the scrub token stream concatenated, with NO
+## author-token removal on either side. Author removal is the
+## step that breaks the ordinary keys for squished file names:
+## the db's author vocabulary contains the token "of" (some
+## author team's name tokenizes through it), so a game's keys
+## shed it ("The Blizzard Of Ozz" keys as "blizzardozz") while
+## a one-word file name ("BlizzardOfOzz") keeps the letters
+## inside its single token where no key can shed them. Joining
+## both sides WITHOUT that removal is the only reduction where
+## the two spellings meet. Collisions (different tokenizations,
+## same letters) are the caller's problem, refereed there like
+## every other road's.
+static func squish_key(s: String) -> String:
+	return "".join(scrub_tokens(s))
+
+
+## IDENTITY rescue (the acronym road): the initials of a name's
+## scrub token stream ("Big Trouble in Little China" ->
+## "btilc") - the shape acronym-named table files carry
+## ("BTILC 2026 Original 1.vpx").
+static func initials_of(s: String) -> String:
+	var out: String = ""
+	for tok: String in scrub_tokens(s):
+		out += tok.substr(0, 1)
 	return out
 
 
@@ -387,6 +433,9 @@ func load_db(path: String) -> bool:
 	_files_by_slug_key.clear()
 	_games_by_scrub_name.clear()
 	_games_by_edition_key.clear()
+	_games_by_squish_key.clear()
+	_games_by_initials.clear()
+	_builds_by_version.clear()
 	if path == "" or not FileAccess.file_exists(path):
 		return false
 	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
@@ -459,6 +508,42 @@ func load_db(path: String) -> bool:
 				eids = existing_eids
 			eids.append(scrub_game_id)
 			_games_by_edition_key[ed_key] = eids
+		# IDENTITY rescue indexes, same pass: the squish key
+		# (letters alone, no author removal), the name initials
+		# (3+ token names only - shorter acronyms are too cheap
+		# to mean anything), and every VPX build's exact version
+		# string (the version witness's raw material - most
+		# versions are claimed by many builds and the road
+		# refuses them; the index keeps them all so the caller
+		# can count the claimants).
+		var sq_key: String = squish_key(str(sgame.get("name", "")))
+		if sq_key != "":
+			var qids: Array = []
+			var existing_qids: Variant = _games_by_squish_key.get(sq_key, [])
+			if existing_qids is Array:
+				qids = existing_qids
+			qids.append(scrub_game_id)
+			_games_by_squish_key[sq_key] = qids
+		if scrub_tokens(str(sgame.get("name", ""))).size() >= 3:
+			var ini_key: String = initials_of(str(sgame.get("name", "")))
+			if ini_key != "":
+				var iids: Array = []
+				var existing_iids: Variant = _games_by_initials.get(ini_key, [])
+				if existing_iids is Array:
+					iids = existing_iids
+				iids.append(scrub_game_id)
+				_games_by_initials[ini_key] = iids
+		for vitem: Variant in vpx_table_files_of(scrub_game_id):
+			if vitem is Dictionary:
+				var vtf: Dictionary = vitem
+				var ver: String = str(vtf.get("version", ""))
+				if ver != "":
+					var claims: Array = []
+					var existing_claims2: Variant = _builds_by_version.get(ver, [])
+					if existing_claims2 is Array:
+						claims = existing_claims2
+					claims.append({"game_id": scrub_game_id, "table_file": vtf})
+					_builds_by_version[ver] = claims
 		for item: Variant in vpx_table_files_of(scrub_game_id):
 			if item is Dictionary:
 				var stf: Dictionary = item
@@ -584,7 +669,59 @@ func find_game_ids_by_edition(file_name: String) -> Array[String]:
 		return out
 	var v: Variant = _games_by_edition_key.get(key, [])
 	if v is Array:
+		var arr: Variant = v
+		for item: Variant in arr:
+			out.append(str(item))
+	return out
+
+
+## Whether a token belongs to the db's author vocabulary (any
+## table file's authors, tokenized) - the rescue tier reads it
+## to judge whether a word riding in a file name is a person's
+## name rather than part of a title.
+func is_author_token(tok: String) -> bool:
+	return _author_tokens.has(tok)
+
+
+## IDENTITY rescue (squish road): db games whose name reduces
+## to the same joined-letters key as this name - see squish_key
+## for why this reduction exists and what it cannot separate.
+func find_game_ids_by_squish(some_name: String) -> Array[String]:
+	var out: Array[String] = []
+	var key: String = squish_key(some_name)
+	if key == "":
+		return out
+	var v: Variant = _games_by_squish_key.get(key, [])
+	if v is Array:
 		var arr: Array = v
 		for item: Variant in arr:
 			out.append(str(item))
 	return out
+
+
+## IDENTITY rescue (acronym road): db games whose name initials
+## equal this acronym ("btilc" -> the Big Trouble in Little
+## China triplets). The caller referees the claimant set - an
+## acronym alone identifies nothing.
+func find_game_ids_by_initials(acronym: String) -> Array[String]:
+	var out: Array[String] = []
+	if acronym == "":
+		return out
+	var v: Variant = _games_by_initials.get(acronym, [])
+	if v is Array:
+		var arr: Array = v
+		for item: Variant in arr:
+			out.append(str(item))
+	return out
+
+
+## IDENTITY rescue (version witness): every VPX table file in
+## the db carrying exactly this version string, as
+## {game_id, table_file} dictionaries. Most versions have many
+## claimants; the road that reads this acts only on a version
+## with exactly one.
+func find_builds_by_version(version: String) -> Array:
+	var v: Variant = _builds_by_version.get(version, [])
+	if v is Array:
+		return v
+	return []

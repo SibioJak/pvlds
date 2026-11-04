@@ -4237,6 +4237,7 @@ func _nb_apply_swap(idx: int, fkey: String, hit: Array) -> void:
 	_nb_sync_footer()
 	_art_event("apply", {
 		"game": game.game_id, "path": _face_path_memoized(game), "col": _grid_coord(idx).x,
+		"shot_origin": game.shot_origin() if game.is_shot_path(_face_path_memoized(game)) else "",
 		"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
 		"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
 		"cost_ms": 0.0, "branch": "facecache", "load_ms": 0.0, "render_ms": 0.0,
@@ -4462,6 +4463,7 @@ func _fill_window_faces_sync(gen: int) -> void:
 		await _fill_one_face_sync(idx, gen)
 		_art_event("apply", {
 			"game": _visible_games[idx].game_id, "path": _face_path_memoized(_visible_games[idx]), "col": cc,
+			"shot_origin": _visible_games[idx].shot_origin() if _visible_games[idx].is_shot_path(_face_path_memoized(_visible_games[idx])) else "",
 			"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
 			"gait": "stepped",
 		"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
@@ -4851,6 +4853,7 @@ func _art_pipe_pass() -> void:
 				_note_apply(travelling_now) ## OPTIMIZE: the apply-cap account
 			_art_event("apply", {
 				"game": _visible_games[idx].game_id, "path": path, "col": cc,
+				"shot_origin": _visible_games[idx].shot_origin() if _visible_games[idx].is_shot_path(path) else "",
 				"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
 				"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
 				"cost_ms": float(Time.get_ticks_usec() - tel_apply_t0) / 1000.0,

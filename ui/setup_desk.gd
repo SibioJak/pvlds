@@ -23,6 +23,8 @@ var _scan_button: Button
 var _stats_label: Label
 var _b2s_label: Label
 var _b2s_button: Button
+var _unplaced_label: Label
+var _unplaced_button: Button
 var _enter_button: Button
 var _dialog: FileDialog
 var _dialog_target: String = "" ## "exe" | "db" | "folder:<index>"
@@ -172,6 +174,21 @@ func _build_ui() -> void:
 	_b2s_button.tooltip_text = "Open missing_b2s.txt - the table files with no backglass - from the app data folder"
 	_b2s_button.pressed.connect(_on_open_b2s_list)
 	b2s_row.add_child(_b2s_button)
+
+	var unplaced_row: HBoxContainer = HBoxContainer.new()
+	unplaced_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(unplaced_row)
+	_unplaced_label = Label.new()
+	_unplaced_label.text = "Files I couldn't place: not scanned yet - the list is written on every scan."
+	_unplaced_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_unplaced_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	unplaced_row.add_child(_unplaced_label)
+	_unplaced_button = Button.new()
+	_unplaced_button.text = "Open list"
+	_unplaced_button.disabled = true
+	_unplaced_button.tooltip_text = "Open unplaced_files.txt - the table files that match no database game - from the app data folder"
+	_unplaced_button.pressed.connect(_on_open_unplaced_list)
+	unplaced_row.add_child(_unplaced_button)
 
 	_enter_button = Button.new()
 	_enter_button.text = "Enter the Room"
@@ -493,3 +510,21 @@ func apply_missing_b2s(count: int) -> void:
 
 func _on_open_b2s_list() -> void:
 	OS.shell_open(MissingB2sList.globalized_path())
+
+
+## The couldn't-place count from the scan that just landed
+## (IDENTITY: Main regenerates unplaced_files.txt in the same
+## pass, from the scanner's match record). Mirrors
+## apply_missing_b2s: a zero count says so plainly; the
+## button arms either way - at zero the file itself states
+## that none are unplaced.
+func apply_unplaced(count: int) -> void:
+	if count > 0:
+		_unplaced_label.text = "Files I couldn't place: %d table file(s) match no database game. The full list is unplaced_files.txt in the app data folder." % count
+	else:
+		_unplaced_label.text = "Files I couldn't place: none - every table file matched a database game."
+	_unplaced_button.disabled = false
+
+
+func _on_open_unplaced_list() -> void:
+	OS.shell_open(UnplacedFilesList.globalized_path())

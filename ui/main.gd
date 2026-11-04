@@ -1106,6 +1106,15 @@ func _finish_scan() -> void:
 			push_warning("PVLDS: missing_b2s.txt could not be written (error %d)" % b2s_err)
 		if _desk != null:
 			_desk.apply_missing_b2s(_scanner.missing_b2s_files.size())
+		# The couldn't-place list (IDENTITY): the same pattern -
+		# every completed scan regenerates unplaced_files.txt
+		# from the scanner's match record (files still local:
+		# after every tier), and the desk shows the count.
+		var unplaced_err: Error = UnplacedFilesList.write_file(_scanner.unplaced_files)
+		if unplaced_err != OK:
+			push_warning("PVLDS: unplaced_files.txt could not be written (error %d)" % unplaced_err)
+		if _desk != null:
+			_desk.apply_unplaced(_scanner.unplaced_files.size())
 	# Scan landed: start warming the whole library's art in the
 	# background (and re-arm on every later scan).
 	if _art_warmer != null and _scanner != null:
@@ -1189,6 +1198,7 @@ func _setup_panel_health() -> Dictionary:
 		"db_ok": _last_db_ok,
 		"db_kind": _last_db_kind,
 		"missing": _scanner.missing_b2s_files.size(),
+		"unplaced": _scanner.unplaced_files.size(),
 		"wovp_line": _wovp_health_line(),
 	}
 
@@ -1461,8 +1471,10 @@ func build_scan_summary() -> String:
 		lines.append("Database (%s): %d games known. Matched %d of %d builds exactly; %d more by game only." % [
 			_last_db_path, _db.game_count(), s.matched_files, s.total_files, s.game_matched_files])
 		var tc: Dictionary = s.match_tier_counts
-		lines.append("Match routes: %d by download slug, %d by title, %d by cleaned title, %d unmatched (file name only)." % [
-			int(tc.get("slug", 0)), int(tc.get("name", 0)), int(tc.get("scrubbed", 0)), int(tc.get("local", 0))])
+		lines.append("Match routes: %d by download slug, %d by title, %d by cleaned title, %d by edition, %d rescued, %d unmatched (file name only)." % [
+			int(tc.get("slug", 0)), int(tc.get("name", 0)), int(tc.get("scrubbed", 0)), int(tc.get("edition", 0)), int(tc.get("rescue", 0)), int(tc.get("local", 0))])
+		if s.inherited_shot_games > 0:
+			lines.append("Author shots: %d game(s) wear a screenshot inherited from another build of the same game - their own build carries none in the database, so the game's shot stands in (flagged in the telemetry as inherited)." % s.inherited_shot_games)
 	else:
 		lines.append("No database loaded - every game is identified from its file name alone.")
 	# Panel art counts a game when art is PROVEN: a side image on
@@ -3258,6 +3270,8 @@ func _drive_setup_panel_smoke() -> void:
 					"scan leg: the panel's health counts the new scan's tables")
 				_setup_panel_expect(int(health.get("missing", -1)) == _scanner.missing_b2s_files.size(),
 					"scan leg: the panel's missing-backglass count matches the scan")
+				_setup_panel_expect(int(health.get("unplaced", -1)) == _scanner.unplaced_files.size(),
+					"scan leg: the panel's couldn't-place count matches the scan (IDENTITY)")
 				_setup_panel_expect(_room.setup_panel_message().contains(str(_scanner.total_files)),
 					"scan leg: the message line states the outcome in words")
 				# The deferral (Chris's after-scan strays,
@@ -14951,6 +14965,31 @@ func _drive_desk_smoke() -> void:
 					"the button's open path resolves to missing_b2s.txt")
 				_desk.apply_missing_b2s(3)
 				_desk._b2s_button.pressed.emit()
+				# Couldn't-place row (IDENTITY): the same shape
+				# as the backglass row, fed through the same
+				# apply_unplaced call _finish_scan makes.
+				_desk_expect(_desk._unplaced_button != null and _desk._unplaced_button.text == "Open list",
+					"the desk has an unplaced-files Open list button")
+				_desk_expect(_desk._unplaced_button != null and _desk._unplaced_button.disabled,
+					"the unplaced Open list button starts disabled (no scan yet)")
+				_desk_expect(_desk._unplaced_label != null and _desk._unplaced_label.text.contains("not scanned yet"),
+					"the couldn't-place line starts unscanned")
+				_desk.apply_unplaced(2)
+				_desk_expect(_desk._unplaced_label.text.contains("2 table file(s)"),
+					"the couldn't-place line shows the applied count")
+				_desk_expect(not _desk._unplaced_button.disabled,
+					"the unplaced Open list button arms once a count lands")
+				_desk.apply_unplaced(0)
+				_desk_expect(_desk._unplaced_label.text.contains("none - every table file"),
+					"a zero unplaced count says none plainly")
+				var unplaced_paths: Array[String] = ["/tables/Alpha.vpx", "/tables/Beta.vpx"]
+				_desk_expect(UnplacedFilesList.write_file(unplaced_paths, "2026-11-04") == OK
+					and FileAccess.file_exists(UnplacedFilesList.FILE_PATH),
+					"the unplaced list file exists at the path the button opens")
+				_desk_expect(UnplacedFilesList.globalized_path().ends_with("unplaced_files.txt"),
+					"the unplaced button's open path resolves to unplaced_files.txt")
+				_desk.apply_unplaced(2)
+				_desk._unplaced_button.pressed.emit()
 				# The WoVP section (the Tournament Room round):
 				# a masked key field; Save key lands the key in
 				# the config FILE on the spot; Test key answers
@@ -17394,6 +17433,202 @@ func _run_core_test() -> void:
 		"edition referee: the wrong-year LUCI file stays filename-only under its own name", failures)
 	_wipe_tree(ProjectSettings.globalize_path(ed_root_user))
 	_wipe_tree(mt_root)
+
+	# IDENTITY fixture: the rescue tier's four roads, shot
+	# inheritance, and the unplaced record, over invented games
+	# wearing the field's real shapes (the wart round's named
+	# defeats, rebuilt): decoration trailing the (Maker Year)
+	# paren, a one-word squished title whose letters the db's
+	# author vocabulary eats on the key roads, an acronym title
+	# with same-name triplets split only by a stated year, and
+	# a db-unique version witnessed by an author token. Under
+	# PVLDS_IDENTITY_NC=norescue the rescue legs below must
+	# fail by name; under =noinherit the inheritance legs must.
+	var id_root_user: String = "user://core_test_identity"
+	var id_root: String = ProjectSettings.globalize_path(id_root_user)
+	_wipe_tree(id_root)
+	var id_user_dir: DirAccess = DirAccess.open("user://")
+	if id_user_dir != null and not id_user_dir.dir_exists("core_test_identity"):
+		id_user_dir.make_dir("core_test_identity")
+	var id_root_dir: DirAccess = DirAccess.open(id_root_user)
+	if id_root_dir != null and not id_root_dir.dir_exists("tables"):
+		id_root_dir.make_dir("tables")
+	var id_tables: String = id_root_user.path_join("tables")
+	var id_db_data: Array = [
+		{
+			"id": "fx-id-crypt", "name": "Tales of the Vault", "manufacturer": "Data West",
+			"year": 1993, "designers": [],
+			"tableFiles": [
+				{"id": "fx-id-crypt-old", "version": "1.0", "tableFormat": "VPX", "authors": ["Someone"], "createdAt": 1700000000, "features": [], "imgUrl": "https://example.invalid/shots/vault-old.webp"},
+				{"id": "fx-id-crypt-vr", "version": "1.2", "tableFormat": "VPX", "authors": ["VPW", "Vault Team"], "createdAt": 1710000000, "features": ["VR"], "imgUrl": "https://example.invalid/shots/vault-vr.webp"},
+			],
+		},
+		{
+			"id": "fx-id-squish", "name": "Wizard Of Zog", "manufacturer": "Original",
+			"year": 2025, "designers": [],
+			"tableFiles": [
+				{"id": "fx-id-squish-1", "version": "1.0.3", "tableFormat": "VPX", "authors": ["Zog Team", "Hall of Fame"], "createdAt": 1700000000, "features": [], "imgUrl": "https://example.invalid/shots/zog.webp"},
+			],
+		},
+		{
+			"id": "fx-id-btilp-2026", "name": "Big Trouble in Little Port", "manufacturer": "Original",
+			"year": 2026, "designers": [],
+			"tableFiles": [
+				{"id": "fx-id-btilp26-1", "version": "1.0.1", "tableFormat": "VPX", "authors": ["Port Team"], "createdAt": 1700000000, "features": [], "imgUrl": "https://example.invalid/shots/port26.webp"},
+			],
+		},
+		{
+			"id": "fx-id-btilp-2022", "name": "Big Trouble in Little Port", "manufacturer": "Original",
+			"year": 2022, "designers": [],
+			"tableFiles": [
+				{"id": "fx-id-btilp22-1", "version": "1.0", "tableFormat": "VPX", "authors": ["Port Team"], "createdAt": 1700000000, "features": [], "imgUrl": "https://example.invalid/shots/port22.webp"},
+			],
+		},
+		{
+			"id": "fx-id-btilp-2020", "name": "Big Trouble in Little Port", "manufacturer": "Original",
+			"year": 2020, "designers": [],
+			"tableFiles": [
+				{"id": "fx-id-btilp20-1", "version": "2.0", "tableFormat": "VPX", "authors": ["Port Team"], "createdAt": 1700000000, "features": [], "imgUrl": "https://example.invalid/shots/port20.webp"},
+			],
+		},
+		{
+			"id": "fx-id-deadsea", "name": "Deadsea", "manufacturer": "Original",
+			"year": 2021, "designers": [],
+			"tableFiles": [
+				{"id": "fx-id-ds-1", "version": "2.0", "tableFormat": "VPX", "authors": ["Other"], "createdAt": 1700000000, "features": [], "imgUrl": "https://example.invalid/shots/deadsea-v2.webp"},
+				{"id": "fx-id-ds-2", "version": "1.08a", "tableFormat": "VPX", "authors": ["Hacksaw999", "JP"], "createdAt": 1710000000, "features": ["VR"], "imgUrl": "https://example.invalid/shots/deadsea-108a.webp"},
+			],
+		},
+		{
+			"id": "fx-id-harbor", "name": "Harbor Lights", "manufacturer": "Marlin",
+			"year": 1988, "designers": [],
+			"tableFiles": [
+				{"id": "fx-id-hb-plain", "version": "1.0", "tableFormat": "VPX", "authors": ["Marlin Works"], "createdAt": 1700000000, "features": [], "imgUrl": "https://example.invalid/shots/harbor-plain.webp"},
+				{"id": "fx-id-hb-hybrid", "version": "1.1", "tableFormat": "VPX", "authors": ["Marlin Works"], "createdAt": 1701000000, "features": ["Hybrid"], "imgUrl": "https://example.invalid/shots/harbor-hybrid.webp"},
+				{"id": "fx-id-hb-vr", "version": "1.2", "tableFormat": "VPX", "authors": ["Marlin Works"], "createdAt": 1702000000, "features": ["VR"], "imgUrl": "https://example.invalid/shots/harbor-vr.webp"},
+				{"id": "fx-id-hb-vr2", "version": "1.3", "tableFormat": "VPX", "authors": ["Marlin Works"], "createdAt": 1703000000, "features": ["VR"], "imgUrl": "https://example.invalid/shots/harbor-vr2.webp"},
+			],
+		},
+		{
+			"id": "fx-id-dune", "name": "Dune Sea", "manufacturer": "Marlin",
+			"year": 1990, "designers": [],
+			"tableFiles": [
+				{"id": "fx-id-dune-plain", "version": "1.0", "tableFormat": "VPX", "authors": ["Marlin Works"], "createdAt": 1700000000, "features": [], "imgUrl": "https://example.invalid/shots/dune-plain.webp"},
+				{"id": "fx-id-dune-hybrid", "version": "1.1", "tableFormat": "VPX", "authors": ["Marlin Works"], "createdAt": 1701000000, "features": ["Hybrid"], "imgUrl": "https://example.invalid/shots/dune-hybrid.webp"},
+			],
+		},
+		{
+			"id": "fx-id-reef", "name": "Reef", "manufacturer": "Marlin",
+			"year": 1991, "designers": [],
+			"tableFiles": [
+				{"id": "fx-id-reef-plain", "version": "1.0", "tableFormat": "VPX", "authors": ["Marlin Works"], "createdAt": 1700000000, "features": [], "imgUrl": "https://example.invalid/shots/reef-plain.webp"},
+			],
+		},
+		{
+			"id": "fx-id-exact", "name": "Exact Shoal", "manufacturer": "Marlin",
+			"year": 1993, "designers": [],
+			"tableFiles": [
+				{"id": "fx-id-exact-1", "version": "1.0", "tableFormat": "VPX", "authors": ["Marlin Works"], "createdAt": 1700000000, "features": [], "imgUrl": "https://example.invalid/shots/exact-plain.webp"},
+				{"id": "fx-id-exact-2", "version": "2.0", "tableFormat": "VPX", "authors": ["Marlin Works"], "createdAt": 1710000000, "features": ["VR"], "imgUrl": "https://example.invalid/shots/exact-vr.webp"},
+			],
+		},
+		{
+			"id": "fx-id-void", "name": "Void Game", "manufacturer": "Marlin",
+			"year": 1992, "designers": [],
+			"tableFiles": [
+				{"id": "fx-id-void-1", "version": "1.0", "tableFormat": "VPX", "authors": ["Marlin Works"], "createdAt": 1700000000, "features": []},
+			],
+		},
+	]
+	_expect(_write_text_file(id_root_user.path_join("vpsdb.json"), JSON.stringify(id_db_data)), "identity fixture: db written", failures)
+	var id_db: VpsDatabase = VpsDatabase.new()
+	_expect(id_db.load_db(id_root_user.path_join("vpsdb.json")), "identity fixture: db loads", failures)
+	var id_names: Array[String] = [
+		"Tales of the Vault (Data West 1993) VPW PATCHED.vpx",
+		"WizardOfZog v1.03a.vpx",
+		"BTILP 2026 Original 1.vpx",
+		"BTILP Original 1.vpx",
+		"Deadsea 1.08a Minimal Hacksaw999 R&BMetal.vpx",
+		"Deadsea 1.08a Minimal R&BMetal.vpx",
+		"Harbor Lights (Marlin 1988) v9.9.vpx",
+		"Dune Sea (Marlin 1990) v9.9.vpx",
+		"Reef (Marlin 1991) v9.9.vpx",
+		"Exact Shoal (Marlin 1993) v1.0.vpx",
+		"Void Game (Marlin 1992) v9.9.vpx",
+		"Nonexistent Table (Nobody 2001) v1.0.vpx",
+	]
+	for id_name: String in id_names:
+		_expect(_write_text_file(id_tables.path_join(id_name), "fixture"), "identity fixture: file written (%s)" % id_name, failures)
+	var id_folders: Array[String] = [id_tables]
+	var id_scan: LibraryScanner = LibraryScanner.new()
+	id_scan.scan(id_folders, id_db)
+	print("  identity fixture distribution: ", id_scan.match_tier_counts,
+		" (rescued ", id_scan.rescued_files, ", inherited shots ", id_scan.inherited_shot_games, ", unplaced ", id_scan.unplaced_files.size(), ")")
+	_expect(id_scan.total_files == 12, "identity fixture: 12 files scanned", failures)
+	_expect(int(id_scan.match_tier_counts.get("rescue", 0)) == 4 and id_scan.rescued_files == 4,
+		"identity: exactly the 4 decorated named shapes are rescued (post-paren, squish, acronym, witness)", failures)
+	var id_crypt: GameEntry = id_scan.game_by_id("fx-id-crypt")
+	_expect(id_crypt != null, "identity rescue (post-paren): the VPW PATCHED file lands on its game", failures)
+	if id_crypt != null:
+		var cb: TableBuild = id_crypt.build_by_path(id_tables.path_join("Tales of the Vault (Data West 1993) VPW PATCHED.vpx"))
+		_expect(cb != null and cb.match_tier == "rescue" and not cb.matched_db,
+			"identity rescue (post-paren): tier rescue, game-only (the ladder never relabels)", failures)
+		_expect(id_crypt.shot_url == "https://example.invalid/shots/vault-vr.webp" and id_crypt.shot_inherited and id_crypt.shot_from_build == "fx-id-crypt-vr",
+			"identity inheritance: the rescued game-only entry inherits the VR build's shot, flagged with its donor", failures)
+	var id_squish: GameEntry = id_scan.game_by_id("fx-id-squish")
+	_expect(id_squish != null, "identity rescue (squish): the one-word file lands on its game", failures)
+	if id_squish != null:
+		var sb: TableBuild = id_squish.build_by_path(id_tables.path_join("WizardOfZog v1.03a.vpx"))
+		_expect(sb != null and sb.match_tier == "rescue" and sb.matched_db and sb.table_file_id == "fx-id-squish-1",
+			"identity rescue (squish): the single build is matched through the ladder", failures)
+		_expect(id_squish.shot_url == "https://example.invalid/shots/zog.webp" and not id_squish.shot_inherited and id_squish.shot_from_build == "fx-id-squish-1",
+			"identity: a build-exact shot is the build's own, never flagged inherited", failures)
+	var id_port: GameEntry = id_scan.game_by_id("fx-id-btilp-2026")
+	_expect(id_port != null, "identity rescue (acronym): the stated year picks the 2026 triplet", failures)
+	if id_port != null:
+		var pb: TableBuild = id_port.build_by_path(id_tables.path_join("BTILP 2026 Original 1.vpx"))
+		_expect(pb != null and pb.match_tier == "rescue" and pb.matched_db and pb.table_file_id == "fx-id-btilp26-1",
+			"identity rescue (acronym): the 2026 game's single build is matched", failures)
+	_expect(id_scan.game_by_id("fx-id-btilp-2022") == null and id_scan.game_by_id("fx-id-btilp-2020") == null,
+		"identity rescue (acronym): the year-vetoed triplets hold no files", failures)
+	_expect(id_scan.game_by_id("local:btilporiginal1") != null,
+		"identity rescue (acronym): the year-less acronym is ambiguous across the triplets and stays local", failures)
+	var id_ds: GameEntry = id_scan.game_by_id("fx-id-deadsea")
+	_expect(id_ds != null, "identity rescue (witness): the unique-version file lands on its game", failures)
+	if id_ds != null:
+		var wb: TableBuild = id_ds.build_by_path(id_tables.path_join("Deadsea 1.08a Minimal Hacksaw999 R&BMetal.vpx"))
+		_expect(wb != null and wb.match_tier == "rescue" and wb.matched_db and wb.table_file_id == "fx-id-ds-2",
+			"identity rescue (witness): the file lands on the very build its version and author name", failures)
+		_expect(id_ds.shot_url == "https://example.invalid/shots/deadsea-108a.webp" and not id_ds.shot_inherited,
+			"identity rescue (witness): the witnessed build's own shot, not an inheritance", failures)
+	_expect(id_scan.unplaced_files.has(id_tables.path_join("Deadsea 1.08a Minimal R&BMetal.vpx")),
+		"identity rescue (witness): without the author token riding along, the same version witnesses nothing - the file stays unplaced", failures)
+	var id_harbor: GameEntry = id_scan.game_by_id("fx-id-harbor")
+	_expect(id_harbor != null and id_harbor.shot_url == "https://example.invalid/shots/harbor-vr.webp" and id_harbor.shot_inherited and id_harbor.shot_from_build == "fx-id-hb-vr",
+		"identity inheritance: VR donors beat Hybrid and plain, first in db order among the VR builds", failures)
+	var id_dune: GameEntry = id_scan.game_by_id("fx-id-dune")
+	_expect(id_dune != null and id_dune.shot_url == "https://example.invalid/shots/dune-hybrid.webp" and id_dune.shot_inherited and id_dune.shot_from_build == "fx-id-dune-hybrid",
+		"identity inheritance: with no VR build, the Hybrid build donates", failures)
+	var id_reef: GameEntry = id_scan.game_by_id("fx-id-reef")
+	_expect(id_reef != null and id_reef.shot_url == "https://example.invalid/shots/reef-plain.webp" and id_reef.shot_inherited and id_reef.shot_from_build == "fx-id-reef-plain",
+		"identity inheritance: with neither VR nor Hybrid, the first build with a shot donates", failures)
+	var id_exact: GameEntry = id_scan.game_by_id("fx-id-exact")
+	_expect(id_exact != null and id_exact.shot_url == "https://example.invalid/shots/exact-plain.webp" and not id_exact.shot_inherited and id_exact.shot_from_build == "fx-id-exact-1",
+		"identity inheritance: a build-exact shot always beats an inherited one (the VR build does not override it)", failures)
+	var id_void: GameEntry = id_scan.game_by_id("fx-id-void")
+	_expect(id_void != null and id_void.shot_url == "" and not id_void.shot_inherited,
+		"identity inheritance: a game with no shot anywhere stays shotless - nothing is invented", failures)
+	_expect(id_scan.inherited_shot_games == 4,
+		"identity inheritance: exactly 4 games inherit (crypt, harbor, dune, reef)", failures)
+	_expect(id_scan.unplaced_files.size() == 3,
+		"identity unplaced: exactly the 3 unplaceable files are recorded", failures)
+	_expect(id_scan.unplaced_files.has(id_tables.path_join("Nonexistent Table (Nobody 2001) v1.0.vpx"))
+		and id_scan.unplaced_files.has(id_tables.path_join("BTILP Original 1.vpx")),
+		"identity unplaced: the unknown table and the ambiguous acronym are both listed", failures)
+	var id_render: String = UnplacedFilesList.render(id_scan.unplaced_files, "2026-11-04")
+	_expect(id_render.contains("Unplaced: 3") and id_render.contains("BTILP Original 1.vpx") and not id_render.contains("Harbor Lights"),
+		"identity unplaced: the rendered list names the count and the files, and no placed file", failures)
+	_wipe_tree(id_root)
 
 	# Letter index (the letter-jump round): the alphabet
 	# strip's mathematics over REAL title shapes - every title
