@@ -744,6 +744,11 @@ func _ready() -> void:
 	RoomView.debug_opt_nc = OS.get_environment("PVLDS_OPT_NC")
 	if OS.get_environment("PVLDS_OPT_NC") == "oldradius":
 		RoomView.WALL_RADIUS = 3.40
+	# The NEVERBLANK round's negative-control seam:
+	# "clearfirst" restores clear-then-fill on the face-swap
+	# seam, so the facecache chain census's black-pane legs
+	# fail by name. Set here, before any room exists.
+	RoomView.debug_nb_nc = OS.get_environment("PVLDS_NEVERBLANK_NC")
 	TextureFactory.probe_enabled = OS.has_environment("PVLDS_GF16_PROBE")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true

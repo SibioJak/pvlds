@@ -11,6 +11,16 @@ extends Area3D
 var action_id: String = ""
 var payload: String = ""
 var pick_enabled: bool = true
+
+## NEVERBLANK instrument: an optional observer the room
+## installs for the session. Called on EVERY set_texture
+## with (quad, outgoing texture, incoming texture) -
+## including calls whose incoming texture is null (which
+## set_texture itself ignores) - so the room can convict
+## any path that tries to replace a real face with an
+## empty one. Observation only: the probe's return value
+## is never read and it cannot veto an assignment.
+static var texture_assign_probe: Callable = Callable()
 var suppress_frame: bool = false ## GRADFIX14 (item 1): the machined strip's sections carry no hover/focus frame - the focused section's lift IS the highlight (see RoomView._update_rail_lift); the room sets this on rail quads in strip mode
 var _size: Vector2 = Vector2.ZERO ## the quad's face size, as set up (the tournament smoke reads board panels')
 
@@ -80,6 +90,8 @@ func setup(p_action: String, p_payload: String, tex: Texture2D, size: Vector2) -
 
 
 func set_texture(tex: Texture2D) -> void:
+	if texture_assign_probe.is_valid():
+		texture_assign_probe.call(self, current_texture(), tex)
 	if _mat != null and tex != null:
 		_mat.albedo_texture = tex
 

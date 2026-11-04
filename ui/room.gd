@@ -891,6 +891,14 @@ static var debug_gf17_nc: String = ""
 ## "oldradius" is Main's (it assigns WALL_RADIUS before the
 ## room exists). Empty in every real run.
 static var debug_opt_nc: String = ""
+## Negative-control seam for the NEVERBLANK round (the
+## harness env PVLDS_NEVERBLANK_NC, set by Main before any
+## room exists): "clearfirst" restores the clear-then-fill
+## shape on the face-swap seam - the swap binds the dark
+## placeholder first and the real face a few frames later -
+## so the facecache chain census's black-pane legs fail by
+## name. Empty in every real run.
+static var debug_nb_nc: String = ""
 
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
@@ -1105,12 +1113,30 @@ var _joy_right_armed: bool = false ## baseline-release arming: set once THIS roo
 var _scroll_telemetry: ScrollTelemetry = ScrollTelemetry.new()
 var _scroll_telemetry_started: bool = false
 
+## NEVERBLANK (the law: a card panel's displayed texture
+## is only ever REPLACED, never cleared first). The
+## instrument: ClickableQuad's assignment probe convicts
+## any empty-over-real assignment on a card panel, and the
+## eviction paths report dropping a texture a visible
+## panel still wears. The fix: cache evictions defer
+## while their texture is bound to a visible panel, and
+## cache-hit faces bind synchronously at enqueue - in the
+## same call stack as the centre change that brought
+## their card into the window - so a served face never
+## waits behind an in-flight render to be seen.
+var _nb_face_clear_count: int = 0 ## assignments of an empty-like texture over a real standing card face (the law: stays 0)
+var _nb_evict_bound_count: int = 0 ## cache evictions that dropped a texture bound to a visible card panel (instrument; the fix turns these into deferrals)
+var _nb_evict_deferred_count: int = 0 ## evictions deferred because the texture is bound to a visible panel (the fix's account)
+var _nb_enqueue_swaps: int = 0 ## cache-hit faces bound synchronously at enqueue (the fix's account)
+var _nb_nc_pending: Array = [] ## NC "clearfirst" only: [quad, tex, frames_left] real binds waiting out their clear dwell
+
 
 func setup(factory: TextureFactory, scanner: LibraryScanner, store: StateStore, xr_enabled: bool) -> void:
 	_factory = factory
 	_scanner = scanner
 	_store = store
 	_xr_enabled = xr_enabled
+	ClickableQuad.texture_assign_probe = _nb_on_texture_assign ## NEVERBLANK instrument (see _nb_on_texture_assign)
 	_build_environment()
 	_build_rigs()
 	_detail = DetailView.new()
@@ -3940,6 +3966,9 @@ func _face_cache_put(key: String, tex: Texture2D, aspect: float, art_path: Strin
 	_face_cache_order.push_back(key)
 	while _face_cache_order.size() > FACE_CACHE_MAX:
 		var old: String = _face_cache_order.pop_front()
+		var old_ent: Array = _face_tex_cache.get(old, []) as Array
+		if not old_ent.is_empty():
+			_nb_note_evict(old, old_ent[0] as Texture2D, "cap") ## NEVERBLANK instrument
 		_face_tex_cache.erase(old)
 		_evicted_total += 1 ## a cap drop is an eviction (the only kind left)
 	_fc_sync_footer()
@@ -3949,6 +3978,9 @@ func _face_cache_put(key: String, tex: Texture2D, aspect: float, art_path: Strin
 ## styled card cached under an art key must not re-serve
 ## itself when the heal asks for the art render again).
 func _face_cache_evict(key: String) -> void:
+	var fent: Array = _face_tex_cache.get(key, []) as Array
+	if not fent.is_empty():
+		_nb_note_evict(key, fent[0] as Texture2D, "force") ## NEVERBLANK instrument
 	_face_tex_cache.erase(key)
 	_face_cache_order.erase(key)
 
@@ -4020,6 +4052,78 @@ func _fc_sync_footer() -> void:
 		"facecache_swaps": _fc_swaps,
 		"facecache_rerenders_after_eviction": _fc_rerenders_eviction,
 		"facecache_evicted_total": _evicted_total,
+	})
+	_nb_sync_footer()
+
+
+## NEVERBLANK: the session's never-blank account, merged
+## into the telemetry footer beside the face cache's (the
+## proof reads the law's counters from the log's own
+## footer: face_clear attempts must read 0).
+func _nb_sync_footer() -> void:
+	if not _scroll_telemetry_started:
+		return
+	_scroll_telemetry.set_footer_extra({
+		"neverblank_face_clear_attempts": _nb_face_clear_count,
+		"neverblank_evict_bound": _nb_evict_bound_count,
+		"neverblank_evict_deferred": _nb_evict_deferred_count,
+		"neverblank_enqueue_swaps": _nb_enqueue_swaps,
+	})
+
+
+## The assignment probe (installed on ClickableQuad in
+## setup): fires on every set_texture in the room. Only
+## one transition is the law's business - an EMPTY-LIKE
+## incoming texture (null, or not a real face by the
+## standing _tex_is_real measure: the 4x4 placeholder,
+## clear and fallback solids) over a REAL standing face,
+## on a CARD panel. Everything else returns in two size
+## checks. Convictions count + record; the shipped law is
+## that the count stays 0.
+func _nb_on_texture_assign(quad: ClickableQuad, old_tex: Texture2D, new_tex: Texture2D) -> void:
+	if quad == null or not _tex_is_real(old_tex) or _tex_is_real(new_tex):
+		return
+	var entry: Dictionary = _panel_pool.get(quad.payload, {}) as Dictionary
+	if entry.is_empty() or str(entry.get("mode", "")) != "card":
+		return
+	_nb_face_clear_count += 1
+	_nb_sync_footer()
+	var idx: int = _panels.find(quad)
+	_telemetry_record("face_clear", {
+		"game": quad.payload,
+		"col": _grid_coord(idx).x if idx >= 0 else -1,
+		"old_size": "%dx%d" % [old_tex.get_width(), old_tex.get_height()],
+		"new_size": "null" if new_tex == null else "%dx%d" % [new_tex.get_width(), new_tex.get_height()],
+		"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
+	})
+
+
+## Whether a composed face texture is bound to a panel
+## the drawn window currently shows. A bound texture may
+## not be dropped by the cache: the panel keeps wearing
+## it, and dropping the cache's reference under it is
+## exactly the eviction the instrument watches.
+func _nb_tex_bound_visible(tex: Texture2D) -> bool:
+	if tex == null:
+		return false
+	for qv: Variant in _panels:
+		var q: ClickableQuad = qv as ClickableQuad
+		if q != null and q.visible and q.current_texture() == tex:
+			return true
+	return false
+
+
+## An eviction is about to drop a key: if its texture is
+## bound to a visible panel, that is the instrument's
+## second conviction - count it and put it in the log.
+func _nb_note_evict(key: String, tex: Texture2D, via: String) -> void:
+	if tex == null or not _nb_tex_bound_visible(tex):
+		return
+	_nb_evict_bound_count += 1
+	_nb_sync_footer()
+	_telemetry_record("evict_bound", {
+		"key": key, "via": via,
+		"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
 	})
 
 
