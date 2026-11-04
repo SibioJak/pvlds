@@ -357,6 +357,32 @@ var _land_filter_forced: bool = false
 var _land_warm_held: bool = false
 var _land_rewarm_done: bool = false
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
+var _smoke_facecache: bool = false ## --pvlds-smoke-facecache: FACECACHE round - fast stick-tap chains across the full shelf TWICE at field cadence (~320 ms taps), sampling the DRAWN panes mid-chain; pass 1 may only miss never-rendered games with a first render in flight, pass 2 must never miss a cache-resident game and must serve re-entries as swaps, not renders. A favourite round-trip on the focused card sits between the passes. Under PVLDS_OPT_NC=nocache the room's cache never serves and the pass-2 census + counters legs fail by name
+var _fc_phase: int = 0
+var _fc_failures: int = 0
+var _fc_filter_forced: bool = false
+var _fc_settle_frames: int = 0
+var _fc_deadline_msec: int = 0
+var _fc_pass: int = 0 ## 1 or 2 while a chain runs
+var _fc_taps: int = 0
+var _fc_tap_next_msec: int = 0
+var _fc_tap_release_msec: int = 0
+var _fc_stick_held: bool = false
+var _fc_start_col: int = 0
+var _fc_samples: int = 0
+var _fc_rendered_ever: Dictionary = {} ## game_id -> true once the cache account shows a render for it
+var _fc_violations: int = 0 ## mid-chain samples where a face that must stand read missing
+var _fc_violation_notes: Array[String] = []
+var _fc_inflight_max: int = 0 ## most never-rendered faces missing in one mid-chain sample
+var _fc_resident: Dictionary = {} ## game_id -> true: resident at pass 2's start
+var _fc_snap_p1_end: Dictionary = {} ## face_cache_stats at pass 1's drain
+var _fc_snap_p2_start: Dictionary = {} ## face_cache_stats at pass 2's start
+var _fc_p2_evicted_inflight: Dictionary = {} ## game_id -> true: cap-evicted games seen mid-re-render on pass 2 (allowed)
+var _fc_fav_game: String = ""
+var _fc_fav_stage: int = 0
+var _fc_fav_renders0: int = 0
+var _fc_fav_swaps0: int = 0
+var _fc_fav_frames: int = 0
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
 var _jumpbench_t0: int = 0
@@ -569,6 +595,8 @@ func _ready() -> void:
 		_smoke_swingprobe = true
 	if user_args.has("--pvlds-smoke-landing"):
 		_smoke_landing = true
+	if user_args.has("--pvlds-smoke-facecache"):
+		_smoke_facecache = true
 	if user_args.has("--pvlds-smoke-jumpbench"):
 		_smoke_jumpbench = true
 		_jumpbench_boot_msec = Time.get_ticks_msec()
@@ -751,7 +779,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -933,6 +961,8 @@ func _process(_delta: float) -> void:
 		_drive_swingprobe_smoke()
 	if _smoke_landing:
 		_drive_landing_smoke()
+	if _smoke_facecache:
+		_drive_facecache_smoke()
 	if _smoke_jumpbench:
 		_drive_jumpbench_smoke()
 	if _smoke_quitwarm:
@@ -12320,6 +12350,342 @@ func _land_tour_grab(title: String) -> void:
 		return
 	var slug: String = title.to_lower().replace(" ", "_").replace("!", "wow")
 	_save_shot_png(dir.path_join("landing_" + slug + ".png"))
+
+
+## -------------------------------------------------- facecache smoke (FACECACHE round)
+##
+## --pvlds-smoke-facecache: the field complaint as a census.
+## The OPTIMIZE field session's video: "tap quickly, you
+## come up empty on cards until it comes to a stop; doesn't
+## matter if card has already loaded previously." The driver
+## chains stick taps at field cadence (~320 ms tap to tap,
+## a 90 ms deflection each) across the full fixture shelf
+## TWICE, sampling the DRAWN panes (room.face_state) on
+## every frame of both chains. Pass 1 (cold shelf): a drawn
+## face may read missing only while its game has never
+## rendered and its first render is in flight - bounded,
+## counted, reported. Between the passes, a favourite
+## round-trip on the focused card: X on renders the new
+## state exactly once; X off must be served as a SWAP (the
+## original face, still cached - no third render). Pass 2
+## (warm shelf): a game resident in the composed-face cache
+## at the pass's start must NEVER read missing mid-chain,
+## and its re-entries must be swaps, not renders; games the
+## LRU cap honestly evicted mid-run (139 fixture games, cap
+## 108) may re-render - every pass-2 render must belong to
+## an evicted game, and the counters must account exactly:
+## renders == unique games + 1 (the favourite's second
+## state) + pass-2 eviction re-renders. Landing census zero
+## at both stops. Under PVLDS_OPT_NC=nocache the room's
+## cache never serves: pass 2 re-renders its re-entries,
+## the toggle-back renders a third time, and the pass-2
+## census + counters legs fail by name.
+func _fc_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - facecache smoke: ", label)
+	else:
+		_fc_failures += 1
+		printerr("  FAIL - facecache smoke: ", label)
+
+
+func _finish_facecache_smoke() -> void:
+	if _fc_failures == 0:
+		print("PVLDS FACECACHE SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS FACECACHE SMOKE: FAIL (%d)" % _fc_failures)
+		get_tree().quit(1)
+
+
+func _fc_feed_button(btn: JoyButton, pressed: bool) -> void:
+	var ev: InputEventJoypadButton = InputEventJoypadButton.new()
+	ev.device = 0
+	ev.button_index = btn
+	ev.pressed = pressed
+	Input.parse_input_event(ev)
+
+
+## One mid-chain sample of the drawn panes. Rendered-ever
+## is refreshed from the cache account first, so a face
+## whose first render lands this very frame already counts
+## as rendered. Violations: pass 1 - a rendered game reads
+## missing; pass 2 - a cache-resident game reads missing.
+## A pass-2 miss on a non-resident game is an evicted
+## re-render in flight: allowed, and tallied apart.
+func _fc_sample() -> void:
+	_fc_samples += 1
+	var stats: Dictionary = _room.face_cache_stats()
+	var rpg: Dictionary = stats.get("renders_per_game", {}) as Dictionary
+	for gid: Variant in rpg.keys():
+		_fc_rendered_ever[str(gid)] = true
+	var inflight: int = 0
+	for e: Dictionary in _room.face_state():
+		if not bool(e.get("is_unreal", false)):
+			continue
+		var gid: String = str(e.get("game_id", ""))
+		if _fc_pass == 2 and _fc_resident.has(gid):
+			_fc_violations += 1
+			if _fc_violation_notes.size() < 6:
+				_fc_violation_notes.append("pass 2 resident '%s'" % str(e.get("title", "")))
+		elif _fc_rendered_ever.has(gid):
+			if _fc_pass == 1:
+				_fc_violations += 1
+				if _fc_violation_notes.size() < 6:
+					_fc_violation_notes.append("pass 1 re-entry '%s'" % str(e.get("title", "")))
+			else:
+				_fc_p2_evicted_inflight[gid] = true
+		else:
+			inflight += 1
+	_fc_inflight_max = maxi(_fc_inflight_max, inflight)
+
+
+## The shared chain driver for both passes: timed taps in
+## _fc_pass's direction until the centre reaches the shelf
+## end it is heading for. Returns true when the chain ends.
+func _fc_chain_step() -> bool:
+	var now: int = Time.get_ticks_msec()
+	var col: int = _room._grid_coord(_room.centre_index()).x
+	var target: int = maxi(0, _room._columns - 3) if _fc_pass == 1 else _fc_start_col
+	if _fc_stick_held and now >= _fc_tap_release_msec:
+		_input_feed_stick_x(0.0)
+		_fc_stick_held = false
+	var arrived: bool = col >= target if _fc_pass == 1 else col <= target
+	if arrived:
+		if _fc_stick_held:
+			_input_feed_stick_x(0.0)
+			_fc_stick_held = false
+		return true
+	if not _fc_stick_held and now >= _fc_tap_next_msec:
+		_input_feed_stick_x(1.0 if _fc_pass == 1 else -1.0)
+		_fc_stick_held = true
+		_fc_taps += 1
+		_fc_tap_release_msec = now + 90
+		_fc_tap_next_msec = now + 320
+	_fc_sample()
+	return false
+
+
+func _drive_facecache_smoke() -> void:
+	match _fc_phase:
+		0:
+			# Boot, force the whole-shelf filter, wait until
+			# every art source has landed (warmer idle, shots
+			# cached), then seat at the shelf's left end and
+			# drain the start window.
+			if _room == null or not _room.visible or not _room.wall_ready or _scan_active:
+				if _fc_deadline_msec == 0:
+					_fc_deadline_msec = Time.get_ticks_msec() + 360000
+				elif Time.get_ticks_msec() > _fc_deadline_msec:
+					_fc_expect(false, "facecache: the room never came up (scan never settled)")
+					_finish_facecache_smoke()
+				return
+			if not _fc_filter_forced:
+				_fc_filter_forced = true
+				_room._handle_rail("filter:all")
+				return
+			Input.warp_mouse(Vector2(512.0, 764.0))
+			var shots_in: bool = true
+			if _scanner != null:
+				for g: GameEntry in _scanner.games:
+					if g.shot_url != "" and not ArtProvider.shot_is_cached(g.shot_url):
+						shots_in = false
+			var warm_in: bool = _art_warmer == null or _art_warmer.is_idle()
+			if not (warm_in and shots_in):
+				if _fc_deadline_msec == 0:
+					_fc_deadline_msec = Time.get_ticks_msec() + 360000
+				elif Time.get_ticks_msec() > _fc_deadline_msec:
+					_fc_expect(false, "facecache: the art sources never all landed (warmer idle %s, shots in %s)" % [str(warm_in), str(shots_in)])
+					_finish_facecache_smoke()
+				return
+			if _room._columns < 40:
+				_fc_expect(false, "facecache: the fixture shelf holds %d columns (a full-shelf chain needs at least 40)" % _room._columns)
+				_finish_facecache_smoke()
+				return
+			var mid: int = _room._panels.size() / 2
+			var mid_row: int = _room._grid_coord(mid).y
+			var start_idx: int = mid
+			for i: int in range(_room._panels.size()):
+				if _room._grid_coord(i).x == 2 and _room._grid_coord(i).y == mid_row:
+					start_idx = i
+					break
+			_room._set_centre(start_idx, true)
+			_room._set_focused(_room._panels[start_idx])
+			if not _room._window_fill_busy and not _room.page_slide_active() and _room.art_pipeline_idle():
+				_fc_settle_frames += 1
+			else:
+				_fc_settle_frames = 0
+			if _fc_settle_frames >= 5:
+				TextureFactory.clear_art_decode_cache()
+				_fc_start_col = _room._grid_coord(_room.centre_index()).x
+				_fc_pass = 1
+				_fc_taps = 0
+				_fc_samples = 0
+				_fc_tap_next_msec = Time.get_ticks_msec()
+				_fc_deadline_msec = Time.get_ticks_msec() + 300000
+				_fc_phase = 1
+				print("FACECACHE: room up, %d columns, %d games; pass 1 chain right at field cadence" % [_room._columns, _room._visible_games.size()])
+		1:
+			# A chain pass (1 rightward, 2 leftward).
+			if Time.get_ticks_msec() > _fc_deadline_msec:
+				if _fc_stick_held:
+					_input_feed_stick_x(0.0)
+					_fc_stick_held = false
+				_fc_expect(false, "facecache: pass %d chain never crossed the shelf (%d taps, centre col %d)" % [_fc_pass, _fc_taps, _room._grid_coord(_room.centre_index()).x])
+				_finish_facecache_smoke()
+				return
+			if _fc_chain_step():
+				print("FACECACHE: pass %d chain done: %d taps, %d samples, %d violations, worst never-rendered in flight %d" % [_fc_pass, _fc_taps, _fc_samples, _fc_violations, _fc_inflight_max])
+				_fc_settle_frames = 0
+				_fc_deadline_msec = Time.get_ticks_msec() + 180000
+				_fc_phase = 2
+		2:
+			# Drain at the stop: pipeline idle and the
+			# landing census reads zero, then judge the
+			# pass's legs (pass 1) or finish (pass 2).
+			var census: Dictionary = _room.landing_census()
+			var missing: Array = census.get("missing", []) as Array
+			var total_faces: int = int(census.get("total", 0))
+			if not _room.swing_active() and not _room.page_slide_active() and _room.art_pipeline_idle():
+				_fc_settle_frames += 1
+			else:
+				_fc_settle_frames = 0
+			if _fc_settle_frames >= 10 and missing.is_empty() and total_faces > 0:
+				if _fc_pass == 1:
+					_fc_expect(_fc_violations == 0,
+						"facecache: pass 1 chain census: no previously rendered face read missing mid-chain (%d violations over %d samples%s)" % [_fc_violations, _fc_samples, (": " + ", ".join(_fc_violation_notes)) if not _fc_violation_notes.is_empty() else ""])
+					_fc_expect(_fc_inflight_max <= 12,
+						"facecache: pass 1 chain census: never-rendered faces with a first render in flight stayed bounded (worst sample %d missing of the drawn window)" % _fc_inflight_max)
+					_fc_expect(true,
+						"facecache: landing census zero at the pass 1 stop (%d of %d faces landed)" % [total_faces, total_faces])
+					_fc_snap_p1_end = _room.face_cache_stats()
+					print("FACECACHE: pass 1 drained: renders %d, swaps %d, unique games %d, evicted %d" % [int(_fc_snap_p1_end.get("renders", 0)), int(_fc_snap_p1_end.get("swaps", 0)), int(_fc_snap_p1_end.get("unique_games", 0)), int(_room.residency_stats().get("evicted_total", 0))])
+					_fc_fav_stage = 0
+					_fc_fav_frames = 0
+					_fc_deadline_msec = Time.get_ticks_msec() + 120000
+					_fc_phase = 3
+				else:
+					_fc_expect(true,
+						"facecache: landing census zero at the pass 2 stop (%d of %d faces landed)" % [total_faces, total_faces])
+					_fc_judge_counters()
+					_finish_facecache_smoke()
+			elif Time.get_ticks_msec() > _fc_deadline_msec:
+				_fc_expect(false, "facecache: the pass %d stop never drained clean (%d of %d faces missing: %s)" % [_fc_pass, missing.size(), total_faces, ", ".join(PackedStringArray(missing))])
+				_finish_facecache_smoke()
+		3:
+			# The favourite round-trip on the centred card.
+			_fc_fav_frames += 1
+			match _fc_fav_stage:
+				0:
+					var cidx: int = _room.centre_index()
+					_fc_fav_game = _room._visible_games[cidx].game_id
+					_room._set_focused(_room._panels[cidx])
+					var st0: Dictionary = _room.face_cache_stats()
+					_fc_fav_renders0 = int((st0.get("renders_per_game", {}) as Dictionary).get(_fc_fav_game, 0))
+					_fc_fav_swaps0 = int(st0.get("swaps", 0))
+					_fc_feed_button(JOY_BUTTON_X, true)
+					_fc_fav_stage = 1
+					_fc_fav_frames = 0
+				1:
+					if _fc_fav_frames >= 3:
+						_fc_feed_button(JOY_BUTTON_X, false)
+						_fc_fav_stage = 2
+						_fc_fav_frames = 0
+				2:
+					var st1: Dictionary = _room.face_cache_stats()
+					var r1: int = int((st1.get("renders_per_game", {}) as Dictionary).get(_fc_fav_game, 0))
+					if r1 >= _fc_fav_renders0 + 1 and _room.art_pipeline_idle():
+						_fc_expect(r1 == _fc_fav_renders0 + 1,
+							"facecache: favourite toggle-on renders the focused face exactly once more (renders %d -> %d)" % [_fc_fav_renders0, r1])
+						_fc_fav_renders0 = r1
+						_fc_fav_stage = 3
+						_fc_fav_frames = 0
+					elif Time.get_ticks_msec() > _fc_deadline_msec:
+						_fc_expect(false, "facecache: favourite toggle-on never re-rendered the focused face (renders stuck at %d)" % r1)
+						_finish_facecache_smoke()
+				3:
+					_fc_feed_button(JOY_BUTTON_X, true)
+					_fc_fav_stage = 4
+					_fc_fav_frames = 0
+				4:
+					if _fc_fav_frames >= 3:
+						_fc_feed_button(JOY_BUTTON_X, false)
+						_fc_fav_stage = 5
+						_fc_fav_frames = 0
+				5:
+					var st2: Dictionary = _room.face_cache_stats()
+					var r2: int = int((st2.get("renders_per_game", {}) as Dictionary).get(_fc_fav_game, 0))
+					var s2: int = int(st2.get("swaps", 0))
+					if s2 > _fc_fav_swaps0 and _room.art_pipeline_idle():
+						_fc_expect(r2 == _fc_fav_renders0,
+							"facecache: favourite toggle-back is served as a swap, not a render (renders hold at %d, swaps %d -> %d)" % [r2, _fc_fav_swaps0, s2])
+						# Pass 2 baseline: who is resident,
+						# and the counters as the chain starts.
+						_fc_resident.clear()
+						for gid: String in _room.face_cache_resident_games():
+							_fc_resident[gid] = true
+						_fc_snap_p2_start = _room.face_cache_stats()
+						_fc_pass = 2
+						_fc_taps = 0
+						_fc_samples = 0
+						_fc_violations = 0
+						_fc_violation_notes.clear()
+						_fc_inflight_max = 0
+						_fc_tap_next_msec = Time.get_ticks_msec()
+						_fc_deadline_msec = Time.get_ticks_msec() + 300000
+						_fc_phase = 1
+						print("FACECACHE: favourite round-trip done; pass 2 chain left, %d games resident at the start" % _fc_resident.size())
+					elif Time.get_ticks_msec() > _fc_deadline_msec:
+						_fc_expect(false, "facecache: favourite toggle-back was never served (renders %d, swaps %d -> %d)" % [r2, _fc_fav_swaps0, s2])
+						_finish_facecache_smoke()
+
+
+## The pass-2 + counters judgment, at the pass 2 drain:
+## the drawn-pane census over the chain, the swap service
+## account, and the exact renders accounting over the
+## snapshot windows. The windows are chosen so every
+## legitimate render is named: between the passes exactly
+## ONE render may land (the favourite's new state - its
+## toggle-back is a swap), and during pass 2 a render may
+## land only for a game the cap evicted, at most once per
+## game, always as an eviction-forced re-render under an
+## unchanged key. Session-wide totals are printed, not
+## asserted: the boot window's games may honestly render
+## twice before the chain (cold key, then the warm key
+## once the art sources land), which is the GF17 upgrade
+## path working, not churn.
+func _fc_judge_counters() -> void:
+	_fc_expect(_fc_violations == 0,
+		"facecache: pass 2 chain census: cache-resident faces never read missing mid-chain (%d violations over %d samples%s)" % [_fc_violations, _fc_samples, (": " + ", ".join(_fc_violation_notes)) if not _fc_violation_notes.is_empty() else ""])
+	var end_stats: Dictionary = _room.face_cache_stats()
+	var p1_rpg: Dictionary = _fc_snap_p1_end.get("renders_per_game", {}) as Dictionary
+	var start_rpg: Dictionary = _fc_snap_p2_start.get("renders_per_game", {}) as Dictionary
+	var end_rpg: Dictionary = end_stats.get("renders_per_game", {}) as Dictionary
+	var between_renders: int = int(_fc_snap_p2_start.get("renders", 0)) - int(_fc_snap_p1_end.get("renders", 0))
+	_fc_expect(between_renders == 1,
+		"facecache: counters: exactly one render lands between the passes - the favourite's new state (renders %d -> %d across the round-trip)" % [int(_fc_snap_p1_end.get("renders", 0)), int(_fc_snap_p2_start.get("renders", 0))])
+	var p2_renders: int = 0
+	var resident_renders: int = 0
+	var worst_delta: int = 0
+	for gid: Variant in end_rpg.keys():
+		var d: int = int(end_rpg[gid]) - int(start_rpg.get(gid, 0))
+		if d > 0:
+			p2_renders += d
+			worst_delta = maxi(worst_delta, d)
+			if _fc_resident.has(str(gid)):
+				resident_renders += d
+	var p2_swaps: int = int(end_stats.get("swaps", 0)) - int(_fc_snap_p2_start.get("swaps", 0))
+	_fc_expect(resident_renders == 0 and p2_swaps > 0,
+		"facecache: pass 2 chain census: re-entries of resident games were swaps, not renders (resident renders %d, swaps +%d, evicted-game re-renders %d)" % [resident_renders, p2_swaps, p2_renders - resident_renders])
+	var evict_rerenders: int = int(end_stats.get("rerenders_after_eviction", 0)) - int(_fc_snap_p1_end.get("rerenders_after_eviction", 0))
+	_fc_expect(evict_rerenders == p2_renders and worst_delta <= 1,
+		"facecache: counters: every pass-2 render is a cap-evicted game's single re-render under its unchanged key (%d pass-2 renders, %d eviction-forced, worst per-game delta %d)" % [p2_renders, evict_rerenders, worst_delta])
+	var fav_delta: int = int(end_rpg.get(_fc_fav_game, 0)) - int(p1_rpg.get(_fc_fav_game, 0))
+	_fc_expect(fav_delta == 1,
+		"facecache: counters: the favourite game rendered exactly once across the whole round-trip window (delta %d)" % fav_delta)
+	var unique: int = int(end_stats.get("unique_games", 0))
+	_fc_expect(unique == _room._visible_games.size(),
+		"facecache: counters: every game on the shelf rendered (%d unique games of %d visible)" % [unique, _room._visible_games.size()])
+	print("FACECACHE: final account: unique %d, renders %d, swaps %d, eviction-forced re-renders %d, resident now %d, evicted total %d" % [unique, int(end_stats.get("renders", 0)), int(end_stats.get("swaps", 0)), int(end_stats.get("rerenders_after_eviction", 0)), int(_room.residency_stats().get("resident_faces", 0)), int(_room.residency_stats().get("evicted_total", 0))])
 
 
 ## The GF16 probe print, kept for the swingprobe (its only

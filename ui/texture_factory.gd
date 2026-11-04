@@ -399,11 +399,16 @@ static func make_solid(color: Color) -> Texture2D:
 ## a pure function of the file's bytes, so it is cached by
 ## path and re-verified against the file's mtime + size on
 ## every call (a replaced file re-decodes; art-cache paths
-## are content-stamped besides). Bounded FIFO: a miss is a
-## cost, never a wrong image.
+## are content-stamped besides). Bounded: a miss is a
+## cost, never a wrong image. FACECACHE round: the
+## eviction is an LRU (a verified hit renews the entry -
+## under the old store-order FIFO a long session
+## re-decoded hot art on schedule) and the cap is reunited
+## with the composed-face residency cap (108), so one
+## discipline governs both cache tiers.
 static var _art_decode_cache: Dictionary = {} ## path -> [Texture2D, mtime, size]
 static var _art_decode_order: Array[String] = []
-const ART_DECODE_CACHE_MAX: int = 64
+const ART_DECODE_CACHE_MAX: int = 108
 
 
 ## Drop every decoded-art entry (the artstream smoke's
@@ -503,6 +508,8 @@ static func load_art_texture(path: String) -> Texture2D:
 	var size: int = _file_size(path)
 	var hit: Variant = _art_decode_cache.get(path)
 	if hit is Array and int(hit[1]) == mtime and int(hit[2]) == size:
+		_art_decode_order.erase(path) ## FACECACHE: an LRU hit renews the entry
+		_art_decode_order.push_back(path)
 		if probe_enabled:
 			probe_note("decode_cache_hit", Time.get_ticks_usec() - probe_t)
 		return hit[0] as Texture2D

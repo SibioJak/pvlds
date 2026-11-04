@@ -656,7 +656,7 @@ var _gf17_audit_runs: int = 0 ## GRADFIX17 item 1: sweeps spent on the current s
 ## GF19 travel costume are deleted wholesale. What stands here
 ## instead: the apply-cap account, the settle audit's dress
 ## stamp, and the eviction law's state.
-const EVICT_MARGIN_COLS: int = 6 ## after a settle audit completes, resident faces outside the drawn window +/- this many columns are evicted
+const EVICT_MARGIN_COLS: int = 6 ## RETIRED by the FACECACHE round: the settle-time margin eviction this named is deleted (distance is no eviction offence - see _evict_after_settle); the constant stays only so old comments and NC runners that name it still parse
 const RESIDENT_FACES_CAP: int = 108 ## resident face cap (drawn window 63 + margin): the face cache's LRU enforces it in _face_cache_put
 var _evicted_total: int = 0 ## faces evicted since boot (margin pass + LRU cap drops)
 var _applies_total: int = 0 ## staged applies since boot (art_frame_stats)
@@ -664,6 +664,31 @@ var _applies_during_travel: int = 0 ## staged applies that landed while the drum
 var _applies_max_one_frame: int = 0 ## most applies landed in any single engine frame
 var _applies_frame_id: int = -1 ## the engine frame the running apply count belongs to
 var _applies_this_frame: int = 0 ## applies landed in _applies_frame_id so far
+## FACECACHE round: the composed-face cache's own account -
+## the field conviction (OPTIMIZE log, 177 s) was 1,056
+## composed renders over 320 games (35.9 s of main thread)
+## with ZERO cache hits, because the OPTIMIZE distance
+## eviction dropped entries (and cleared panel stamps) for
+## leaving the window's margin. The law now: a composed
+## face renders ONCE per game-state (the face key: game,
+## art path, favourite, PuP - every input the render reads),
+## is served from the cache as a pointer swap while it
+## lives, and leaves the cache only under LRU cap pressure
+## (RESIDENT_FACES_CAP in _face_cache_put) or when the heal
+## force-evicts the one key it is retrying. These counters
+## are the proof's raw numbers (face_cache_stats + the
+## telemetry footer's extra fields).
+var _fc_renders: int = 0 ## composed renders served (a fill reached _face_cache_put)
+var _fc_swaps: int = 0 ## fills served from the cache (the "facecache" branch)
+var _fc_rerenders_eviction: int = 0 ## renders whose game+key had already rendered this session: the previous entry was dropped (cap pressure or a heal force-evict) - the number the field log must hold at ~0 for cap headroom
+var _fc_renders_per_game: Dictionary = {} ## game_id -> composed renders served this session
+var _fc_last_render_key: Dictionary = {} ## game_id -> the face key its last served render wore
+var _fc_evict_reported: int = 0 ## _evicted_total as of the last settle evict record (the record reports the delta)
+var _swaps_total: int = 0 ## staged swap-applies since boot (art_frame_stats: swaps ride their own account, never the render cap's)
+var _swaps_during_travel: int = 0 ## swap-applies that landed while the drum travelled
+var _swaps_max_one_frame: int = 0 ## most swap-applies landed in any single engine frame
+var _swaps_frame_id: int = -1 ## the engine frame the running swap count belongs to
+var _swaps_this_frame: int = 0 ## swap-applies landed in _swaps_frame_id so far
 var _settle_travel_end_msec: int = 0 ## when the last travel ended (the settle audit's dress_ms zero)
 var _nc_costume_saved: Dictionary = {} ## debug_opt_nc="costume" seam only: panel idx -> texture it wore before the blank swap
 var _nc_costume_on: bool = false ## debug_opt_nc="costume" seam only: the blank swap stands
@@ -1630,6 +1655,9 @@ func art_frame_stats() -> Dictionary:
 		"applies_total": _applies_total,
 		"applies_during_travel": _applies_during_travel,
 		"max_applies_one_frame": _applies_max_one_frame,
+		"swaps_total": _swaps_total,
+		"swaps_during_travel": _swaps_during_travel,
+		"max_swaps_one_frame": _swaps_max_one_frame,
 	}
 
 
@@ -1644,6 +1672,24 @@ func _note_apply(travelling: bool) -> void:
 		_applies_this_frame = 0
 	_applies_this_frame += 1
 	_applies_max_one_frame = maxi(_applies_max_one_frame, _applies_this_frame)
+
+
+## Count one landed staged SWAP (FACECACHE): a fill the
+## composed-face cache served as a pointer swap. Swaps ride
+## their own account - the apply cap exists to bound the
+## main-thread cost of composed RENDERS, and a swap is not
+## one (the GF18 measurement put it at ~0.34 ms), so a swap
+## never spends the cap's frame and never inflates its max.
+func _note_swap(travelling: bool) -> void:
+	_swaps_total += 1
+	if travelling:
+		_swaps_during_travel += 1
+	var fid: int = Engine.get_process_frames()
+	if fid != _swaps_frame_id:
+		_swaps_frame_id = fid
+		_swaps_this_frame = 0
+	_swaps_this_frame += 1
+	_swaps_max_one_frame = maxi(_swaps_max_one_frame, _swaps_this_frame)
 
 
 ## OPTIMIZE telemetry: a step's travel began (from _set_centre's
@@ -3857,8 +3903,16 @@ func _land_after_letter_pick(key: String, nc_fallback: ClickableQuad) -> void:
 
 
 ## The panel face cache's LRU read: a hit returns
-## [Texture2D, art_aspect] and renews the entry's place.
+## [Texture2D, art_aspect, art_path] and renews the entry's
+## place. The art path rides along as the entry's provenance
+## (which art file the texture was composed from; "" for a
+## styled card) - the readers that only ever used [0]/[1]
+## are untouched. Under the debug_opt_nc="nocache" seam the
+## cache never serves: every issue re-renders, so the
+## facecache smoke's swap and counters legs fail by name.
 func _face_cache_get(key: String) -> Array:
+	if debug_opt_nc == "nocache":
+		return [] ## NC seam (PVLDS_OPT_NC=nocache): the cache is disabled
 	if not _face_tex_cache.has(key):
 		return []
 	_face_cache_order.erase(key)
@@ -3873,15 +3927,22 @@ func _face_cache_get(key: String) -> Array:
 ## favorite flag and PuP flag (GRADFIX6 item 5: a face
 ## rendered before the db match lands must not serve forever
 ## without its PuP badge), and a fresh library clears the
-## cache).
-func _face_cache_put(key: String, tex: Texture2D, aspect: float) -> void:
-	_face_tex_cache[key] = [tex, aspect]
+## cache). FACECACHE: this LRU cap drop is now the ONLY
+## distance-blind eviction the cache knows - the OPTIMIZE
+## round's settle-time margin pass (drop whatever stands
+## outside the window +/- EVICT_MARGIN_COLS columns, and
+## clear its panel's stamp with it) is deleted: leaving the
+## window is not an eviction offence any more, so a face
+## the player scrolls away from and back to is still here.
+func _face_cache_put(key: String, tex: Texture2D, aspect: float, art_path: String = "") -> void:
+	_face_tex_cache[key] = [tex, aspect, art_path]
 	_face_cache_order.erase(key)
 	_face_cache_order.push_back(key)
 	while _face_cache_order.size() > FACE_CACHE_MAX:
 		var old: String = _face_cache_order.pop_front()
 		_face_tex_cache.erase(old)
-		_evicted_total += 1 ## OPTIMIZE: a cap drop is an eviction
+		_evicted_total += 1 ## a cap drop is an eviction (the only kind left)
+	_fc_sync_footer()
 
 
 ## Drop one cached face (the panel heal's art retry: the
@@ -3890,6 +3951,76 @@ func _face_cache_put(key: String, tex: Texture2D, aspect: float) -> void:
 func _face_cache_evict(key: String) -> void:
 	_face_tex_cache.erase(key)
 	_face_cache_order.erase(key)
+
+
+## FACECACHE account: one composed render served for a
+## game under a face key. A render whose game already
+## rendered under the SAME key this session is an
+## eviction-forced re-render (its entry was dropped under
+## cap pressure, or the heal force-evicted the key for its
+## retry) - counted apart, because that is the number the
+## retention law exists to hold down.
+func _fc_note_render(game_id: String, fkey: String) -> void:
+	_fc_renders += 1
+	_fc_renders_per_game[game_id] = int(_fc_renders_per_game.get(game_id, 0)) + 1
+	if str(_fc_last_render_key.get(game_id, "")) == fkey:
+		_fc_rerenders_eviction += 1
+	_fc_last_render_key[game_id] = fkey
+	_fc_sync_footer()
+
+
+## FACECACHE account: one fill served from the cache.
+func _fc_note_swap() -> void:
+	_fc_swaps += 1
+	_fc_sync_footer()
+
+
+## The composed-face cache's session account, for the
+## smokes and the telemetry footer: how many games ever
+## rendered, how many renders and swaps were served, how
+## many renders were eviction-forced re-renders, and the
+## worst per-game render count (the field log's ~4x, the
+## number this round exists to bring to ~1 per state).
+func face_cache_stats() -> Dictionary:
+	var worst: int = 0
+	for gid: Variant in _fc_renders_per_game.keys():
+		worst = maxi(worst, int(_fc_renders_per_game[gid]))
+	return {
+		"unique_games": _fc_renders_per_game.size(),
+		"renders": _fc_renders,
+		"swaps": _fc_swaps,
+		"rerenders_after_eviction": _fc_rerenders_eviction,
+		"max_renders_one_game": worst,
+		"renders_per_game": _fc_renders_per_game.duplicate(),
+	}
+
+
+## The game ids whose composed faces are resident in the
+## cache right now (the facecache smoke's pass-2 baseline:
+## a resident game must never read missing mid-chain, and
+## must never re-render - only cap-evicted games may).
+func face_cache_resident_games() -> Array[String]:
+	var out: Array[String] = []
+	for key: String in _face_tex_cache.keys():
+		var gid: String = key.split("|")[0]
+		if not out.has(gid):
+			out.append(gid)
+	return out
+
+
+## Push the cache account into the telemetry footer's
+## extra fields (called on every counter change - a small
+## dictionary write, never on a frame path of its own).
+func _fc_sync_footer() -> void:
+	if not _scroll_telemetry_started:
+		return
+	_scroll_telemetry.set_footer_extra({
+		"facecache_unique_games": _fc_renders_per_game.size(),
+		"facecache_renders": _fc_renders,
+		"facecache_swaps": _fc_swaps,
+		"facecache_rerenders_after_eviction": _fc_rerenders_eviction,
+		"facecache_evicted_total": _evicted_total,
+	})
 
 
 func _fill_wall_textures(gen: int) -> void:
@@ -4089,6 +4220,7 @@ func _fill_window_faces_sync(gen: int) -> void:
 		"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
 			"cost_ms": float(Time.get_ticks_usec() - tel_apply_t0) / 1000.0,
 			"branch": _art_apply_branch, "load_ms": _art_apply_load_ms, "render_ms": _art_apply_render_ms,
+			"cache": "hit" if _art_apply_branch == "facecache" else ("standing" if _art_apply_branch == "standing" else "render"), ## FACECACHE
 			"via": "syncfill",
 		})
 		if TextureFactory.probe_enabled:
@@ -4408,6 +4540,7 @@ func art_pipeline_idle() -> bool:
 func _art_pipe_pass() -> void:
 	var gen: int = _gen
 	var deferred: Array[int] = []
+	var swap_run: int = 0 ## FACECACHE: consecutive swap-applies served without a yield (bounded - see the yield below)
 	while gen == _gen:
 		while not _art_pipe_queue.is_empty():
 			if gen != _gen:
@@ -4436,13 +4569,18 @@ func _art_pipe_pass() -> void:
 			var travelling_now: bool = _swing_active or page_slide_active()
 			await _fill_one_face_sync(idx, gen)
 			_art_pipe_in_stage = false
-			_note_apply(travelling_now) ## OPTIMIZE: the apply-cap account
+			var was_swap: bool = _art_apply_branch == "facecache"
+			if was_swap:
+				_note_swap(travelling_now) ## FACECACHE: swaps ride their own account, never the render cap's
+			else:
+				_note_apply(travelling_now) ## OPTIMIZE: the apply-cap account
 			_art_event("apply", {
 				"game": _visible_games[idx].game_id, "path": path, "col": cc,
 				"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
 				"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
 				"cost_ms": float(Time.get_ticks_usec() - tel_apply_t0) / 1000.0,
 				"branch": _art_apply_branch, "load_ms": _art_apply_load_ms, "render_ms": _art_apply_render_ms,
+				"cache": "hit" if was_swap else ("standing" if _art_apply_branch == "standing" else "render"), ## FACECACHE: hit = swap, render = a composed render, standing = already wearing it
 				"via": "pipe",
 			})
 			if TextureFactory.probe_enabled:
@@ -4453,6 +4591,18 @@ func _art_pipe_pass() -> void:
 				break
 			if debug_opt_nc == "streamahead" and travelling_now:
 				continue ## NC seam: no yield on travel frames - applies drain inline, past the cap
+			if was_swap:
+				# FACECACHE: a swap is a pointer assignment
+				# (~0.34 ms measured in GF18), not a render -
+				# it does not spend the render cap's frame, so
+				# a cached face lands inside the very step that
+				# brought its card into the window. The run is
+				# bounded so a queue of nothing but swaps still
+				# yields once in a while.
+				swap_run += 1
+				if swap_run < 18:
+					continue
+			swap_run = 0
 			await get_tree().process_frame # the cap: at most APPLY_CAP_PER_FRAME staged faces per frame, ever
 			if travelling_now:
 				# Travelling: halve the application rate -
@@ -4600,6 +4750,7 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 		art_aspect = float(cached_face[1])
 		from_art = art_aspect > 0.0
 		_art_apply_branch = "facecache" ## GRADFIX17 telemetry
+		_fc_note_swap() ## FACECACHE: the cache served this face - a pointer swap, no render, no decode
 	else:
 		if art_file != "":
 			var art_tex: Texture2D = null
@@ -4664,7 +4815,8 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 		if gen != _gen:
 			return
 		if tex != null and (_tex_is_real(tex) or _blackface_nc(game)):
-			_face_cache_put(fkey, tex, art_aspect if from_art else 0.0)
+			_fc_note_render(game.game_id, fkey) ## FACECACHE: a composed render served - the count the retention law judges
+			_face_cache_put(fkey, tex, art_aspect if from_art else 0.0, art_file if from_art else "")
 		elif tex != null:
 			# The styled card's own capture failed too: stamp
 			# nothing, cache nothing - the placeholder stands
@@ -4989,10 +5141,11 @@ func _guarantee_audit() -> void:
 ## GF19 kept as costume_dress; -1 when the budget spent with
 ## faces still missing) - carrying the residency the settle
 ## landed under; and, on a clean census only, the eviction
-## pass. Under the debug_opt_nc="evictvis" seam the eviction
-## runs even here with its window guard dropped (see
-## _evict_after_settle), so the landing census that follows
-## in the same settle reads the window's faces missing.
+## account. FACECACHE: the account no longer evicts by
+## distance (see _evict_after_settle); under the
+## debug_opt_nc="evictvis" seam it instead eats the
+## window's faces, so the landing census that follows in
+## the same settle reads them missing.
 func _on_settle_audit_complete(missing: int) -> void:
 	var dress_ms: float = -1.0
 	if missing == 0 and _settle_travel_end_msec > 0:
@@ -5010,78 +5163,66 @@ func _on_settle_audit_complete(missing: int) -> void:
 		_evict_after_settle()
 
 
-## OPTIMIZE round (item 6): the eviction pass. Resident face
-## textures for games outside the drawn window +/-
-## EVICT_MARGIN_COLS columns are dropped from the face cache;
-## a non-window panel still wearing an evicted face has its
-## texture and stamp cleared too, so the evicted state reads
-## as missing to every later probe - the settle guarantee
-## re-fills any evicted face that becomes visible again (its
-## fresh-probe sweep sees stamp != want, exactly the heal's
-## first branch). NEVER evicted: drawn-window faces, the
-## focused card, a flipped/detail card in use (the standing
-## flip's card - the detail view renders its own faces, so
-## the flip is the in-use surface here), and tournament
-## board faces (they live in their own cache, untouched by
-## this pass). The RESIDENT_FACES_CAP LRU in _face_cache_put
-## is the second half of the law. The debug_opt_nc="evictvis"
-## seam drops the visible-window guard: window faces evict
-## too (their panels are cleared the same way), so the
-## landing census leg fails by name.
+## FACECACHE round: the eviction pass, reunited. The
+## OPTIMIZE round's pass dropped every resident face
+## outside the drawn window +/- EVICT_MARGIN_COLS columns
+## and cleared those panels' stamps and textures with it -
+## distance eviction, and the convicted half of the field
+## log's re-render churn (the OPTIMIZE field session
+## evicted ~480 faces across 31 settles while residency
+## never once reached the 108 cap, so every scroll away
+## and back was a fresh ~33 ms composed render and the
+## cache branch never fired once in 1,297 applies). That
+## law is DELETED. A card leaving the window now drops
+## nothing: not its composed texture, not its panel's
+## dress, not its stamp, not its decoded image. The only
+## evictions left in the building are cap pressure (the
+## LRU inside _face_cache_put) and the heal's single-key
+## force-evict on its art retry (whose retry render then
+## replaces the entry - the cache lives BELOW the GF17
+## guarantee, never above it). What remains here is the
+## settle-time ACCOUNT: the evict telemetry record still
+## lands on a clean census, reporting the cap drops since
+## the last record and the residency the settle landed
+## under, so the log keeps the shape its readers know.
+## The debug_opt_nc="evictvis" seam keeps its meaning by
+## restoring the offence against the standing window
+## itself: window faces are dropped from the cache and
+## their panels cleared, so the landing census that
+## follows in the same settle reads them missing and the
+## leg fails by name.
 func _evict_after_settle() -> void:
-	if _panel_window_lo < 0 or _columns <= 0:
-		return
-	var nc_vis: bool = debug_opt_nc == "evictvis"
-	var keep_lo: int = maxi(0, _panel_window_lo - EVICT_MARGIN_COLS)
-	var keep_hi: int = mini(_columns - 1, _panel_window_hi + EVICT_MARGIN_COLS)
-	var keep_games: Dictionary = {}
-	if not nc_vis:
+	var evicted: int = 0
+	if debug_opt_nc == "evictvis":
+		if _panel_window_lo < 0:
+			return
 		for idx: int in range(_panels.size()):
 			if idx >= _visible_games.size():
 				continue
 			var cc: int = _grid_coord(idx).x
-			if cc >= keep_lo and cc <= keep_hi:
-				keep_games[_visible_games[idx].game_id] = true
-	# The focused card and the flipped card keep their faces
-	# whatever column they stand on.
-	if _focused != null:
-		var fidx: int = _panels.find(_focused)
-		if fidx >= 0 and fidx < _visible_games.size():
-			keep_games[_visible_games[fidx].game_id] = true
-	if _flip_idx >= 0 and _flip_idx < _visible_games.size():
-		keep_games[_visible_games[_flip_idx].game_id] = true
-	var evicted: int = 0
-	for key: String in _face_cache_order.duplicate():
-		var gid: String = key.split("|")[0]
-		if keep_games.has(gid):
-			continue
-		_face_cache_evict(key)
-		evicted += 1
-	_evicted_total += evicted
-	# Panels outside the keep span that still wear a face:
-	# clear them (texture to the placeholder, stamp erased)
-	# so the eviction is honest on the panels too. Under the
-	# NC the span is the whole shelf, window included.
-	for idx: int in range(_panels.size()):
-		if idx >= _visible_games.size():
-			continue
-		var cc2: int = _grid_coord(idx).x
-		var in_keep: bool = cc2 >= keep_lo and cc2 <= keep_hi
-		if nc_vis:
-			in_keep = false
-		if in_keep:
-			continue
-		var game: GameEntry = _visible_games[idx]
-		if keep_games.has(game.game_id):
-			continue
-		if str(_panel_face_key.get(game.game_id, "")) == "":
-			continue
-		_panel_face_key.erase(game.game_id)
-		_face_path_memo.erase(game.game_id)
-		if _panels[idx].current_texture() != _placeholder_tex:
-			_panels[idx].set_texture(_placeholder_tex)
+			if cc < _panel_window_lo or cc > _panel_window_hi:
+				continue
+			if _tournament and idx < _tournament_rows.size() \
+					and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+				continue # state panels wear board faces, not card faces
+			var game: GameEntry = _visible_games[idx]
+			var stamped: String = str(_panel_face_key.get(game.game_id, ""))
+			if stamped == "":
+				continue
+			_face_cache_evict(stamped)
+			_panel_face_key.erase(game.game_id)
+			_face_path_memo.erase(game.game_id)
+			evicted += 1
+			if _panels[idx].current_texture() != _placeholder_tex:
+				_panels[idx].set_texture(_placeholder_tex)
 			if idx < _panel_art_aspect.size():
 				_panel_art_aspect[idx] = 0.0
+		_evicted_total += evicted
+		_fc_evict_reported = _evicted_total
+	else:
+		evicted = _evicted_total - _fc_evict_reported
+		_fc_evict_reported = _evicted_total
+	_fc_sync_footer()
 	var gauge2: Dictionary = residency_stats()
 	var fields: Dictionary = _telemetry_context()
 	fields["event"] = "evict"

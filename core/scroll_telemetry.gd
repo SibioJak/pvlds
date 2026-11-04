@@ -19,7 +19,7 @@ extends RefCounted
 ## logging itself never does file work per frame.
 
 const LOG_PATH: String = "user://scroll_telemetry.jsonl"
-const BUILD_STAMP: String = "PVLDS-OPTIMIZE"
+const BUILD_STAMP: String = "PVLDS-FACECACHE"
 const BASE_COMMIT: String = "629f8b5"
 const FLUSH_LINES: int = 64
 const FLUSH_INTERVAL_MSEC: int = 250
@@ -32,6 +32,7 @@ var _last_flush_msec: int = 0
 var _flush_count: int = 0
 var _bytes_written: int = 0
 var _work_usec_total: int = 0 ## the logger's own measured cost (JSON + buffering + file writes), reported in the footer
+var _footer_extra: Dictionary = {} ## caller-owned session counters merged into the footer at close (FACECACHE: the composed-face cache's account - renders, swaps, eviction-forced re-renders)
 
 
 static func _sanitize(value: Variant) -> Variant:
@@ -102,6 +103,14 @@ func flush_pending() -> void:
 	_work_usec_total += Time.get_ticks_usec() - t0
 
 
+## FACECACHE: merge caller-owned session counters into the
+## footer's extra fields. Merged, not replaced, and callable
+## any number of times - the last write of a key wins.
+func set_footer_extra(fields: Dictionary) -> void:
+	for key: String in fields.keys():
+		_footer_extra[key] = fields[key]
+
+
 func close() -> void:
 	if _file == null:
 		return
@@ -112,6 +121,8 @@ func close() -> void:
 		"bytes_written_before_footer": _bytes_written,
 		"logger_self_time_ms_before_footer": float(_work_usec_total) / 1000.0,
 	}
+	for key: String in _footer_extra.keys():
+		footer[key] = _footer_extra[key]
 	var line: String = JSON.stringify(_make_record("footer", footer))
 	_file.store_line(line)
 	_file.flush()
