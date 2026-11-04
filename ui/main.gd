@@ -358,6 +358,16 @@ var _land_warm_held: bool = false
 var _land_rewarm_done: bool = false
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _smoke_facecache: bool = false ## --pvlds-smoke-facecache: FACECACHE round - fast stick-tap chains across the full shelf TWICE at field cadence (~320 ms taps), sampling the DRAWN panes mid-chain; pass 1 may only miss never-rendered games with a first render in flight, pass 2 must never miss a cache-resident game and must serve re-entries as swaps, not renders. A favourite round-trip on the focused card sits between the passes. Under PVLDS_OPT_NC=nocache the room's cache never serves and the pass-2 census + counters legs fail by name
+var _smoke_identity: bool = false ## --pvlds-smoke-identity: IDENTITY round - seats each game of the wart's named set (the manifest at PVLDS_IDENTITY_MANIFEST) in the real room and judges it standing there: the recorded shot is the expected one (build-exact or inherited, donor build named), the face on the card is that shot's cache path, and the drawn pane is not black and tracks the source shot's luminance. A full-viewport grab per game lands in PVLDS_GRAB_DIR
+var _id_phase: int = 0
+var _id_manifest: Array = []
+var _id_manifest_loaded: bool = false
+var _id_idx: int = 0
+var _id_failures: Array[String] = []
+var _id_deadline_msec: int = 0
+var _id_settle_frames: int = 0
+var _id_filter_forced: bool = false
+var _id_seated: bool = false
 var _fc_phase: int = 0
 var _fc_failures: int = 0
 var _fc_filter_forced: bool = false
@@ -603,6 +613,8 @@ func _ready() -> void:
 		_smoke_landing = true
 	if user_args.has("--pvlds-smoke-facecache"):
 		_smoke_facecache = true
+	if user_args.has("--pvlds-smoke-identity"):
+		_smoke_identity = true
 	if user_args.has("--pvlds-smoke-jumpbench"):
 		_smoke_jumpbench = true
 		_jumpbench_boot_msec = Time.get_ticks_msec()
@@ -790,7 +802,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -974,6 +986,8 @@ func _process(_delta: float) -> void:
 		_drive_landing_smoke()
 	if _smoke_facecache:
 		_drive_facecache_smoke()
+	if _smoke_identity:
+		_drive_identity_smoke()
 	if _smoke_jumpbench:
 		_drive_jumpbench_smoke()
 	if _smoke_quitwarm:
@@ -12424,6 +12438,173 @@ func _finish_facecache_smoke() -> void:
 	else:
 		printerr("PVLDS FACECACHE SMOKE: FAIL (%d)" % _fc_failures)
 		get_tree().quit(1)
+
+
+# ------------------------------------------------------------ IDENTITY smoke
+
+func _id_expect(cond: bool, what: String) -> void:
+	if cond:
+		print("  ok - ", what)
+	else:
+		_id_failures.append(what)
+		printerr("  FAIL - ", what)
+
+
+func _finish_identity_smoke() -> void:
+	if _id_failures.is_empty():
+		print("PVLDS IDENTITY SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS IDENTITY SMOKE: FAIL (%d)" % _id_failures.size())
+		get_tree().quit(1)
+
+
+## IDENTITY rendered proof: boot on the named-set fixture
+## (real db subset, field-true file names, real author shot
+## bytes behind the stub), wait for the room and every shot,
+## then seat each manifest game at the centre and judge it
+## standing there - data legs (the recorded shot is the
+## expected URL, the inheritance flag and donor build match
+## the manifest, the ready face IS that shot's cache path)
+## and a pixel leg (the drawn pane is not the black class
+## and its mean luminance tracks the source shot's, measured
+## by the fixture generator). One full-viewport grab per
+## game lands in PVLDS_GRAB_DIR. The shotless manifest entry
+## (a game with no db record at all) is judged on data alone:
+## it stands filename-only, and gets a grab like the others.
+func _drive_identity_smoke() -> void:
+	if not _id_manifest_loaded:
+		_id_manifest_loaded = true
+		var mpath: String = OS.get_environment("PVLDS_IDENTITY_MANIFEST")
+		if mpath != "" and FileAccess.file_exists(mpath):
+			var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(mpath))
+			if parsed is Array:
+				_id_manifest = parsed
+		if _id_manifest.is_empty():
+			_id_expect(false, "identity: no manifest at PVLDS_IDENTITY_MANIFEST")
+			_finish_identity_smoke()
+			return
+		_id_deadline_msec = Time.get_ticks_msec() + 360000
+	match _id_phase:
+		0:
+			if _room == null or not _room.visible or not _room.wall_ready or _scan_active:
+				if Time.get_ticks_msec() > _id_deadline_msec:
+					_id_expect(false, "identity: the room never came up (scan never settled)")
+					_finish_identity_smoke()
+				return
+			if not _id_filter_forced:
+				_id_filter_forced = true
+				_room._handle_rail("filter:all")
+				return
+			var shots_in: bool = true
+			if _scanner != null:
+				for g: GameEntry in _scanner.games:
+					if g.shot_url != "" and not ArtProvider.shot_is_cached(g.shot_url):
+						shots_in = false
+			var warm_in: bool = _art_warmer == null or _art_warmer.is_idle()
+			if not (warm_in and shots_in):
+				if Time.get_ticks_msec() > _id_deadline_msec:
+					_id_expect(false, "identity: the art sources never all landed (warmer idle %s, shots in %s)" % [str(warm_in), str(shots_in)])
+					_finish_identity_smoke()
+				return
+			print("IDENTITY: room up, %d games, %d manifest entries to seat" % [_room._visible_games.size(), _id_manifest.size()])
+			_id_phase = 1
+			_id_deadline_msec = Time.get_ticks_msec() + 90000
+		1:
+			if _id_idx >= _id_manifest.size():
+				_finish_identity_smoke()
+				return
+			var item: Dictionary = _id_manifest[_id_idx]
+			var gid: String = str(item.get("game_id", ""))
+			var idx: int = -1
+			for i: int in range(_room._visible_games.size()):
+				if _room._visible_games[i].game_id == gid:
+					idx = i
+					break
+			if idx < 0:
+				_id_expect(false, "identity: '%s' is not on the wall" % gid)
+				_id_idx += 1
+				_id_seated = false
+				_id_deadline_msec = Time.get_ticks_msec() + 90000
+				return
+			if not _id_seated:
+				_id_seated = true
+				_room._set_centre(idx, true)
+				_room._set_focused(_room._panels[idx])
+				_id_settle_frames = 0
+				return
+			if Time.get_ticks_msec() > _id_deadline_msec:
+				_id_expect(false, "identity: '%s' never settled at the centre" % gid)
+				_id_idx += 1
+				_id_seated = false
+				_id_deadline_msec = Time.get_ticks_msec() + 90000
+				return
+			if not _room._window_fill_busy and not _room.page_slide_active() and _room.art_pipeline_idle():
+				_id_settle_frames += 1
+			else:
+				_id_settle_frames = 0
+			if _id_settle_frames < 6:
+				return
+			_judge_identity_game(item, idx)
+			_id_idx += 1
+			_id_seated = false
+			_id_settle_frames = 0
+			_id_deadline_msec = Time.get_ticks_msec() + 90000
+
+
+## One seated game's legs (see _drive_identity_smoke).
+func _judge_identity_game(item: Dictionary, idx: int) -> void:
+	var gid: String = str(item.get("game_id", ""))
+	var title: String = str(item.get("title", gid))
+	var entry: GameEntry = _room._visible_games[idx]
+	var want_url: String = str(item.get("shot_url", ""))
+	var want_inherited: bool = bool(item.get("inherited", false))
+	var want_from: String = str(item.get("from_build", ""))
+	_id_expect(entry.shot_url == want_url,
+		"identity: '%s' records the expected shot (%s)" % [title, want_url.get_file() if want_url != "" else "none"])
+	_id_expect(entry.shot_inherited == want_inherited and entry.shot_from_build == want_from,
+		"identity: '%s' shot provenance is %s (donor %s)" % [title, "inherited" if want_inherited else ("build-exact" if want_url != "" else "none"), want_from if want_from != "" else "-"])
+	var img: Image = get_viewport().get_texture().get_image()
+	if want_url != "":
+		_id_expect(entry.face_path_ready() == ArtProvider.shot_cache_path_for(want_url),
+			"identity: '%s' stands wearing the shot itself (face path = the shot's cache path)" % title)
+		var panel: ClickableQuad = _room._panels[idx]
+		var full_rect: Rect2i = _mimic_art_screen_rect(panel)
+		var rect: Rect2i = full_rect.intersection(Rect2i(0, 0, img.get_width(), img.get_height()))
+		if rect.size.x < 8 or rect.size.y < 8:
+			_id_expect(false, "identity: '%s' art pane is off-frame (rect %s)" % [title, str(rect)])
+		else:
+			var n: int = 0
+			var lum_sum: float = 0.0
+			var lum_sq: float = 0.0
+			var ink: int = 0
+			var step_x: int = maxi(1, rect.size.x / 24)
+			var step_y: int = maxi(1, rect.size.y / 24)
+			var py: int = rect.position.y
+			while py < rect.position.y + rect.size.y:
+				var px: int = rect.position.x
+				while px < rect.position.x + rect.size.x:
+					var c: Color = img.get_pixel(px, py)
+					var lum: float = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+					lum_sum += lum
+					lum_sq += lum * lum
+					if lum > 0.30:
+						ink += 1
+					n += 1
+					px += step_x
+				py += step_y
+			var mean: float = lum_sum / float(n)
+			var sd: float = sqrt(maxf(0.0, lum_sq / float(n) - mean * mean))
+			var ink_frac: float = float(ink) / float(n)
+			_id_expect(not (mean < 0.13 and ink_frac < 0.01 and sd < 0.025),
+				"identity: '%s' drawn pane is not black (mean %.3f sd %.3f ink %.3f)" % [title, mean, sd, ink_frac])
+			var src_lum: float = float(item.get("lum", -1.0))
+			if src_lum >= 0.0:
+				_id_expect(absf(mean - src_lum) <= 0.12,
+					"identity: '%s' pane luminance tracks its author shot (rendered %.3f vs source %.3f)" % [title, mean, src_lum])
+	var grab_dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if grab_dir != "":
+		img.save_png(grab_dir.path_join("identity_%s.png" % gid.replace(":", "_")))
 
 
 func _fc_feed_button(btn: JoyButton, pressed: bool) -> void:
