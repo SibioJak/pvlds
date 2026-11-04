@@ -12836,6 +12836,44 @@ func _fc_judge_counters() -> void:
 		print("FACECACHE: neverblank black-pane sightings: ", _fc_black_notes)
 	print("FACECACHE: neverblank account: black p1 %d/%d p2 %d/%d, face_clear %d, evict_bound %d, evict_deferred %d, enqueue_swaps %d" % [int(_fc_black_panes.get(1, 0)), int(_fc_px_samples.get(1, 0)), int(_fc_black_panes.get(2, 0)), int(_fc_px_samples.get(2, 0)), int(nb.get("face_clear", -1)), int(nb.get("evict_bound", -1)), int(nb.get("evict_deferred", 0)), int(nb.get("enqueue_swaps", 0))])
 	print("FACECACHE: neverblank darkest countable panes: p1 %s | p2 %s" % [str(_fc_px_worst.get(1, {})), str(_fc_px_worst.get(2, {}))])
+	# WART legs (only under PVLDS_WART_RACE=1, which poisons
+	# the first capture of every card-face render with an
+	# unpainted frame - the field species, deterministic):
+	# the content gate must reject every raced capture and
+	# re-capture, so no drawn pane ever classifies black and
+	# the gate's own account is non-empty. Under
+	# PVLDS_WART_NC=nogate the gate stands down: the raced
+	# captures are stamped as faces (rejects stay 0) and the
+	# black panes appear - both legs fail by name.
+	if OS.get_environment("PVLDS_WART_RACE") == "1":
+		# Judged on pass 2, the settled pass: pass 1's pixel
+		# census also catches in-flight placeholder panes on
+		# a loaded software-renderer box (the pristine base
+		# binary flakes it identically - measured 14 black
+		# over 1,401 samples on 21b56f1, 2026-11-04), while a
+		# raced capture that STANDS is still standing in
+		# pass 2, where no run of either build ever flakes.
+		# Pixels alone cannot carry the whole verdict (one
+		# fixture game's honest chain art is itself
+		# near-black), so the gate's own account judges the
+		# mechanism exactly: the race poisons the first
+		# capture of every card-face render (substituted);
+		# with the gate on, every poisoned capture is
+		# rejected (rejects >= substituted) and every
+		# rejection is answered by a re-capture or a counted
+		# give-up (rejects == retries + nulls, nulls == 0).
+		# Under PVLDS_WART_NC=nogate the poison flows and
+		# stands: rejects stay 0 and the black panes appear -
+		# the legs fail by name.
+		_fc_expect(int(_fc_black_panes.get(2, 0)) == 0,
+			"wart: raced captures never stand as faces (black panes p2 %d; p1 %d incl. in-flight placeholders)" % [int(_fc_black_panes.get(2, 0)), int(_fc_black_panes.get(1, 0))])
+		_fc_expect(TextureFactory.wart_race_substituted > 0 \
+			and TextureFactory.wart_gate_rejects >= TextureFactory.wart_race_substituted,
+			"wart: the content gate rejected every raced capture (%d rejected of %d poisoned)" % [TextureFactory.wart_gate_rejects, TextureFactory.wart_race_substituted])
+		_fc_expect(TextureFactory.wart_gate_rejects == TextureFactory.wart_gate_retries + TextureFactory.wart_gate_nulls \
+			and TextureFactory.wart_gate_nulls == 0,
+			"wart: no gated render gave up (rejects %d = retries %d + nulls %d)" % [TextureFactory.wart_gate_rejects, TextureFactory.wart_gate_retries, TextureFactory.wart_gate_nulls])
+		print("FACECACHE: wart account: substituted %d, gate rejects %d, retries %d, nulls %d" % [TextureFactory.wart_race_substituted, TextureFactory.wart_gate_rejects, TextureFactory.wart_gate_retries, TextureFactory.wart_gate_nulls])
 	print("FACECACHE: final account: unique %d, renders %d, swaps %d, eviction-forced re-renders %d, resident now %d, evicted total %d" % [unique, int(end_stats.get("renders", 0)), int(end_stats.get("swaps", 0)), int(end_stats.get("rerenders_after_eviction", 0)), int(_room.residency_stats().get("resident_faces", 0)), int(_room.residency_stats().get("evicted_total", 0))])
 
 

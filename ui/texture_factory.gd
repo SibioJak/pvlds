@@ -18,6 +18,7 @@ extends Node
 var _viewport: SubViewport
 var _face: CardFace
 var _render_in_flight: bool = false ## the serialization queue's lock: one capture at a time, ever
+var _race_armed: bool = false ## WART smoke seam: poison this render's first capture (see render_texture)
 
 ## GRADFIX16 (item 2) art probe: per-operation timing census
 ## for the travel-hitch conviction, gated by the harness env
@@ -41,6 +42,91 @@ static func probe_note(op: String, usec: int) -> void:
 	row[2] = maxi(int(row[2]), usec)
 	probe_stats[op] = row
 	_probe_mutex.unlock()
+
+
+## The WART content gate (the dark-card wart, reopened
+## 2026-11-04): a card-face capture can come back UNPAINTED -
+## full-size, but transparent, uniform ground, or uniform
+## black - when the capture frame lands before the freshly
+## decoded art actually paints (convicted in the field by
+## GRADFIX6's pixel census: faces measuring 99%+ exact-black
+## while their source art is bright). Every gate the fill and
+## the heal apply is key/path/SIZE based, so an unpainted
+## capture - being full-size - was cached and key-stamped as
+## the card's real face and no mechanism could ever see it
+## again; the composed-face cache then preserved it forever.
+## The gate is the missing CONTENT test, applied here in the
+## factory where the capture is born: card-face specs (kind
+## "art" / "panel" - the opaque-ground faces) are re-captured
+## up to WART_MAX_CAPTURE_ATTEMPTS times while the capture
+## reads unpainted, and a capture that never paints returns
+## null - which every caller already treats as "not a face"
+## (the room falls through to the styled card and its heal
+## retries the art render, bounded; the detail view falls
+## through to its title card). Board faces and card backs
+## are transparent by design (GRADFIX15's frameless law) and
+## are NEVER gated. NC: PVLDS_WART_NC=nogate restores the
+## pre-gate behaviour (the first capture stands, whatever it
+## holds) so the facecache smoke's wart legs fail by name.
+## The smoke seam PVLDS_WART_RACE=1 makes the first capture
+## of every gated render come back unpainted - the field
+## species, deterministic.
+const WART_MAX_CAPTURE_ATTEMPTS: int = 3
+static var wart_gate_rejects: int = 0 ## gated captures that read unpainted
+static var wart_gate_retries: int = 0 ## re-captures the gate issued
+static var wart_gate_nulls: int = 0 ## gated renders that never painted (returned null)
+static var wart_race_substituted: int = 0 ## smoke seam: first captures the race poisoned
+
+
+## Whether a captured card-face image is UNPAINTED: no real
+## content ever reached it. Two arms, either suffices:
+##   - VOID: fewer than 1% of samples are painted at all
+##     (alpha up and some colour present) - the transparent
+##     capture, or a capture of nothing.
+##   - UNIFORM DARK: the samples form a near-constant dark
+##     field (luminance stdev < 0.004, mean < 0.10, and fewer
+##     than 1% of samples reaching even 0.16) - the
+##     ground-only capture, or uniform black. Genuinely dark
+##     ART always carries texture and highlights (lamps,
+##     reels, chrome) far past these bounds across a whole
+##     face; a raced capture of the flat ground has neither.
+## The grid keeps the sample count near a thousand whatever
+## the capture size - the test runs inside the render, so it
+## must stay cheap (measured ~1 ms at face size).
+static func is_unpainted(img: Image) -> bool:
+	if img == null or img.is_empty():
+		return true
+	var w: int = img.get_width()
+	var h: int = img.get_height()
+	var step: int = maxi(1, mini(w, h) / 24)
+	var n: int = 0
+	var painted: int = 0
+	var bright: int = 0
+	var sum: float = 0.0
+	var sumsq: float = 0.0
+	var y: int = 0
+	while y < h:
+		var x: int = 0
+		while x < w:
+			var c: Color = img.get_pixel(x, y)
+			var lum: float = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+			sum += lum
+			sumsq += lum * lum
+			n += 1
+			if c.a >= 0.5 and maxf(c.r, maxf(c.g, c.b)) >= 0.03:
+				painted += 1
+			if lum >= 0.16:
+				bright += 1
+			x += step
+		y += step
+	if n == 0:
+		return true
+	if float(painted) / float(n) < 0.01:
+		return true
+	var mean: float = sum / float(n)
+	var variance: float = maxf(0.0, sumsq / float(n) - mean * mean)
+	return sqrt(variance) < 0.004 and mean < 0.10 \
+		and float(bright) / float(n) < 0.01
 
 
 static func probe_reset() -> void:
@@ -86,11 +172,50 @@ func render_texture(spec: Dictionary, px_size: Vector2i) -> Texture2D:
 	if probe_enabled:
 		probe_note("render_queue_wait", Time.get_ticks_usec() - probe_t0)
 	_render_in_flight = true
-	var result: Texture2D = await _render_now(spec, px_size)
+	# The WART smoke seam arms here (never set in production):
+	# the first capture of a card-face render will come back
+	# unpainted - see _render_now's capture tail. It arms
+	# OUTSIDE the gate so the NC (gate off) still takes the
+	# poison: the negative control must reintroduce the
+	# fault, not merely disable the cure.
+	var race_kind: String = str(spec.get("kind", ""))
+	_race_armed = OS.get_environment("PVLDS_WART_RACE") == "1" \
+		and (race_kind == "art" or race_kind == "panel")
+	var result: Texture2D = await _render_gated(spec, px_size)
+	_race_armed = false
 	_render_in_flight = false
 	if probe_enabled:
 		probe_note("render_total", Time.get_ticks_usec() - probe_t0)
 	return result
+
+
+## One render through the WART content gate (see the gate's
+## note at is_unpainted): ungated specs (everything that is
+## not a card face, and every spec under the NC) get exactly
+## the pre-gate behaviour - one capture, returned as-is.
+## Gated card faces re-capture while the capture reads
+## unpainted, up to WART_MAX_CAPTURE_ATTEMPTS in total, and
+## return null when no capture paints.
+func _render_gated(spec: Dictionary, px_size: Vector2i) -> Texture2D:
+	var kind: String = str(spec.get("kind", ""))
+	var gated: bool = (kind == "art" or kind == "panel") \
+		and OS.get_environment("PVLDS_WART_NC") != "nogate"
+	if not gated:
+		return await _render_now(spec, px_size)
+	for attempt: int in range(WART_MAX_CAPTURE_ATTEMPTS):
+		var result: Texture2D = await _render_now(spec, px_size)
+		if result == null:
+			return null
+		if not (result is ImageTexture):
+			return result
+		var img: Image = (result as ImageTexture).get_image()
+		if img == null or img.is_empty() or not is_unpainted(img):
+			return result
+		wart_gate_rejects += 1
+		if attempt < WART_MAX_CAPTURE_ATTEMPTS - 1:
+			wart_gate_retries += 1
+	wart_gate_nulls += 1
+	return null
 
 
 ## The face's board-layout metrics for the spec it currently
@@ -169,6 +294,19 @@ func _render_now(spec: Dictionary, px_size: Vector2i) -> Texture2D:
 				var spec2: Dictionary = spec.duplicate()
 				spec2["ink_bias_px"] = clampi(int(round(-delta)), -px_size.y / 4, px_size.y / 4)
 				return await _render_now(spec2, px_size)
+	if _race_armed:
+		# The smoke seam (never set in production): this
+		# render's first capture comes back unpainted,
+		# whatever the viewport held - the field species,
+		# deterministic. It sits at the capture tail, outside
+		# the gate, so the NC (gate off) takes the poison
+		# too: the negative control must reintroduce the
+		# fault, not merely disable the cure.
+		_race_armed = false
+		wart_race_substituted += 1
+		var blank: Image = Image.create(px_size.x, px_size.y, false, Image.FORMAT_RGBA8)
+		blank.fill(Color(0, 0, 0, 1))
+		return ImageTexture.create_from_image(blank)
 	var created: Texture2D = ImageTexture.create_from_image(img)
 	if probe_enabled:
 		probe_note("render_create_texture", Time.get_ticks_usec() - probe_t)

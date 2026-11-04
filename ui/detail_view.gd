@@ -222,7 +222,11 @@ func _fill_textures(gen: int, game: GameEntry) -> void:
 		if art_tex != null:
 			var full_tex: Texture2D = await _factory.render_texture(
 				RoomSpecs.art_spec(game, art_tex, _store), Vector2i(640, 800))
-			if gen == _gen and _big_quad != null:
+			# The WART content gate can return null here (the
+			# capture never painted): that is "not a face", so
+			# fall through to the title card below instead of
+			# counting the art as done.
+			if full_tex != null and gen == _gen and _big_quad != null:
 				_big_quad.set_texture(full_tex)
 				art_done = true
 	if not art_done:
