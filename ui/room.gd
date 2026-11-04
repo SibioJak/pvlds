@@ -3964,11 +3964,34 @@ func _face_cache_put(key: String, tex: Texture2D, aspect: float, art_path: Strin
 	_face_tex_cache[key] = [tex, aspect, art_path]
 	_face_cache_order.erase(key)
 	_face_cache_order.push_back(key)
+	var nb_guard: int = 0
 	while _face_cache_order.size() > FACE_CACHE_MAX:
-		var old: String = _face_cache_order.pop_front()
+		var old: String = str(_face_cache_order[0])
 		var old_ent: Array = _face_tex_cache.get(old, []) as Array
+		var old_tex: Texture2D = (old_ent[0] as Texture2D) if not old_ent.is_empty() else null
+		if old_tex != null and _nb_tex_bound_visible(old_tex):
+			# NEVERBLANK (the fix): skip-and-mark - the LRU
+			# entry's texture is bound to a visible panel,
+			# so it rotates to the back of the line instead
+			# of dropping; cap pressure is absorbed by
+			# unbound entries only. If every over-cap entry
+			# is bound, the cache rides over the cap until
+			# one unbinds (the guard ends the rotation).
+			_face_cache_order.pop_front()
+			_face_cache_order.push_back(old)
+			_nb_evict_deferred_count += 1
+			_nb_sync_footer()
+			_telemetry_record("evict_deferred", {
+				"key": old, "via": "cap",
+				"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
+			})
+			nb_guard += 1
+			if nb_guard > _face_cache_order.size():
+				break
+			continue
+		_face_cache_order.pop_front()
 		if not old_ent.is_empty():
-			_nb_note_evict(old, old_ent[0] as Texture2D, "cap") ## NEVERBLANK instrument
+			_nb_note_evict(old, old_tex, "cap") ## NEVERBLANK instrument
 		_face_tex_cache.erase(old)
 		_evicted_total += 1 ## a cap drop is an eviction (the only kind left)
 	_fc_sync_footer()
@@ -3980,7 +4003,24 @@ func _face_cache_put(key: String, tex: Texture2D, aspect: float, art_path: Strin
 func _face_cache_evict(key: String) -> void:
 	var fent: Array = _face_tex_cache.get(key, []) as Array
 	if not fent.is_empty():
-		_nb_note_evict(key, fent[0] as Texture2D, "force") ## NEVERBLANK instrument
+		var ftex: Texture2D = fent[0] as Texture2D
+		if ftex != null and _nb_tex_bound_visible(ftex):
+			# NEVERBLANK (the fix): the entry's texture is
+			# bound to a visible panel, so the eviction is
+			# DEFERRED - the entry stays. The heal's retry
+			# render replaces it under this key when it
+			# lands, and the deferred entry cannot re-serve
+			# itself meanwhile (the fill's cache branch
+			# refuses a stale-aspect art entry); cap
+			# pressure reaches it once it is unbound.
+			_nb_evict_deferred_count += 1
+			_nb_sync_footer()
+			_telemetry_record("evict_deferred", {
+				"key": key, "via": "force",
+				"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
+			})
+			return
+		_nb_note_evict(key, ftex, "force") ## NEVERBLANK instrument
 	_face_tex_cache.erase(key)
 	_face_cache_order.erase(key)
 
@@ -4125,6 +4165,109 @@ func _nb_note_evict(key: String, tex: Texture2D, via: String) -> void:
 		"key": key, "via": via,
 		"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
 	})
+
+
+## The session's never-blank account for the smokes (the
+## footer carries the same numbers for the field log).
+func neverblank_counts() -> Dictionary:
+	return {
+		"face_clear": _nb_face_clear_count,
+		"evict_bound": _nb_evict_bound_count,
+		"evict_deferred": _nb_evict_deferred_count,
+		"enqueue_swaps": _nb_enqueue_swaps,
+	}
+
+
+## NEVERBLANK: the one door every card-face bind walks
+## through. Production binds the replacement directly -
+## the panel's standing texture holds until this call, and
+## this call replaces it in the same operation; there is
+## no frame in which the panel wears nothing. The
+## clearfirst NC restores the pre-law shape on the swap
+## seam only: the dark placeholder binds first and the
+## real face lands a few frames later (the pending list
+## below, drained in _process), so the chain census's
+## black-pane legs fail by name.
+func _nb_bind_face(quad: ClickableQuad, tex: Texture2D, seam: String) -> void:
+	if debug_nb_nc == "clearfirst" and seam == "swap":
+		quad.set_texture(_placeholder_tex)
+		_nb_nc_pending.append([quad, tex, 12])
+		return
+	quad.set_texture(tex)
+
+
+## Bind one cache-hit face at ENQUEUE time - synchronously,
+## in the centre change's own call stack, before the art
+## pipeline's pass starts. Mirrors the fill tail's duties
+## for a served face: the stamp, the nameplate law, the
+## power-on debts, the plate re-derivation. (The Launch
+## plinth is not dressed here: a cache hit implies a fill
+## tail already ran for this game and dressed it.)
+func _nb_apply_swap(idx: int, fkey: String, hit: Array) -> void:
+	var game: GameEntry = _visible_games[idx]
+	var quad: ClickableQuad = _panels[idx]
+	var tex: Texture2D = hit[0] as Texture2D
+	var aspect: float = float(hit[1]) if hit.size() >= 2 else 0.0
+	var from_art: bool = aspect > 0.0
+	_sc_face_assigns += 1 ## OPTIMIZE standing-cost audit (observation only)
+	if quad.current_texture() == tex and debug_nb_nc != "clearfirst":
+		_sc_noop_face_swaps += 1 ## the heal erased the stamp, not the dress: counted, skipped
+	else:
+		_nb_bind_face(quad, tex, "swap")
+	_panel_face_key[game.game_id] = fkey
+	if idx < _panel_plates.size() and _panel_plates[idx] != null:
+		_panel_plates[idx].visible = from_art
+		_panel_labels[idx].visible = from_art
+		if idx == _flip_idx and _flip_t >= 0.5:
+			_apply_flip_side(idx, true)
+	if quad == _power_missed:
+		_power_missed = null
+		if _power_candidate == quad:
+			_power_candidate_t = POWER_SETTLE_SEC
+	if quad == _power_panel:
+		_restore_power("face_arrived")
+	_panel_art_aspect[idx] = aspect
+	_rederive_card_plate(idx, game)
+	if _panel_pop[idx] > 0.0:
+		_panel_pop_applied[idx] = -1.0
+		_pop_awake = true
+	_note_swap(_swing_active or page_slide_active())
+	_fc_note_swap()
+	_nb_enqueue_swaps += 1
+	_nb_sync_footer()
+	_art_event("apply", {
+		"game": game.game_id, "path": _face_path_memoized(game), "col": _grid_coord(idx).x,
+		"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+		"nc_roll_dir": _nc_roll_dir, "swing": _swing_active,
+		"cost_ms": 0.0, "branch": "facecache", "load_ms": 0.0, "render_ms": 0.0,
+		"cache": "hit", "via": "enqueue",
+	})
+
+
+## Whether the enqueue may serve this face from the cache
+## right now - the fill's own gates, read through the
+## pipeline memo: not a tournament state panel, not the
+## blackface NC's target, a cache entry exists, and the
+## entry is not a styled render cached under an art key
+## (the poison the heal exists to retry).
+func _nb_try_enqueue_swap(idx: int) -> bool:
+	if idx < 0 or idx >= _visible_games.size() or idx >= _panels.size():
+		return false
+	if _tournament and idx < _tournament_rows.size() \
+			and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+		return false
+	var game: GameEntry = _visible_games[idx]
+	if _blackface_nc(game):
+		return false
+	var fkey: String = _face_key_for_memo(idx)
+	var hit: Array = _face_cache_get(fkey)
+	if hit.is_empty():
+		return false
+	var aspect: float = float(hit[1]) if hit.size() >= 2 else 0.0
+	if _face_path_memoized(game) != "" and aspect <= 0.0:
+		return false
+	_nb_apply_swap(idx, fkey, hit)
+	return true
 
 
 func _fill_wall_textures(gen: int) -> void:
@@ -4497,6 +4640,33 @@ func _art_pipe_enqueue_window() -> void:
 			tel_filter_max_ms = tel_face_ms
 			tel_filter_max_game = fgame.game_id
 	_art_pipe_queue = needy
+	# NEVERBLANK (the fix): cache-hit faces bind NOW, in
+	# this call - the centre change's own stack, before the
+	# pipeline's pass starts and before the next frame can
+	# draw. A served face used to wait for the pass to
+	# reach it, and while a composed render was in flight
+	# the pass was suspended: a warm card entering the
+	# window stood on the dark placeholder for the wait,
+	# the field blink. Renders stay queued and capped
+	# exactly as before; only the pointer swaps move up.
+	var nb_swapped: int = 0
+	if not needy.is_empty():
+		var nb_rest: Array[int] = []
+		for nidx: int in needy:
+			if _nb_try_enqueue_swap(nidx):
+				nb_swapped += 1
+			else:
+				nb_rest.append(nidx)
+		needy = nb_rest
+		_art_pipe_queue = needy
+	if debug_nb_nc == "clearfirst":
+		# NC (clearfirst): every cache-served face in the
+		# window re-binds through the clear-first door on
+		# every enqueue - the pre-law world where a served
+		# face passes through the placeholder - so the
+		# census's black-pane legs fail by name.
+		for widx: int in order:
+			_nb_try_enqueue_swap(widx)
 	var tel_filter_done: int = Time.get_ticks_usec()
 	# GRADFIX17 telemetry: the enqueue's own account - which
 	# faces it found needy (identity = game + art file), on
@@ -4512,6 +4682,7 @@ func _art_pipe_enqueue_window() -> void:
 		"nc_roll_dir": _nc_roll_dir,
 		"swing": _swing_active,
 		"needy": needy.size(),
+		"enqueue_swaps": nb_swapped, ## NEVERBLANK: faces bound synchronously at this enqueue
 		"faces": tel_faces,
 		"cost_ms": float(Time.get_ticks_usec() - tel_t0) / 1000.0,
 		"order_ms": float(tel_order_done - tel_t0) / 1000.0,
@@ -4936,7 +5107,7 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 		# never happen.
 		_sc_noop_face_swaps += 1
 	else:
-		quad.set_texture(tex)
+		_nb_bind_face(quad, tex, "swap" if _art_apply_branch == "facecache" else "render") ## NEVERBLANK: the one bind door
 	_panel_face_key[game.game_id] = fkey
 	# The nameplate shows only over an art face: a generated
 	# title card carries its own title, and a title under a
@@ -9295,6 +9466,20 @@ func _process(delta: float) -> void:
 		_sc_rest_msec += Time.get_ticks_msec() - _sc_rest_since
 		_sc_rest_since = 0
 	_update_power(delta)
+	# NEVERBLANK NC (clearfirst) only: the deferred real
+	# binds land after their clear dwell. Empty in every
+	# production run.
+	if not _nb_nc_pending.is_empty():
+		var nb_still: Array = []
+		for nb_ent: Variant in _nb_nc_pending:
+			var nb_arr: Array = nb_ent as Array
+			var nb_left: int = int(nb_arr[2]) - 1
+			if nb_left <= 0:
+				(nb_arr[0] as ClickableQuad).set_texture(nb_arr[1] as Texture2D)
+			else:
+				nb_arr[2] = nb_left
+				nb_still.append(nb_arr)
+		_nb_nc_pending = nb_still
 	var deaf: bool = _launching_game_id != ""
 	var telemetry_cooldown_before: float = _joy_cooldown ## scroll telemetry: the poll's before (read-only)
 	var telemetry_roll_before_poll: int = _nc_roll_dir ## scroll telemetry: the NC roll state as this poll began (read-only)

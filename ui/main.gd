@@ -383,6 +383,12 @@ var _fc_fav_stage: int = 0
 var _fc_fav_renders0: int = 0
 var _fc_fav_swaps0: int = 0
 var _fc_fav_frames: int = 0
+var _fc_px_calls: int = 0 ## NEVERBLANK: pixel-sample cadence counter (every 3rd chain sample)
+var _fc_px_samples: Dictionary = {1: 0, 2: 0} ## NEVERBLANK: countable panes pixel-classified per pass
+var _fc_black_panes: Dictionary = {1: 0, 2: 0} ## NEVERBLANK: black panes counted per pass (the law: 0)
+var _fc_black_notes: Array[String] = [] ## NEVERBLANK: first black-pane sightings (game, pass, stats)
+var _fc_px_worst: Dictionary = {1: {}, 2: {}} ## NEVERBLANK: the darkest countable pane's stats per pass (the calibration witness)
+var _fc_midchain_grabbed: bool = false ## NEVERBLANK: the mid-chain rendered grab is saved once
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
 var _jumpbench_t0: int = 0
@@ -12428,7 +12434,8 @@ func _fc_sample() -> void:
 	for gid: Variant in rpg.keys():
 		_fc_rendered_ever[str(gid)] = true
 	var inflight: int = 0
-	for e: Dictionary in _room.face_state():
+	var entries: Array = _room.face_state()
+	for e: Dictionary in entries:
 		if not bool(e.get("is_unreal", false)):
 			continue
 		var gid: String = str(e.get("game_id", ""))
@@ -12446,6 +12453,95 @@ func _fc_sample() -> void:
 		else:
 			inflight += 1
 	_fc_inflight_max = maxi(_fc_inflight_max, inflight)
+	# NEVERBLANK: the drawn-pane census rides the same
+	# samples, every third one (a viewport grab per sample
+	# would tax the very frames being measured).
+	_fc_px_calls += 1
+	if _fc_px_calls % 3 == 0:
+		_fc_px_sample(entries)
+
+
+## NEVERBLANK: the drawn-pane census. Classifies countable
+## window panes from the actual frame: a pane is BLACK
+## when its face area (the mimic art rect - the face above
+## the name strip, inset) is dark, inkless and uniform:
+## a texture absent, the panel wearing the placeholder.
+## A styled face carries its painted title ink in that
+## area and an art face carries detail, so neither can
+## classify black. Countable mirrors the data census's
+## own surface: pass 1 judges rendered-ever games (a first
+## render may honestly be in flight); pass 2 judges games
+## cache-resident at its start or still wearing their
+## stamp (the heal's evicted re-renders in flight are the
+## data census's allowed case, here too).
+func _fc_px_sample(entries: Array) -> void:
+	var img: Image = get_viewport().get_texture().get_image()
+	if img == null or img.is_empty():
+		return
+	if _fc_pass == 2 and _fc_taps >= 20 and not _fc_midchain_grabbed:
+		_fc_midchain_grabbed = true
+		var grab_dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+		if grab_dir != "":
+			img.save_png(grab_dir + "/neverblank_midchain.png")
+	for e: Variant in entries:
+		var ent: Dictionary = e as Dictionary
+		var gid: String = str(ent.get("game_id", ""))
+		var countable: bool = false
+		if _fc_pass == 1:
+			countable = _fc_rendered_ever.has(gid)
+		else:
+			countable = _fc_resident.has(gid) or bool(ent.get("key_stamped", false))
+		if not countable:
+			continue
+		var pidx: int = int(ent.get("idx", -1))
+		if pidx < 0 or pidx >= _room._panels.size():
+			continue
+		var panel: ClickableQuad = _room._panels[pidx]
+		if panel == null:
+			continue
+		var full_rect: Rect2i = _mimic_art_screen_rect(panel)
+		var rect: Rect2i = full_rect.intersection(Rect2i(0, 0, img.get_width(), img.get_height()))
+		if rect.size.x < 8 or rect.size.y < 8:
+			continue
+		# A pane less than half in frame is not a drawn pane
+		# to judge: its projected box is mostly the void
+		# beside the card (the data census above is the
+		# authority for those), and it is fully framed
+		# within a step or two, where this census reads it.
+		if float(rect.size.x * rect.size.y) < 0.5 * float(full_rect.size.x * full_rect.size.y):
+			continue
+		var n: int = 0
+		var lum_sum: float = 0.0
+		var lum_sq: float = 0.0
+		var ink: int = 0
+		var step_x: int = maxi(1, rect.size.x / 24)
+		var step_y: int = maxi(1, rect.size.y / 24)
+		var py: int = rect.position.y
+		while py < rect.position.y + rect.size.y:
+			var px: int = rect.position.x
+			while px < rect.position.x + rect.size.x:
+				var c: Color = img.get_pixel(px, py)
+				var lum: float = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+				lum_sum += lum
+				lum_sq += lum * lum
+				if lum > 0.30:
+					ink += 1
+				n += 1
+				px += step_x
+			py += step_y
+		if n == 0:
+			continue
+		_fc_px_samples[_fc_pass] = int(_fc_px_samples.get(_fc_pass, 0)) + 1
+		var mean: float = lum_sum / float(n)
+		var sd: float = sqrt(maxf(0.0, lum_sq / float(n) - mean * mean))
+		var ink_frac: float = float(ink) / float(n)
+		var worst: Dictionary = _fc_px_worst.get(_fc_pass, {}) as Dictionary
+		if worst.is_empty() or mean < float(worst.get("mean", 9.9)):
+			_fc_px_worst[_fc_pass] = {"game": gid, "mean": mean, "sd": sd, "ink": ink_frac}
+		if mean < 0.13 and ink_frac < 0.01 and sd < 0.025:
+			_fc_black_panes[_fc_pass] = int(_fc_black_panes.get(_fc_pass, 0)) + 1
+			if _fc_black_notes.size() < 10:
+				_fc_black_notes.append("pass %d '%s' col %d unreal %s rect %s mean %.3f sd %.3f ink %.3f" % [_fc_pass, str(ent.get("title", "")), int(ent.get("col", -1)), str(bool(ent.get("is_unreal", false))), str(rect), mean, sd, ink_frac])
 
 
 ## The shared chain driver for both passes: timed taps in
@@ -12724,6 +12820,22 @@ func _fc_judge_counters() -> void:
 	var unique: int = int(end_stats.get("unique_games", 0))
 	_fc_expect(unique == _room._visible_games.size(),
 		"facecache: counters: every game on the shelf rendered (%d unique games of %d visible)" % [unique, _room._visible_games.size()])
+	# NEVERBLANK legs: the drawn-pane census (pixels, not
+	# data), the assignment probe's account, and the
+	# eviction witness - the law judged three ways.
+	var nb: Dictionary = _room.neverblank_counts()
+	_fc_expect(int(_fc_black_panes.get(1, 0)) == 0,
+		"neverblank: pass 1 chain shows no black panes on rendered games (%d black over %d pixel samples)" % [int(_fc_black_panes.get(1, 0)), int(_fc_px_samples.get(1, 0))])
+	_fc_expect(int(_fc_black_panes.get(2, 0)) == 0,
+		"neverblank: pass 2 chain shows no black panes (%d black over %d pixel samples)" % [int(_fc_black_panes.get(2, 0)), int(_fc_px_samples.get(2, 0))])
+	_fc_expect(int(nb.get("face_clear", -1)) == 0,
+		"neverblank: no empty texture was ever assigned over a real face (probe count %d)" % int(nb.get("face_clear", -1)))
+	_fc_expect(int(nb.get("evict_bound", -1)) == 0,
+		"neverblank: no eviction dropped a visible panel's texture (%d dropped, %d deferred)" % [int(nb.get("evict_bound", -1)), int(nb.get("evict_deferred", 0))])
+	if not _fc_black_notes.is_empty():
+		print("FACECACHE: neverblank black-pane sightings: ", _fc_black_notes)
+	print("FACECACHE: neverblank account: black p1 %d/%d p2 %d/%d, face_clear %d, evict_bound %d, evict_deferred %d, enqueue_swaps %d" % [int(_fc_black_panes.get(1, 0)), int(_fc_px_samples.get(1, 0)), int(_fc_black_panes.get(2, 0)), int(_fc_px_samples.get(2, 0)), int(nb.get("face_clear", -1)), int(nb.get("evict_bound", -1)), int(nb.get("evict_deferred", 0)), int(nb.get("enqueue_swaps", 0))])
+	print("FACECACHE: neverblank darkest countable panes: p1 %s | p2 %s" % [str(_fc_px_worst.get(1, {})), str(_fc_px_worst.get(2, {}))])
 	print("FACECACHE: final account: unique %d, renders %d, swaps %d, eviction-forced re-renders %d, resident now %d, evicted total %d" % [unique, int(end_stats.get("renders", 0)), int(end_stats.get("swaps", 0)), int(end_stats.get("rerenders_after_eviction", 0)), int(_room.residency_stats().get("resident_faces", 0)), int(_room.residency_stats().get("evicted_total", 0))])
 
 
