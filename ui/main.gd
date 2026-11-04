@@ -12600,8 +12600,16 @@ func _drive_facecache_smoke() -> void:
 						_fc_fav_stage = 3
 						_fc_fav_frames = 0
 					elif Time.get_ticks_msec() > _fc_deadline_msec:
+						# Recorded, not fatal: the round-trip
+						# continues so the pass-2 census legs
+						# still get their say (the NC shape -
+						# under the cache seam the run must
+						# fail on the census legs by name too,
+						# not stop early here).
 						_fc_expect(false, "facecache: favourite toggle-on never re-rendered the focused face (renders stuck at %d)" % r1)
-						_finish_facecache_smoke()
+						_fc_fav_renders0 = r1
+						_fc_fav_stage = 3
+						_fc_fav_frames = 0
 				3:
 					_fc_feed_button(JOY_BUTTON_X, true)
 					_fc_fav_stage = 4
@@ -12618,25 +12626,36 @@ func _drive_facecache_smoke() -> void:
 					if s2 > _fc_fav_swaps0 and _room.art_pipeline_idle():
 						_fc_expect(r2 == _fc_fav_renders0,
 							"facecache: favourite toggle-back is served as a swap, not a render (renders hold at %d, swaps %d -> %d)" % [r2, _fc_fav_swaps0, s2])
-						# Pass 2 baseline: who is resident,
-						# and the counters as the chain starts.
-						_fc_resident.clear()
-						for gid: String in _room.face_cache_resident_games():
-							_fc_resident[gid] = true
-						_fc_snap_p2_start = _room.face_cache_stats()
-						_fc_pass = 2
-						_fc_taps = 0
-						_fc_samples = 0
-						_fc_violations = 0
-						_fc_violation_notes.clear()
-						_fc_inflight_max = 0
-						_fc_tap_next_msec = Time.get_ticks_msec()
-						_fc_deadline_msec = Time.get_ticks_msec() + 300000
-						_fc_phase = 1
-						print("FACECACHE: favourite round-trip done; pass 2 chain left, %d games resident at the start" % _fc_resident.size())
+						_fc_begin_pass2()
 					elif Time.get_ticks_msec() > _fc_deadline_msec:
-						_fc_expect(false, "facecache: favourite toggle-back was never served (renders %d, swaps %d -> %d)" % [r2, _fc_fav_swaps0, s2])
-						_finish_facecache_smoke()
+						# Judged on what stands and the run
+						# continues into pass 2 regardless:
+						# under the NC the toggle-back renders
+						# a third time and no swap ever comes -
+						# the leg fails by name here AND the
+						# pass-2 census legs fail after it.
+						_fc_expect(false,
+							"facecache: favourite toggle-back is served as a swap, not a render (renders hold at %d, swaps %d -> %d - no swap arrived before the deadline)" % [r2, _fc_fav_swaps0, s2])
+						_fc_begin_pass2()
+
+
+## Pass 2 setup: the residency baseline and the counters
+## snapshot the pass-2 judgment reads, then the chain phase.
+func _fc_begin_pass2() -> void:
+	_fc_resident.clear()
+	for gid: String in _room.face_cache_resident_games():
+		_fc_resident[gid] = true
+	_fc_snap_p2_start = _room.face_cache_stats()
+	_fc_pass = 2
+	_fc_taps = 0
+	_fc_samples = 0
+	_fc_violations = 0
+	_fc_violation_notes.clear()
+	_fc_inflight_max = 0
+	_fc_tap_next_msec = Time.get_ticks_msec()
+	_fc_deadline_msec = Time.get_ticks_msec() + 300000
+	_fc_phase = 1
+	print("FACECACHE: favourite round-trip done; pass 2 chain left, %d games resident at the start" % _fc_resident.size())
 
 
 ## The pass-2 + counters judgment, at the pass 2 drain:
