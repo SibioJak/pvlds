@@ -1074,7 +1074,7 @@ var _strip_tex_cache: Dictionary = {} ## "key|state" -> Texture2D: every strip s
 var _btn_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: the panels' Launch/Failed button faces - two textures in existence, once rendered per panel per rebuild before the pick-latency fix. GRADFIX13 (item 2): dormant in the shipped build (no plinth is dressed); the plinth NC's minted buttons use it as before
 var _face_tex_cache: Dictionary = {} ## "game_id|art_path|fav" -> [Texture2D, art_aspect]: rendered panel faces (the pick-latency fix - a revisit re-rendered every face from scratch)
 var _face_cache_order: Array[String] = [] ## the face cache's LRU order (oldest first)
-const FACE_CACHE_MAX: int = RESIDENT_FACES_CAP ## OPTIMIZE: the resident cap IS the cache cap (108 = window 63 + eviction margin)
+const FACE_CACHE_MAX: int = RESIDENT_FACES_CAP ## OPTIMIZE: the resident cap IS the cache cap (384 since COMPOSE-AHEAD - see RESIDENT_FACES_CAP's arithmetic)
 var _strip_has_number: bool = false ## the library holds a non-letter title, so the "#" slot is laid out (see _refresh_strip)
 var _letter_net: String = "" ## "" | "THE" | "#": the standing net view - the wall shows exactly that net's games, in title order (see _jump_to_letter)
 var _tournament: bool = false ## the Tournament Room view stands: the wall shows WoVP challenge boards, not the library (see _build_tournament_rows)

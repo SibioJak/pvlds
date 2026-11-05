@@ -541,9 +541,14 @@ static func make_solid(color: Color) -> Texture2D:
 ## cost, never a wrong image. FACECACHE round: the
 ## eviction is an LRU (a verified hit renews the entry -
 ## under the old store-order FIFO a long session
-## re-decoded hot art on schedule) and the cap is reunited
-## with the composed-face residency cap (108), so one
-## discipline governs both cache tiers.
+## re-decoded hot art on schedule) and the cap was reunited
+## with the composed-face residency cap of its day (108).
+## COMPOSE-AHEAD round: the tiers now differ on purpose -
+## the composed cap rose to 384 because a composed face's
+## cost is fixed and small (1,714,176 B), while a decoded
+## source texture's cost is variable and up to ~4x that;
+## this tier stays at 108, and a miss costs one background
+## re-decode (~3.5 ms on the field rig), never a frame.
 static var _art_decode_cache: Dictionary = {} ## path -> [Texture2D, mtime, size]
 static var _art_decode_order: Array[String] = []
 const ART_DECODE_CACHE_MAX: int = 108
