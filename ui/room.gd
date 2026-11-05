@@ -5078,7 +5078,7 @@ func _art_ahead_pass() -> void:
 			var acc: int = _grid_coord(idx).x
 			if acc >= _panel_window_lo and acc <= _panel_window_hi:
 				continue
-		var spent: int = await _compose_ahead_one(idx, gen)
+		var spent: int = await _compose_ahead_one(idx, gen, centre_col0)
 		if spent < 0:
 			deferred.append(idx) # its decode is still in flight - retry behind the rest
 			continue
@@ -5093,7 +5093,7 @@ func _art_ahead_pass() -> void:
 ## render was spent, 0 when there was nothing to compose (or
 ## the art decode had failed - nothing is put either way),
 ## -1 when the face's decode is still in flight.
-func _compose_ahead_one(idx: int, gen: int) -> int:
+func _compose_ahead_one(idx: int, gen: int, centre_col0: int) -> int:
 	if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
 		return 0
 	if _tournament and idx < _tournament_rows.size() \
@@ -5162,14 +5162,19 @@ func _compose_ahead_one(idx: int, gen: int) -> int:
 		if tex == null or not _tex_is_real(tex):
 			_ca_gate_dropped += 1
 			return 1
-	# The render spanned real time: a window fill may have
-	# composed this same face meanwhile (the boot-churn race -
-	# the span was built off a window the seating then moved).
-	# If the cache serves the key now, this render is a
-	# duplicate: discard it unnoted, so the account never
-	# counts two renders for one standing face.
+	# The render spanned real time, and the boot churn races
+	# it both ways: a window fill for this face may have put
+	# first (the cache serves - discard), or may still be in
+	# flight while the seating moved the window over this
+	# face or the centre moved on (the window owns the face
+	# now, and its fill's put must be the one that stands -
+	# discard). Either way the duplicate dies unnoted, so
+	# the account never counts two renders for one face.
 	var raced: Array = _face_cache_get(fkey)
-	if not raced.is_empty() and _face_cache_serves(raced, art_file):
+	var face_col: int = _grid_coord(idx).x
+	var claimed: bool = _panel_window_lo >= 0 and face_col >= _panel_window_lo and face_col <= _panel_window_hi
+	var moved: bool = _centre_index < 0 or _grid_coord(_centre_index).x != centre_col0
+	if claimed or moved or (not raced.is_empty() and _face_cache_serves(raced, art_file)):
 		_ca_raced += 1
 		return 1
 	_fc_note_render(game.game_id, fkey)
