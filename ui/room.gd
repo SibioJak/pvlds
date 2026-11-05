@@ -899,6 +899,14 @@ static var debug_opt_nc: String = ""
 ## so the facecache chain census's black-pane legs fail by
 ## name. Empty in every real run.
 static var debug_nb_nc: String = ""
+## Negative-control seam for the PHANTOMFIX round (the
+## harness env PVLDS_PHANTOM_NC, set by Main before any
+## room exists): "phantom" restores both pre-fix behaviours
+## - provenance-blind face-cache serving (Layer 1) and the
+## direct-ask sync shortcut inside the art pipe's stage
+## (Layer 3) - so the phantom fixture fails by name. Empty
+## in every real run.
+static var debug_phantom_nc: String = ""
 
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
@@ -3946,6 +3954,21 @@ func _face_cache_get(key: String) -> Array:
 	return _face_tex_cache[key] as Array
 
 
+## PHANTOMFIX Layer 1 - the provenance law: a cache entry
+## serves a key only when the art path recorded at its put
+## (entry[2]) IS the key's art path. A styled fallback put
+## under an art key by a failed art attempt (a failed
+## capture, a failed decode) carries "" there, so it can
+## never serve the art key again - the fill falls through
+## to a genuine render, and the heal's retry can cure the
+## face instead of restamping the fallback forever. The
+## NC seam restores provenance-blind serving.
+func _face_cache_serves(entry: Array, art_path: String) -> bool:
+	if debug_phantom_nc == "phantom":
+		return true ## NC seam (PVLDS_PHANTOM_NC=phantom): pre-fix blind serving
+	return entry.size() >= 3 and str(entry[2]) == art_path
+
+
 ## The panel face cache's LRU write: past FACE_CACHE_MAX
 ## the oldest faces are dropped (their games simply
 ## re-render on a later visit - a miss is a cost, never a
@@ -4264,8 +4287,14 @@ func _nb_try_enqueue_swap(idx: int) -> bool:
 	var hit: Array = _face_cache_get(fkey)
 	if hit.is_empty():
 		return false
-	var aspect: float = float(hit[1]) if hit.size() >= 2 else 0.0
-	if _face_path_memoized(game) != "" and aspect <= 0.0:
+	# PHANTOMFIX Layer 1: the swap may bind only an entry
+	# whose provenance is this key's art path - the old
+	# aspect proxy (a memoized art path with a zero-aspect
+	# entry) let a styled fallback cached under the art key
+	# through whenever the memo had already been corrected.
+	var key_parts: PackedStringArray = fkey.split("|")
+	var key_art: String = str(key_parts[1]) if key_parts.size() >= 2 else ""
+	if not _face_cache_serves(hit, key_art):
 		return false
 	_nb_apply_swap(idx, fkey, hit)
 	return true
@@ -4972,7 +5001,13 @@ func _rederive_card_plate(idx: int, game: GameEntry) -> void:
 ## later. The NC's syncfill path, and the pipeline's own
 ## stage step, call _fill_one_face_sync directly.
 func _fill_one_face(idx: int, gen: int) -> void:
-	if debug_gf16_nc == "syncfill" or _art_pipe_in_stage:
+	# PHANTOMFIX Layer 3: a direct ask ALWAYS queues - the
+	# old in-stage shortcut ran the fill re-entrantly inside
+	# the pipe's own stage step, where its bookkeeping (the
+	# shared apply-branch string, the unwrapped cache put)
+	# corrupted the stage fill it interrupted. The phantom
+	# NC restores the shortcut verbatim.
+	if debug_gf16_nc == "syncfill" or (_art_pipe_in_stage and debug_phantom_nc == "phantom"):
 		await _fill_one_face_sync(idx, gen)
 		return
 	# GRADFIX17 telemetry: a direct ask (shot landing, X-press
@@ -5006,23 +5041,42 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 	var pup: bool = game.is_pup_tagged()
 	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
 	if str(_panel_face_key.get(game.game_id, "")) == fkey:
-		_art_apply_branch = "standing" ## GRADFIX17 telemetry (read by the caller's apply wrap)
-		# Already wearing exactly this face - but a rebuild
-		# since the fill reset this seat's art aspect to 0
-		# and re-derived its plate under the styled law, so
-		# an art card can be standing with the wrong Launch
-		# seat (and a lying aspect) under an honest face.
-		# Restore the aspect from the face cache's own record
-		# and re-derive the plate before returning.
+		# PHANTOMFIX Layer 1: the stamp alone no longer
+		# vouches for the face - a styled fallback cached
+		# under the art key stamps exactly this key. The
+		# standing return stands only when the cache holds
+		# no entry for the key (the panel still wears the
+		# texture the stamp names; the entry was evicted)
+		# or the entry's provenance is this key's art path.
+		# An entry that does not serve means the stamp is
+		# lying: fall through to a full fill.
 		var standing_face: Array = _face_cache_get(fkey)
-		if not standing_face.is_empty():
-			_panel_art_aspect[idx] = float(standing_face[1])
-		_rederive_card_plate(idx, game)
-		return
+		if standing_face.is_empty() or _face_cache_serves(standing_face, art_file):
+			_art_apply_branch = "standing" ## GRADFIX17 telemetry (read by the caller's apply wrap)
+			# Already wearing exactly this face - but a rebuild
+			# since the fill reset this seat's art aspect to 0
+			# and re-derived its plate under the styled law, so
+			# an art card can be standing with the wrong Launch
+			# seat (and a lying aspect) under an honest face.
+			# Restore the aspect from the face cache's own record
+			# and re-derive the plate before returning.
+			if not standing_face.is_empty():
+				_panel_art_aspect[idx] = float(standing_face[1])
+			_rederive_card_plate(idx, game)
+			return
 	var tex: Texture2D = null
 	var art_aspect: float = 0.0
 	var from_art: bool = false
 	var cached_face: Array = _face_cache_get(fkey)
+	if not cached_face.is_empty() and not _face_cache_serves(cached_face, art_file):
+		# PHANTOMFIX Layer 1: the entry's provenance is not
+		# this key's art (a styled fallback cached under the
+		# art key by a failed art attempt) - it must not
+		# serve. Drop it when its texture is unbound; when
+		# bound the eviction defers and the genuine render
+		# below replaces the entry with its own put.
+		_face_cache_evict(fkey)
+		cached_face = []
 	if not cached_face.is_empty():
 		tex = cached_face[0] as Texture2D
 		art_aspect = float(cached_face[1])

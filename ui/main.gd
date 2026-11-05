@@ -386,6 +386,8 @@ var _ph_seated: bool = false
 var _ph_restored: bool = false ## ROUND-3 attempt 5: the judging seat's restore step is done for the current target
 var _ph_evicted: bool = false ## ROUND-3 attempt 6: the judging seat's forcing step (away-seat, evict, corrupt, centre-seat) is done for the current target
 var _ph_cure_until_msec: int = 0 ## ROUND-3 attempt 5: the judging cure-wait deadline (fixed code cures inside it; unfixed code burns it)
+var _ph_trace_next_msec: int = 0
+var _ph_next_reask_msec: int = 0 ## ROUND-3: the cure-wait re-ask cadence ## ROUND-3: the judging trace print cadence (driver observability) ## ROUND-3 attempt 5: the judging cure-wait deadline (fixed code cures inside it; unfixed code burns it)
 var _ph_settle_frames: int = 0
 var _ph_chain_dir: int = 1 ## 1 = tapping right to the shelf end, -1 = tapping back to the start
 var _ph_chain_home_col: int = -1 ## the chain's return target column (where judging left the centre)
@@ -796,6 +798,7 @@ func _ready() -> void:
 	# seam, so the facecache chain census's black-pane legs
 	# fail by name. Set here, before any room exists.
 	RoomView.debug_nb_nc = OS.get_environment("PVLDS_NEVERBLANK_NC")
+	RoomView.debug_phantom_nc = OS.get_environment("PVLDS_PHANTOM_NC")
 	TextureFactory.probe_enabled = OS.has_environment("PVLDS_GF16_PROBE")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
@@ -12756,7 +12759,7 @@ func _drive_phantom_smoke() -> void:
 					if not (item is Dictionary):
 						continue
 					var entry: GameEntry = _scanner.game_by_id(str((item as Dictionary).get("game_id", "")))
-					if entry != null and entry.shot_url != "" and not ArtProvider.shot_is_cached(entry.shot_url):
+					if entry != null and entry.shot_url != "" and not _ph_shot_drained(entry.shot_url):
 						shots_in = false
 			# ROUND-3 attempt 2: also wait for the WHOLE
 			# library's shots - attempt 1's sting storms
@@ -12766,7 +12769,7 @@ func _drive_phantom_smoke() -> void:
 			# the only refresh in the sting is the driver's.
 			var library_in: bool = true
 			for g: GameEntry in _room._visible_games:
-				if g.shot_url != "" and not ArtProvider.shot_is_cached(g.shot_url):
+				if g.shot_url != "" and not _ph_shot_drained(g.shot_url):
 					library_in = false
 					break
 			if not shots_in or not library_in or not _room.art_pipeline_idle():
@@ -12793,7 +12796,7 @@ func _drive_phantom_smoke() -> void:
 			if _ph_idx >= _ph_manifest.size():
 				_ph_phase = 4
 				_ph_chain_home_col = -1
-				_ph_deadline_msec = Time.get_ticks_msec() + 420000
+				_ph_deadline_msec = Time.get_ticks_msec() + 240000 ## ROUND-3: chain box - the stepped gait under llvmpipe drops taps while a landing settles; the tour needs the longer box (runner cap raised to match for the proof runs)
 				return
 			var item: Dictionary = _ph_manifest[_ph_idx]
 			var gid: String = str(item.get("game_id", ""))
@@ -12821,6 +12824,22 @@ func _drive_phantom_smoke() -> void:
 				_ph_seated = false
 				_ph_deadline_msec = Time.get_ticks_msec() + 90000
 				return
+			if not _ph_restored and _ph_mint_observed(gid):
+				print("PHANTOM: observe - %s mint seen, restoring" % gid)
+				_ph_restore_target(gid)
+				_ph_restored = true
+				_ph_cure_until_msec = Time.get_ticks_msec() + 45000
+				# Re-ask at once (proof run 5's trace): the
+				# heal's retry budget may already be spent by
+				# the pre-restore cycles, and a stamped face
+				# has no other asker - the refresh is the
+				# product's own arrival call, and on fixed
+				# code its fill misses on provenance and
+				# renders the restored shot genuinely.
+				_room.refresh_shot_faces(_room._visible_games[idx])
+			if _ph_seated and Time.get_ticks_msec() >= _ph_trace_next_msec:
+				_ph_trace_next_msec = Time.get_ticks_msec() + 1000
+				print("PHANTOM: trace %s stamp=%s from_art=%s restored=%s settle=%d" % [gid, str(_room._panel_face_key.get(gid, "")), str(_ph_target_from_art(gid)), str(_ph_restored), _ph_settle_frames])
 			if not _room._window_fill_busy and not _room.page_slide_active() and _room.art_pipeline_idle():
 				_ph_settle_frames += 1
 			else:
@@ -12835,10 +12854,26 @@ func _drive_phantom_smoke() -> void:
 				# the target now.
 				_ph_restore_target(gid)
 				_ph_restored = true
-				_ph_cure_until_msec = Time.get_ticks_msec() + 20000
+				_ph_cure_until_msec = Time.get_ticks_msec() + 45000
+				# Backstop re-ask: if the heal's retry budget
+				# died before the restore, queue one fresh fill
+				# through the product's own arrival call so the
+				# cure gets its attempt inside the cure-wait.
+				_room.refresh_shot_faces(_room._visible_games[idx])
 				return
-			if not _ph_target_from_art(gid) and Time.get_ticks_msec() < _ph_cure_until_msec:
-				return
+			if not _ph_target_from_art(gid):
+				# Spend the cure-wait actively (run 8: a
+				# single restore+refresh left the cure to
+				# one capture attempt, and this bench's
+				# captures are a lottery): re-ask through
+				# the product's arrival call every 2 s -
+				# the same bounded-retry discipline the
+				# heal itself uses, driven from the wait.
+				if Time.get_ticks_msec() >= _ph_next_reask_msec:
+					_ph_next_reask_msec = Time.get_ticks_msec() + 2000
+					_room.refresh_shot_faces(_room._visible_games[idx])
+				if Time.get_ticks_msec() < _ph_cure_until_msec:
+					return
 			_judge_phantom_game(item, idx)
 			_ph_idx += 1
 			_ph_seated = false
@@ -12953,6 +12988,39 @@ func _ph_evict_target(gid: String) -> void:
 	print("PHANTOM: evict - %s cache entry dropped, stamp + memo erased" % gid)
 
 
+## ROUND-3 attempt 8: the mint, observed live - the
+## target's stamp has taken the shot key while its face is
+## still not from art. The driver restores the genuine
+## bytes the moment this reads true (mid-loop, the heal's
+## retry budget still alive), which is the field's own
+## ordering: there the shot file was healthy all along and
+## only the one capture failed.
+func _ph_mint_observed(gid: String) -> bool:
+	var tidx: int = _ph_target_idx(gid)
+	if tidx < 0:
+		return false
+	var entry: GameEntry = _room._visible_games[tidx]
+	# Prefix, not the full key: a favourite or PuP flag rides
+	# the key's tail (attempt: AMH and Airborne are PuP-tagged
+	# in the db, so their stamps end "|pup" and an exact "||"
+	# comparison never observed their mints - their restores
+	# never fired and every decode kept reading garbage).
+	var stamp_prefix: String = gid + "|" + ArtProvider.shot_cache_path_for(entry.shot_url) + "|"
+	if not str(_room._panel_face_key.get(gid, "")).begins_with(stamp_prefix):
+		return false
+	return not _ph_target_from_art(gid)
+
+
+## ROUND-3 attempt 9: a shot counts as drained when it is
+## cached OR the fetcher recorded any outcome for it - one
+## fetch in fixed proof run 2 died on a connection reset and
+## was left FAILED with no retry, and the all-landed gate
+## starved over a quiet room. A failed shot is a drained
+## fetcher (the game simply keeps its styled face).
+func _ph_shot_drained(url: String) -> bool:
+	return ArtProvider.shot_is_cached(url) or ArtProvider.shot_outcome(url) != ""
+
+
 func _ph_target_from_art(gid: String) -> bool:
 	for e: Dictionary in _room.face_state():
 		if str(e.get("game_id", "")) == gid:
@@ -13061,8 +13129,14 @@ func _ph_drive_chain() -> void:
 	if not _ph_stick_held and now >= _ph_tap_next_msec:
 		_input_feed_stick_x(float(_ph_chain_dir))
 		_ph_stick_held = true
-		_ph_tap_release_msec = now + 90
-		_ph_tap_next_msec = now + 320
+		# ROUND-3 run 8: the hold is 350 ms, not 90 - this
+		# fixture runs at ~6 fps under llvmpipe, so a 90 ms
+		# throw can fall entirely between two input polls
+		# and never register (run 7: 780 s of taps, zero
+		# steps). A 350 ms hold spans 2-3 polls; completion
+		# is position-based, so an extra step is harmless.
+		_ph_tap_release_msec = now + 350
+		_ph_tap_next_msec = now + 700
 
 ## One seated target's legs (see _drive_phantom_smoke): the
 ## recorded shot is the manifest's inherited donor shot, the
