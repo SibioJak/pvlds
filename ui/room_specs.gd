@@ -423,6 +423,11 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 	# validation - whose key is saved here, in plain words.
 	if health.has("wovp_line"):
 		lines.append(str(health["wovp_line"]))
+	# NEXTROUND (item 4): the PINemHi line rides beside the
+	# WoVP line - Main composes it from the same read that
+	# feeds the boards, so the panel and the boards agree.
+	if health.has("pinemhi_line"):
+		lines.append(str(health["pinemhi_line"]))
 	return {
 		"kind": "banner",
 		"bg": Color(0.05, 0.05, 0.09),
@@ -460,7 +465,15 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 ## knows its tone: "up" for a promotion line, "down" for a
 ## cut line - the face draws it as a ruled line, not a
 ## sentence.
-static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true) -> Dictionary:
+## NEXTROUND (item 4): the PINemHi negative-control seam,
+## set by Main from PVLDS_PINEMHI_NC. "nobest" = the board
+## spec drops the personal-best line even when a best was
+## handed in - the tournament smoke's PINemHi legs fail
+## against it by name. Same static-seam shape as
+## board_deadplank_nc above.
+static var pinemhi_nc: String = ""
+
+static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}) -> Dictionary:
 	var rows: Array = []
 	for entry: Variant in ch.board_rows(user_id):
 		var e: Dictionary = entry
@@ -492,6 +505,17 @@ static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: Strin
 				rows.append({"kind": "divider", "text": str(e.get("label", "")), "size": 28, "tone": tone})
 			"note":
 				rows.append({"kind": "note", "text": str(e.get("text", "")), "size": 34})
+	# NEXTROUND (item 4): the PINemHi personal-best line -
+	# appended BELOW the league rows as a plain note, never
+	# a score row: it is the player's own best from their
+	# local PINemHi files (core/pinemhi_scores.gd), not a
+	# league score, and it must never read as one.
+	if not personal_best.is_empty() and pinemhi_nc != "nobest":
+		rows.append({
+			"kind": "note",
+			"text": "Your PINemHi best: %s" % str(personal_best.get("score_text", "")),
+			"size": 30,
+		})
 	var chips: Array = []
 	if not owned:
 		chips.append({"text": "NOT IN YOUR LIBRARY", "accent": true})

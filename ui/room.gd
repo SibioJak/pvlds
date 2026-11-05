@@ -1107,6 +1107,7 @@ var _tournament_rows: Array = [] ## the standing view's rows, aligned 1:1 with _
 var _wovp_has_key: bool = false ## Main's word on the config: a WoVP key is saved
 var _wovp_user_id: String = "" ## whose key it is (validate-apikey's answer, or the cache's) - how the wall knows which row is HIS
 var _wovp_challenges: Array = [] ## the last-good boards (Array of WovpChallenge), live or from the disk cache
+var _pinemhi_bests: Dictionary = {} ## NEXTROUND (item 4): PINemHi personal bests by PinemhiScores title key, pushed by Main (set_pinemhi_bests); a challenge whose title keys into this map gets the subordinate best line on its standing board
 var _wovp_fetched_at: int = 0 ## unix time the standing boards landed (0 = never)
 var _wovp_live: bool = false ## the standing boards came from a fetch this session (false = the disk cache's)
 var _wovp_fetch_error: String = "" ## the last fetch's failure, in words, when it failed - the wall says so rather than dressing stale boards as live
@@ -2038,6 +2039,22 @@ func _collect_visible() -> void:
 ## the last good boards WITH their stamp and the failure
 ## stated (see _tournament_banner_line), never dressed as
 ## live.
+## NEXTROUND (item 4): Main's push of the PINemHi personal
+## bests it read from the player's own install (the room
+## never touches the disk for this). A changed map re-seats
+## the standing boards - their content keys carry the best.
+func set_pinemhi_bests(bests: Dictionary) -> void:
+	if bests == _pinemhi_bests:
+		return
+	_pinemhi_bests = bests
+	if _tournament:
+		# The boards' content keys carry the best line, so
+		# a re-render under the new key is the refresh's
+		# whole job (the render's own key check decides).
+		for idx: int in range(_board_nodes.size()):
+			_render_tournament_board(idx)
+
+
 func set_wovp_data(d: Dictionary) -> void:
 	_wovp_has_key = bool(d.get("has_key", false))
 	_wovp_user_id = str(d.get("user_id", ""))
@@ -6069,8 +6086,13 @@ func _tournament_board_key(idx: int) -> String:
 	var pair_state: String = "none"
 	if bool(row.get("owned", false)):
 		pair_state = "owned" if bool(row.get("build_owned", false)) else "diff"
+	# NEXTROUND (item 4): the board's PINemHi best line is
+	# part of its content, so the best's identity rides the
+	# key - a changed best re-renders the board.
+	var pb: Dictionary = _pinemhi_bests.get(PinemhiScores.challenge_key(ch.table_name), {}) as Dictionary
+	var pb_state: String = "" if pb.is_empty() else str(pb.get("score_text", ""))
 	return "board|" + ch.challenge_id + "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id \
-		+ "|" + pair_state
+		+ "|" + pair_state + ("|pb:" + pb_state if pb_state != "" else "")
 
 
 ## Seat the standing boards for the standing Tournament
@@ -6214,7 +6236,8 @@ func _render_tournament_board(idx: int) -> void:
 	book["render_key"] = key
 	var spec: Dictionary = RoomSpecs.tournament_board_spec(
 		ch, bool(row.get("owned", false)), _wovp_user_id, int(Time.get_unix_time_from_system()),
-		bool(row.get("build_owned", false)))
+		bool(row.get("build_owned", false)),
+		_pinemhi_bests.get(PinemhiScores.challenge_key(ch.table_name), {}) as Dictionary)
 	var bc: Vector2i = _board_coord(idx)
 	var cc: Vector2i = _grid_coord(idx)
 	spec["spine_side"] = "right" if bc.x < cc.x else "left"

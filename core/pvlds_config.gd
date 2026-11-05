@@ -41,6 +41,14 @@ var wovp_api_key: String = ""
 ## has no off state; a saved wing_enabled key in an old
 ## config file is simply no longer read.)
 var starfield_mode: String = "layered" ## "layered" | "flat" | "off"
+## NEXTROUND (item 4): the PINemHi personal-best read.
+## pinemhi_folder: the PINemHi install folder PVLDS reads
+## TOP10_Personal files from; "" = auto-detect the common
+## locations (PinemhiScores.AUTO_DETECT_CANDIDATES).
+## pinemhi_enabled: the toggle; off = the board line never
+## appears (and the folder is never read).
+var pinemhi_folder: String = ""
+var pinemhi_enabled: bool = true
 const STARFIELD_MODES: Array[String] = ["layered", "flat", "off"]
 ## Wall travel gait (was the GRADFIX10 item 3 display dial):
 ## the OPTIMIZE round closed the smooth-cruise saga by the
@@ -109,6 +117,8 @@ func load_from_disk() -> bool:
 	starfield_mode = str(d.get("starfield_mode", "layered"))
 	if not STARFIELD_MODES.has(starfield_mode):
 		starfield_mode = "layered"
+	pinemhi_folder = str(d.get("pinemhi_folder", ""))
+	pinemhi_enabled = bool(d.get("pinemhi_enabled", true))
 	# OPTIMIZE: any stored gait coerces to the one gait -
 	# a config written by a shipped build may carry "smooth"
 	# (the old default) and must load as "stepped", never error.
@@ -132,6 +142,8 @@ func save_to_disk() -> bool:
 	d["focus_herding"] = focus_herding
 	d["wovp_api_key"] = wovp_api_key
 	d["starfield_mode"] = starfield_mode
+	d["pinemhi_folder"] = pinemhi_folder
+	d["pinemhi_enabled"] = pinemhi_enabled
 	wall_motion_mode = "stepped" ## OPTIMIZE: saves write the one gait, whatever a caller left standing in the var
 	d["wall_motion_mode"] = wall_motion_mode
 	var folders: Array = []

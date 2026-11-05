@@ -749,6 +749,11 @@ func _ready() -> void:
 	# "board centred:" / "board frame-centred:", tournament
 	# "layout frame-centred:") fail by name.
 	RoomSpecs.board_deadplank_nc = OS.get_environment("PVLDS_GRADFIX10_NC") == "deadplank"
+	# The NEXTROUND PINemHi negative-control seam
+	# (PVLDS_PINEMHI_NC=nobest): the board spec drops the
+	# personal-best line even when a best was handed in -
+	# the tournament smoke's PINemHi legs fail by name.
+	RoomSpecs.pinemhi_nc = OS.get_environment("PVLDS_PINEMHI_NC")
 	# GRADFIX8's tournie-border negative-control seam
 	# (PVLDS_GRADFIX8_NC=noborder): borders are never
 	# applied, so the census's tourney-border legs fail
@@ -1271,7 +1276,7 @@ func _on_setup_panel_scan_requested() -> void:
 ## dictionary).
 func _setup_panel_health() -> Dictionary:
 	if _scanner == null:
-		return {"wovp_line": _wovp_health_line()}
+		return {"wovp_line": _wovp_health_line(), "pinemhi_line": PinemhiScores.status_line(_config)}
 	return {
 		"files": _scanner.total_files,
 		"games": _scanner.games.size(),
@@ -1282,6 +1287,7 @@ func _setup_panel_health() -> Dictionary:
 		"missing": _scanner.missing_b2s_files.size(),
 		"unplaced": _scanner.unplaced_files.size(),
 		"wovp_line": _wovp_health_line(),
+		"pinemhi_line": PinemhiScores.status_line(_config),
 	}
 
 
@@ -1326,6 +1332,11 @@ func _push_wovp_data() -> void:
 		"live": _wovp_boards_live,
 		"fetch_error": _wovp_fetch_error,
 	})
+	# NEXTROUND (item 4): the PINemHi bests ride the same
+	# push - re-read from the player's own install each
+	# time, so a folder/toggle change or fresh files land
+	# on the boards without a restart.
+	_room.set_pinemhi_bests(PinemhiScores.load_for_config(_config))
 	_resolve_unowned_shots()
 	# GRADFIX6 (item 3): pre-warm the challenge set's art at
 	# push time - boot/cache-load, long before anyone enters
@@ -2971,6 +2982,7 @@ func _show_desk(message: String = "") -> void:
 		_desk.enter_room_requested.connect(_enter_room)
 		_desk.wovp_key_saved.connect(_on_desk_wovp_key_saved)
 		_desk.wovp_test_requested.connect(_on_desk_wovp_test_requested)
+		_desk.pinemhi_settings_saved.connect(_push_wovp_data)
 	_desk.visible = true
 
 
@@ -14389,6 +14401,8 @@ func _bootfocus_region_stdev(img: Image, rect: Rect2i) -> float:
 ## his-row legs fail by name).
 func _drive_tournament_smoke() -> void:
 	match _tournament_smoke_mode:
+		"pinemhi":
+			_drive_tournament_pinemhi()
 		"nokey":
 			_drive_tournament_state_mode(false)
 		"failfetch", "errbody", "errempty":
@@ -14399,6 +14413,150 @@ func _drive_tournament_smoke() -> void:
 			_drive_tournament_layout()
 		_:
 			_drive_tournament_full()
+
+
+## pinemhi mode (NEXTROUND item 4): the personal-best board
+## line. No stub - the challenges are fabricated in the
+## driver and pushed through Main's own push, and the
+## harness config points pinemhi_folder at a fixture install
+## holding the REAL apollo13.txt plus a fabricated Medieval
+## Madness file. Legs: the line lands on the matching
+## boards with the file's own dotted score, subordinate
+## (a note row, last, never a score row); the unmatched
+## challenge stays clean; the rendered boards' content keys
+## carry the best; clearing the bests re-renders it away
+## and a re-push restores it. PVLDS_PINEMHI_NC=nobest drops
+## the line in the spec - the spec legs fail by name.
+func _drive_tournament_pinemhi() -> void:
+	match _tournament_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				var apollo: WovpChallenge = _pinemhi_fab_challenge("pinemhi-apollo", "Apollo 13")
+				var medieval: WovpChallenge = _pinemhi_fab_challenge("pinemhi-medieval", "Medieval Madness")
+				var twilight: WovpChallenge = _pinemhi_fab_challenge("pinemhi-twilight", "Twilight Zone")
+				_wovp_challenges = [apollo, medieval, twilight]
+				_wovp_user_id = "smoke-user"
+				_wovp_boards_live = true
+				_wovp_fetched_at = int(Time.get_unix_time_from_system())
+				_push_wovp_data()
+				_tournament_leg_pinemhi_specs(apollo, medieval, twilight)
+				_room._handle_rail("tournament")
+				_tournament_expect(_room.tournament_active(), "pinemhi: the TOURNAMENT stop raises the Tournament Room")
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 45000
+				_tournament_smoke_phase = 1
+			else:
+				_tournament_smoke_wait += 1
+				if _tournament_smoke_wait > 3600:
+					_tournament_fail("the room never came up")
+					_finish_tournament_smoke()
+		1:
+			var ea: Dictionary = _pinemhi_board_entry("pinemhi-apollo")
+			var em: Dictionary = _pinemhi_board_entry("pinemhi-medieval")
+			var et: Dictionary = _pinemhi_board_entry("pinemhi-twilight")
+			if bool(ea.get("texture_real", false)) and bool(em.get("texture_real", false)) and bool(et.get("texture_real", false)):
+				_tournament_expect(str(ea.get("texture_key", "")).contains("|pb:1.638.803.870"),
+					"pinemhi: the rendered Apollo 13 board's content carries the personal best (key: %s)" % str(ea.get("texture_key", "")))
+				_tournament_expect(str(em.get("texture_key", "")).contains("|pb:2.345.678.901"),
+					"pinemhi: the rendered Medieval Madness board's content carries its personal best")
+				_tournament_expect(not str(et.get("texture_key", "")).contains("|pb:"),
+					"pinemhi: the unmatched Twilight Zone board carries no best line")
+				_room.set_pinemhi_bests({})
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 30000
+				_tournament_smoke_phase = 2
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("pinemhi: the boards never rendered")
+				_finish_tournament_smoke()
+		2:
+			var ea2: Dictionary = _pinemhi_board_entry("pinemhi-apollo")
+			if bool(ea2.get("texture_real", false)) and not str(ea2.get("texture_key", "")).contains("|pb:"):
+				_tournament_expect(true, "pinemhi: clearing the bests re-renders the line away (the toggle-off / no-folder case)")
+				_push_wovp_data()
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 30000
+				_tournament_smoke_phase = 3
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("pinemhi: the cleared board never re-rendered")
+				_finish_tournament_smoke()
+		3:
+			var ea3: Dictionary = _pinemhi_board_entry("pinemhi-apollo")
+			if bool(ea3.get("texture_real", false)) and str(ea3.get("texture_key", "")).contains("|pb:1.638.803.870"):
+				_tournament_expect(true, "pinemhi: a fresh push restores the line")
+				_finish_tournament_smoke()
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("pinemhi: the restored board never re-rendered")
+				_finish_tournament_smoke()
+
+
+## One fabricated challenge for the pinemhi mode: two league
+## rows, the second his, on a season board ending in 3 days.
+func _pinemhi_fab_challenge(cid: String, table: String) -> WovpChallenge:
+	var ch: WovpChallenge = WovpChallenge.new()
+	ch.challenge_id = cid
+	ch.name = table + " - Season Challenge"
+	ch.table_name = table
+	ch.type_code = WovpChallenge.TYPE_SEASON
+	ch.end_unix = int(Time.get_unix_time_from_system()) + 3 * 86400
+	var r1: WovpScoreRow = WovpScoreRow.new()
+	r1.position = 1
+	r1.participant_name = "Leader"
+	r1.score = 2000000000.0
+	var r2: WovpScoreRow = WovpScoreRow.new()
+	r2.position = 2
+	r2.participant_name = "Smoke"
+	r2.score = 1000000000.0
+	r2.user_id = "smoke-user"
+	ch.rows = [r1, r2]
+	return ch
+
+
+## The pinemhi mode's spec legs: the board spec each
+## challenge would render with, fed the best the room
+## itself was handed by the push.
+func _tournament_leg_pinemhi_specs(apollo: WovpChallenge, medieval: WovpChallenge, twilight: WovpChallenge) -> void:
+	var bests: Dictionary = _room._pinemhi_bests
+	_tournament_expect(bests.size() == 2,
+		"pinemhi: two personal bests were read from the fixture install (got %d)" % bests.size())
+	var now_unix: int = int(Time.get_unix_time_from_system())
+	var cases: Array = [
+		[apollo, "Your PINemHi best: 1.638.803.870", "Apollo 13"],
+		[medieval, "Your PINemHi best: 2.345.678.901", "Medieval Madness"],
+		[twilight, "", "Twilight Zone"],
+	]
+	for case_v: Variant in cases:
+		var case_a: Array = case_v
+		var ch: WovpChallenge = case_a[0] as WovpChallenge
+		var want: String = str(case_a[1])
+		var tname: String = str(case_a[2])
+		var best: Dictionary = bests.get(PinemhiScores.challenge_key(ch.table_name), {}) as Dictionary
+		var spec: Dictionary = RoomSpecs.tournament_board_spec(ch, false, _wovp_user_id, now_unix, true, best)
+		var rows: Array = spec.get("rows", []) as Array
+		var found_at: int = -1
+		var score_carries: bool = false
+		for i: int in range(rows.size()):
+			var rd: Dictionary = rows[i] as Dictionary
+			if str(rd.get("text", "")) == want and want != "":
+				found_at = i
+			if str(rd.get("kind", "")) == "score" and str(rd.get("text", "")).contains("PINemHi"):
+				score_carries = true
+		if want == "":
+			_tournament_expect(found_at == -1 and not score_carries,
+				"pinemhi: the unmatched challenge (%s) shows no best line" % tname)
+		else:
+			_tournament_expect(found_at == rows.size() - 1 and str((rows[found_at] as Dictionary).get("kind", "")) == "note",
+				"pinemhi: %s board ends with the subordinate best line '%s'" % [tname, want])
+			_tournament_expect(not score_carries,
+				"pinemhi: %s best never rides a league score row" % tname)
+
+
+## A standing board's state entry by challenge id (the
+## pinemhi mode's rendered-path read).
+func _pinemhi_board_entry(cid: String) -> Dictionary:
+	if _room == null:
+		return {}
+	for e: Variant in _room.board_state():
+		var ed: Dictionary = e
+		if str(ed.get("challenge_id", "")) == cid:
+			return ed
+	return {}
 
 
 ## layout mode: the board-presentation contract against the
@@ -19283,6 +19441,47 @@ func _run_core_test() -> void:
 	_expect(wovp_probe_answers.size() == 1 and str(wovp_probe_answers[0]).contains("31 characters") and not wovp_probe_client.is_busy(),
 		"wovp: validate on a short key sends nothing - the refusal is local and instant", failures)
 	wovp_probe_client.queue_free()
+
+	# NEXTROUND (item 4): the PINemHi reader. A fabricated
+	# install tree under user:// (the genuine Apollo 13
+	# file's parse is proven in the tournament smoke, whose
+	# harness copies the real file): two parseable TOP10
+	# files, one garbage file, and the silence cases - no
+	# folder, disabled toggle - all read through the same
+	# doors the app uses.
+	var ph_root: String = ProjectSettings.globalize_path("user://pinemhi_core_fixture")
+	var ph_personal: String = ph_root.path_join("PINemHi LeaderBoard").path_join("TOP10_Personal")
+	DirAccess.make_dir_recursive_absolute(ph_personal)
+	var ph_write := func(rel: String, body: String) -> void:
+		var f: FileAccess = FileAccess.open(ph_personal.path_join(rel), FileAccess.WRITE)
+		if f != null:
+			f.store_string(body)
+			f.close()
+	ph_write.call("apollo13.txt", "PINEMHI ONLINE LEADERBOARD\n\n<<< Apollo 13 >>>\n\n\nTOP 10 Personal Best Scores\n1   111.222.333      Tester  2026-07-06 14:26:10\n2   100.000.001      Tester  2026-07-05 09:12:44\n")
+	ph_write.call("medievalmadness.txt", "PINEMHI ONLINE LEADERBOARD\n\n<<< Medieval Madness >>>\n\n\nTOP 10 Personal Best Scores\n1   2.345.678.901      Tester  2026-08-01 21:14:03\n")
+	ph_write.call("notes.txt", "not a leaderboard file at all\njust some notes\n")
+	var ph_rec: Dictionary = PinemhiScores.parse_file(ph_personal.path_join("apollo13.txt"))
+	_expect(str(ph_rec.get("title", "")) == "Apollo 13" and str(ph_rec.get("score_text", "")) == "111.222.333" and int(ph_rec.get("score", 0)) == 111222333 and str(ph_rec.get("player", "")) == "Tester",
+		"pinemhi: a TOP10_Personal file parses to its #1 row (title, dotted score verbatim, numeric score, player)", failures)
+	_expect(PinemhiScores.parse_file(ph_personal.path_join("notes.txt")).is_empty(),
+		"pinemhi: a file without the <<< title >>> and ranked rows parses to nothing", failures)
+	var ph_all: Dictionary = PinemhiScores.load_folder(ph_root)
+	_expect(ph_all.size() == 2 and ph_all.has("apollo 13") and ph_all.has("medieval madness"),
+		"pinemhi: the folder read keys every parseable file by its normalised title (got %s)" % str(ph_all.keys()), failures)
+	_expect(PinemhiScores.load_folder(ph_root.path_join("no_such_folder")).is_empty(),
+		"pinemhi: a missing folder reads as silence, not an error", failures)
+	_expect(PinemhiScores.challenge_key("Apollo 13 (Sega 1995)") == PinemhiScores.title_key("Apollo 13"),
+		"pinemhi: a challenge's qualified name keys to the file's bare title", failures)
+	_expect(PinemhiScores.title_key("Bugs Bunny's Birthday Ball") == PinemhiScores.challenge_key("Bugs Bunny's Birthday Ball"),
+		"pinemhi: punctuation and case normalise away on both sides of the match", failures)
+	var ph_cfg: PvldsConfig = PvldsConfig.new()
+	ph_cfg.pinemhi_enabled = false
+	ph_cfg.pinemhi_folder = ph_root
+	_expect(PinemhiScores.resolve_folder(ph_cfg) == "" and PinemhiScores.load_for_config(ph_cfg).is_empty(),
+		"pinemhi: the toggle off means the folder is never read", failures)
+	ph_cfg.pinemhi_enabled = true
+	_expect(PinemhiScores.resolve_folder(ph_cfg) == ph_root and PinemhiScores.load_for_config(ph_cfg).size() == 2,
+		"pinemhi: an explicit folder is honoured when the toggle is on", failures)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")

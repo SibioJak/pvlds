@@ -9,6 +9,7 @@ extends CanvasLayer
 
 signal enter_room_requested
 signal wovp_key_saved ## the WoVP key was saved from this desk: Main refreshes the Tournament Room's boards
+signal pinemhi_settings_saved ## NEXTROUND (item 4): the PINemHi folder/toggle was saved from this desk: Main re-reads the bests and re-pushes them to the room
 signal wovp_test_requested(api_key: String) ## Test key: Main validates this text against WoVP and answers on the status line
 
 var _config: PvldsConfig
@@ -36,6 +37,9 @@ var _wovp_edit: LineEdit
 var _wovp_save_button: Button
 var _wovp_test_button: Button
 var _wovp_label: Label
+var _pinemhi_edit: LineEdit
+var _pinemhi_check: CheckBox
+var _pinemhi_label: Label
 
 const MAX_FOLDER_ROWS: int = 6
 
@@ -136,6 +140,39 @@ func _build_ui() -> void:
 	_wovp_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_wovp_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	wovp_row.add_child(_wovp_label)
+
+	# The PINemHi section (NEXTROUND item 4): the folder
+	# PVLDS READS TOP10_Personal files from, plus the
+	# toggle. PVLDS never runs PINemHi - it reads the
+	# leaderboard files an existing install leaves behind
+	# and shows your own #1 under the league scores on a
+	# tournament board. Like the key, these are live
+	# settings: Save writes the config on the spot.
+	var pinemhi_title: Label = Label.new()
+	pinemhi_title.text = "PINemHi - your personal bests on the tournament boards"
+	pinemhi_title.add_theme_font_size_override("font_size", 20)
+	vbox.add_child(pinemhi_title)
+	var pinemhi_intro: Label = Label.new()
+	pinemhi_intro.text = "If you use PINemHi, PVLDS can read its TOP10_Personal leaderboard files and show your own best beneath the league scores on a tournament board. PVLDS only reads the files - it never runs PINemHi or any watcher. Leave the folder empty to auto-detect the usual install places (D:\\vPinball\\Pinemhi and friends)."
+	pinemhi_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(pinemhi_intro)
+	_pinemhi_check = CheckBox.new()
+	_pinemhi_check.text = "Show my PINemHi personal bests on tournament boards"
+	vbox.add_child(_pinemhi_check)
+	_pinemhi_edit = LineEdit.new()
+	_pinemhi_edit.placeholder_text = "PINemHi folder - empty = auto-detect"
+	vbox.add_child(_pinemhi_edit)
+	var pinemhi_row: HBoxContainer = HBoxContainer.new()
+	pinemhi_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(pinemhi_row)
+	var pinemhi_save: Button = Button.new()
+	pinemhi_save.text = "Save PINemHi settings"
+	pinemhi_save.pressed.connect(_on_pinemhi_save_pressed)
+	pinemhi_row.add_child(pinemhi_save)
+	_pinemhi_label = Label.new()
+	_pinemhi_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pinemhi_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	pinemhi_row.add_child(_pinemhi_label)
 	_folder_rows = VBoxContainer.new()
 	_folder_rows.add_theme_constant_override("separation", 8)
 	vbox.add_child(_folder_label())
@@ -297,6 +334,9 @@ func _fill_from_config() -> void:
 	_args_edit.text = _config.launch_args_template
 	_wovp_edit.text = _config.wovp_api_key
 	_wovp_label.text = "A key is saved on this PC." if _config.wovp_api_key != "" else "No key saved yet."
+	_pinemhi_edit.text = _config.pinemhi_folder
+	_pinemhi_check.button_pressed = _config.pinemhi_enabled
+	_pinemhi_label.text = PinemhiScores.status_line(_config)
 	_fill_session_widgets()
 	for f: String in _config.table_folders:
 		_add_folder_row(f)
@@ -327,6 +367,8 @@ func _collect_into_config() -> void:
 	_config.vpx_exe_path = _exe_edit.text.strip_edges()
 	_config.vpsdb_path = _db_edit.text.strip_edges()
 	_config.wovp_api_key = _wovp_edit.text.strip_edges()
+	_config.pinemhi_folder = _pinemhi_edit.text.strip_edges()
+	_config.pinemhi_enabled = _pinemhi_check.button_pressed
 	_config.launch_args_template = _args_edit.text.strip_edges()
 	if _config.launch_args_template == "":
 		_config.launch_args_template = PvldsConfig.DEFAULT_LAUNCH_ARGS
@@ -423,6 +465,31 @@ func _on_wovp_test_pressed() -> void:
 ## the section's own status line.
 func set_wovp_status(text: String) -> void:
 	_wovp_label.text = text
+
+
+## Save PINemHi settings: the live apply, on the WoVP key
+## pattern - folder + toggle land in the config file the
+## moment the button is pressed; a failed save restores
+## fields, config and label to exactly what they were.
+## The status line always answers from a fresh read of the
+## folder (PinemhiScores.status_line), so it says what
+## PVLDS actually found there.
+func _on_pinemhi_save_pressed() -> void:
+	if _config == null:
+		return
+	var prev_folder: String = _config.pinemhi_folder
+	var prev_enabled: bool = _config.pinemhi_enabled
+	_config.pinemhi_folder = _pinemhi_edit.text.strip_edges()
+	_config.pinemhi_enabled = _pinemhi_check.button_pressed
+	if _config.save_to_disk():
+		_pinemhi_label.text = PinemhiScores.status_line(_config)
+		pinemhi_settings_saved.emit()
+		return
+	_config.pinemhi_folder = prev_folder
+	_config.pinemhi_enabled = prev_enabled
+	_pinemhi_edit.text = prev_folder
+	_pinemhi_check.button_pressed = prev_enabled
+	_pinemhi_label.text = "Those PINemHi settings could NOT be saved - the config file is not writable, so nothing changed. Fix the config file, then save again."
 
 
 func wovp_key_text() -> String:
