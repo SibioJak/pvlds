@@ -59,10 +59,19 @@ const MARQUEE_YEAR_Y: float = 0.30 ## year line's offset from the holder's centr
 const MARQUEE_NAME_Y: float = -0.34 ## designer/title line's offset
 const MARQUEE_PULSE_RATE: float = 1.6 ## settle pulse, cycles per second
 const MARQUEE_PULSE_AMOUNT: float = 0.025 ## settle pulse, scale amplitude
-const MARQUEE_YEAR_COLOR: Color = Color(1.0, 0.78, 0.25) ## marquee amber
-const MARQUEE_NAME_COLOR: Color = Color(0.45, 0.85, 1.0) ## playfield blue
-const MARQUEE_OUTLINE_COLOR: Color = Color(0.04, 0.02, 0.0)
-const MARQUEE_OUTLINE_SIZE: int = 24
+## NEXTROUND (item 2): the marquee's type treatment joins
+## the frameless graphite house look (the filter strip /
+## SETUP furniture language) - the year takes the strip's
+## lifted-label white and the designer line its resting
+## label grey (RoomSpecs.STRIP_LABEL_ACCENT / _REST, the
+## same values), and the heavy display outline gives way
+## to a graphite hairline that only keeps the letters
+## defined over bright art. Presentational only: sizes,
+## positions, the fly-in and the pulse are untouched.
+const MARQUEE_YEAR_COLOR: Color = Color(0.847, 0.867, 0.910) ## = RoomSpecs.STRIP_LABEL_ACCENT (#d8dde8)
+const MARQUEE_NAME_COLOR: Color = Color(0.659, 0.678, 0.722) ## = RoomSpecs.STRIP_LABEL_REST (#a8adb8)
+const MARQUEE_OUTLINE_COLOR: Color = Color(0.102, 0.106, 0.122) ## the strip gradient's deep graphite family (#1a1c20)
+const MARQUEE_OUTLINE_SIZE: int = 8
 
 ## Card pop-out (Chris, 2026-10-22): the card under the pointer -
 ## or holding gamepad/keyboard focus - lifts off the wall toward
