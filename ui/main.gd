@@ -366,6 +366,33 @@ var _id_idx: int = 0
 var _id_failures: Array[String] = []
 var _id_deadline_msec: int = 0
 var _id_settle_frames: int = 0
+var _smoke_phantom: bool = false ## --pvlds-smoke-phantom: PHANTOM round 3 - the discriminating repro: boot on the 84-game phantom fixture, PARK at the shelf's far end so the four targets' delayed shots land while their cards stand outside the drawn window (their arrival refreshes early-return: no decode dispatched, no fill queued - the pristine pre-arrival state), then STING each target in turn: seat 3 columns away, raise a favourite-flip render storm on its window neighbours, and fire the fetcher's own refresh (Room.refresh_shot_faces) on the first frame the art pipe reads in-stage - the field's exact collision, placed deterministically. Judge each target dressed on its inherited shot; a there-and-back tap chain follows and a dressed target must never read undressed again
+var _ph_phase: int = 0
+var _ph_manifest: Array = []
+var _ph_manifest_loaded: bool = false
+var _ph_idx: int = 0
+var _ph_failures: Array[String] = []
+var _ph_deadline_msec: int = 0
+var _ph_filter_forced: bool = false
+var _ph_parked: bool = false
+var _ph_sting_stage: int = 0 ## 0 = seat + flip storm, 1 = watching for the pipe in-stage, 2 = verifying the sting's outcome from the room's stamp book
+var _ph_sting_outcomes: Dictionary = {} ## game_id -> "mint" | "genuine" | "missing", read live in the sting's verify stage
+var _ph_stash: Dictionary = {} ## ROUND-3 attempt 4: game_id -> the target's genuine landed shot bytes, stashed before the corruption write
+var _ph_corrupted: Dictionary = {} ## ROUND-3 attempt 4: game_id -> true while the target's cache file holds undecodable garbage
+var _ph_sting_until_msec: int = 0
+var _ph_rest_until_msec: int = 0
+var _ph_ever_art: Dictionary = {} ## game_id -> true once its panel read from_art (sting, judging or chain)
+var _ph_seated: bool = false
+var _ph_restored: bool = false ## ROUND-3 attempt 5: the judging seat's restore step is done for the current target
+var _ph_evicted: bool = false ## ROUND-3 attempt 6: the judging seat's forcing step (away-seat, evict, corrupt, centre-seat) is done for the current target
+var _ph_cure_until_msec: int = 0 ## ROUND-3 attempt 5: the judging cure-wait deadline (fixed code cures inside it; unfixed code burns it)
+var _ph_settle_frames: int = 0
+var _ph_chain_dir: int = 1 ## 1 = tapping right to the shelf end, -1 = tapping back to the start
+var _ph_chain_home_col: int = -1 ## the chain's return target column (where judging left the centre)
+var _ph_chain_violations: Array[String] = []
+var _ph_stick_held: bool = false
+var _ph_tap_next_msec: int = 0
+var _ph_tap_release_msec: int = 0
 var _id_filter_forced: bool = false
 var _id_seated: bool = false
 var _fc_phase: int = 0
@@ -615,6 +642,8 @@ func _ready() -> void:
 		_smoke_facecache = true
 	if user_args.has("--pvlds-smoke-identity"):
 		_smoke_identity = true
+	if user_args.has("--pvlds-smoke-phantom"):
+		_smoke_phantom = true
 	if user_args.has("--pvlds-smoke-jumpbench"):
 		_smoke_jumpbench = true
 		_jumpbench_boot_msec = Time.get_ticks_msec()
@@ -988,6 +1017,8 @@ func _process(_delta: float) -> void:
 		_drive_facecache_smoke()
 	if _smoke_identity:
 		_drive_identity_smoke()
+	if _smoke_phantom:
+		_drive_phantom_smoke()
 	if _smoke_jumpbench:
 		_drive_jumpbench_smoke()
 	if _smoke_quitwarm:
@@ -12605,6 +12636,496 @@ func _judge_identity_game(item: Dictionary, idx: int) -> void:
 	var grab_dir: String = OS.get_environment("PVLDS_GRAB_DIR")
 	if grab_dir != "":
 		img.save_png(grab_dir.path_join("identity_%s.png" % gid.replace(":", "_")))
+
+
+func _ph_expect(cond: bool, what: String) -> void:
+	if cond:
+		print("  PHANTOM OK: ", what)
+	else:
+		_ph_failures.append(what)
+		printerr("  PHANTOM FAIL: ", what)
+
+
+func _finish_phantom_smoke() -> void:
+	if _ph_failures.is_empty():
+		print("PVLDS PHANTOM SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS PHANTOM SMOKE: FAIL (%d)" % _ph_failures.size())
+		get_tree().quit(1)
+
+
+## Sample every manifest target's standing face once: a panel
+## reading from_art marks its game dressed-ever (the boot
+## observation and the chain both feed this). Mid-chain, a
+## game that has dressed and reads unreal again is a
+## violation (the phantom's shape: dressed on paper, blank
+## on the wall).
+func _ph_sample_targets(mid_chain: bool) -> void:
+	var entries: Array = _room.face_state()
+	for e: Dictionary in entries:
+		var gid: String = str(e.get("game_id", ""))
+		if not _ph_is_target(gid):
+			continue
+		if bool(e.get("from_art", false)):
+			_ph_ever_art[gid] = true
+		elif mid_chain and bool(_ph_ever_art.get(gid, false)) and bool(e.get("is_unreal", false)):
+			var note: String = "phantom: '%s' read undressed mid-chain after dressing" % str(e.get("title", gid))
+			if not _ph_chain_violations.has(note):
+				_ph_chain_violations.append(note)
+
+
+func _ph_is_target(gid: String) -> bool:
+	for item: Variant in _ph_manifest:
+		if item is Dictionary and str((item as Dictionary).get("game_id", "")) == gid:
+			return true
+	return false
+
+
+## PHANTOM rendered proof (see _smoke_phantom) - ROUND 3,
+## the discriminating shape. The fixture's four target games
+## wear the field's phantom shape exactly: game-matched,
+## build-unmatched, inherited shots. The 84-game fixture is
+## 28 columns wide and the drawn window is 21, so phase 0
+## PARKS at the shelf's far end before the targets' stub-
+## delayed shots land: their arrival refreshes find their
+## cards outside the window and early-return - no decode is
+## dispatched, no fill is queued, the targets keep the
+## pristine pre-arrival state with their shot files on disk.
+## The judging seats (phase 3) mint the targets (attempt 5;
+## attempts 1-3 chased the re-entrant race and lost to the
+## fill's synchronous-load fallback, and attempt 4 proved a
+## shot-keyed fill mints only when its art attempt FAILS -
+## so the driver manufactures the failure deterministically,
+## per target, at its judging seat: _ph_corrupt_target
+## stashes the target's landed shot bytes and overwrites
+## its cache file with undecodable garbage - the bench form
+## of the field's failed capture. The seat first swings
+## far away and the driver strips the target's shields
+## (cache entry evicted, stamp and memo erased) so the
+## centre seat's fill cannot serve anything and must
+## attempt the art - and the fill puts
+## the styled card under the shot's key. Once the pipe
+## settles (the heal loop has run over the mint), the
+## genuine bytes are restored and a cure-wait opens: on
+## unfixed code nothing cures (the cache serves the minted
+## entry blind) and the judging legs fail; on fixed code
+## the next fill misses on provenance, renders the restored
+## shot genuinely, and the legs pass. Phase 1 is a plain
+## seat at all (attempt 7 - a seat before judging dresses
+## the targets genuinely in most runs and a standing face
+## cannot be re-minted; the targets' first window contact
+## is their judging seat, exactly as in the field). Phase 3
+## seats each target and judges it (identity's legs: recorded
+## shot, provenance, face path, pane ink and luminance);
+## phase 4 chains there and back on discrete taps and
+## re-judges the targets at rest.
+func _drive_phantom_smoke() -> void:
+	if not _ph_manifest_loaded:
+		_ph_manifest_loaded = true
+		var mpath: String = OS.get_environment("PVLDS_PHANTOM_MANIFEST")
+		if mpath != "" and FileAccess.file_exists(mpath):
+			var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(mpath))
+			if parsed is Array:
+				_ph_manifest = parsed
+		if _ph_manifest.is_empty():
+			_ph_expect(false, "phantom: no manifest at PVLDS_PHANTOM_MANIFEST")
+			_finish_phantom_smoke()
+			return
+		_ph_deadline_msec = Time.get_ticks_msec() + 420000
+	match _ph_phase:
+		0:
+			if _room == null or not _room.visible or not _room.wall_ready or _scan_active:
+				if Time.get_ticks_msec() > _ph_deadline_msec:
+					_ph_expect(false, "phantom: the room never came up (scan never settled)")
+					_finish_phantom_smoke()
+				return
+			if not _ph_filter_forced:
+				_ph_filter_forced = true
+				_room._handle_rail("filter:all")
+				return
+			if not _ph_parked:
+				_ph_parked = true
+				var last_idx: int = _room._visible_games.size() - 1
+				_room._set_centre(last_idx, true)
+				_room._set_focused(_room._panels[last_idx])
+				return
+			var shots_in: bool = true
+			if _scanner != null:
+				for item: Variant in _ph_manifest:
+					if not (item is Dictionary):
+						continue
+					var entry: GameEntry = _scanner.game_by_id(str((item as Dictionary).get("game_id", "")))
+					if entry != null and entry.shot_url != "" and not ArtProvider.shot_is_cached(entry.shot_url):
+						shots_in = false
+			# ROUND-3 attempt 2: also wait for the WHOLE
+			# library's shots - attempt 1's sting storms
+			# minted 31 bystander games whose fetcher
+			# arrivals landed mid-storm (147 phantom
+			# applies of noise). With the fetcher drained,
+			# the only refresh in the sting is the driver's.
+			var library_in: bool = true
+			for g: GameEntry in _room._visible_games:
+				if g.shot_url != "" and not ArtProvider.shot_is_cached(g.shot_url):
+					library_in = false
+					break
+			if not shots_in or not library_in or not _room.art_pipeline_idle():
+				if Time.get_ticks_msec() > _ph_deadline_msec:
+					_ph_expect(false, "phantom: the shots never all landed (or the park storm never drained)")
+					_finish_phantom_smoke()
+				return
+			print("PHANTOM: room up, %d games, parked at the far end, every shot landed; corrupting the targets and resting" % _room._visible_games.size())
+			for item: Variant in _ph_manifest:
+				if item is Dictionary:
+					_ph_corrupt_target(str((item as Dictionary).get("game_id", "")))
+			_ph_phase = 2
+			_ph_rest_until_msec = Time.get_ticks_msec() + 12000
+		1:
+			_ph_sting_step()
+		2:
+			_ph_sample_targets(false)
+			if Time.get_ticks_msec() >= _ph_rest_until_msec:
+				_ph_phase = 3
+				_ph_idx = 0
+				_ph_seated = false
+				_ph_deadline_msec = Time.get_ticks_msec() + 90000
+		3:
+			if _ph_idx >= _ph_manifest.size():
+				_ph_phase = 4
+				_ph_chain_home_col = -1
+				_ph_deadline_msec = Time.get_ticks_msec() + 420000
+				return
+			var item: Dictionary = _ph_manifest[_ph_idx]
+			var gid: String = str(item.get("game_id", ""))
+			var idx: int = -1
+			for i: int in range(_room._visible_games.size()):
+				if _room._visible_games[i].game_id == gid:
+					idx = i
+					break
+			if idx < 0:
+				_ph_expect(false, "phantom: '%s' is not on the wall" % gid)
+				_ph_idx += 1
+				_ph_seated = false
+				_ph_deadline_msec = Time.get_ticks_msec() + 90000
+				return
+			if not _ph_seated:
+				_ph_seated = true
+				_ph_restored = false
+				_room._set_centre(idx, true)
+				_room._set_focused(_room._panels[idx])
+				_ph_settle_frames = 0
+				return
+			if Time.get_ticks_msec() > _ph_deadline_msec:
+				_ph_expect(false, "phantom: '%s' never settled at the centre" % str(item.get("title", gid)))
+				_ph_idx += 1
+				_ph_seated = false
+				_ph_deadline_msec = Time.get_ticks_msec() + 90000
+				return
+			if not _room._window_fill_busy and not _room.page_slide_active() and _room.art_pipeline_idle():
+				_ph_settle_frames += 1
+			else:
+				_ph_settle_frames = 0
+			if _ph_settle_frames < 6:
+				return
+			if not _ph_restored:
+				# The mint has landed and the heal loop has
+				# run over it during the settle. Put the
+				# genuine bytes back and open the cure-wait:
+				# only a provenance-honest cache can dress
+				# the target now.
+				_ph_restore_target(gid)
+				_ph_restored = true
+				_ph_cure_until_msec = Time.get_ticks_msec() + 20000
+				return
+			if not _ph_target_from_art(gid) and Time.get_ticks_msec() < _ph_cure_until_msec:
+				return
+			_judge_phantom_game(item, idx)
+			_ph_idx += 1
+			_ph_seated = false
+			_ph_settle_frames = 0
+			_ph_deadline_msec = Time.get_ticks_msec() + 90000
+		4:
+			_ph_drive_chain()
+		5:
+			for note: String in _ph_chain_violations:
+				_ph_expect(false, note)
+			_ph_expect(_ph_chain_violations.is_empty(), "phantom: no dressed target read undressed mid-chain")
+			for item: Variant in _ph_manifest:
+				if item is Dictionary:
+					var d: Dictionary = item as Dictionary
+					_ph_expect(bool(_ph_ever_art.get(str(d.get("game_id", "")), false)),
+						"phantom: '%s' stood dressed on its shot at some point in the session" % str(d.get("title", "")))
+			_finish_phantom_smoke()
+
+
+## The sting (see _drive_phantom_smoke) - ROUND-3
+## attempt 3: ONE seat for all four targets. Attempt 2's
+## per-target stings taught two lessons: AC/DC and
+## Aerosmith were lost before their stings ever ran (their
+## shots landed pre-park, inside the boot window, and
+## rendered genuinely), and any target left sitting in an
+## active window is exposed to the heal/enqueue dispatch
+## creep. So: seat once, flip a dozen neighbours for the
+## storm, and on the FIRST frame the pipe reads in-stage
+## fire the arrival refresh for all four targets back to
+## back - inside one suspended fill, long before any
+## dispatch can reach them (each re-entrant fill's staged-
+## decode check runs synchronously inside the refresh
+## call, so the mint is sealed in that frame). The verify
+## stage then reads each target's outcome from the room's
+## stamp book: stamped with the shot key while the art
+## aspect reads 0 is the mint; from_art is a genuine render.
+## ROUND-3 attempt 4 - the bad-bytes window. The fetcher
+## validates bytes on store, so corruption cannot arrive
+## through the stub; the driver applies it directly to the
+## landed cache files while the room is parked (the targets
+## sit outside the window then, so nothing can dispatch
+## their decodes first).
+func _ph_corrupt_target(gid: String) -> void:
+	if bool(_ph_corrupted.get(gid, false)):
+		return # already corrupted: the stash holds the genuine bytes
+	var tidx: int = _ph_target_idx(gid)
+	if tidx < 0:
+		print("PHANTOM: corrupt - %s not in the visible games" % gid)
+		return
+	var entry: GameEntry = _room._visible_games[tidx]
+	var path: String = ArtProvider.shot_cache_path_for(entry.shot_url)
+	var bytes: PackedByteArray = FileAccess.get_file_as_bytes(path)
+	if bytes.is_empty():
+		print("PHANTOM: corrupt - %s has no landed bytes at %s" % [gid, path])
+		return
+	_ph_stash[gid] = bytes
+	var junk: PackedByteArray = PackedByteArray()
+	for k: int in range(64):
+		junk.append_array(("PVLDS-PHANTOM-UNDECODABLE-%d-" % k).to_utf8_buffer())
+	var f: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		print("PHANTOM: corrupt - cannot open %s for write" % path)
+		return
+	f.store_buffer(junk)
+	f.close()
+	_ph_corrupted[gid] = true
+	print("PHANTOM: corrupt - %s shot bytes stashed (%d B), garbage written" % [gid, bytes.size()])
+
+
+## Put a minted target's genuine shot bytes back: from this
+## moment the render path is healthy, and only the minted
+## cache entry stands between the target and a genuine dress.
+func _ph_restore_target(gid: String) -> void:
+	if not bool(_ph_corrupted.get(gid, false)):
+		return
+	var tidx: int = _ph_target_idx(gid)
+	if tidx < 0:
+		return
+	var entry: GameEntry = _room._visible_games[tidx]
+	var path: String = ArtProvider.shot_cache_path_for(entry.shot_url)
+	var bytes: PackedByteArray = _ph_stash.get(gid, PackedByteArray())
+	var f: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	if f == null or bytes.is_empty():
+		print("PHANTOM: restore - %s FAILED (no stash or no write)" % gid)
+		return
+	f.store_buffer(bytes)
+	f.close()
+	_ph_corrupted[gid] = false
+	print("PHANTOM: restore - %s genuine shot bytes back in place" % gid)
+
+
+## ROUND-3 attempt 6 - the judging seat's forcing step.
+## Attempts 3-5 taught that whether a plain seat fills a
+## target is state-dependent (a standing genuine face never
+## refills, so a corruption under it never bites). The
+## driver therefore strips the target's shields while it is
+## seated away, out of the window, its texture unbound: the
+## cache entry is evicted through the room's own eviction
+## door, and the stamp and memo are erased (a test-driver
+## privilege - the same dictionaries the driver already
+## reads for its verdicts). The fill after the centre seat
+## then has nothing left to serve and must attempt the art.
+func _ph_evict_target(gid: String) -> void:
+	var tidx: int = _ph_target_idx(gid)
+	if tidx < 0:
+		return
+	var entry: GameEntry = _room._visible_games[tidx]
+	var fkey: String = gid + "|" + ArtProvider.shot_cache_path_for(entry.shot_url) + "||"
+	_room._face_cache_evict(fkey)
+	_room._panel_face_key.erase(gid)
+	_room._face_path_memo.erase(gid)
+	print("PHANTOM: evict - %s cache entry dropped, stamp + memo erased" % gid)
+
+
+func _ph_target_from_art(gid: String) -> bool:
+	for e: Dictionary in _room.face_state():
+		if str(e.get("game_id", "")) == gid:
+			return bool(e.get("from_art", false))
+	return false
+
+
+func _ph_sting_step() -> void:
+	match _ph_sting_stage:
+		0:
+			var ccol: int = 3
+			var sidx: int = _room._raw_index(ccol, 1)
+			if sidx < 0 or sidx >= _room._panels.size():
+				sidx = 0
+			_room._set_centre(sidx, true)
+			_room._set_focused(_room._panels[sidx])
+			_ph_sting_outcomes.clear()
+			print("PHANTOM: sting - seated col %d over corrupted target shots, watching for the mints" % ccol)
+			_ph_sting_stage = 1
+			_ph_sting_until_msec = Time.get_ticks_msec() + 20000
+		1:
+			# The mint watch. A target mints when its stamp
+			# takes the shot key while from_art stays false;
+			# the genuine bytes go back in the same frame the
+			# mint is observed. A target that reads from_art
+			# here means the corruption never bit (its fill
+			# found a healthy file) - on unfixed code that is
+			# a dead repro for that target, reported as-is.
+			var pending: bool = false
+			for item: Variant in _ph_manifest:
+				if not (item is Dictionary):
+					continue
+				var gid: String = str((item as Dictionary).get("game_id", ""))
+				if _ph_sting_outcomes.has(gid):
+					continue
+				var tidx: int = _ph_target_idx(gid)
+				if tidx < 0:
+					_ph_sting_outcomes[gid] = "missing"
+					continue
+				var entry: GameEntry = _room._visible_games[tidx]
+				var want_key: String = gid + "|" + ArtProvider.shot_cache_path_for(entry.shot_url) + "||"
+				var stamped: String = str(_room._panel_face_key.get(gid, ""))
+				var from_art: bool = false
+				var seen: bool = false
+				for e: Dictionary in _room.face_state():
+					if str(e.get("game_id", "")) == gid:
+						seen = true
+						from_art = bool(e.get("from_art", false))
+				if from_art:
+					_ph_sting_outcomes[gid] = "genuine"
+					print("PHANTOM: sting %s - outcome GENUINE (the shot rendered; the corruption did not bite)" % gid)
+				elif seen and stamped == want_key:
+					_ph_sting_outcomes[gid] = "mint"
+					print("PHANTOM: sting %s - outcome MINT (stamped with the shot key, art aspect 0)" % gid)
+					_ph_restore_target(gid)
+				else:
+					pending = true
+			if not pending:
+				_ph_sting_stage = 2
+				_ph_sting_until_msec = Time.get_ticks_msec() + 2000
+			elif Time.get_ticks_msec() > _ph_sting_until_msec:
+				for item: Variant in _ph_manifest:
+					if item is Dictionary:
+						var gid2: String = str((item as Dictionary).get("game_id", ""))
+						if not _ph_sting_outcomes.has(gid2):
+							_ph_sting_outcomes[gid2] = "unreadable"
+							print("PHANTOM: sting %s - outcome UNREADABLE (no shot-keyed fill in the watch window)" % gid2)
+				_ph_sting_stage = 2
+				_ph_sting_until_msec = Time.get_ticks_msec() + 2000
+		2:
+			_ph_sample_targets(false)
+			if Time.get_ticks_msec() >= _ph_sting_until_msec:
+				_ph_phase = 2
+				_ph_rest_until_msec = Time.get_ticks_msec() + 12000
+
+
+func _ph_target_idx(gid: String) -> int:
+	for i: int in range(_room._visible_games.size()):
+		if _room._visible_games[i].game_id == gid:
+			return i
+	return -1
+## The there-and-back chain: discrete stick taps on a
+## wall-clock cadence (90 ms throw, 320 ms period - the
+## facecache chain's proven shape; the held stick crawled
+## on this bench because hold-repeats queue per landing),
+## sampling the targets as it goes.
+func _ph_drive_chain() -> void:
+	if Time.get_ticks_msec() > _ph_deadline_msec:
+		_input_feed_stick_x(0.0)
+		_ph_expect(false, "phantom: the chain never completed")
+		_ph_phase = 5
+		return
+	_ph_sample_targets(true)
+	var now: int = Time.get_ticks_msec()
+	if _ph_chain_home_col < 0:
+		_ph_chain_home_col = _room._grid_coord(_room.centre_index()).x
+	if _ph_stick_held and now >= _ph_tap_release_msec:
+		_input_feed_stick_x(0.0)
+		_ph_stick_held = false
+	var col: int = _room._grid_coord(_room.centre_index()).x
+	if _ph_chain_dir == 1 and col >= maxi(0, _room._columns - 3):
+		_ph_chain_dir = -1
+	elif _ph_chain_dir == -1 and col <= _ph_chain_home_col:
+		_ph_phase = 5
+		return
+	if not _ph_stick_held and now >= _ph_tap_next_msec:
+		_input_feed_stick_x(float(_ph_chain_dir))
+		_ph_stick_held = true
+		_ph_tap_release_msec = now + 90
+		_ph_tap_next_msec = now + 320
+
+## One seated target's legs (see _drive_phantom_smoke): the
+## recorded shot is the manifest's inherited donor shot, the
+## standing face IS that shot, the panel read dressed during
+## the untouched boot observation or reads dressed now, and
+## the drawn pane carries the shot's ink.
+func _judge_phantom_game(item: Dictionary, idx: int) -> void:
+	var gid: String = str(item.get("game_id", ""))
+	var title: String = str(item.get("title", gid))
+	var entry: GameEntry = _room._visible_games[idx]
+	var want_url: String = str(item.get("shot_url", ""))
+	_ph_expect(entry.shot_url == want_url,
+		"phantom: '%s' records the expected shot (%s)" % [title, want_url.get_file()])
+	_ph_expect(entry.shot_inherited and entry.shot_from_build == str(item.get("from_build", "")),
+		"phantom: '%s' shot is inherited from donor %s" % [title, str(item.get("from_build", ""))])
+	_ph_expect(entry.face_path_ready() == ArtProvider.shot_cache_path_for(want_url),
+		"phantom: '%s' stands wearing the shot itself (face path = the shot's cache path)" % title)
+	var st: Dictionary = {}
+	var entries: Array = _room.face_state()
+	if idx >= 0 and idx < entries.size() and entries[idx] is Dictionary:
+		st = entries[idx]
+	_ph_expect(bool(st.get("from_art", false)),
+		"phantom: '%s' face stands on its shot at rest (art aspect read)" % title)
+	_ph_expect(bool(_ph_ever_art.get(gid, false)) or bool(st.get("from_art", false)),
+		"phantom: '%s' read dressed during the boot observation" % title)
+	var img: Image = get_viewport().get_texture().get_image()
+	var panel: ClickableQuad = _room._panels[idx]
+	var full_rect: Rect2i = _mimic_art_screen_rect(panel)
+	var rect: Rect2i = full_rect.intersection(Rect2i(0, 0, img.get_width(), img.get_height()))
+	if rect.size.x < 8 or rect.size.y < 8:
+		_ph_expect(false, "phantom: '%s' art pane is off-frame (rect %s)" % [title, str(rect)])
+	else:
+		var n: int = 0
+		var lum_sum: float = 0.0
+		var lum_sq: float = 0.0
+		var ink: int = 0
+		var step_x: int = maxi(1, rect.size.x / 24)
+		var step_y: int = maxi(1, rect.size.y / 24)
+		var py: int = rect.position.y
+		while py < rect.position.y + rect.size.y:
+			var px: int = rect.position.x
+			while px < rect.position.x + rect.size.x:
+				var c: Color = img.get_pixel(px, py)
+				var lum: float = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+				lum_sum += lum
+				lum_sq += lum * lum
+				if lum > 0.30:
+					ink += 1
+				n += 1
+				px += step_x
+			py += step_y
+		var mean: float = lum_sum / float(n)
+		var sd: float = sqrt(maxf(0.0, lum_sq / float(n) - mean * mean))
+		var ink_frac: float = float(ink) / float(n)
+		_ph_expect(not (mean < 0.13 and ink_frac < 0.01 and sd < 0.025),
+			"phantom: '%s' drawn pane is not black (mean %.3f sd %.3f ink %.3f)" % [title, mean, sd, ink_frac])
+		var src_lum: float = float(item.get("lum", -1.0))
+		if src_lum >= 0.0:
+			_ph_expect(absf(mean - src_lum) <= 0.12,
+				"phantom: '%s' pane luminance tracks its author shot (rendered %.3f vs source %.3f)" % [title, mean, src_lum])
+	var grab_dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if grab_dir != "":
+		img.save_png(grab_dir.path_join("phantom_%s.png" % gid.replace(":", "_")))
 
 
 func _fc_feed_button(btn: JoyButton, pressed: bool) -> void:
