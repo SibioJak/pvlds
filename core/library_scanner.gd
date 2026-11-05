@@ -1180,6 +1180,14 @@ func _make_entry(build: TableBuild, db: VpsDatabase) -> GameEntry:
 		entry.manufacturer = str(g.get("manufacturer", ""))
 		entry.year = int(g.get("year", 0))
 		entry.designers = VpsDatabase.str_array(g.get("designers", []))
+		# CARDBACK: the db fact fields ride the entry to the
+		# card back's spec grid (theme / players / MPU / type)
+		# with the game's IPDB id parsed out of its ipdbUrl.
+		entry.theme = VpsDatabase.str_array(g.get("theme", []))
+		entry.players = int(g.get("players", 0))
+		entry.mpu = str(g.get("MPU", ""))
+		entry.db_type = str(g.get("type", ""))
+		entry.ipdb_id = IpdbFacts.ipdb_id_from_url(str(g.get("ipdbUrl", "")))
 	else:
 		# Filename-only game: the title it shows everywhere (wall
 		# cards, detail view, the loading marquee) is the file

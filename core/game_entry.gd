@@ -9,6 +9,16 @@ var title: String = ""
 var manufacturer: String = ""
 var year: int = 0 ## 0 = unknown.
 var designers: PackedStringArray = PackedStringArray()
+## The db's own fact fields (CARDBACK round): the card
+## back's spec grid reads these as its db well. Filled by
+## LibraryScanner from the game dict for db-matched games;
+## a filename-only game leaves them empty and its back
+## shows local facts alone.
+var theme: PackedStringArray = PackedStringArray()
+var players: int = 0 ## the db's player count; 0 = not carried
+var mpu: String = "" ## the db's MPU line ("Williams WPC (DCS)")
+var db_type: String = "" ## the db's raw "type" ("SS", "EM", ...)
+var ipdb_id: int = 0 ## the game's IPDB machine id, parsed from the db's ipdbUrl; 0 = the db carries no IPDB link for this game
 var builds: Array[TableBuild] = []
 var art_path: String = "" ## Loadable image (side image or extracted cache file), or "" -> generated title card.
 var art_source_path: String = "" ## The primary extraction source not yet extracted: a same-stem .directb2s, or the .vpx itself when the game has no backglass. "" when neither exists.
@@ -362,6 +372,24 @@ func is_pup_tagged() -> bool:
 
 func year_text() -> String:
 	return str(year) if year > 0 else "Year unknown"
+
+
+## The db's theme list as one line ("Adventure · Movie ·
+## ..."), "" when the db carries none.
+func theme_text() -> String:
+	return " · ".join(theme)
+
+
+## The db's machine type in words: the raw code expanded
+## ("SS" -> "Solid State"), an unlisted code shown as-is,
+## "" when the db carries no type.
+func type_text() -> String:
+	match db_type:
+		"SS":
+			return "Solid State"
+		"EM":
+			return "Electromechanical"
+	return db_type
 
 
 func designer_text() -> String:

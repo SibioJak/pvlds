@@ -19576,6 +19576,111 @@ func _run_core_test() -> void:
 	_expect(not sg_scan2.unplaced_files.has(sg_tables.path_join(sg_dead_name)) and sg_scan2.game_by_id("nu50f2Mg") != null,
 		"suggest: the decorated Deadpool file is placed by the rescue tier and never appears unplaced (the control)", failures)
 
+	# CARDBACK (item 3, second leg): the Spec Sheet back.
+	# The parser legs read the REAL page IPDB served for
+	# id=1267 (excerpt fixture, row markup verbatim - see
+	# data/ipdb/ipdb_1267_facts.html); the grid legs build
+	# GameEntry fixtures and judge RoomSpecs.wing_spec's
+	# rows. Under PVLDS_CARDBACK_NC=nodots the spec drops
+	# every row's source, and the dots leg fails by name.
+	RoomSpecs.cardback_nc = OS.get_environment("PVLDS_CARDBACK_NC")
+	_expect(IpdbFacts.ipdb_id_from_url("https://www.ipdb.org/machine.cgi?id=1267") == 1267,
+		"cardback: the IPDB id parses out of the db's ipdbUrl", failures)
+	_expect(IpdbFacts.ipdb_id_from_url("") == 0 and IpdbFacts.ipdb_id_from_url("https://example.com/x") == 0,
+		"cardback: a URL with no machine id yields no IPDB id", failures)
+	var cb_fixture: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://data/ipdb/ipdb_1267_facts.json"))
+	var cb_html: String = str((cb_fixture as Dictionary).get("html", "")) if cb_fixture is Dictionary else ""
+	_expect(cb_html != "", "cardback: the served-page excerpt fixture loads", failures)
+	var cb_facts: Dictionary = IpdbFacts.parse_page(cb_html)
+	_expect(str(cb_facts.get("units", "")) == "12,716",
+		"cardback: the parser reads 12,716 production units off the real page (got '%s')" % str(cb_facts.get("units", "<none>")), failures)
+	_expect(str(cb_facts.get("fun_rating", "")) == "8.3",
+		"cardback: the parser reads the 8.3 fun rating off the real page (got '%s')" % str(cb_facts.get("fun_rating", "<none>")), failures)
+	_expect(str(cb_facts.get("specialty", "")) == "Widebody",
+		"cardback: the parser reads the Widebody specialty off the real page (got '%s')" % str(cb_facts.get("specialty", "<none>")), failures)
+	_expect(str(cb_facts.get("design", "")) == "Mark Ritchie, Doug Watson",
+		"cardback: the parser reads IPDB's two-name design credit (got '%s')" % str(cb_facts.get("design", "<none>")), failures)
+	_expect(str(cb_facts.get("art", "")) == "Doug Watson" and str(cb_facts.get("music", "")) == "Chris Granner" and str(cb_facts.get("software", "")) == "Brian Eddy",
+		"cardback: the parser reads the art / music / software credits off the real page", failures)
+	_expect(str(cb_facts.get("features", "")).begins_with("Flippers (2), Pop bumpers (3)"),
+		"cardback: the parser reads the notable-features text off the real page", failures)
+	_expect(IpdbFacts.parse_page("<html><body>no facts here</body></html>").is_empty(),
+		"cardback: a page with no labelled rows parses to NOTHING (a failed fetch, never an empty cache entry)", failures)
+	# The cache store: round-trip + the coverage/fetch-plan
+	# arithmetic, in a scratch user dir like the other legs.
+	var cb_root: String = "user://core_test_ipdb"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(cb_root))
+	var cb_cache_path: String = cb_root + "/ipdb_cache.json"
+	var cb_cache: Dictionary = {"facts": {"lkSumsrF": cb_facts}, "failed": {"ghost000": "HTTP 404"}}
+	_expect(IpdbFacts.save_cache(cb_cache, cb_cache_path), "cardback: the IPDB cache saves", failures)
+	var cb_loaded: Dictionary = IpdbFacts.load_cache(cb_cache_path)
+	var cb_loaded_facts: Dictionary = cb_loaded.get("facts", {}) as Dictionary
+	_expect(str((cb_loaded_facts.get("lkSumsrF", {}) as Dictionary).get("units", "")) == "12,716" and (cb_loaded.get("failed", {}) as Dictionary).has("ghost000"),
+		"cardback: the IPDB cache round-trips facts and recorded failures", failures)
+	var cb_indy: GameEntry = GameEntry.new()
+	cb_indy.game_id = "lkSumsrF"
+	cb_indy.title = "Indiana Jones - The Pinball Adventure"
+	cb_indy.manufacturer = "Williams"
+	cb_indy.year = 1993
+	cb_indy.designers = PackedStringArray(["Mark Ritchie"])
+	cb_indy.theme = PackedStringArray(["Adventure", "Fictional", "Licensed Theme", "Movie"])
+	cb_indy.players = 4
+	cb_indy.mpu = "Williams WPC (DCS)"
+	cb_indy.db_type = "SS"
+	cb_indy.ipdb_id = 1267
+	var cb_dbonly: GameEntry = GameEntry.new()
+	cb_dbonly.game_id = "dbonly00"
+	cb_dbonly.title = "Blackout"
+	cb_dbonly.manufacturer = "Williams"
+	cb_dbonly.year = 1980
+	cb_dbonly.players = 4
+	cb_dbonly.db_type = "SS"
+	var cb_cov: Array = IpdbFacts.coverage([cb_indy, cb_dbonly], cb_loaded_facts)
+	_expect(int(cb_cov[0]) == 1 and int(cb_cov[1]) == 1,
+		"cardback: coverage counts cached over IPDB-carrying games only (got %s of %s)" % [str(cb_cov[0]), str(cb_cov[1])], failures)
+	var cb_plan: Array = IpdbFacts.fetch_plan([cb_indy, cb_dbonly], cb_loaded_facts, false)
+	_expect(cb_plan.is_empty(), "cardback: cache-first - a cached game is never in the fetch plan", failures)
+	var cb_plan_force: Array = IpdbFacts.fetch_plan([cb_indy, cb_dbonly], cb_loaded_facts, true)
+	_expect(cb_plan_force.size() == 1 and str((cb_plan_force[0] as Dictionary).get("game_id", "")) == "lkSumsrF",
+		"cardback: a forced plan refetches every IPDB-carrying game and only those", failures)
+	# The grid itself: wing_spec rows for Indy (both wells,
+	# the disagreement shown twice) and for the db-only
+	# game (no IPDB rows, no empty rows anywhere).
+	var cb_spec: Dictionary = RoomSpecs.wing_spec(cb_indy, null, "", 1700000000, cb_facts)
+	var cb_kv: Dictionary = {}
+	var cb_srcs: Dictionary = {}
+	var cb_empty_rows: int = 0
+	for rv: Variant in (cb_spec.get("rows", []) as Array):
+		var rd: Dictionary = rv as Dictionary
+		if str(rd.get("kind", "")) != "kv":
+			continue
+		cb_kv[str(rd.get("k", ""))] = str(rd.get("v", ""))
+		cb_srcs[str(rd.get("k", ""))] = str(rd.get("src", ""))
+		if str(rd.get("v", "")) == "":
+			cb_empty_rows += 1
+	_expect(str(cb_kv.get("Designer", "")) == "Mark Ritchie" and str(cb_srcs.get("Designer", "")) == "db",
+		"cardback: the db well's designer row stands with its db dot (got '%s' / '%s')" % [str(cb_kv.get("Designer", "<none>")), str(cb_srcs.get("Designer", "<none>"))], failures)
+	_expect(str(cb_kv.get("Design", "")) == "Mark Ritchie, Doug Watson" and str(cb_srcs.get("Design", "")) == "ipdb",
+		"cardback: the IPDB design row stands BESIDE the db row - the disagreement is shown, never merged (got '%s')" % str(cb_kv.get("Design", "<none>")), failures)
+	_expect(str(cb_kv.get("Units produced", "")) == "12,716" and str(cb_kv.get("Fun rating", "")) == "8.3 / 10" and str(cb_kv.get("Body", "")) == "Widebody",
+		"cardback: the IPDB production / rating / body rows stand in the grid", failures)
+	_expect(str(cb_kv.get("Type", "")) == "Solid State" and str(cb_srcs.get("Type", "")) == "db" and str(cb_kv.get("MPU", "")) == "Williams WPC (DCS)",
+		"cardback: the db machine rows stand in the grid with db dots", failures)
+	_expect(cb_empty_rows == 0, "cardback: the grid carries no empty rows", failures)
+	var cb_spec_db: Dictionary = RoomSpecs.wing_spec(cb_dbonly, null, "", 1700000000, {})
+	var cb_ipdb_rows: int = 0
+	var cb_db_empty: int = 0
+	for rv2: Variant in (cb_spec_db.get("rows", []) as Array):
+		var rd2: Dictionary = rv2 as Dictionary
+		if str(rd2.get("kind", "")) != "kv":
+			continue
+		if str(rd2.get("src", "")) == "ipdb":
+			cb_ipdb_rows += 1
+		if str(rd2.get("v", "")) == "":
+			cb_db_empty += 1
+	_expect(cb_ipdb_rows == 0, "cardback: a game with no cached IPDB facts shows NO ipdb rows (degrades honestly)", failures)
+	_expect(cb_db_empty == 0, "cardback: the db-only back carries no empty rows either", failures)
+
 	if failures.is_empty():
 		print("CORE TEST: PASS")
 		get_tree().quit(0)

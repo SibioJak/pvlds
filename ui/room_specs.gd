@@ -472,6 +472,7 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 ## against it by name. Same static-seam shape as
 ## board_deadplank_nc above.
 static var pinemhi_nc: String = ""
+static var cardback_nc: String = "" ## Main sets this from PVLDS_CARDBACK_NC before any room exists (nodots: the Spec Sheet grid's rows lose their source dots - the wells stand unlabelled - so the cardback legs fail by name)
 
 static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}) -> Dictionary:
 	var rows: Array = []
@@ -608,16 +609,70 @@ static func tournament_state_spec(lines: Array) -> Dictionary:
 ## alone under a TABLE DATA band. One render, one quad: the
 ## page is exactly the card's height (GRADFIX5), so there is
 ## no room for a second surface hanging beneath the board.
-static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_unix: int) -> Dictionary:
-	var meta: Array = []
-	var maker_line: String = game.manufacturer
-	if game.year > 0:
-		maker_line = (maker_line + " - " if maker_line != "" else "") + str(game.year)
-	if maker_line != "":
-		meta.append({"kind": "note", "text": maker_line, "size": 30})
-	var des: String = game.designer_text()
-	if des != "":
-		meta.append({"kind": "note", "text": "Design: " + des, "size": 30})
+## The Spec Sheet grid (CARDBACK round, Chris's pick -
+## mock variant B): ONE dense fact grid for the card back,
+## the db well's rows and the IPDB well's rows interleaved
+## in reading order, every row carrying its well in "src"
+## ("db" / "ipdb") - CardFace draws the source dot from it.
+## A fact a well doesn't hold produces NO row: the grid
+## never carries an empty line. The wells are never merged:
+## the db's Designer row and IPDB's Design row are two
+## rows, and when they disagree (Indiana Jones: the db
+## credits Mark Ritchie alone, IPDB adds Doug Watson) BOTH
+## stand, each with its own dot. Only an IPDB design string
+## character-identical to the db's is skipped - the fact is
+## already on the back, dotted, and a duplicate row is
+## noise, not provenance. Under the nodots NC the rows are
+## built without "src" at all (the wells stand unlabelled),
+## so the cardback legs fail by name.
+static func spec_grid_rows(game: GameEntry, ipdb: Dictionary) -> Array:
+	var rows: Array = []
+	# db well: the machine facts the db itself carries.
+	_add_kv(rows, "Type", game.type_text(), "db")
+	# IPDB's body line (Specialty: Widebody...) interleaves
+	# directly under the db's Type.
+	_add_kv(rows, "Body", str(ipdb.get("specialty", "")), "ipdb")
+	if game.players > 0:
+		_add_kv(rows, "Players", str(game.players), "db")
+	_add_kv(rows, "MPU", game.mpu, "db")
+	_add_kv(rows, "Theme", game.theme_text(), "db")
+	var db_designer: String = ", ".join(game.designers)
+	_add_kv(rows, "Designer", db_designer, "db")
+	# IPDB credits: each role its own row, its own dot.
+	var ipdb_design: String = str(ipdb.get("design", ""))
+	if ipdb_design != db_designer:
+		_add_kv(rows, "Design", ipdb_design, "ipdb")
+	_add_kv(rows, "Art", str(ipdb.get("art", "")), "ipdb")
+	_add_kv(rows, "Music", str(ipdb.get("music", "")), "ipdb")
+	_add_kv(rows, "Software", str(ipdb.get("software", "")), "ipdb")
+	# IPDB production facts.
+	_add_kv(rows, "Units produced", str(ipdb.get("units", "")), "ipdb")
+	var fun: String = str(ipdb.get("fun_rating", ""))
+	_add_kv(rows, "Fun rating", (fun + " / 10") if fun != "" else "", "ipdb")
+	var feats: String = str(ipdb.get("features", ""))
+	if feats.length() > 240:
+		feats = feats.substr(0, 240).strip_edges() + "…"
+	_add_kv(rows, "Features", feats, "ipdb")
+	if not ipdb.is_empty() and game.ipdb_id > 0:
+		_add_kv(rows, "IPDB entry", "#" + str(game.ipdb_id), "ipdb")
+	return rows
+
+
+static func _add_kv(rows: Array, k: String, v: String, src: String) -> void:
+	if v == "":
+		return
+	var row: Dictionary = {"kind": "kv", "k": k, "v": v, "size": 30}
+	if cardback_nc != "nodots":
+		row["src"] = src
+	rows.append(row)
+
+
+## The back's local rows (no dot - neither well owns them):
+## the version/builds line, the PuP note, and the mock's
+## footer: what the player owns of this game and which
+## build stands current.
+static func back_local_rows(game: GameEntry) -> Array:
+	var rows: Array = []
 	var b: TableBuild = game.current_build()
 	var ver_line: String = ""
 	if b != null and b.version != "":
@@ -625,14 +680,58 @@ static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_u
 	if game.build_count() > 1:
 		ver_line += (" - " if ver_line != "" else "") + "%d builds" % game.build_count()
 	if ver_line != "":
-		meta.append({"kind": "note", "text": ver_line, "size": 30})
+		rows.append({"kind": "note", "text": ver_line, "size": 30})
 	if game.is_pup_tagged():
-		meta.append({"kind": "note", "text": PUP_NOTE, "size": 30})
+		rows.append({"kind": "note", "text": PUP_NOTE, "size": 30})
+	if game.build_count() > 0:
+		var vr_n: int = 0
+		for bb: TableBuild in game.builds:
+			if bb.has_vr_tag():
+				vr_n += 1
+		var own: String = "Your builds: %d in the library" % game.build_count()
+		if vr_n > 0:
+			own += " · %d with VR" % vr_n
+		rows.append({"kind": "note", "text": own, "size": 30})
+		if b != null:
+			var cur: String = "Current: "
+			var auth: String = b.authors_text()
+			if auth != "":
+				cur += auth + " "
+			cur += "v" + b.display_version()
+			rows.append({"kind": "note", "text": cur, "size": 30})
+	return rows
+
+
+static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_unix: int, ipdb: Dictionary = {}) -> Dictionary:
+	# CARDBACK (item 3, second leg): the wing's metadata
+	# block is the Spec Sheet grid now (spec_grid_rows) over
+	# the back's local rows. A game with NO db facts at all
+	# (a filename-only local game, no IPDB cache) keeps the
+	# pre-CARDBACK meta block verbatim - maker, design,
+	# version - so its back degrades to exactly what it
+	# always showed instead of an empty sheet.
+	var grid: Array = spec_grid_rows(game, ipdb)
+	var local: Array = back_local_rows(game)
+	if grid.is_empty():
+		var meta: Array = []
+		var maker_line: String = game.manufacturer
+		if game.year > 0:
+			maker_line = (maker_line + " - " if maker_line != "" else "") + str(game.year)
+		if maker_line != "":
+			meta.append({"kind": "note", "text": maker_line, "size": 30})
+		var des: String = game.designer_text()
+		if des != "":
+			meta.append({"kind": "note", "text": "Design: " + des, "size": 30})
+		for m2: Variant in local:
+			meta.append(m2)
+		local = meta
 	if ch != null:
 		var spec: Dictionary = tournament_board_spec(ch, true, user_id, now_unix)
 		var rows: Array = (spec.get("rows", []) as Array).duplicate()
-		for m: Variant in meta:
+		for m: Variant in grid:
 			rows.append(m)
+		for m3: Variant in local:
+			rows.append(m3)
 		spec["rows"] = rows
 		spec["footer_px"] = 0 ## the wing carries no Launch button: the board's footer band is metadata room instead
 		spec["ink_centre"] = false ## the wing/back composition is not the standing board's: GRADFIX10's ink correction never touches it (the back centres as GRADFIX8 left it)
@@ -642,17 +741,23 @@ static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_u
 		# to the standing board's left).
 		spec["spine_side"] = "right"
 		return spec
+	var sub: String = ""
+	if game.manufacturer != "":
+		sub = game.manufacturer.to_upper()
+	if game.year > 0:
+		sub = (sub + " · " if sub != "" else "") + str(game.year)
 	return {
 		"kind": "board",
 		"bg": CARD_BG,
 		"band": manufacturer_color(game.manufacturer),
-		"band_text": "TABLE DATA",
+		"band_text": "SPEC SHEET" if not grid.is_empty() else "TABLE DATA",
 		"band_size": 28,
 		"title": game.title,
 		"title_size": 40,
 		"title_max_lines": 1,
-		"sub": "",
-		"rows": meta,
+		"sub": sub,
+		"sub_size": 26,
+		"rows": grid + local,
 		"footer_px": 0,
 		"spine_side": "right",
 	}
