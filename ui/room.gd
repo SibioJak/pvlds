@@ -908,6 +908,14 @@ static var debug_nb_nc: String = ""
 ## in every real run.
 static var debug_phantom_nc: String = ""
 
+## COMPOSE-AHEAD round's negative-control seam:
+## "noahead" - ahead composition never runs, so first-visit
+## arrivals compose at arrival exactly as they did before
+## the round and the compose smoke's arrival legs fail by
+## name. Empty in every real run. (Declared ahead of the
+## mechanism; inert until the round's product commit.)
+static var debug_compose_nc: String = ""
+
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)

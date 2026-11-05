@@ -358,6 +358,7 @@ var _land_warm_held: bool = false
 var _land_rewarm_done: bool = false
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
 var _smoke_facecache: bool = false ## --pvlds-smoke-facecache: FACECACHE round - fast stick-tap chains across the full shelf TWICE at field cadence (~320 ms taps), sampling the DRAWN panes mid-chain; pass 1 may only miss never-rendered games with a first render in flight, pass 2 must never miss a cache-resident game and must serve re-entries as swaps, not renders. A favourite round-trip on the focused card sits between the passes. Under PVLDS_OPT_NC=nocache the room's cache never serves and the pass-2 census + counters legs fail by name
+var _smoke_compose: bool = false ## --pvlds-smoke-compose: COMPOSE-AHEAD round - boot on the landing fixture, print the render profile (TextureFactory probe split + residency + cache account), rest until the ahead span stands composed, single-step into it (the stepped-into column must arrive dressed), then tap-chain the full shelf at field cadence sampling every entered column's dress-at-arrival and dress latencies, chain back sampling for blank-after-dressed, and judge the landing census + the cache account (no eviction-forced re-renders on a shelf the raised cap covers). Under PVLDS_COMPOSE_NC=noahead the room never composes ahead and the rest/step/chain arrival legs fail by name
 var _smoke_identity: bool = false ## --pvlds-smoke-identity: IDENTITY round - seats each game of the wart's named set (the manifest at PVLDS_IDENTITY_MANIFEST) in the real room and judges it standing there: the recorded shot is the expected one (build-exact or inherited, donor build named), the face on the card is that shot's cache path, and the drawn pane is not black and tracks the source shot's luminance. A full-viewport grab per game lands in PVLDS_GRAB_DIR
 var _id_phase: int = 0
 var _id_manifest: Array = []
@@ -427,6 +428,28 @@ var _fc_px_samples: Dictionary = {1: 0, 2: 0} ## NEVERBLANK: countable panes pix
 var _fc_black_panes: Dictionary = {1: 0, 2: 0} ## NEVERBLANK: black panes counted per pass (the law: 0)
 var _fc_black_notes: Array[String] = [] ## NEVERBLANK: first black-pane sightings (game, pass, stats)
 var _fc_px_worst: Dictionary = {1: {}, 2: {}} ## NEVERBLANK: the darkest countable pane's stats per pass (the calibration witness)
+var _ca_phase: int = 0
+var _ca_failures: int = 0
+var _ca_filter_forced: bool = false
+var _ca_deadline_msec: int = 0
+var _ca_settle_frames: int = 0
+var _ca_start_col: int = 0
+var _ca_centre_col: int = -1 ## centre column at the last entry watch
+var _ca_tap_next_msec: int = 0
+var _ca_tap_release_msec: int = 0
+var _ca_stick_held: bool = false
+var _ca_taps: int = 0
+var _ca_dir: int = 1 ## chain direction (+1 right, -1 left)
+var _ca_target_col: int = 0
+var _ca_entered_faces: int = 0 ## faces in columns the chain brought into the window
+var _ca_dressed_arrival: int = 0 ## of those, dressed on the arrival frame
+var _ca_latencies: Array[int] = [] ## dress latency (ms) for faces not dressed at arrival
+var _ca_pending: Dictionary = {} ## game_id -> entry msec, awaiting dress
+var _ca_dressed_ever: Dictionary = {} ## game_id -> true once seen dressed in a sample
+var _ca_return_unreal: int = 0 ## return-leg samples where a once-dressed face read unreal
+var _ca_step_from_col: int = -1
+var _ca_step_stage: int = 0
+var _ca_step_sampled: bool = false
 var _fc_midchain_grabbed: bool = false ## NEVERBLANK: the mid-chain rendered grab is saved once
 var _jumpbench_phase: int = 0
 var _jumpbench_wait: int = 0
@@ -642,6 +665,8 @@ func _ready() -> void:
 		_smoke_landing = true
 	if user_args.has("--pvlds-smoke-facecache"):
 		_smoke_facecache = true
+	if user_args.has("--pvlds-smoke-compose"):
+		_smoke_compose = true
 	if user_args.has("--pvlds-smoke-identity"):
 		_smoke_identity = true
 	if user_args.has("--pvlds-smoke-phantom"):
@@ -799,6 +824,7 @@ func _ready() -> void:
 	# fail by name. Set here, before any room exists.
 	RoomView.debug_nb_nc = OS.get_environment("PVLDS_NEVERBLANK_NC")
 	RoomView.debug_phantom_nc = OS.get_environment("PVLDS_PHANTOM_NC")
+	RoomView.debug_compose_nc = OS.get_environment("PVLDS_COMPOSE_NC")
 	TextureFactory.probe_enabled = OS.has_environment("PVLDS_GF16_PROBE")
 	if user_args.has("--pvlds-seated-cam"):
 		_seated_cam = true
@@ -834,7 +860,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1018,6 +1044,8 @@ func _process(_delta: float) -> void:
 		_drive_landing_smoke()
 	if _smoke_facecache:
 		_drive_facecache_smoke()
+	if _smoke_compose:
+		_drive_compose_smoke()
 	if _smoke_identity:
 		_drive_identity_smoke()
 	if _smoke_phantom:
@@ -13358,6 +13386,363 @@ func _fc_chain_step() -> bool:
 		_fc_tap_next_msec = now + 320
 	_fc_sample()
 	return false
+
+
+## --pvlds-smoke-compose: the first-visit complaint as a
+## census. Chris's field words: tap into unvisited columns
+## and the cards stand empty until the wall stops - each new
+## face owes a ~35 ms composed render at arrival. This driver
+## boots on the landing fixture, prints the composition's
+## profile (the TextureFactory probe split, the residency
+## gauge, the cache account), rests until the room's ahead
+## span stands composed, steps once into that span (the
+## entered column must arrive dressed on the arrival frame),
+## then tap-chains the shelf at field cadence (~320 ms taps)
+## sampling every entered column: dressed-at-arrival is the
+## headline, dress latency the tail. The return chain samples
+## for blank-after-dressed (the never-blank law on revisited
+## ground), and the close judges the landing census and the
+## cache account: on a shelf the raised cap covers, no render
+## may be an eviction-forced re-render. On the pre-round code
+## (and under PVLDS_COMPOSE_NC=noahead) nothing composes
+## ahead: the rest, step and chain arrival legs fail by name
+## and the metrics print the baseline.
+func _ca_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - compose smoke: ", label)
+	else:
+		_ca_failures += 1
+		printerr("  FAIL - compose smoke: ", label)
+
+
+func _finish_compose_smoke() -> void:
+	if _ca_failures == 0:
+		print("PVLDS COMPOSE SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS COMPOSE SMOKE: FAIL (%d)" % _ca_failures)
+		get_tree().quit(1)
+
+
+## The room's compose-ahead account, read dynamically: the
+## pre-round room has no such method and reads as zeroes -
+## which is exactly what its legs must fail against.
+func _ca_stats() -> Dictionary:
+	if _room != null and _room.has_method("compose_ahead_stats"):
+		return _room.call("compose_ahead_stats") as Dictionary
+	return {}
+
+
+func _ca_ahead_idle() -> bool:
+	if _room != null and _room.has_method("compose_ahead_idle"):
+		return bool(_room.call("compose_ahead_idle"))
+	return true
+
+
+func _ca_print_profile(tag: String) -> void:
+	var gauge: Dictionary = _room.residency_stats()
+	var fc: Dictionary = _room.face_cache_stats()
+	var rfaces: int = int(gauge.get("resident_faces", 0))
+	var rbytes: int = int(gauge.get("resident_bytes", 0))
+	print("COMPOSE PROFILE %s: resident %d faces, %d bytes (%.0f B/face), cap %d, renders %d, swaps %d, unique %d, rerenders_after_eviction %d" % [
+		tag, rfaces, rbytes, float(rbytes) / maxf(1.0, float(rfaces)),
+		int(gauge.get("cap_faces", 0)), int(fc.get("renders", 0)), int(fc.get("swaps", 0)),
+		int(fc.get("unique_games", 0)), int(fc.get("rerenders_after_eviction", 0))])
+	if TextureFactory.probe_enabled:
+		var snap: Dictionary = TextureFactory.probe_snapshot()
+		var keys: Array = snap.keys()
+		keys.sort()
+		for k: Variant in keys:
+			var row: Array = snap[k] as Array
+			var cnt: int = int(row[0])
+			var tot: int = int(row[1])
+			var mx: int = int(row[2])
+			print("COMPOSE PROBE %s %s: count %d, total %.1f ms, avg %.2f ms, max %.2f ms" % [
+				tag, str(k), cnt, float(tot) / 1000.0, float(tot) / 1000.0 / maxf(float(cnt), 1.0), float(mx) / 1000.0])
+	var castats: Dictionary = _ca_stats()
+	print("COMPOSE PROFILE %s: ahead composed %d, gate dropped %d, span %d faces, span ready %d, travel dir %d" % [
+		tag, int(castats.get("composed_total", 0)), int(castats.get("gate_dropped", 0)),
+		int(castats.get("span_faces", 0)), int(castats.get("span_ready", 0)), int(castats.get("travel_dir", 0))])
+
+
+## One drawn-window sample: resolves pending dress latencies
+## and (phase 4, the return leg) counts a once-dressed face
+## reading unreal again. Returns the face_state rows.
+func _ca_sample() -> Array:
+	var rows: Array = _room.face_state()
+	var now: int = Time.get_ticks_msec()
+	for rowv: Variant in rows:
+		var row: Dictionary = rowv as Dictionary
+		var gid: String = str(row.get("game_id", ""))
+		if bool(row.get("is_unreal", true)):
+			if _ca_phase == 4 and _ca_dressed_ever.has(gid):
+				_ca_return_unreal += 1
+		else:
+			_ca_dressed_ever[gid] = true
+			if _ca_pending.has(gid):
+				_ca_latencies.append(now - int(_ca_pending[gid]))
+				_ca_pending.erase(gid)
+	return rows
+
+
+## Watch the centre column across samples: when it steps,
+## the column that just entered the window's leading edge is
+## sampled for dress-at-arrival (undressed faces join the
+## pending latency watch).
+func _ca_watch_entries(rows: Array) -> void:
+	var ccol: int = _room._grid_coord(_room.centre_index()).x
+	if _ca_centre_col < 0:
+		_ca_centre_col = ccol
+		return
+	if ccol == _ca_centre_col:
+		return
+	var step: int = 1 if ccol > _ca_centre_col else -1
+	_ca_centre_col = ccol
+	var entered_col: int = ccol + 10 * step
+	var now: int = Time.get_ticks_msec()
+	for rowv: Variant in rows:
+		var row: Dictionary = rowv as Dictionary
+		if int(row.get("col", -1)) != entered_col:
+			continue
+		_ca_entered_faces += 1
+		if bool(row.get("is_unreal", true)):
+			_ca_pending[str(row.get("game_id", ""))] = now
+		else:
+			_ca_dressed_arrival += 1
+
+
+## One chain beat at field cadence (a 90 ms stick deflection
+## every ~320 ms, the facecache chain's own pacing).
+func _ca_chain_step() -> bool:
+	var now: int = Time.get_ticks_msec()
+	var col: int = _room._grid_coord(_room.centre_index()).x
+	if _ca_stick_held and now >= _ca_tap_release_msec:
+		_input_feed_stick_x(0.0)
+		_ca_stick_held = false
+	var arrived: bool = col >= _ca_target_col if _ca_dir > 0 else col <= _ca_target_col
+	if arrived:
+		if _ca_stick_held:
+			_input_feed_stick_x(0.0)
+			_ca_stick_held = false
+		return true
+	if not _ca_stick_held and now >= _ca_tap_next_msec:
+		_input_feed_stick_x(float(_ca_dir))
+		_ca_stick_held = true
+		_ca_taps += 1
+		_ca_tap_release_msec = now + 90
+		_ca_tap_next_msec = now + 320
+	return false
+
+
+func _drive_compose_smoke() -> void:
+	match _ca_phase:
+		0:
+			# Boot, force the whole-shelf filter, wait until
+			# every art source has landed, seat at column 2
+			# and drain the start window (the facecache
+			# driver's own boot, verbatim in shape).
+			if _room == null or not _room.visible or not _room.wall_ready or _scan_active:
+				if _ca_deadline_msec == 0:
+					_ca_deadline_msec = Time.get_ticks_msec() + 360000
+				elif Time.get_ticks_msec() > _ca_deadline_msec:
+					_ca_expect(false, "compose: the room never came up (scan never settled)")
+					_finish_compose_smoke()
+				return
+			if not _ca_filter_forced:
+				_ca_filter_forced = true
+				_room._handle_rail("filter:all")
+				return
+			Input.warp_mouse(Vector2(512.0, 764.0))
+			var shots_in: bool = true
+			if _scanner != null:
+				for g: GameEntry in _scanner.games:
+					if g.shot_url != "" and not ArtProvider.shot_is_cached(g.shot_url):
+						shots_in = false
+			var warm_in: bool = _art_warmer == null or _art_warmer.is_idle()
+			if not (warm_in and shots_in):
+				if _ca_deadline_msec == 0:
+					_ca_deadline_msec = Time.get_ticks_msec() + 360000
+				elif Time.get_ticks_msec() > _ca_deadline_msec:
+					_ca_expect(false, "compose: the art sources never all landed (warmer idle %s, shots in %s)" % [str(warm_in), str(shots_in)])
+					_finish_compose_smoke()
+				return
+			if _room._columns < 40:
+				_ca_expect(false, "compose: the fixture shelf holds %d columns (a full-shelf chain needs at least 40)" % _room._columns)
+				_finish_compose_smoke()
+				return
+			var mid: int = _room._panels.size() / 2
+			var mid_row: int = _room._grid_coord(mid).y
+			var start_idx: int = mid
+			for i: int in range(_room._panels.size()):
+				if _room._grid_coord(i).x == 2 and _room._grid_coord(i).y == mid_row:
+					start_idx = i
+					break
+			_room._set_centre(start_idx, true)
+			_room._set_focused(_room._panels[start_idx])
+			if not _room._window_fill_busy and not _room.page_slide_active() and _room.art_pipeline_idle():
+				_ca_settle_frames += 1
+			else:
+				_ca_settle_frames = 0
+			if _ca_settle_frames >= 5:
+				_ca_start_col = _room._grid_coord(_room.centre_index()).x
+				_ca_centre_col = _ca_start_col
+				_ca_settle_frames = 0
+				_ca_deadline_msec = Time.get_ticks_msec() + 240000
+				_ca_phase = 1
+				print("COMPOSE: room up, %d columns, %d games; resting for the ahead span" % [_room._columns, _room._visible_games.size()])
+		1:
+			# Rest: the ahead pass quiesces with the span
+			# composed. (On the pre-round code nothing runs:
+			# idle reads true at once and the span legs fail
+			# against zeroes.)
+			if Time.get_ticks_msec() > _ca_deadline_msec:
+				_ca_expect(false, "compose: the rest never quiesced (ahead busy or pipe busy past the deadline)")
+				_finish_compose_smoke()
+				return
+			if _room.art_pipeline_idle() and _ca_ahead_idle():
+				_ca_settle_frames += 1
+			else:
+				_ca_settle_frames = 0
+			if _ca_settle_frames >= 10:
+				_ca_print_profile("rest")
+				var st: Dictionary = _ca_stats()
+				var span_faces: int = int(st.get("span_faces", 0))
+				var span_ready: int = int(st.get("span_ready", 0))
+				_ca_expect(span_faces >= 15,
+					"compose: the rest span holds at least 15 faces (got %d)" % span_faces)
+				_ca_expect(span_faces > 0 and span_ready == span_faces,
+					"compose: every face in the ahead span stands composed at rest (ready %d of %d)" % [span_ready, span_faces])
+				_ca_step_from_col = _room._grid_coord(_room.centre_index()).x
+				_ca_step_stage = 0
+				_ca_step_sampled = false
+				_ca_settle_frames = 0
+				_ca_deadline_msec = Time.get_ticks_msec() + 120000
+				_ca_phase = 2
+		2:
+			# One stick tap right; the column entering the
+			# window's right edge on that step must arrive
+			# dressed on the arrival frame itself.
+			if Time.get_ticks_msec() > _ca_deadline_msec:
+				_ca_expect(false, "compose: the single step never settled")
+				_finish_compose_smoke()
+				return
+			var now2: int = Time.get_ticks_msec()
+			if _ca_step_stage == 0:
+				_input_feed_stick_x(1.0)
+				_ca_stick_held = true
+				_ca_tap_release_msec = now2 + 90
+				_ca_step_stage = 1
+				return
+			if _ca_stick_held and now2 >= _ca_tap_release_msec:
+				_input_feed_stick_x(0.0)
+				_ca_stick_held = false
+			var rows2: Array = _ca_sample()
+			var ccol2: int = _room._grid_coord(_room.centre_index()).x
+			if not _ca_step_sampled and ccol2 == _ca_step_from_col + 1:
+				_ca_step_sampled = true
+				var entered_col: int = ccol2 + 10
+				var n_in: int = 0
+				var n_dressed: int = 0
+				for rowv: Variant in rows2:
+					var row: Dictionary = rowv as Dictionary
+					if int(row.get("col", -1)) != entered_col:
+						continue
+					n_in += 1
+					if not bool(row.get("is_unreal", true)):
+						n_dressed += 1
+				_ca_expect(n_in == 3 and n_dressed == n_in,
+					"compose: the stepped-into column arrives dressed on the arrival frame (%d of %d faces)" % [n_dressed, n_in])
+			if _ca_step_sampled and not _room.swing_active() and _room.art_pipeline_idle() and _ca_ahead_idle():
+				_ca_settle_frames += 1
+			else:
+				_ca_settle_frames = 0
+			if _ca_settle_frames >= 5:
+				_ca_dir = 1
+				_ca_target_col = maxi(0, _room._columns - 13)
+				_ca_taps = 0
+				_ca_entered_faces = 0
+				_ca_dressed_arrival = 0
+				_ca_pending.clear()
+				_ca_latencies.clear()
+				_ca_centre_col = _room._grid_coord(_room.centre_index()).x
+				_ca_tap_next_msec = Time.get_ticks_msec()
+				_ca_deadline_msec = Time.get_ticks_msec() + 420000
+				_ca_phase = 3
+				print("COMPOSE: step leg done; chain right to column %d at field cadence" % _ca_target_col)
+		3:
+			# The outward chain: first-visit ground at field
+			# cadence, every entered column sampled.
+			if Time.get_ticks_msec() > _ca_deadline_msec:
+				if _ca_stick_held:
+					_input_feed_stick_x(0.0)
+					_ca_stick_held = false
+				_ca_expect(false, "compose: the outward chain never crossed the shelf (%d taps, centre col %d)" % [_ca_taps, _room._grid_coord(_room.centre_index()).x])
+				_finish_compose_smoke()
+				return
+			var rows3: Array = _ca_sample()
+			_ca_watch_entries(rows3)
+			if _ca_chain_step():
+				var frac: float = float(_ca_dressed_arrival) / maxf(1.0, float(_ca_entered_faces))
+				print("COMPOSE: outward chain done: %d taps, %d entered faces, %d dressed at arrival (%.1f%%), %d still pending" % [
+					_ca_taps, _ca_entered_faces, _ca_dressed_arrival, frac * 100.0, _ca_pending.size()])
+				_ca_dir = -1
+				_ca_target_col = _ca_start_col
+				_ca_taps = 0
+				_ca_settle_frames = 0
+				_ca_centre_col = _room._grid_coord(_room.centre_index()).x
+				_ca_tap_next_msec = Time.get_ticks_msec()
+				_ca_deadline_msec = Time.get_ticks_msec() + 420000
+				_ca_phase = 4
+		4:
+			# The return chain over visited ground: no
+			# once-dressed face may read unreal again.
+			if Time.get_ticks_msec() > _ca_deadline_msec:
+				if _ca_stick_held:
+					_input_feed_stick_x(0.0)
+					_ca_stick_held = false
+				_ca_expect(false, "compose: the return chain never crossed back (%d taps, centre col %d)" % [_ca_taps, _room._grid_coord(_room.centre_index()).x])
+				_finish_compose_smoke()
+				return
+			_ca_sample()
+			if _ca_chain_step():
+				print("COMPOSE: return chain done: %d taps, %d blank-after-dressed samples" % [_ca_taps, _ca_return_unreal])
+				_ca_settle_frames = 0
+				_ca_deadline_msec = Time.get_ticks_msec() + 180000
+				_ca_phase = 5
+		5:
+			# Drain at the stop and judge the census + the
+			# cache account over the whole tour.
+			if not _room.swing_active() and not _room.page_slide_active() and _room.art_pipeline_idle():
+				_ca_settle_frames += 1
+			else:
+				_ca_settle_frames = 0
+			if _ca_settle_frames >= 10:
+				var census: Dictionary = _room.landing_census()
+				var missing: Array = census.get("missing", []) as Array
+				var total_faces: int = int(census.get("total", 0))
+				_ca_expect(missing.is_empty() and total_faces > 0,
+					"compose: landing census zero at the tour's end (%d of %d faces landed)" % [total_faces - missing.size(), total_faces])
+				var frac2: float = float(_ca_dressed_arrival) / maxf(1.0, float(_ca_entered_faces))
+				_ca_expect(_ca_entered_faces >= 100 and frac2 >= 0.85,
+					"compose: first-visit arrivals dress at arrival across the outward chain (%d of %d faces, %.1f%%)" % [_ca_dressed_arrival, _ca_entered_faces, frac2 * 100.0])
+				_ca_latencies.sort()
+				var med: int = _ca_latencies[_ca_latencies.size() / 2] if not _ca_latencies.is_empty() else 0
+				var p90: int = _ca_latencies[int(float(_ca_latencies.size()) * 0.9)] if not _ca_latencies.is_empty() else 0
+				print("COMPOSE: dress latency for faces not dressed at arrival: n=%d median %d ms, p90 %d ms, max %d ms, never dressed %d" % [
+					_ca_latencies.size(), med, p90, _ca_latencies[_ca_latencies.size() - 1] if not _ca_latencies.is_empty() else 0, _ca_pending.size()])
+				_ca_expect(_ca_return_unreal == 0,
+					"compose: no once-dressed face read blank on the return leg (%d samples)" % _ca_return_unreal)
+				var fc5: Dictionary = _room.face_cache_stats()
+				_ca_expect(int(fc5.get("rerenders_after_eviction", 0)) == 0,
+					"compose: no eviction-forced re-renders across the full tour (renders %d over %d unique games, worst game %d)" % [
+						int(fc5.get("renders", 0)), int(fc5.get("unique_games", 0)), int(fc5.get("max_renders_one_game", 0))])
+				_ca_expect(int(fc5.get("max_renders_one_game", 0)) <= 2,
+					"compose: no game rendered more than twice all tour (worst %d)" % int(fc5.get("max_renders_one_game", 0)))
+				_ca_print_profile("final")
+				_finish_compose_smoke()
+			elif Time.get_ticks_msec() > _ca_deadline_msec:
+				_ca_expect(false, "compose: the tour's end never drained clean")
+				_finish_compose_smoke()
 
 
 func _drive_facecache_smoke() -> void:
