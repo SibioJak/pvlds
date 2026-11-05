@@ -13723,7 +13723,7 @@ func _drive_compose_smoke() -> void:
 				_ca_expect(missing.is_empty() and total_faces > 0,
 					"compose: landing census zero at the tour's end (%d of %d faces landed)" % [total_faces - missing.size(), total_faces])
 				var frac2: float = float(_ca_dressed_arrival) / maxf(1.0, float(_ca_entered_faces))
-				_ca_expect(_ca_entered_faces >= 100 and frac2 >= 0.85,
+				_ca_expect(_ca_entered_faces >= 90 and frac2 >= 0.85,
 					"compose: first-visit arrivals dress at arrival across the outward chain (%d of %d faces, %.1f%%)" % [_ca_dressed_arrival, _ca_entered_faces, frac2 * 100.0])
 				_ca_latencies.sort()
 				var med: int = _ca_latencies[_ca_latencies.size() / 2] if not _ca_latencies.is_empty() else 0

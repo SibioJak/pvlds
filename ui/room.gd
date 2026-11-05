@@ -622,6 +622,7 @@ var _art_ahead_busy: bool = false ## COMPOSE-AHEAD: an ahead pass is running
 var _ca_composed: int = 0 ## COMPOSE-AHEAD account: faces composed ahead this session
 var _ca_gate_dropped: int = 0 ## COMPOSE-AHEAD account: ahead renders the reality gate refused (nothing put - arrival composes as it always did)
 var _ca_decode_failed: int = 0 ## COMPOSE-AHEAD account: ahead asks whose art decode had failed (nothing put)
+var _ca_raced: int = 0 ## COMPOSE-AHEAD account: ahead renders discarded because a window fill composed the same face while the render was in flight
 var _art_pipe_in_stage: bool = false ## the pipeline is inside _fill_one_face_sync: its decode branch reads staged results instead of paying a synchronous decode
 var _art_decode_pending: Dictionary = {} ## art path -> true while a background decode is queued for or in flight on the decode pump
 var _art_decoded_ready: Dictionary = {} ## art path -> Image: a finished background decode awaiting texture creation on the pipeline's own frames
@@ -5069,6 +5070,14 @@ func _art_ahead_pass() -> void:
 			continue
 		else:
 			break
+		if idx >= 0 and idx < _panels.size():
+			# Revalidate at pop time, the pipe's own discipline
+			# mirrored: the span was computed at kick time, and
+			# a face the window has since claimed belongs to
+			# the window's fill, not to idle work.
+			var acc: int = _grid_coord(idx).x
+			if acc >= _panel_window_lo and acc <= _panel_window_hi:
+				continue
 		var spent: int = await _compose_ahead_one(idx, gen)
 		if spent < 0:
 			deferred.append(idx) # its decode is still in flight - retry behind the rest
@@ -5153,6 +5162,16 @@ func _compose_ahead_one(idx: int, gen: int) -> int:
 		if tex == null or not _tex_is_real(tex):
 			_ca_gate_dropped += 1
 			return 1
+	# The render spanned real time: a window fill may have
+	# composed this same face meanwhile (the boot-churn race -
+	# the span was built off a window the seating then moved).
+	# If the cache serves the key now, this render is a
+	# duplicate: discard it unnoted, so the account never
+	# counts two renders for one standing face.
+	var raced: Array = _face_cache_get(fkey)
+	if not raced.is_empty() and _face_cache_serves(raced, art_file):
+		_ca_raced += 1
+		return 1
 	_fc_note_render(game.game_id, fkey)
 	_face_cache_put(fkey, tex, art_aspect, art_file)
 	_ca_composed += 1
@@ -5184,6 +5203,7 @@ func compose_ahead_stats() -> Dictionary:
 		"composed_total": _ca_composed,
 		"gate_dropped": _ca_gate_dropped,
 		"decode_failed": _ca_decode_failed,
+		"raced": _ca_raced,
 		"span_faces": span.size(),
 		"span_ready": ready,
 		"travel_dir": _travel_dir,
