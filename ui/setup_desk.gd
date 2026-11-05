@@ -10,7 +10,7 @@ extends CanvasLayer
 signal enter_room_requested
 signal wovp_key_saved ## the WoVP key was saved from this desk: Main refreshes the Tournament Room's boards
 signal pinemhi_settings_saved ## NEXTROUND (item 4): the PINemHi folder/toggle was saved from this desk: Main re-reads the bests and re-pushes them to the room
-signal ipdb_fetch_requested(force: bool) ## CARDBACK: run the IPDB fetch pass (force = refetch even cached games): Main owns the fetcher and answers on the IPDB status line
+signal ipdb_snapshot_requested ## IPDBFIX: re-apply the bundled IPDB snapshot to the cache (the CARDBACK live fetch is retired - IPDB's site refuses app requests): Main owns the cache and answers on the IPDB status line
 signal wovp_test_requested(api_key: String) ## Test key: Main validates this text against WoVP and answers on the status line
 
 var _config: PvldsConfig
@@ -176,34 +176,32 @@ func _build_ui() -> void:
 	_pinemhi_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	pinemhi_row.add_child(_pinemhi_label)
 
-	# The IPDB section (CARDBACK): the card backs' second
-	# well. One user-triggered pass fetches each library
-	# game's IPDB machine page once and caches the facts
-	# (production units, fun rating, credits, features);
-	# backs then read only the cache. Fetch is cache-first -
-	# a cached game is never refetched unless Refetch all
-	# forces it.
+	# The IPDB section (CARDBACK, reshaped by IPDBFIX):
+	# the card backs' second well. The facts ship BUNDLED
+	# with PVLDS - a snapshot of the Internet Pinball
+	# Database taken when the app was built - and seed the
+	# cache at boot; the app never fetches from IPDB
+	# directly (its site refuses requests from apps). The
+	# button re-applies the bundled snapshot, the useful
+	# move after a cache clear; a snapshot refresh rides
+	# a PVLDS update.
 	var ipdb_title: Label = Label.new()
 	ipdb_title.text = "IPDB data - the card backs' second well"
 	ipdb_title.add_theme_font_size_override("font_size", 20)
 	vbox.add_child(ipdb_title)
 	var ipdb_intro: Label = Label.new()
-	ipdb_intro.text = "The Spec Sheet on each card's back mixes the database's own facts with the Internet Pinball Database's (production run, fun rating, full credits, notable features), each row dotted with its source. Fetch once here; the backs read the saved cache and never go online. Games the database carries no IPDB link for show database rows only."
+	ipdb_intro.text = "The Spec Sheet on each card's back mixes the database's own facts with the Internet Pinball Database's (production run, fun rating, full credits, notable features), each row dotted with its source. The IPDB facts ship bundled with PVLDS as a snapshot and are applied automatically; the backs read the saved cache and never go online. Games the database carries no IPDB link for show database rows only."
 	ipdb_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(ipdb_intro)
 	var ipdb_row: HBoxContainer = HBoxContainer.new()
 	ipdb_row.add_theme_constant_override("separation", 8)
 	vbox.add_child(ipdb_row)
-	var ipdb_fetch: Button = Button.new()
-	ipdb_fetch.text = "Fetch IPDB data"
-	ipdb_fetch.pressed.connect(func() -> void: ipdb_fetch_requested.emit(false))
-	ipdb_row.add_child(ipdb_fetch)
-	var ipdb_refetch: Button = Button.new()
-	ipdb_refetch.text = "Refetch all"
-	ipdb_refetch.pressed.connect(func() -> void: ipdb_fetch_requested.emit(true))
-	ipdb_row.add_child(ipdb_refetch)
+	var ipdb_apply: Button = Button.new()
+	ipdb_apply.text = "Re-apply bundled IPDB data"
+	ipdb_apply.pressed.connect(func() -> void: ipdb_snapshot_requested.emit())
+	ipdb_row.add_child(ipdb_apply)
 	_ipdb_label = Label.new()
-	_ipdb_label.text = "IPDB data: not fetched yet."
+	_ipdb_label.text = "IPDB data: bundled snapshot not applied yet."
 	_ipdb_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_ipdb_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	ipdb_row.add_child(_ipdb_label)
@@ -526,8 +524,8 @@ func _on_pinemhi_save_pressed() -> void:
 	_pinemhi_label.text = "Those PINemHi settings could NOT be saved - the config file is not writable, so nothing changed. Fix the config file, then save again."
 
 
-## CARDBACK: Main drives the IPDB status line (coverage,
-## fetch progress, the pass's verdict).
+## CARDBACK/IPDBFIX: Main drives the IPDB status line
+## (coverage, the bundled snapshot's apply verdict).
 func set_ipdb_status(text: String) -> void:
 	if _ipdb_label != null:
 		_ipdb_label.text = text

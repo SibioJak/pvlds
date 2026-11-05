@@ -4,9 +4,20 @@ extends RefCounted
 ## The IPDB well of the enriched card back (CARDBACK round,
 ## item 3's second leg): parsing the Internet Pinball
 ## Database's machine pages and the on-disk cache the backs
-## read. Pure logic - no nodes, no network. The fetch itself
-## is IpdbFetcher's; this class owns the page's shape and
-## the cache file's shape.
+## read. Pure logic - no nodes, no network.
+##
+## IPDBFIX round (2026-11-05): the app NO LONGER fetches
+## from ipdb.org at all. The field convicted the live pass
+## end to end - Chris's cache recorded 288 fetches, 288 x
+## "HTTP 403 (result 0)": IPDB's bot wall refuses the
+## app's requests outright, browser user agent
+## notwithstanding. So the facts ship BUNDLED instead: a
+## snapshot of every db-linked machine page, parsed with
+## this class's own parser (data/ipdb/
+## ipdb_cache_snapshot.json), seeds the user cache at
+## boot. The parser stays as the snapshot's provenance
+## and the core legs' witness; nothing in the app builds
+## an ipdb.org URL or opens a request to one.
 ##
 ## The page's facts live in a labelled two-column table:
 ## rows of the form <tr><td ...><b>LABEL: </b></td>
@@ -21,15 +32,15 @@ extends RefCounted
 ##
 ## The cache (user://ipdb_cache.json):
 ##   {"facts": {game_id: {units, fun_rating, specialty,
-##             design, art, music, software, features,
-##             fetched_at}},
+##             design, art, music, software, features}},
 ##    "failed": {game_id: "why the last fetch failed"}}
-## A game under "failed" is not cached - the next Fetch
-## retries it (cache-first means facts-first, not
-## failure-first).
+## The "failed" map is a CARDBACK-era remnant, kept for
+## the file's shape: the bundled seed clears the entry of
+## every game it fills, and nothing writes new ones now
+## that the live fetch is retired.
 
 const CACHE_PATH: String = "user://ipdb_cache.json"
-const DEFAULT_BASE: String = "https://www.ipdb.org/machine.cgi?id="
+const SNAPSHOT_PATH: String = "res://data/ipdb/ipdb_cache_snapshot.json"
 
 ## Label (as served, trailing space and all) -> raw key.
 const LABELS: Dictionary = {
@@ -42,16 +53,6 @@ const LABELS: Dictionary = {
 	"Software by: ": "software",
 	"Notable Features: ": "features",
 }
-
-
-## The page a game's facts come from. PVLDS_IPDB_BASE is
-## the dev seam (the harness stub pattern, VpsDownloader's
-## PVLDS_VPSDB_URL precedent).
-static func page_url(ipdb_id: int) -> String:
-	var base: String = OS.get_environment("PVLDS_IPDB_BASE")
-	if base == "":
-		base = DEFAULT_BASE
-	return base + str(ipdb_id)
 
 
 ## The numeric id inside a db ipdbUrl
@@ -70,7 +71,7 @@ static func ipdb_id_from_url(url: String) -> int:
 
 ## Parse one served machine page into its facts dictionary
 ## (string values only). {} when nothing at all extracts -
-## the caller counts that as a failed fetch, not a game
+## the snapshot builder counts that as no data, not a game
 ## with no facts.
 static func parse_page(html: String) -> Dictionary:
 	var facts: Dictionary = {}
@@ -149,7 +150,8 @@ static func _first_match(text: String, pattern: String) -> String:
 
 ## Load the cache file: {"facts": {...}, "failed": {...}}.
 ## A missing or unreadable file is an empty cache, not an
-## error - the backs simply show db rows until a Fetch.
+## error - the backs simply show db rows until the bundled
+## snapshot seeds it (Main seeds at boot).
 static func load_cache(path: String = CACHE_PATH) -> Dictionary:
 	var out: Dictionary = {"facts": {}, "failed": {}}
 	if not FileAccess.file_exists(path):
@@ -177,6 +179,44 @@ static func save_cache(cache: Dictionary, path: String = CACHE_PATH) -> bool:
 	return true
 
 
+## The bundled snapshot: the cache's own shape, parsed off
+## the shipped data file. A missing or unreadable snapshot
+## is an empty one - the backs simply show db rows, the
+## same honest degrade as an empty cache.
+static func load_snapshot(path: String = SNAPSHOT_PATH) -> Dictionary:
+	return load_cache(path)
+
+
+## IPDBFIX: merge the bundled snapshot into the user
+## cache, in place. The law: the user's own facts WIN - a
+## game the user cache already holds facts for is never
+## overwritten; the snapshot fills every game the user
+## cache lacks (or holds an empty entry for); and a game
+## that stands with facts afterwards leaves the "failed"
+## map, so a poisoned pre-fix cache (facts {} + hundreds
+## of recorded 403s) heals in one boot. Returns how many
+## games GAINED facts from the snapshot.
+static func seed_from_snapshot(cache: Dictionary, snapshot: Dictionary) -> int:
+	var facts: Dictionary = cache.get("facts", {}) as Dictionary
+	var failed: Dictionary = cache.get("failed", {}) as Dictionary
+	var snap_facts: Dictionary = snapshot.get("facts", {}) as Dictionary
+	var gained: int = 0
+	for game_id: Variant in snap_facts.keys():
+		var snap_entry: Variant = snap_facts[game_id]
+		if not (snap_entry is Dictionary) or (snap_entry as Dictionary).is_empty():
+			continue
+		var held: Variant = facts.get(game_id, null)
+		if held is Dictionary and not (held as Dictionary).is_empty():
+			continue # the user's facts stand
+		facts[game_id] = (snap_entry as Dictionary).duplicate(true)
+		gained += 1
+	for game_id2: Variant in facts.keys():
+		failed.erase(game_id2)
+	cache["facts"] = facts
+	cache["failed"] = failed
+	return gained
+
+
 ## [have, want] over a library: want = games carrying an
 ## IPDB id, have = those among them with cached facts. The
 ## coverage health line's two numbers.
@@ -192,18 +232,3 @@ static func coverage(games: Array, facts: Dictionary) -> Array:
 			have += 1
 	return [have, want]
 
-
-## The fetch plan: [{game_id, ipdb_id}] for every library
-## game with an IPDB id that has no cached facts - or every
-## such game at all under force (the Refetch action). A
-## cached game is never in a non-force plan.
-static func fetch_plan(games: Array, facts: Dictionary, force: bool) -> Array:
-	var out: Array = []
-	for gv: Variant in games:
-		var g: GameEntry = gv as GameEntry
-		if g == null or g.ipdb_id <= 0:
-			continue
-		if not force and facts.has(g.game_id):
-			continue
-		out.append({"game_id": g.game_id, "ipdb_id": g.ipdb_id})
-	return out

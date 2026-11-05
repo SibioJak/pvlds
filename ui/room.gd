@@ -19,7 +19,7 @@ extends Node3D
 signal setup_requested
 signal setup_placard_dismissed ## the setup placard's BACK: Main closes the desk it opened alongside
 signal setup_panel_scan_requested ## the SETUP panel's SCAN LIBRARY: Main owns the scan machinery
-signal setup_panel_ipdb_requested ## CARDBACK: the SETUP panel's FETCH IPDB DATA: Main owns the fetcher and the cache
+signal setup_panel_ipdb_requested ## CARDBACK/IPDBFIX: the SETUP panel's RE-APPLY IPDB DATA: Main re-applies the bundled snapshot to the cache (no fetch exists)
 signal launch_requested(game: GameEntry, build: TableBuild) ## card Launch / detail Play - Main owns the launch + exit
 signal exit_requested ## rail EXIT: Main disarms the watchdog and quits
 signal art_prefetch_requested(games: Array) ## a page settled: Main's warmer should bring the neighbouring pages' art forward
@@ -1068,7 +1068,7 @@ var _setup_panel_wovp_test_btn: ClickableQuad = null ## TEST KEY: Main validates
 var _setup_panel_stars_btn: ClickableQuad = null ## STARS: LAYERED/FLAT/OFF - the display dial (the GRAD FIX round)
 var _setup_panel_wall_btn: ClickableQuad = null ## WALL MOTION: STEPPED - the panel's gait label (OPTIMIZE: the dial is gone, STEPPED is the only gait)
 var _setup_panel_back_btn: ClickableQuad = null
-var _setup_panel_ipdb_btn: ClickableQuad = null ## CARDBACK: FETCH IPDB DATA - Main's fetch pass, the panel's mirror of the desk's button
+var _setup_panel_ipdb_btn: ClickableQuad = null ## CARDBACK/IPDBFIX: RE-APPLY IPDB DATA - Main re-applies the bundled snapshot, the panel's mirror of the desk's button
 var _setup_panel_up: bool = false
 var _setup_panel_gen: int = 0
 var _setup_health: Dictionary = {} ## the last completed scan's numbers, fed by Main (see set_setup_health)
@@ -1111,7 +1111,7 @@ var _wovp_user_id: String = "" ## whose key it is (validate-apikey's answer, or 
 var _wovp_challenges: Array = [] ## the last-good boards (Array of WovpChallenge), live or from the disk cache
 var _pinemhi_bests: Dictionary = {} ## NEXTROUND (item 4): PINemHi personal bests by PinemhiScores title key, pushed by Main (set_pinemhi_bests); a challenge whose title keys into this map gets the subordinate best line on its standing board
 var _ipdb_facts: Dictionary = {} ## CARDBACK: the IPDB cache's facts by game id, pushed by Main (set_ipdb_facts); backs read ONLY this map - the flip path never fetches
-var _ipdb_stamp: int = 0 ## CARDBACK: Main's cache stamp; it rides _card_back_key so a completed fetch re-renders a standing back under its new key
+var _ipdb_stamp: int = 0 ## CARDBACK: Main's cache stamp; it rides _card_back_key so a snapshot apply re-renders a standing back under its new key
 var _wovp_fetched_at: int = 0 ## unix time the standing boards landed (0 = never)
 var _wovp_live: bool = false ## the standing boards came from a fetch this session (false = the disk cache's)
 var _wovp_fetch_error: String = "" ## the last fetch's failure, in words, when it failed - the wall says so rather than dressing stale boards as live
@@ -8582,11 +8582,11 @@ func _build_setup_panel() -> void:
 	_setup_panel_wall_btn.setup("setup_setting_wall_motion", "", placeholder, Vector2(0.66, 0.16))
 	_setup_panel_wall_btn.position = Vector3(0.375, -0.76, 0.0)
 	_setup_panel.add_child(_setup_panel_wall_btn)
-	# The last row (CARDBACK): FETCH IPDB DATA shares it
-	# with BACK - the fetch pass is Main's (the signal
-	# route, like SCAN), the panel only asks. The row keeps
-	# the panel's standing height: nothing hangs lower than
-	# BACK always did.
+	# The last row (CARDBACK/IPDBFIX): RE-APPLY IPDB DATA
+	# shares it with BACK - the bundled snapshot's apply
+	# is Main's (the signal route, like SCAN), the panel
+	# only asks. The row keeps the panel's standing
+	# height: nothing hangs lower than BACK always did.
 	_setup_panel_ipdb_btn = ClickableQuad.new()
 	_setup_panel_ipdb_btn.setup("setup_panel_ipdb", "", placeholder, Vector2(0.66, 0.16))
 	_setup_panel_ipdb_btn.position = Vector3(-0.375, -1.02, 0.0)
@@ -8679,7 +8679,7 @@ func _fill_setup_panel_textures(gen: int) -> void:
 		return
 	_setup_panel_wall_btn.set_texture(wall_tex)
 	var ipdb_tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.button_spec("FETCH IPDB DATA", false), Vector2i(512, 124))
+		RoomSpecs.button_spec("RE-APPLY IPDB DATA", false), Vector2i(512, 124))
 	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_ipdb_btn == null:
 		_after_setup_render()
 		return

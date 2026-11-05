@@ -187,10 +187,9 @@ var _intentional_launch_exit: bool = false ## quitting FOR a launch must not dis
 # boards the room renders. The key itself lives only in the
 # config - never in these vars, never in a print.
 var _wovp_client: WovpClient = null
-var _ipdb_cache: Dictionary = {"facts": {}, "failed": {}} ## CARDBACK: the IPDB facts cache (user://ipdb_cache.json), loaded at boot; the room's backs read it through the push, the SETUP fetch pass writes it
-var _ipdb_fetcher: IpdbFetcher = null ## CARDBACK: the fetch pass's engine - created at boot, started ONLY from the SETUP surfaces (desk button / in-room panel button), never at boot, in play, or on a flip
+var _ipdb_cache: Dictionary = {"facts": {}, "failed": {}} ## CARDBACK: the IPDB facts cache (user://ipdb_cache.json), loaded at boot; the room's backs read it through the push. IPDBFIX: the bundled snapshot seeds it at boot - the app never fetches from ipdb.org (its bot wall 403'd all 288 of the old pass's requests in the field)
 var _ipdb_stamp: int = 0 ## CARDBACK: bumped whenever the cache changes; rides the room backs' content keys
-var _ipdb_since_save: int = 0 ## CARDBACK: items landed since the cache last saved (a long pass saves as it goes)
+var _ipdb_seeded: int = 0 ## IPDBFIX: games that gained facts at the last bundled-snapshot seed (boot or a SETUP re-apply) - the smoke's seed witness
 var _wovp_user_id: String = "" ## whose key is saved (validate's answer, or the cache's when its key hash matches)
 var _wovp_user_name: String = ""
 var _wovp_identity_key_hash: int = 0 ## the hash of the key _wovp_user_id was resolved for
@@ -308,7 +307,7 @@ var _letters_smoke_failures: int = 0
 var _letters_step: int = 0 ## the focus-fix legs' sub-state (strip visual grab, pager turns)
 var _letters_focus_key: String = "" ## the strip slot the entry walk landed on
 var _smoke_bootfocus: bool = false ## --pvlds-smoke-bootfocus: the boot-focused (last-played) card renders fully with NO input
-var _smoke_cardback: bool = false ## --pvlds-smoke-cardback: CARDBACK round - flips each card of the 3-game fixture library (cache SEEDED in app_userdata) and judges the Spec Sheet backs off the rendered rows: both wells dotted, the disagreement standing as two rows, the db-only game clean, and the fetcher's request count at 0 throughout
+var _smoke_cardback: bool = false ## --pvlds-smoke-cardback: CARDBACK round - flips each card of the 3-game fixture library and judges the Spec Sheet backs off the rendered rows: both wells dotted, the disagreement standing as two rows, the db-only game clean. IPDBFIX: the facts arrive via the boot seed from the bundled snapshot (the harness seeds NO facts, or a poisoned 403 cache); the seed legs witness it
 var _cb_phase: int = 0
 var _cb_wait: int = 0
 var _cb_failures: int = 0
@@ -916,15 +915,12 @@ func _ready() -> void:
 	_shot_fetcher = ShotFetcher.new()
 	add_child(_shot_fetcher)
 	_shot_fetcher.shot_arrived.connect(_on_shot_arrived)
-	# CARDBACK: the IPDB cache loads at boot (a disk read,
-	# never a fetch) and its fetcher stands ready for the
-	# SETUP surfaces' word - nothing here starts a pass.
+	# CARDBACK + IPDBFIX: the IPDB cache loads at boot and
+	# the bundled snapshot seeds it on the spot - disk
+	# reads only, no network, no user action. A pre-fix
+	# cache full of recorded 403s heals right here.
 	_ipdb_cache = IpdbFacts.load_cache()
-	_ipdb_fetcher = IpdbFetcher.new()
-	add_child(_ipdb_fetcher)
-	_ipdb_fetcher.item_done.connect(_on_ipdb_item_done)
-	_ipdb_fetcher.progress.connect(_on_ipdb_progress)
-	_ipdb_fetcher.finished.connect(_on_ipdb_finished)
+	_ipdb_seeded = _seed_ipdb_from_snapshot()
 	# The WoVP client (read side only) + the last-good boards
 	# off the disk cache, so an offline boot still shows the
 	# boards with their stamp. The cached identity is trusted
@@ -1333,17 +1329,7 @@ func _ipdb_health_line() -> String:
 		return "IPDB data: not counted yet - no scan has run."
 	var facts: Dictionary = _ipdb_cache.get("facts", {}) as Dictionary
 	var cov: Array = IpdbFacts.coverage(_scanner.games, facts)
-	var line: String = "IPDB data: %d of %d games" % [int(cov[0]), int(cov[1])]
-	var failed: Dictionary = _ipdb_cache.get("failed", {}) as Dictionary
-	var failed_in_lib: int = 0
-	for g: GameEntry in _scanner.games:
-		if failed.has(g.game_id):
-			failed_in_lib += 1
-	if failed_in_lib > 0:
-		line += " - %d fetch failures (a fresh Fetch IPDB data pass retries them)" % failed_in_lib
-	if _ipdb_fetcher != null and _ipdb_fetcher.is_running():
-		line += " - fetching..."
-	return line
+	return "IPDB data: %d of %d games" % [int(cov[0]), int(cov[1])]
 
 
 ## Push the cache's facts to the room (its backs render
@@ -1354,21 +1340,36 @@ func _push_ipdb_data() -> void:
 		_room.set_ipdb_facts(_ipdb_cache.get("facts", {}) as Dictionary, _ipdb_stamp)
 
 
-## The SETUP surfaces' word: run the fetch pass. Cache-
-## first unless force - a cached game is never refetched
-## on a plain Fetch. Only ever called from the desk's
-## buttons and the in-room panel's button.
-func _start_ipdb_fetch(force: bool) -> void:
-	if _ipdb_fetcher == null or _scanner == null or _ipdb_fetcher.is_running():
-		return
-	var facts: Dictionary = _ipdb_cache.get("facts", {}) as Dictionary
-	var plan: Array = IpdbFacts.fetch_plan(_scanner.games, facts, force)
-	if plan.is_empty():
-		_set_ipdb_status(_ipdb_health_line() + " Nothing to fetch - the cache already covers every game the database links to IPDB.")
-		return
-	_ipdb_since_save = 0
-	_ipdb_fetcher.start(plan)
-	_set_ipdb_status("Fetching IPDB data: 0 of %d..." % plan.size())
+## IPDBFIX: merge the bundled snapshot into the user
+## cache (IpdbFacts.seed_from_snapshot carries the law)
+## and persist when anything was gained, so a poisoned
+## pre-fix cache heals on disk too, not just in memory.
+## Under PVLDS_IPDBFIX_NC=noseed the seed is skipped -
+## the negative control that fails the seed legs by name.
+## Returns the number of games that gained facts.
+func _seed_ipdb_from_snapshot() -> int:
+	if OS.get_environment("PVLDS_IPDBFIX_NC") == "noseed":
+		return 0
+	var gained: int = IpdbFacts.seed_from_snapshot(_ipdb_cache, IpdbFacts.load_snapshot())
+	if gained > 0:
+		IpdbFacts.save_cache(_ipdb_cache)
+	return gained
+
+
+## The SETUP surfaces' word (IPDBFIX): re-apply the
+## bundled snapshot - the useful move after a cache
+## clear. The status text says plainly what the data is:
+## a snapshot bundled with PVLDS, refreshed when PVLDS
+## updates; the app never fetches from IPDB directly
+## (its site refuses app requests - 288 of 288 in the
+## field).
+func _apply_ipdb_snapshot() -> void:
+	_ipdb_seeded = _seed_ipdb_from_snapshot()
+	_push_ipdb_data()
+	if _ipdb_seeded > 0:
+		_set_ipdb_status("Bundled IPDB data applied - %d more games filled in. %s The facts ship with PVLDS and refresh when it updates; PVLDS never fetches from IPDB directly." % [_ipdb_seeded, _ipdb_health_line()])
+	else:
+		_set_ipdb_status("%s - the bundled snapshot is already fully applied. The facts ship with PVLDS and refresh when it updates; PVLDS never fetches from IPDB directly." % _ipdb_health_line())
 
 
 func _set_ipdb_status(text: String) -> void:
@@ -1377,35 +1378,6 @@ func _set_ipdb_status(text: String) -> void:
 	if _room != null:
 		_room.set_setup_panel_message(text)
 	_refresh_setup_panel_health()
-
-
-func _on_ipdb_item_done(game_id: String, ok: bool, payload: String) -> void:
-	var facts: Dictionary = _ipdb_cache.get("facts", {}) as Dictionary
-	var failed: Dictionary = _ipdb_cache.get("failed", {}) as Dictionary
-	if ok:
-		var parsed: Dictionary = IpdbFacts.parse_page(payload)
-		if not parsed.is_empty():
-			parsed["fetched_at"] = int(Time.get_unix_time_from_system())
-			facts[game_id] = parsed
-			failed.erase(game_id)
-		else:
-			failed[game_id] = "the page carried no facts table"
-	else:
-		failed[game_id] = payload
-	_ipdb_since_save += 1
-	if _ipdb_since_save >= 10:
-		_ipdb_since_save = 0
-		IpdbFacts.save_cache(_ipdb_cache)
-
-
-func _on_ipdb_progress(done: int, total: int) -> void:
-	_set_ipdb_status("Fetching IPDB data: %d of %d - %s" % [done, total, _ipdb_health_line()])
-
-
-func _on_ipdb_finished() -> void:
-	IpdbFacts.save_cache(_ipdb_cache)
-	_push_ipdb_data()
-	_set_ipdb_status("IPDB fetch finished. " + _ipdb_health_line())
 
 
 # ------------------------------------------------------------- WoVP
@@ -1748,7 +1720,7 @@ func _enter_room() -> void:
 		_room.setup_requested.connect(_show_desk)
 		_room.setup_placard_dismissed.connect(_on_setup_placard_dismissed)
 		_room.setup_panel_scan_requested.connect(_on_setup_panel_scan_requested)
-		_room.setup_panel_ipdb_requested.connect(func() -> void: _start_ipdb_fetch(false))
+		_room.setup_panel_ipdb_requested.connect(func() -> void: _apply_ipdb_snapshot())
 		_room.tournament_refresh_requested.connect(_wovp_fetch_boards)
 		_room.wovp_key_pasted.connect(_on_room_wovp_key_pasted)
 		_room.wovp_key_test_requested.connect(_on_room_wovp_key_test)
@@ -3104,7 +3076,7 @@ func _show_desk(message: String = "") -> void:
 		_desk.wovp_key_saved.connect(_on_desk_wovp_key_saved)
 		_desk.wovp_test_requested.connect(_on_desk_wovp_test_requested)
 		_desk.pinemhi_settings_saved.connect(_push_wovp_data)
-		_desk.ipdb_fetch_requested.connect(_start_ipdb_fetch)
+		_desk.ipdb_snapshot_requested.connect(_apply_ipdb_snapshot)
 		_desk.set_ipdb_status(_ipdb_health_line())
 	_desk.visible = true
 
@@ -14440,14 +14412,18 @@ func _drive_cardback_smoke() -> void:
 					_cb_fail("the room never came up on the real boot path")
 					_finish_cardback_smoke()
 		1:
-			# The seeded cache reached the room through
-			# Main's real boot path (load + push) - and the
-			# fetcher has not fired: no fetch on boot, ever.
+			# The bundled snapshot seeded the cache on
+			# Main's real boot path (load + seed + push) -
+			# no fetch on boot, ever: this build carries no
+			# IPDB fetch path at all (IPDBFIX).
 			var pushed: Dictionary = _room._ipdb_facts
 			_cb_expect(pushed.has("lkSumsrF") and str((pushed.get("lkSumsrF", {}) as Dictionary).get("units", "")) == "12,716",
 				"the seeded IPDB cache loaded at boot and reached the room (Indy's facts stand in the push)")
-			_cb_expect(_ipdb_fetcher != null and _ipdb_fetcher.fetch_count == 0,
-				"no IPDB request fired on boot (fetch_count = %d)" % (_ipdb_fetcher.fetch_count if _ipdb_fetcher != null else -1))
+			_cb_expect(_ipdb_seeded > 0,
+				"the boot seed filled the cache from the bundled IPDB snapshot (seeded = %d games)" % _ipdb_seeded)
+			var cb_failed: Dictionary = _ipdb_cache.get("failed", {}) as Dictionary
+			_cb_expect(not cb_failed.has("lkSumsrF") and not cb_failed.has("aT_GONvw"),
+				"the seed cleansed the recorded failures of the games it filled (no 403 stands against Indy or Addams)")
 			# Park the harness pointer in a corner: the
 			# room's centre follows the pointer's hover
 			# before the focus (_follow_centre), and the
@@ -14517,8 +14493,8 @@ func _drive_cardback_smoke() -> void:
 				_cb_fail("the back render for %s never landed" % CB_TARGETS[_cb_target])
 				_cb_advance()
 		5:
-			_cb_expect(_ipdb_fetcher != null and _ipdb_fetcher.fetch_count == 0,
-				"three flips rendered with networking unused (fetch_count = %d)" % (_ipdb_fetcher.fetch_count if _ipdb_fetcher != null else -1))
+			_cb_expect(_ipdb_seeded > 0 and (_room._ipdb_facts as Dictionary).has("lkSumsrF"),
+				"three flips rendered off the bundled seed - no IPDB fetch path exists in this build (seeded = %d)" % _ipdb_seeded)
 			_finish_cardback_smoke()
 		6:
 			_cb_wait += 1
@@ -19908,7 +19884,7 @@ func _run_core_test() -> void:
 		"cardback: the parser reads the notable-features text off the real page", failures)
 	_expect(IpdbFacts.parse_page("<html><body>no facts here</body></html>").is_empty(),
 		"cardback: a page with no labelled rows parses to NOTHING (a failed fetch, never an empty cache entry)", failures)
-	# The cache store: round-trip + the coverage/fetch-plan
+	# The cache store: round-trip + the coverage
 	# arithmetic, in a scratch user dir like the other legs.
 	var cb_root: String = "user://core_test_ipdb"
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(cb_root))
@@ -19940,11 +19916,30 @@ func _run_core_test() -> void:
 	var cb_cov: Array = IpdbFacts.coverage([cb_indy, cb_dbonly], cb_loaded_facts)
 	_expect(int(cb_cov[0]) == 1 and int(cb_cov[1]) == 1,
 		"cardback: coverage counts cached over IPDB-carrying games only (got %s of %s)" % [str(cb_cov[0]), str(cb_cov[1])], failures)
-	var cb_plan: Array = IpdbFacts.fetch_plan([cb_indy, cb_dbonly], cb_loaded_facts, false)
-	_expect(cb_plan.is_empty(), "cardback: cache-first - a cached game is never in the fetch plan", failures)
-	var cb_plan_force: Array = IpdbFacts.fetch_plan([cb_indy, cb_dbonly], cb_loaded_facts, true)
-	_expect(cb_plan_force.size() == 1 and str((cb_plan_force[0] as Dictionary).get("game_id", "")) == "lkSumsrF",
-		"cardback: a forced plan refetches every IPDB-carrying game and only those", failures)
+	# IPDBFIX: the bundled seed's merge law, exercised on
+	# Chris's exact poisoned shape - facts {} and a failed
+	# map full of recorded 403s. The snapshot fills what
+	# the user cache lacks, clears the filled games out
+	# of the failed map, and never overwrites user facts.
+	var cb_snap: Dictionary = {"facts": {"lkSumsrF": cb_facts, "newgame0": {"units": "1,234", "design": "A. Maker"}}, "failed": {}}
+	var cb_poison: Dictionary = {"facts": {}, "failed": {"lkSumsrF": "HTTP 403 (result 0)", "ghostX": "HTTP 403 (result 0)"}}
+	var cb_gained: int = IpdbFacts.seed_from_snapshot(cb_poison, cb_snap)
+	_expect(cb_gained == 2,
+		"ipdbfix: the seed fills every game the user cache lacks (gained %d)" % cb_gained, failures)
+	var cb_poison_facts: Dictionary = cb_poison.get("facts", {}) as Dictionary
+	var cb_poison_failed: Dictionary = cb_poison.get("failed", {}) as Dictionary
+	_expect(str((cb_poison_facts.get("lkSumsrF", {}) as Dictionary).get("units", "")) == "12,716",
+		"ipdbfix: the seeded Indy carries the snapshot's facts (units '%s')" % str((cb_poison_facts.get("lkSumsrF", {}) as Dictionary).get("units", "<none>")), failures)
+	_expect(not cb_poison_failed.has("lkSumsrF") and cb_poison_failed.has("ghostX"),
+		"ipdbfix: a game that gains facts leaves the failed map; an unfilled failure stays recorded", failures)
+	var cb_userwins: Dictionary = {"facts": {"lkSumsrF": {"units": "999"}}, "failed": {}}
+	var cb_gained2: int = IpdbFacts.seed_from_snapshot(cb_userwins, cb_snap)
+	_expect(cb_gained2 == 1 and str(((cb_userwins.get("facts", {}) as Dictionary).get("lkSumsrF", {}) as Dictionary).get("units", "")) == "999",
+		"ipdbfix: the user's own facts WIN over the snapshot (gained %d, Indy units stay '999')" % cb_gained2, failures)
+	var cb_empty_held: Dictionary = {"facts": {"lkSumsrF": {}}, "failed": {}}
+	var cb_gained3: int = IpdbFacts.seed_from_snapshot(cb_empty_held, cb_snap)
+	_expect(cb_gained3 == 2 and str(((cb_empty_held.get("facts", {}) as Dictionary).get("lkSumsrF", {}) as Dictionary).get("units", "")) == "12,716",
+		"ipdbfix: an empty held entry counts as missing and is filled (gained %d)" % cb_gained3, failures)
 	# The grid itself: wing_spec rows for Indy (both wells,
 	# the disagreement shown twice) and for the db-only
 	# game (no IPDB rows, no empty rows anywhere).
