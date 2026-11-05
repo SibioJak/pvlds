@@ -24,7 +24,7 @@ const FILE_PATH: String = "user://unplaced_files.txt"
 ## (ties by folder, then full path, so the order is total
 ## and stable). Zero unplaced states it plainly instead of
 ## listing nothing.
-static func render(unplaced_paths: Array[String], date_str: String) -> String:
+static func render(unplaced_paths: Array[String], date_str: String, suggestions: Dictionary = {}) -> String:
 	var sorted: Array[String] = []
 	sorted.append_array(unplaced_paths)
 	sorted.sort_custom(func(a: String, b: String) -> bool:
@@ -47,17 +47,49 @@ static func render(unplaced_paths: Array[String], date_str: String) -> String:
 	else:
 		for path: String in sorted:
 			lines.append("%s  (folder: %s)" % [path.get_file(), path.get_base_dir()])
+			# NEXTROUND (item 5): a VERIFIED rename suggestion
+			# rides under its file - the scanner dry-ran this
+			# exact name through its own matcher and it landed
+			# on the game named in the note. No verified
+			# landing, no line: never a guess. Renaming is
+			# always the player's own act (rename the .ini
+			# and .directb2s to the same stem, as always).
+			if suggestions.has(path):
+				var s: Dictionary = suggestions[path] as Dictionary
+				lines.append("    Suggested rename: %s" % str(s.get("name", "")))
+				lines.append("    Lands on: %s" % _suggestion_note(s))
 	return "\n".join(lines) + "\n"
+
+
+## The landing note under a suggestion: the game it lands
+## on, the build version when the landing is build-exact,
+## and the flags that matter when true.
+static func _suggestion_note(s: Dictionary) -> String:
+	var note: String = str(s.get("game_name", ""))
+	if bool(s.get("build_matched", false)):
+		note += " - build v%s" % str(s.get("version", ""))
+	else:
+		note += " - game match (the build stays yours to pick)"
+	var flags: Array[String] = []
+	if bool(s.get("has_vr", false)):
+		flags.append("VR")
+	if bool(s.get("has_shot", false)):
+		flags.append("has screenshot")
+	if bool(s.get("is_pup", false)):
+		flags.append("PuP pack")
+	if not flags.is_empty():
+		note += " (%s)" % ", ".join(flags)
+	return note
 
 
 ## Regenerate the file from a scan's unplaced record. An
 ## empty date_str stamps the system date.
-static func write_file(unplaced_paths: Array[String], date_str: String = "") -> Error:
+static func write_file(unplaced_paths: Array[String], date_str: String = "", suggestions: Dictionary = {}) -> Error:
 	var stamp: String = date_str if date_str != "" else Time.get_date_string_from_system()
 	var f: FileAccess = FileAccess.open(FILE_PATH, FileAccess.WRITE)
 	if f == null:
 		return FileAccess.get_open_error()
-	f.store_string(render(unplaced_paths, stamp))
+	f.store_string(render(unplaced_paths, stamp, suggestions))
 	f.close()
 	return OK
 

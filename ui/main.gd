@@ -1197,7 +1197,12 @@ func _finish_scan() -> void:
 		# every completed scan regenerates unplaced_files.txt
 		# from the scanner's match record (files still local:
 		# after every tier), and the desk shows the count.
-		var unplaced_err: Error = UnplacedFilesList.write_file(_scanner.unplaced_files)
+		# NEXTROUND (item 5): each unplaced file also gets a
+		# VERIFIED rename suggestion where one exists - the
+		# scanner dry-runs candidate canonical names through
+		# its own tier chain and prints only landings on the
+		# intended game (see LibraryScanner.suggest_renames).
+		var unplaced_err: Error = UnplacedFilesList.write_file(_scanner.unplaced_files, "", _scanner.suggest_renames(_db))
 		if unplaced_err != OK:
 			push_warning("PVLDS: unplaced_files.txt could not be written (error %d)" % unplaced_err)
 		if _desk != null:
@@ -19482,6 +19487,94 @@ func _run_core_test() -> void:
 	ph_cfg.pinemhi_enabled = true
 	_expect(PinemhiScores.resolve_folder(ph_cfg) == ph_root and PinemhiScores.load_for_config(ph_cfg).size() == 2,
 		"pinemhi: an explicit folder is honoured when the toggle is on", failures)
+
+	# NEXTROUND (item 5): rename suggestions. The fixture db
+	# is assembled from REAL db records (transcribed: Big
+	# Buck Hunter Pro with its patch build, both Whirlwinds,
+	# the four Predators, JP's Deadpool) and written to
+	# user:// for the loader - the same census discipline
+	# as the IDENTITY round: fixtures from the real data's
+	# actual shape, URLs included (the slug tier reads
+	# them).
+	var sg_game := func(gid: String, gname: String, maker: String, yr: int, tfs: Array) -> Dictionary:
+		return {"id": gid, "name": gname, "manufacturer": maker, "year": yr, "tableFiles": tfs}
+	var sg_tf := func(tid: String, ver: String, authors: Array, feats: Array, img: bool, url: String) -> Dictionary:
+		var d: Dictionary = {"id": tid, "tableFormat": "VPX", "version": ver, "authors": authors, "features": feats, "imgUrl": "https://img.example/x.png" if img else ""}
+		if url != "":
+			d["urls"] = [{"url": url}]
+		return d
+	var sg_db_dict: Dictionary = {"games": [
+		sg_game.call("VSq_t7jP", "Big Buck Hunter Pro", "Stern", 2010, [
+			sg_tf.call("e5wX1iIELR", "1.1", ["Select.nl", "TastyWasps", "Retro27"], ["Fleep", "Hybrid", "LUT", "VPU Patch", "VR", "nFozzy"], true, "https://vpuniverse.com/files/file/31461-big-buck-hunter-pro-stern-2010-mod-gameplay-fixes-playfield-clean-up/"),
+			sg_tf.call("KZfhhA6dcs", "4.0", ["Bigus1", "32assassin", "85vett"], [], true, "https://www.vpforums.org/index.php?app=downloads&showfile=16004"),
+			sg_tf.call("XyIigsNsKG", "1.10", ["TastyWasps", "Retro27", "32assassin"], ["nFozzy", "Fleep", "Hybrid", "VR", "LUT"], true, "https://vpuniverse.com/files/file/18215-big-buck-hunter-pro-stern-2010/"),
+			sg_tf.call("er5TndpCA8", "1.3.3", ["Retro27", "32assassin", "85vett"], ["VR"], true, "https://vpuniverse.com/files/file/6094-vr-room-big-buck-hunter-pro-stern-2010/"),
+			sg_tf.call("KHyis7rN", "2.0.1", ["32assassin", "85vett"], ["FastFlips"], false, ""),
+		]),
+		sg_game.call("JcJtmz2q", "Whirlwind", "Williams", 1990, [
+			sg_tf.call("huOWrTMO", "2.0", ["Bigus1", "Walamab", "Siggi"], ["MOD"], true, "https://www.vpforums.org/index.php?app=downloads&showfile=15672"),
+			sg_tf.call("ZX39Pet3", "1.1", ["Flupper", "Herweh", "Walamab", "Fleep"], ["4k", "VR", "nFozzy", "Fleep", "LUT"], true, "https://www.vpforums.org/index.php?app=downloads&showfile=16337"),
+			sg_tf.call("3S9DrsCg", "1.0", ["Siggi", "Walamab"], ["MOD"], true, ""),
+			sg_tf.call("w2l8Ug06", "1.4-2.5", ["Arconovum", "Walamab"], ["FastFlips", "FSS", "MOD"], true, ""),
+			sg_tf.call("jqb7_mA0", "1.4", ["Walamab"], [], false, ""),
+		]),
+		sg_game.call("HGxhs5iu", "Whirl-Wind", "Gottlieb", 1958, [
+			sg_tf.call("vXE1-CEo", "1.0.1", ["Bord", "Scottacus"], ["incl. B2S", "no ROM"], true, "https://vpuniverse.com/files/file/6424-whirl-wind-gottlieb-1958/"),
+		]),
+		sg_game.call("kyyZmBAP", "Predator", "Original", 2019, [
+			sg_tf.call("0iAxKlQy_K", "1.0.0", ["Tom"], [], true, ""),
+			sg_tf.call("-LxhHcra", "1.1a", ["Tom"], [], true, ""),
+		]),
+		sg_game.call("n5c8qbNk93", "Predator", "Original", 2023, [
+			sg_tf.call("GRqg-2y7_G", "1.0.1", ["Tom"], [], true, ""),
+		]),
+		sg_game.call("t8KPxzoPe_", "Predator", "Original", 2026, [
+			sg_tf.call("Xludx-jcms", "1.0.0", ["HauntFreaks", "Tom", "Bord"], ["Retheme", "Hybrid", "VR", "nFozzy", "Fleep"], true, "https://vpuniverse.com/files/file/28543-predator-gottlieb-1986/"),
+		]),
+		sg_game.call("4rvHgllUOA", "PREDATOR", "Original", 2026, []),
+		sg_game.call("nu50f2Mg", "JP's Deadpool", "Original", 2021, [
+			sg_tf.call("9q11JO-gT1", "1.3", ["Cheese3075", "JPSalas"], ["MOD", "nFozzy", "no ROM", "VPU Patch"], true, "https://vpuniverse.com/files/file/31571-deadpool-stern-2018-wolverine-mod-table/"),
+			sg_tf.call("8A1Qk8uCXg", "1.08a", ["Hacksaw777", "RajoJoey", "JPSalas"], ["MOD", "VR", "nFozzy", "Fleep", "LUT", "no ROM"], true, "https://www.vpforums.org/index.php?app=downloads&showfile=16668"),
+			sg_tf.call("ZTDR4AR1-P", "1.0", ["R4ndom", "JPSalas"], ["MOD", "VR", "incl. B2S", "no ROM"], true, "https://www.vpforums.org/index.php?app=downloads&showfile=16665"),
+		]),
+	]}
+	var sg_db_path: String = ProjectSettings.globalize_path("user://suggest_fixture_db.json")
+	var sg_out: FileAccess = FileAccess.open(sg_db_path, FileAccess.WRITE)
+	sg_out.store_string(JSON.stringify(sg_db_dict))
+	sg_out.close()
+	var sg_db: VpsDatabase = VpsDatabase.new()
+	_expect(sg_db.load_db(sg_db_path), "suggest: the real-records fixture db loads", failures)
+	var sg_scan: LibraryScanner = LibraryScanner.new()
+	var sg_bbh: String = "D:/tables/Big Buck Hunter.vpx_VPUMod.vpx"
+	var sg_whirl: String = "D:/tables/Whirlwind (Williams 1990) 4K v1.1.vpx"
+	var sg_pred: String = "D:/tables/Predator (Gottlieb 1986).vpx"
+	sg_scan.unplaced_files = [sg_bbh, sg_whirl, sg_pred]
+	var sg_suggestions: Dictionary = sg_scan.suggest_renames(sg_db)
+	var sg_bbh_s: Dictionary = sg_suggestions.get(sg_bbh, {}) as Dictionary
+	_expect(str(sg_bbh_s.get("name", "")) == "Big Buck Hunter Pro (Stern 2010) v1.1.vpx" and bool(sg_bbh_s.get("build_matched", false)) and str(sg_bbh_s.get("game_id", "")) == "VSq_t7jP",
+		"suggest: the patch-stamped Big Buck file is suggested the PATCH build's canonical name (got '%s')" % str(sg_bbh_s.get("name", "<none>")), failures)
+	var sg_whirl_s: Dictionary = sg_suggestions.get(sg_whirl, {}) as Dictionary
+	_expect(str(sg_whirl_s.get("name", "")) == "Whirlwind (Williams 1990) 4K v1.1.vpx" and str(sg_whirl_s.get("game_id", "")) == "JcJtmz2q" and bool(sg_whirl_s.get("build_matched", false)),
+		"suggest: the Whirlwind 4K file is suggested the Williams form that lands on ITS game - never the 1958 Whirl-Wind (got '%s')" % str(sg_whirl_s.get("name", "<none>")), failures)
+	_expect(not sg_suggestions.has(sg_pred),
+		"suggest: Predator (Gottlieb 1986) earns NO suggestion - four same-name games deadlock and its paren corroborates none of them", failures)
+	var sg_rendered: String = UnplacedFilesList.render(sg_scan.unplaced_files, "2026-11-05", sg_suggestions)
+	_expect(sg_rendered.contains("Suggested rename: Big Buck Hunter Pro (Stern 2010) v1.1.vpx") and sg_rendered.contains("build v1.1") and sg_rendered.contains("VR"),
+		"suggest: the list prints the verified suggestion with its landing note", failures)
+	_expect(sg_rendered.count("Suggested rename:") == 2,
+		"suggest: exactly the two verified suggestions print - nothing is guessed for Predator", failures)
+	# The control: a decorated Deadpool the rescue tier
+	# already places never reaches the suggester at all.
+	var sg_tables: String = ProjectSettings.globalize_path("user://suggest_fixture_tables")
+	DirAccess.make_dir_recursive_absolute(sg_tables)
+	var sg_dead_name: String = "Deadpool 1.08a Minimal (Hacksaw777)R&BMetals.vpx"
+	var sg_dead: FileAccess = FileAccess.open(sg_tables.path_join(sg_dead_name), FileAccess.WRITE)
+	sg_dead.store_string("stub")
+	sg_dead.close()
+	var sg_scan2: LibraryScanner = LibraryScanner.new()
+	sg_scan2.scan([sg_tables], sg_db)
+	_expect(not sg_scan2.unplaced_files.has(sg_tables.path_join(sg_dead_name)) and sg_scan2.game_by_id("nu50f2Mg") != null,
+		"suggest: the decorated Deadpool file is placed by the rescue tier and never appears unplaced (the control)", failures)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")

@@ -262,6 +262,22 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 	if size_probe != null:
 		b.file_size = int(size_probe.get_length())
 		size_probe.close()
+	_match_build(b, db)
+	if b.match_tier == "rescue":
+		rescued_files += 1
+	return b
+
+
+## The tier chain alone, on a build whose file facts are
+## already set (or, for a dry run, on a synthetic build
+## carrying only a candidate file_name): slug -> name ->
+## scrubbed -> edition -> rescue -> local. NEXTROUND
+## (item 5): the rename suggester dry-runs candidate names
+## through THIS function on synthetic builds - no
+## filesystem writes, no library mutation, and the rescue
+## counter is the caller's business (a dry run never
+## counts).
+func _match_build(b: TableBuild, db: VpsDatabase) -> void:
 	b.match_tier = "local"
 	var title_guess: String = _guess_title(b.file_name)
 	var version_guess: String = _guess_version(b.file_name)
@@ -297,12 +313,14 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 			if not only_tf.is_empty() and (version_guess == "" or version_guess == str(only_tf.get("version", ""))):
 				_apply_table_file(b, slug_game_id, only_tf)
 				b.match_tier = "slug"
-				return b
-			return _finish_game_match(b, db, slug_game_id, "slug", version_guess)
+				return
+			_finish_game_match(b, db, slug_game_id, "slug", version_guess)
+			return
 		# 2) Game by title (with/without a leading "The").
 		var game_id: String = _match_game_id(db, title_guess, b.file_name)
 		if game_id != "":
-			return _finish_game_match(b, db, game_id, "name", version_guess)
+			_finish_game_match(b, db, game_id, "name", version_guess)
+			return
 		# 3) Cleaned game name: the file's scrubbed name equals a
 		# db game's scrubbed name - for tables whose db entries
 		# carry no usable download slug. Refereed by the file's
@@ -311,7 +329,8 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 		var scrub_ids: Array[String] = db.find_game_ids_by_scrubbed_name(b.file_name)
 		var survivors: Array[String] = _referee_survivors(db, scrub_ids, b.file_name)
 		if survivors.size() == 1:
-			return _finish_game_match(b, db, survivors[0], "scrubbed", version_guess)
+			_finish_game_match(b, db, survivors[0], "scrubbed", version_guess)
+			return
 		# 3b) Edition referee: the file states a game's EDITION
 		# words - trailing ("AC-DC LUCI Premium ... VPW v1.13"),
 		# behind the maker parens, or in a no-year paren of its
@@ -329,19 +348,18 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 		var edition_ids: Array[String] = db.find_game_ids_by_edition(b.file_name)
 		var ed_survivors: Array[String] = _referee_survivors(db, edition_ids, b.file_name)
 		if ed_survivors.size() == 1:
-			return _finish_game_match(b, db, ed_survivors[0], "edition", version_guess)
+			_finish_game_match(b, db, ed_survivors[0], "edition", version_guess)
+			return
 		# 3c) IDENTITY rescue tier: the last chance before the
 		# local fallback, for decoration the equality tiers
 		# cannot parse (see _rescue_match). It runs only on
 		# files every tier above refused, so by construction it
 		# cannot move a file any earlier tier claimed.
 		if _rescue_match(b, db, version_guess):
-			rescued_files += 1
-			return b
+			return
 	# 4) Unknown to the db: group by normalized title from the filename.
 	b.game_key = "local:" + VpsDatabase.normalize_name(title_guess)
 	b.version = version_guess
-	return b
 
 
 ## The within-game ladder once a tier has identified the game:
@@ -377,6 +395,326 @@ func _finish_game_match(b: TableBuild, db: VpsDatabase, game_id: String, tier: S
 ## stand shotless). Production runs with the env unset.
 static func _identity_nc() -> String:
 	return OS.get_environment("PVLDS_IDENTITY_NC")
+
+
+## ---------------------------------------------------------------
+## NEXTROUND (item 5): rename suggestions for the unplaced list.
+##
+## For each file the scan could not place, generate candidate
+## canonical names from db games the filename gives real
+## evidence for, DRY-RUN each candidate through the scanner's
+## own tier chain (_match_build on a synthetic build - no
+## filesystem writes, no library mutation), and suggest a name
+## ONLY when a candidate actually lands AND lands on the game
+## it was generated from. A wrong-game landing is discarded,
+## never printed: the guard is the heart of the feature, and
+## when nothing lands there is no suggestion - never a guess.
+##
+## The NC seam, read at call time like the house's others:
+## PVLDS_SUGGEST_NC=noverify prints the first candidate
+## unverified (the core test's suggester legs fail by name).
+
+const SUGGEST_MAX_CANDIDATES: int = 16
+
+static func _suggest_nc() -> String:
+	return OS.get_environment("PVLDS_SUGGEST_NC")
+
+
+## Suggestions for the standing unplaced list:
+## {file_path: {"name", "game_id", "game_name",
+## "build_matched", "version", "has_vr", "has_shot",
+## "is_pup"}} - only for files a verified candidate exists
+## for. Runs on the completed scan's own data; the cost is
+## bounded by SUGGEST_MAX_CANDIDATES dry runs per file.
+func suggest_renames(db: VpsDatabase) -> Dictionary:
+	var out: Dictionary = {}
+	if db == null or not db.loaded:
+		return out
+	for path: String in unplaced_files:
+		var s: Dictionary = _suggest_for_file(path.get_file(), db)
+		if not s.is_empty():
+			out[path] = s
+	return out
+
+
+func _suggest_for_file(file_name: String, db: VpsDatabase) -> Dictionary:
+	var candidates: Array = _suggest_candidates(file_name, db)
+	if candidates.is_empty():
+		return {}
+	if _suggest_nc() == "noverify":
+		# The seam: print the first candidate UNVERIFIED -
+		# exactly the guess-printing the feature forbids.
+		var first: Dictionary = candidates[0] as Dictionary
+		return _suggest_describe(str(first.get("name", "")), str(first.get("game_id", "")), db, null)
+	# The patch preference: a file stamped by a patch tool
+	# (".vpx_VPUMod" and kin) names after the PATCH build
+	# when the db lists one - the build carrying the db's
+	# own "VPU Patch" tag - over the base build it patched
+	# (the rename-sheet rule from the unplaced audit: the
+	# patch is registered as its own build, with its own
+	# version). Only patch-stamped files engage it.
+	var lower_name: String = file_name.to_lower()
+	var patch_evidence: bool = lower_name.contains("vpumod") or lower_name.contains("vpupatch") or lower_name.contains("vpuremix")
+	var best: Dictionary = {}
+	var best_rank: int = -1
+	var best_patch: int = 1
+	var best_close: int = 1 << 30
+	for cand_v: Variant in candidates:
+		var cand: Dictionary = cand_v
+		var probe: TableBuild = TableBuild.new()
+		probe.file_name = str(cand.get("name", ""))
+		_match_build(probe, db)
+		if probe.game_key != str(cand.get("game_id", "")):
+			continue # landed elsewhere, or nowhere: discarded
+		var rank: int = 2 if probe.matched_db else 1
+		var patch_rank: int = 0 if (patch_evidence and probe.features.has("VPU Patch")) else 1
+		var close: int = _suggest_closeness(file_name, probe.file_name)
+		if rank > best_rank or (rank == best_rank and patch_rank < best_patch) or (rank == best_rank and patch_rank == best_patch and close < best_close):
+			best_rank = rank
+			best_patch = patch_rank
+			best_close = close
+			best = _suggest_describe(probe.file_name, probe.game_key, db, probe)
+	return best
+
+
+## The candidate names for one unplaced file, in the order
+## they should be tried: for each eligible game (strongest
+## corroboration first), the version-matching build's form
+## and its tail-token forms, then the no-version form, then
+## the remaining builds' forms. Capped at
+## SUGGEST_MAX_CANDIDATES.
+func _suggest_candidates(file_name: String, db: VpsDatabase) -> Array:
+	var out: Array = []
+	var version_guess: String = _guess_version(file_name)
+	for gid: String in _suggest_candidate_games(file_name, db):
+		var gd: Dictionary = db.game_dict(gid)
+		var gname: String = str(gd.get("name", ""))
+		var base: String = "%s (%s %d)" % [gname, str(gd.get("manufacturer", "")), int(gd.get("year", 0))]
+		var builds: Array = db.vpx_table_files_of(gid)
+		# The version-matching build first (its plain form,
+		# then its tail-token forms), the no-version form,
+		# then the rest of the builds in db order.
+		var ordered: Array = []
+		var rest: Array = []
+		for item: Variant in builds:
+			if item is Dictionary:
+				var tf: Dictionary = item
+				if version_guess != "" and str(tf.get("version", "")) == version_guess:
+					ordered.append(tf)
+				else:
+					rest.append(tf)
+		for tf: Dictionary in ordered:
+			out.append({"name": "%s v%s.vpx" % [base, str(tf.get("version", ""))], "game_id": gid})
+			for tok: String in _suggest_tail_tokens(file_name, tf):
+				out.append({"name": "%s %s v%s.vpx" % [base, tok, str(tf.get("version", ""))], "game_id": gid})
+		out.append({"name": base + ".vpx", "game_id": gid})
+		for tf2: Dictionary in rest:
+			var ver: String = str(tf2.get("version", ""))
+			if ver != "":
+				out.append({"name": "%s v%s.vpx" % [base, ver], "game_id": gid})
+		if out.size() >= SUGGEST_MAX_CANDIDATES:
+			break
+	return out.slice(0, SUGGEST_MAX_CANDIDATES)
+
+
+## The games a filename gives real evidence for, strongest
+## first. A game is eligible only with corroboration - a
+## filename that merely shares a word with a game proves
+## nothing (the same-name deadlock is the standing example:
+## "Predator (Gottlieb 1986)" corroborates NONE of the four
+## db Predators, so it earns no candidates and no
+## suggestion):
+##   (a) the file's version guess is one of the game's VPX
+##       build versions, or
+##   (b) the file's (Maker Year) paren states the game's
+##       maker or year, or
+##   (c) the game's full name tokens all appear in the
+##       file's tokens AND no other candidate game
+##       satisfies (c), or
+##   (d) the file's guessed-title tokens all appear in the
+##       game's name AND the game is the unique such game.
+func _suggest_candidate_games(file_name: String, db: VpsDatabase) -> Array:
+	# The token evidence comes from the file's HEAD - the
+	# name up to its first ".vpx". A patch tool's stamp
+	# (".vpx_VPUMod" and friends) rides after a complete
+	# extension, and its debris tokens must not poison the
+	# title evidence ("Big Buck Hunter.vpx_VPUMod.vpx" is
+	# titled "Big Buck Hunter").
+	var head: String = file_name
+	var vpos: int = head.to_lower().find(".vpx")
+	if vpos > 0:
+		head = head.substr(0, vpos)
+	var file_tokens: Dictionary = {}
+	for tok: String in VpsDatabase.scrub_tokens(head):
+		file_tokens[tok] = true
+	var guess_tokens: Dictionary = {}
+	for tok: String in VpsDatabase.scrub_tokens(_guess_title(head + ".vpx")):
+		guess_tokens[tok] = true
+	var version_guess: String = _guess_version(file_name)
+	var meta: Dictionary = _parse_paren_meta(file_name)
+	var meta_maker: String = str(meta.get("manufacturer", "")).to_lower()
+	var meta_year: int = int(meta.get("year", 0))
+	var strong: Array[String] = [] # (a) or (b), db order
+	var rule_c: Array[String] = []
+	var rule_d: Array[String] = []
+	for gid_v: Variant in db.games_by_id.keys():
+		var gid: String = str(gid_v)
+		var gd: Dictionary = db.game_dict(gid)
+		var name_tokens: Dictionary = {}
+		for tok: String in VpsDatabase.scrub_tokens(str(gd.get("name", ""))):
+			name_tokens[tok] = true
+		var shares: bool = false
+		for tok: String in name_tokens.keys():
+			if file_tokens.has(tok):
+				shares = true
+				break
+		if not shares:
+			continue
+		var corr: bool = false
+		if version_guess != "":
+			for item: Variant in db.vpx_table_files_of(gid):
+				if item is Dictionary and str((item as Dictionary).get("version", "")) == version_guess:
+					corr = true
+					break
+		if not corr and meta_maker != "" and meta_maker == str(gd.get("manufacturer", "")).to_lower():
+			corr = true
+		if not corr and meta_year > 0 and meta_year == int(gd.get("year", 0)):
+			corr = true
+		if corr:
+			strong.append(gid)
+			continue
+		var name_in_file: bool = not name_tokens.is_empty()
+		for tok: String in name_tokens.keys():
+			if not file_tokens.has(tok):
+				name_in_file = false
+				break
+		if name_in_file:
+			rule_c.append(gid)
+		var guess_in_name: bool = not guess_tokens.is_empty()
+		for tok: String in guess_tokens.keys():
+			if not name_tokens.has(tok):
+				guess_in_name = false
+				break
+		if guess_in_name:
+			rule_d.append(gid)
+	var out: Array = []
+	for gid: String in strong:
+		out.append(gid)
+	if rule_c.size() == 1:
+		out.append(rule_c[0])
+	if rule_d.size() == 1 and not out.has(rule_d[0]):
+		out.append(rule_d[0])
+	return out
+
+
+## Tail tokens for one build's candidate forms: words the
+## FILENAME carries (in its own spelling) that are also
+## among the build's authors or feature tags - the steering
+## words a decorated name legitimately carries ("4K" on
+## the Whirlwind file, matching the build's own 4K tag).
+## Tokens that belong to the game's canonical name, its
+## maker/year, or the version itself are not tail tokens.
+func _suggest_tail_tokens(file_name: String, tf: Dictionary) -> Array:
+	var wanted: Dictionary = {}
+	for a: String in VpsDatabase.str_array(tf.get("authors", [])):
+		for tok: String in VpsDatabase.scrub_tokens(a):
+			wanted[tok] = true
+	for f: String in VpsDatabase.str_array(tf.get("features", [])):
+		for tok: String in VpsDatabase.scrub_tokens(f):
+			wanted[tok] = true
+	var stem: String = file_name.get_basename()
+	var raw: PackedStringArray = stem.split(" ", false)
+	var out: Array = []
+	for tok: String in raw:
+		var clean: String = tok.strip_edges()
+		if clean == "" or clean.begins_with("(") or (clean.begins_with("v") and clean.length() > 1 and clean.substr(1, 1).is_valid_int()):
+			continue
+		var key: String = VpsDatabase.string_scrub(clean).to_lower()
+		if wanted.has(key) and not out.has(clean):
+			out.append(clean)
+	return out
+
+
+## How far a candidate name stands from the file's current
+## name, in scrubbed tokens (symmetric difference) - the
+## ranking's tie-break: among equal landings, suggest the
+## smallest rename.
+func _suggest_closeness(current_name: String, candidate_name: String) -> int:
+	var a: Dictionary = {}
+	for tok: String in VpsDatabase.scrub_tokens(current_name):
+		a[tok] = true
+	var b: Dictionary = {}
+	for tok: String in VpsDatabase.scrub_tokens(candidate_name):
+		b[tok] = true
+	var n: int = 0
+	for tok: String in a.keys():
+		if not b.has(tok):
+			n += 1
+	for tok: String in b.keys():
+		if not a.has(tok):
+			n += 1
+	return n
+
+
+## The suggestion record for one verified (or, under the NC
+## seam, unverified) candidate. Flags come from the probe
+## build when there is one - the build the candidate
+## actually landed on - else from the candidate's own game
+## and build in the db.
+func _suggest_describe(cand_name: String, game_id: String, db: VpsDatabase, probe: TableBuild) -> Dictionary:
+	var gd: Dictionary = db.game_dict(game_id)
+	var has_vr: bool = false
+	var has_shot: bool = false
+	var is_pup: bool = false
+	var build_matched: bool = false
+	var version: String = ""
+	if probe != null:
+		build_matched = probe.matched_db
+		version = probe.version if probe.matched_db else ""
+		has_shot = probe.img_url != ""
+		for f: String in probe.features:
+			if f == "VR" or f == "Mixed Reality" or f == "MR":
+				has_vr = true
+			if f == "incl. PuP":
+				is_pup = true
+		if not probe.matched_db:
+			# Game-matched only: the flags describe the GAME
+			# (any build), not a build the file does not have.
+			for item: Variant in db.vpx_table_files_of(game_id):
+				if item is Dictionary:
+					var tf: Dictionary = item
+					if str(tf.get("imgUrl", "")) != "":
+						has_shot = true
+					for f: String in VpsDatabase.str_array(tf.get("features", [])):
+						if f == "VR" or f == "Mixed Reality" or f == "MR":
+							has_vr = true
+						if f == "incl. PuP":
+							is_pup = true
+	else:
+		var cand_version: String = _guess_version(cand_name)
+		for item: Variant in db.vpx_table_files_of(game_id):
+			if item is Dictionary:
+				var tf: Dictionary = item
+				if cand_version != "" and str(tf.get("version", "")) == cand_version:
+					build_matched = true
+					version = cand_version
+					has_shot = str(tf.get("imgUrl", "")) != ""
+					for f: String in VpsDatabase.str_array(tf.get("features", [])):
+						if f == "VR" or f == "Mixed Reality" or f == "MR":
+							has_vr = true
+						if f == "incl. PuP":
+							is_pup = true
+					break
+	return {
+		"name": cand_name,
+		"game_id": game_id,
+		"game_name": str(gd.get("name", "")),
+		"build_matched": build_matched,
+		"version": version,
+		"has_vr": has_vr,
+		"has_shot": has_shot,
+		"is_pup": is_pup,
+	}
 
 
 ## IDENTITY: the rescue tier. Four roads, each reading one
