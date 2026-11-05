@@ -187,6 +187,10 @@ var _intentional_launch_exit: bool = false ## quitting FOR a launch must not dis
 # boards the room renders. The key itself lives only in the
 # config - never in these vars, never in a print.
 var _wovp_client: WovpClient = null
+var _ipdb_cache: Dictionary = {"facts": {}, "failed": {}} ## CARDBACK: the IPDB facts cache (user://ipdb_cache.json), loaded at boot; the room's backs read it through the push, the SETUP fetch pass writes it
+var _ipdb_fetcher: IpdbFetcher = null ## CARDBACK: the fetch pass's engine - created at boot, started ONLY from the SETUP surfaces (desk button / in-room panel button), never at boot, in play, or on a flip
+var _ipdb_stamp: int = 0 ## CARDBACK: bumped whenever the cache changes; rides the room backs' content keys
+var _ipdb_since_save: int = 0 ## CARDBACK: items landed since the cache last saved (a long pass saves as it goes)
 var _wovp_user_id: String = "" ## whose key is saved (validate's answer, or the cache's when its key hash matches)
 var _wovp_user_name: String = ""
 var _wovp_identity_key_hash: int = 0 ## the hash of the key _wovp_user_id was resolved for
@@ -754,6 +758,7 @@ func _ready() -> void:
 	# personal-best line even when a best was handed in -
 	# the tournament smoke's PINemHi legs fail by name.
 	RoomSpecs.pinemhi_nc = OS.get_environment("PVLDS_PINEMHI_NC")
+	RoomSpecs.cardback_nc = OS.get_environment("PVLDS_CARDBACK_NC")
 	# GRADFIX8's tournie-border negative-control seam
 	# (PVLDS_GRADFIX8_NC=noborder): borders are never
 	# applied, so the census's tourney-border legs fail
@@ -902,6 +907,15 @@ func _ready() -> void:
 	_shot_fetcher = ShotFetcher.new()
 	add_child(_shot_fetcher)
 	_shot_fetcher.shot_arrived.connect(_on_shot_arrived)
+	# CARDBACK: the IPDB cache loads at boot (a disk read,
+	# never a fetch) and its fetcher stands ready for the
+	# SETUP surfaces' word - nothing here starts a pass.
+	_ipdb_cache = IpdbFacts.load_cache()
+	_ipdb_fetcher = IpdbFetcher.new()
+	add_child(_ipdb_fetcher)
+	_ipdb_fetcher.item_done.connect(_on_ipdb_item_done)
+	_ipdb_fetcher.progress.connect(_on_ipdb_progress)
+	_ipdb_fetcher.finished.connect(_on_ipdb_finished)
 	# The WoVP client (read side only) + the last-good boards
 	# off the disk cache, so an offline boot still shows the
 	# boards with their stamp. The cached identity is trusted
@@ -1281,7 +1295,7 @@ func _on_setup_panel_scan_requested() -> void:
 ## dictionary).
 func _setup_panel_health() -> Dictionary:
 	if _scanner == null:
-		return {"wovp_line": _wovp_health_line(), "pinemhi_line": PinemhiScores.status_line(_config)}
+		return {"wovp_line": _wovp_health_line(), "pinemhi_line": PinemhiScores.status_line(_config), "ipdb_line": _ipdb_health_line()}
 	return {
 		"files": _scanner.total_files,
 		"games": _scanner.games.size(),
@@ -1293,7 +1307,94 @@ func _setup_panel_health() -> Dictionary:
 		"unplaced": _scanner.unplaced_files.size(),
 		"wovp_line": _wovp_health_line(),
 		"pinemhi_line": PinemhiScores.status_line(_config),
+		"ipdb_line": _ipdb_health_line(),
 	}
+
+
+# ------------------------------------------------------------ IPDB
+
+## CARDBACK: the coverage health line - the cache's truth
+## against the library as scanned. The desk's status line
+## and the in-room panel's IPDB line both read this, so
+## every surface agrees on the count.
+func _ipdb_health_line() -> String:
+	if _scanner == null:
+		return "IPDB data: not counted yet - no scan has run."
+	var facts: Dictionary = _ipdb_cache.get("facts", {}) as Dictionary
+	var cov: Array = IpdbFacts.coverage(_scanner.games, facts)
+	var line: String = "IPDB data: %d of %d games" % [int(cov[0]), int(cov[1])]
+	var failed: Dictionary = _ipdb_cache.get("failed", {}) as Dictionary
+	var failed_in_lib: int = 0
+	for g: GameEntry in _scanner.games:
+		if failed.has(g.game_id):
+			failed_in_lib += 1
+	if failed_in_lib > 0:
+		line += " - %d fetch failures (a fresh Fetch IPDB data pass retries them)" % failed_in_lib
+	if _ipdb_fetcher != null and _ipdb_fetcher.is_running():
+		line += " - fetching..."
+	return line
+
+
+## Push the cache's facts to the room (its backs render
+## exactly this map - the flip path never fetches).
+func _push_ipdb_data() -> void:
+	_ipdb_stamp += 1
+	if _room != null:
+		_room.set_ipdb_facts(_ipdb_cache.get("facts", {}) as Dictionary, _ipdb_stamp)
+
+
+## The SETUP surfaces' word: run the fetch pass. Cache-
+## first unless force - a cached game is never refetched
+## on a plain Fetch. Only ever called from the desk's
+## buttons and the in-room panel's button.
+func _start_ipdb_fetch(force: bool) -> void:
+	if _ipdb_fetcher == null or _scanner == null or _ipdb_fetcher.is_running():
+		return
+	var facts: Dictionary = _ipdb_cache.get("facts", {}) as Dictionary
+	var plan: Array = IpdbFacts.fetch_plan(_scanner.games, facts, force)
+	if plan.is_empty():
+		_set_ipdb_status(_ipdb_health_line() + " Nothing to fetch - the cache already covers every game the database links to IPDB.")
+		return
+	_ipdb_since_save = 0
+	_ipdb_fetcher.start(plan)
+	_set_ipdb_status("Fetching IPDB data: 0 of %d..." % plan.size())
+
+
+func _set_ipdb_status(text: String) -> void:
+	if _desk != null:
+		_desk.set_ipdb_status(text)
+	if _room != null:
+		_room.set_setup_panel_message(text)
+	_refresh_setup_panel_health()
+
+
+func _on_ipdb_item_done(game_id: String, ok: bool, payload: String) -> void:
+	var facts: Dictionary = _ipdb_cache.get("facts", {}) as Dictionary
+	var failed: Dictionary = _ipdb_cache.get("failed", {}) as Dictionary
+	if ok:
+		var parsed: Dictionary = IpdbFacts.parse_page(payload)
+		if not parsed.is_empty():
+			parsed["fetched_at"] = int(Time.get_unix_time_from_system())
+			facts[game_id] = parsed
+			failed.erase(game_id)
+		else:
+			failed[game_id] = "the page carried no facts table"
+	else:
+		failed[game_id] = payload
+	_ipdb_since_save += 1
+	if _ipdb_since_save >= 10:
+		_ipdb_since_save = 0
+		IpdbFacts.save_cache(_ipdb_cache)
+
+
+func _on_ipdb_progress(done: int, total: int) -> void:
+	_set_ipdb_status("Fetching IPDB data: %d of %d - %s" % [done, total, _ipdb_health_line()])
+
+
+func _on_ipdb_finished() -> void:
+	IpdbFacts.save_cache(_ipdb_cache)
+	_push_ipdb_data()
+	_set_ipdb_status("IPDB fetch finished. " + _ipdb_health_line())
 
 
 # ------------------------------------------------------------- WoVP
@@ -1342,6 +1443,9 @@ func _push_wovp_data() -> void:
 	# time, so a folder/toggle change or fresh files land
 	# on the boards without a restart.
 	_room.set_pinemhi_bests(PinemhiScores.load_for_config(_config))
+	# CARDBACK: the IPDB facts ride the same push (the
+	# standing stamp - only a cache change bumps it).
+	_room.set_ipdb_facts(_ipdb_cache.get("facts", {}) as Dictionary, _ipdb_stamp)
 	_resolve_unowned_shots()
 	# GRADFIX6 (item 3): pre-warm the challenge set's art at
 	# push time - boot/cache-load, long before anyone enters
@@ -1633,6 +1737,7 @@ func _enter_room() -> void:
 		_room.setup_requested.connect(_show_desk)
 		_room.setup_placard_dismissed.connect(_on_setup_placard_dismissed)
 		_room.setup_panel_scan_requested.connect(_on_setup_panel_scan_requested)
+		_room.setup_panel_ipdb_requested.connect(func() -> void: _start_ipdb_fetch(false))
 		_room.tournament_refresh_requested.connect(_wovp_fetch_boards)
 		_room.wovp_key_pasted.connect(_on_room_wovp_key_pasted)
 		_room.wovp_key_test_requested.connect(_on_room_wovp_key_test)
@@ -2988,6 +3093,8 @@ func _show_desk(message: String = "") -> void:
 		_desk.wovp_key_saved.connect(_on_desk_wovp_key_saved)
 		_desk.wovp_test_requested.connect(_on_desk_wovp_test_requested)
 		_desk.pinemhi_settings_saved.connect(_push_wovp_data)
+		_desk.ipdb_fetch_requested.connect(_start_ipdb_fetch)
+		_desk.set_ipdb_status(_ipdb_health_line())
 	_desk.visible = true
 
 

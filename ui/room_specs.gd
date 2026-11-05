@@ -428,6 +428,11 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 	# feeds the boards, so the panel and the boards agree.
 	if health.has("pinemhi_line"):
 		lines.append(str(health["pinemhi_line"]))
+	# CARDBACK: the IPDB coverage line rides beside the
+	# PINemHi line - Main composes it from the cache, so the
+	# panel, the desk, and the backs all agree on the count.
+	if health.has("ipdb_line"):
+		lines.append(str(health["ipdb_line"]))
 	return {
 		"kind": "banner",
 		"bg": Color(0.05, 0.05, 0.09),

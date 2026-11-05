@@ -19,6 +19,7 @@ extends Node3D
 signal setup_requested
 signal setup_placard_dismissed ## the setup placard's BACK: Main closes the desk it opened alongside
 signal setup_panel_scan_requested ## the SETUP panel's SCAN LIBRARY: Main owns the scan machinery
+signal setup_panel_ipdb_requested ## CARDBACK: the SETUP panel's FETCH IPDB DATA: Main owns the fetcher and the cache
 signal launch_requested(game: GameEntry, build: TableBuild) ## card Launch / detail Play - Main owns the launch + exit
 signal exit_requested ## rail EXIT: Main disarms the watchdog and quits
 signal art_prefetch_requested(games: Array) ## a page settled: Main's warmer should bring the neighbouring pages' art forward
@@ -1067,6 +1068,7 @@ var _setup_panel_wovp_test_btn: ClickableQuad = null ## TEST KEY: Main validates
 var _setup_panel_stars_btn: ClickableQuad = null ## STARS: LAYERED/FLAT/OFF - the display dial (the GRAD FIX round)
 var _setup_panel_wall_btn: ClickableQuad = null ## WALL MOTION: STEPPED - the panel's gait label (OPTIMIZE: the dial is gone, STEPPED is the only gait)
 var _setup_panel_back_btn: ClickableQuad = null
+var _setup_panel_ipdb_btn: ClickableQuad = null ## CARDBACK: FETCH IPDB DATA - Main's fetch pass, the panel's mirror of the desk's button
 var _setup_panel_up: bool = false
 var _setup_panel_gen: int = 0
 var _setup_health: Dictionary = {} ## the last completed scan's numbers, fed by Main (see set_setup_health)
@@ -1108,6 +1110,8 @@ var _wovp_has_key: bool = false ## Main's word on the config: a WoVP key is save
 var _wovp_user_id: String = "" ## whose key it is (validate-apikey's answer, or the cache's) - how the wall knows which row is HIS
 var _wovp_challenges: Array = [] ## the last-good boards (Array of WovpChallenge), live or from the disk cache
 var _pinemhi_bests: Dictionary = {} ## NEXTROUND (item 4): PINemHi personal bests by PinemhiScores title key, pushed by Main (set_pinemhi_bests); a challenge whose title keys into this map gets the subordinate best line on its standing board
+var _ipdb_facts: Dictionary = {} ## CARDBACK: the IPDB cache's facts by game id, pushed by Main (set_ipdb_facts); backs read ONLY this map - the flip path never fetches
+var _ipdb_stamp: int = 0 ## CARDBACK: Main's cache stamp; it rides _card_back_key so a completed fetch re-renders a standing back under its new key
 var _wovp_fetched_at: int = 0 ## unix time the standing boards landed (0 = never)
 var _wovp_live: bool = false ## the standing boards came from a fetch this session (false = the disk cache's)
 var _wovp_fetch_error: String = "" ## the last fetch's failure, in words, when it failed - the wall says so rather than dressing stale boards as live
@@ -2053,6 +2057,16 @@ func set_pinemhi_bests(bests: Dictionary) -> void:
 		# whole job (the render's own key check decides).
 		for idx: int in range(_board_nodes.size()):
 			_render_tournament_board(idx)
+
+
+## CARDBACK: Main's push of the IPDB cache (facts by game
+## id + the cache stamp). The stamp rides the back's
+## content key, so when a fetch lands while a card stands
+## flipped, the back heal re-renders it under the new key -
+## the same discipline the boards' fetch stamp uses.
+func set_ipdb_facts(facts: Dictionary, stamp: int) -> void:
+	_ipdb_facts = facts
+	_ipdb_stamp = stamp
 
 
 func set_wovp_data(d: Dictionary) -> void:
@@ -6413,6 +6427,8 @@ func _refresh_focusables() -> void:
 			_focusables.append(_setup_panel_stars_btn)
 		if _setup_panel_wall_btn != null:
 			_focusables.append(_setup_panel_wall_btn)
+		if _setup_panel_ipdb_btn != null:
+			_focusables.append(_setup_panel_ipdb_btn)
 		if _setup_panel_back_btn != null:
 			_focusables.append(_setup_panel_back_btn)
 	elif _mode == "detail" and _detail != null:
@@ -6498,6 +6514,8 @@ func _refresh_quad_states() -> void:
 		all.append(_setup_panel_stars_btn)
 	if _setup_panel_wall_btn != null:
 		all.append(_setup_panel_wall_btn)
+	if _setup_panel_ipdb_btn != null:
+		all.append(_setup_panel_ipdb_btn)
 	if _setup_panel_back_btn != null:
 		all.append(_setup_panel_back_btn)
 	for q: ClickableQuad in all:
@@ -6952,7 +6970,7 @@ func _card_back_key(idx: int) -> String:
 			ch2 = cand
 			break
 	return "wing|" + game.game_id + "|" + (ch2.challenge_id if ch2 != null else "") \
-		+ "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id
+		+ "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id + "|ipdb" + str(_ipdb_stamp)
 
 
 ## The spec a panel's back renders: the Tournament board
@@ -6981,7 +6999,8 @@ func _card_back_spec(idx: int) -> Dictionary:
 		if cand != null and cand.table_external_id == game.game_id:
 			ch2 = cand
 			break
-	var spec: Dictionary = RoomSpecs.wing_spec(game, ch2, _wovp_user_id, now_unix)
+	var spec: Dictionary = RoomSpecs.wing_spec(game, ch2, _wovp_user_id, now_unix,
+		_ipdb_facts.get(game.game_id, {}) as Dictionary)
 	spec["spine_side"] = ""
 	spec["footer_px"] = RoomSpecs.BOARD_FOOTER_PX if _plinth_nc() else 0
 	spec["ink_centre"] = not _plinth_nc()
@@ -7278,6 +7297,10 @@ func _activate(quad: ClickableQuad) -> void:
 				if _setup_downloader != null and not _setup_downloader.is_downloading():
 					quad.pulse()
 					_start_setup_panel_download()
+			"setup_panel_ipdb":
+				quad.pulse()
+				set_setup_panel_message("Fetching IPDB data - the coverage line below counts it...")
+				setup_panel_ipdb_requested.emit()
 			"setup_panel_wovp_paste":
 				quad.pulse()
 				_paste_wovp_key()
@@ -8364,6 +8387,7 @@ func clear_setup_panel() -> void:
 		_setup_panel_dl_btn = null
 		_setup_panel_wovp_paste_btn = null
 		_setup_panel_wovp_test_btn = null
+		_setup_panel_ipdb_btn = null
 		_setup_panel_back_btn = null
 	_restore_room_pick_states()
 	_set_focused(null)
@@ -8558,9 +8582,18 @@ func _build_setup_panel() -> void:
 	_setup_panel_wall_btn.setup("setup_setting_wall_motion", "", placeholder, Vector2(0.66, 0.16))
 	_setup_panel_wall_btn.position = Vector3(0.375, -0.76, 0.0)
 	_setup_panel.add_child(_setup_panel_wall_btn)
+	# The last row (CARDBACK): FETCH IPDB DATA shares it
+	# with BACK - the fetch pass is Main's (the signal
+	# route, like SCAN), the panel only asks. The row keeps
+	# the panel's standing height: nothing hangs lower than
+	# BACK always did.
+	_setup_panel_ipdb_btn = ClickableQuad.new()
+	_setup_panel_ipdb_btn.setup("setup_panel_ipdb", "", placeholder, Vector2(0.66, 0.16))
+	_setup_panel_ipdb_btn.position = Vector3(-0.375, -1.02, 0.0)
+	_setup_panel.add_child(_setup_panel_ipdb_btn)
 	_setup_panel_back_btn = ClickableQuad.new()
-	_setup_panel_back_btn.setup("setup_panel_back", "", placeholder, Vector2(0.5, 0.16))
-	_setup_panel_back_btn.position = Vector3(0.0, -1.02, 0.0)
+	_setup_panel_back_btn.setup("setup_panel_back", "", placeholder, Vector2(0.66, 0.16))
+	_setup_panel_back_btn.position = Vector3(0.375, -1.02, 0.0)
 	_setup_panel.add_child(_setup_panel_back_btn)
 	if _setup_downloader == null:
 		_setup_downloader = VpsDownloader.new()
@@ -8645,6 +8678,12 @@ func _fill_setup_panel_textures(gen: int) -> void:
 		_after_setup_render()
 		return
 	_setup_panel_wall_btn.set_texture(wall_tex)
+	var ipdb_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.button_spec("FETCH IPDB DATA", false), Vector2i(512, 124))
+	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_ipdb_btn == null:
+		_after_setup_render()
+		return
+	_setup_panel_ipdb_btn.set_texture(ipdb_tex)
 	var back_tex: Texture2D = await _factory.render_texture(
 		RoomSpecs.button_spec("BACK", true), Vector2i(512, 164))
 	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_back_btn == null:

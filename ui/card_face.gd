@@ -844,6 +844,54 @@ func _make_board_row(entry: Dictionary, layout: Dictionary, idx: int) -> Control
 			sp.add_child(h)
 		sp.set_meta("score_label", sl)
 		return sp
+	if kind == "kv":
+		# CARDBACK (item 3, second leg): a Spec Sheet grid
+		# row - the fact's key at the left in rest grey, its
+		# value right-aligned in ink, and the source dot at
+		# the right edge naming the well the row came from
+		# (● db dim / ● ipdb teal). No panel ground: the grid
+		# stands on the frameless back like the rest of the
+		# post-saga furniture. Under the nodots NC the spec
+		# carries no "src" and no dot is drawn - the smoke
+		# legs fail by name.
+		var kp: PanelContainer = PanelContainer.new()
+		kp.add_theme_stylebox_override("panel", _board_box(Color(0, 0, 0, 0), 0))
+		var kh: HBoxContainer = HBoxContainer.new()
+		kh.add_theme_constant_override("separation", 14)
+		var kl: Label = Label.new()
+		kl.text = str(entry.get("k", ""))
+		kl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		kl.add_theme_font_size_override("font_size", int(entry.get("size", 30)))
+		kl.add_theme_color_override("font_color", Color(0.66, 0.68, 0.72))
+		kh.add_child(kl)
+		var vl: Label = Label.new()
+		vl.text = str(entry.get("v", ""))
+		vl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		vl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		vl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		vl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		vl.add_theme_font_size_override("font_size", int(entry.get("size", 30)))
+		vl.add_theme_color_override("font_color", Color(0.91, 0.93, 0.97))
+		kh.add_child(vl)
+		var src: String = str(entry.get("src", ""))
+		if src != "":
+			var dl2: Label = Label.new()
+			dl2.text = "● " + src
+			dl2.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			dl2.add_theme_font_size_override("font_size", 20)
+			dl2.add_theme_color_override("font_color",
+				Color(0.50, 0.83, 0.76) if src == "ipdb" else Color(0.43, 0.45, 0.50))
+			kh.add_child(dl2)
+		kp.add_child(kh)
+		kp.set_meta("board_kind", "kv")
+		kp.set_meta("kv_key", str(entry.get("k", "")))
+		kp.set_meta("kv_value", str(entry.get("v", "")))
+		kp.set_meta("kv_src", src)
+		# The note-label lesson above applies to the wrapped
+		# value too: preset the row's width so its reported
+		# minimum is the wrapped height it will stand at.
+		kp.size = Vector2(maxf(1.0, size.x - 52.0), 0.0)
+		return kp
 	var nl: Label = Label.new()
 	nl.text = text
 	nl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -883,6 +931,10 @@ func board_metrics() -> Dictionary:
 		if c == null or not c.has_meta("board_kind"):
 			continue
 		var d: Dictionary = {"kind": str(c.get_meta("board_kind")), "rect": c.get_global_rect()}
+		if str(d["kind"]) == "kv":
+			d["kv_key"] = str(c.get_meta("kv_key"))
+			d["kv_value"] = str(c.get_meta("kv_value"))
+			d["kv_src"] = str(c.get_meta("kv_src"))
 		if str(d["kind"]) == "score":
 			var sl: Label = c.get_meta("score_label") as Label
 			if sl != null:
