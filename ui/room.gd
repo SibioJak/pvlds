@@ -616,6 +616,12 @@ var _window_fill_dirty: bool = false
 ## path (see the pipeline block at _request_window_fill).
 var _art_pipe_busy: bool = false ## a staged pipeline pass is running
 var _art_pipe_queue: Array[int] = [] ## panel indices awaiting a staged face, centre-out order, revalidated at pop time
+var _travel_dir: int = 0 ## COMPOSE-AHEAD: the last nonzero centre-column travel direction (-1/+1), witnessed by the window enqueue
+var _ca_last_centre_col: int = -1 ## COMPOSE-AHEAD: the centre column the last enqueue saw (the direction witness's memory)
+var _art_ahead_busy: bool = false ## COMPOSE-AHEAD: an ahead pass is running
+var _ca_composed: int = 0 ## COMPOSE-AHEAD account: faces composed ahead this session
+var _ca_gate_dropped: int = 0 ## COMPOSE-AHEAD account: ahead renders the reality gate refused (nothing put - arrival composes as it always did)
+var _ca_decode_failed: int = 0 ## COMPOSE-AHEAD account: ahead asks whose art decode had failed (nothing put)
 var _art_pipe_in_stage: bool = false ## the pipeline is inside _fill_one_face_sync: its decode branch reads staged results instead of paying a synchronous decode
 var _art_decode_pending: Dictionary = {} ## art path -> true while a background decode is queued for or in flight on the decode pump
 var _art_decoded_ready: Dictionary = {} ## art path -> Image: a finished background decode awaiting texture creation on the pipeline's own frames
@@ -657,7 +663,9 @@ var _gf17_audit_runs: int = 0 ## GRADFIX17 item 1: sweeps spent on the current s
 ## instead: the apply-cap account, the settle audit's dress
 ## stamp, and the eviction law's state.
 const EVICT_MARGIN_COLS: int = 6 ## RETIRED by the FACECACHE round: the settle-time margin eviction this named is deleted (distance is no eviction offence - see _evict_after_settle); the constant stays only so old comments and NC runners that name it still parse
-const RESIDENT_FACES_CAP: int = 108 ## resident face cap (drawn window 63 + margin): the face cache's LRU enforces it in _face_cache_put
+const RESIDENT_FACES_CAP: int = 384 ## resident face cap: the face cache's LRU enforces it in _face_cache_put. COMPOSE-AHEAD round raised it from 108 (drawn window 63 + margin): a resident face measures exactly 1,714,176 B (496x864x4, the residency gauge's own count, field-verified), so 384 faces bound composed residency at 658,243,584 B (~628 MiB) while covering a whole 350-game library - the field session at cap 108 paid 218 eviction-forced re-renders on one full tour (telemetry-9). Libraries past 384 fall back to the LRU behaviour the 108 cap always had.
+const COMPOSE_AHEAD_COLS: int = 6 ## COMPOSE-AHEAD: columns composed ahead beyond the drawn window's edge in the travel direction
+const COMPOSE_BEHIND_COLS: int = 2 ## COMPOSE-AHEAD: columns composed beyond the window's other edge (the at-rest neighbourhood's far side)
 var _evicted_total: int = 0 ## faces evicted since boot (margin pass + LRU cap drops)
 var _applies_total: int = 0 ## staged applies since boot (art_frame_stats)
 var _applies_during_travel: int = 0 ## staged applies that landed while the drum travelled
@@ -4656,6 +4664,14 @@ func _face_is_standing_memo(idx: int) -> bool:
 func _art_pipe_enqueue_window() -> void:
 	var tel_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the enqueue's own cost, measured unconditionally
 	var probe_t: int = Time.get_ticks_usec() if TextureFactory.probe_enabled else 0
+	# COMPOSE-AHEAD: the direction witness. This enqueue runs
+	# on every centre change, so the centre column's delta
+	# across calls IS the travel direction (last nonzero wins).
+	if _centre_index >= 0:
+		var ca_col: int = _grid_coord(_centre_index).x
+		if _ca_last_centre_col >= 0 and ca_col != _ca_last_centre_col:
+			_travel_dir = 1 if ca_col > _ca_last_centre_col else -1
+		_ca_last_centre_col = ca_col
 	# OPTIMIZE: the queue is built over the DRAWN window only -
 	# the GF17 shape. (GF18's stream window reached ahead of
 	# the drum; stream-ahead is deleted with the SMOOTH gait.)
@@ -4942,6 +4958,243 @@ func _art_pipe_pass() -> void:
 			_window_fill_dirty = false
 			_art_pipe_enqueue_window()
 			_run_art_pipe()
+		if not _art_pipe_busy:
+			# COMPOSE-AHEAD: the window stands dressed and
+			# the pipe is idle - spend the idle frames on
+			# the columns the player is heading toward.
+			_compose_ahead_kick()
+
+
+## ------------------------------------------------------------
+## COMPOSE-AHEAD (this round): the first-visit dress latency's
+## cure. The profile (field telemetry-9 + the bench probe
+## split) convicted the shape of the cost: a composed render
+## is ~35 ms on the field rig and ~93% of it is two serialized
+## frame waits through the factory's ONE shared viewport -
+## the CPU phases are ~2 ms. A render cannot be made much
+## cheaper; it can only be moved off the arrival moment. So:
+## when the pipe drains and the wall is idle, compose the
+## faces of the columns just outside the drawn window -
+## COMPOSE_AHEAD_COLS beyond the edge in the travel direction,
+## COMPOSE_BEHIND_COLS beyond the other edge - into the same
+## composed-face cache, under the same key and the PHANTOMFIX
+## provenance law. An arrival in that span is then a cache
+## swap (~0.04 ms) instead of a render. The laws:
+## - Window work owns the machine: the ahead pass checks for
+##   pipe work before EVERY composition and stops; the next
+##   drain re-kicks it with fresh geometry. Drum motion and
+##   input never wait on it (the yield discipline is the
+##   pipe's own: one render per frame, one per two while
+##   travelling).
+## - It never binds a panel and never stamps a face key: it
+##   only puts composed textures in the cache. The settle
+##   guarantee and the never-blank law are untouched - they
+##   judge what stands, and ahead work changes only what the
+##   cache holds before a face is ever asked for.
+## - A failed capture puts NOTHING (the fill's own fallback
+##   discipline, minus the panel): arrival then composes
+##   exactly as it did before this round.
+## - The composer keeps its timings in locals - never the
+##   shared _art_apply_* wrap whose corruption minted the
+##   phantom faces.
+## The honest ceiling: a nonstop end-to-end tour outruns any
+## finite margin; the win is normal travel - bursts, stops,
+## reversals - arriving dressed.
+
+## Kick the ahead pass if the room is in a state to spend
+## idle frames (called from the pipe pass's drained tail).
+func _compose_ahead_kick() -> void:
+	if debug_compose_nc == "noahead":
+		return ## NC seam (PVLDS_COMPOSE_NC=noahead): ahead composition never runs
+	if _art_ahead_busy or _tournament:
+		return
+	if _panel_window_lo < 0 or _centre_index < 0:
+		return
+	_art_ahead_busy = true
+	call_deferred("_art_ahead_pass")
+
+
+## The ahead span's panel indices, nearest column first: the
+## lead span (travel direction) in full, then the trail span.
+func _compose_ahead_targets() -> Array[int]:
+	var out: Array[int] = []
+	if _panel_window_lo < 0 or _centre_index < 0:
+		return out
+	var dir: int = _travel_dir if _travel_dir != 0 else 1
+	var cols: Array = []
+	if dir > 0:
+		for i: int in range(COMPOSE_AHEAD_COLS):
+			cols.append(_panel_window_hi + 1 + i)
+		for i: int in range(COMPOSE_BEHIND_COLS):
+			cols.append(_panel_window_lo - 1 - i)
+	else:
+		for i: int in range(COMPOSE_AHEAD_COLS):
+			cols.append(_panel_window_lo - 1 - i)
+		for i: int in range(COMPOSE_BEHIND_COLS):
+			cols.append(_panel_window_hi + 1 + i)
+	for cv: Variant in cols:
+		var c: int = int(cv)
+		if c < 0 or c >= _columns:
+			continue
+		for row: int in range(3):
+			var idx: int = _raw_index(c, row)
+			if idx >= 0 and idx < _visible_games.size():
+				out.append(idx)
+	return out
+
+
+## The ahead pass: compose the span, one face per iteration,
+## strictly below window work in priority.
+func _art_ahead_pass() -> void:
+	var gen: int = _gen
+	var centre_col0: int = _grid_coord(_centre_index).x if _centre_index >= 0 else -1
+	var queue: Array[int] = _compose_ahead_targets()
+	var deferred: Array[int] = []
+	var pre: Array[int] = []
+	for i: int in range(mini(6, queue.size())):
+		pre.append(queue[i])
+	_art_pipe_dispatch_decodes(pre)
+	while gen == _gen:
+		if _art_pipe_busy or not _art_pipe_queue.is_empty() or _window_fill_dirty:
+			break # window work owns the machine; the next drain re-kicks
+		if _centre_index < 0 or _grid_coord(_centre_index).x != centre_col0:
+			break # geometry moved; the next drain re-kicks with a fresh span
+		var idx: int = -1
+		if not queue.is_empty():
+			idx = queue.pop_front()
+		elif not deferred.is_empty():
+			queue = deferred
+			deferred = []
+			await get_tree().process_frame
+			continue
+		else:
+			break
+		var spent: int = await _compose_ahead_one(idx, gen)
+		if spent < 0:
+			deferred.append(idx) # its decode is still in flight - retry behind the rest
+			continue
+		if spent > 0:
+			await get_tree().process_frame # the yield law: at most one ahead render per frame
+			if _swing_active or page_slide_active():
+				await get_tree().process_frame # travelling: one per two frames, the pipe's own rate
+	_art_ahead_busy = false
+
+
+## Compose ONE span face into the cache. Returns 1 when a
+## render was spent, 0 when there was nothing to compose (or
+## the art decode had failed - nothing is put either way),
+## -1 when the face's decode is still in flight.
+func _compose_ahead_one(idx: int, gen: int) -> int:
+	if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
+		return 0
+	if _tournament and idx < _tournament_rows.size() \
+			and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+		return 0
+	var game: GameEntry = _visible_games[idx]
+	var art_file: String = _face_path_for(game)
+	_face_path_memo[game.game_id] = art_file # a fresh probe, like every fill writes
+	var fav: bool = _store != null and _store.is_favorite(game.game_id)
+	var pup: bool = game.is_pup_tagged()
+	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+	var existing: Array = _face_cache_get(fkey)
+	if not existing.is_empty() and _face_cache_serves(existing, art_file):
+		return 0 # already composed under this key, provenance honest
+	var tex: Texture2D = null
+	var art_aspect: float = 0.0
+	var branch: String = ""
+	var load_ms: float = 0.0
+	var render_ms: float = 0.0
+	if art_file != "":
+		var art_tex: Texture2D = null
+		var tel_load_t0: int = Time.get_ticks_usec()
+		_art_decode_mutex.lock()
+		var staged_img: Image = _art_decoded_ready.get(art_file, null) as Image
+		var staged_failed: bool = _art_decoded_failed.has(art_file)
+		if staged_img != null:
+			_art_decoded_ready.erase(art_file)
+		if staged_failed:
+			_art_decoded_failed.erase(art_file)
+		_art_decode_mutex.unlock()
+		if staged_img != null:
+			branch = "staged"
+			art_tex = TextureFactory.art_texture_from_decoded(art_file, staged_img)
+		elif staged_failed:
+			_ca_decode_failed += 1
+			return 0 # nothing put: arrival composes exactly as it did before this round
+		elif TextureFactory.art_decode_is_cached(art_file):
+			branch = "decodecache"
+			art_tex = TextureFactory.load_art_texture(art_file)
+		else:
+			_art_pipe_dispatch_one(art_file)
+			return -1 # decode in flight - the pass retries behind the rest
+		load_ms = float(Time.get_ticks_usec() - tel_load_t0) / 1000.0
+		if art_tex == null:
+			_ca_decode_failed += 1
+			return 0
+		art_aspect = float(art_tex.get_width()) / float(art_tex.get_height())
+		var tel_render_t0: int = Time.get_ticks_usec()
+		tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store, false), _panel_face_px)
+		render_ms = float(Time.get_ticks_usec() - tel_render_t0) / 1000.0
+		if gen != _gen:
+			return 1 # a render was spent; its result belongs to a dead generation
+		if tex == null or not _tex_is_real(tex):
+			# The WART reality gate, the ahead shape: a failed
+			# capture puts nothing (never a styled fallback
+			# under the art key - that species is the phantom's).
+			_ca_gate_dropped += 1
+			return 1
+	else:
+		branch = "styled"
+		var tel_styled_t0: int = Time.get_ticks_usec()
+		tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), _panel_face_px)
+		render_ms = float(Time.get_ticks_usec() - tel_styled_t0) / 1000.0
+		if gen != _gen:
+			return 1
+		if tex == null or not _tex_is_real(tex):
+			_ca_gate_dropped += 1
+			return 1
+	_fc_note_render(game.game_id, fkey)
+	_face_cache_put(fkey, tex, art_aspect, art_file)
+	_ca_composed += 1
+	_art_event("apply", {
+		"game": game.game_id, "path": art_file, "col": _grid_coord(idx).x,
+		"shot_origin": game.shot_origin() if game.is_shot_path(art_file) else "",
+		"centre_col": _grid_coord(_centre_index).x if _centre_index >= 0 else -1,
+		"branch": branch, "load_ms": load_ms, "render_ms": render_ms,
+		"cache": "render", "via": "ahead",
+	})
+	return 1
+
+
+## The ahead account for the smokes and the field: how much
+## was composed ahead, how the standing span reads right now.
+func compose_ahead_stats() -> Dictionary:
+	var span: Array[int] = _compose_ahead_targets()
+	var ready: int = 0
+	for idx: int in span:
+		var game: GameEntry = _visible_games[idx]
+		var art_file: String = _face_path_memoized(game)
+		var fav: bool = _store != null and _store.is_favorite(game.game_id)
+		var pup: bool = game.is_pup_tagged()
+		var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+		var ent: Array = _face_cache_get(fkey)
+		if not ent.is_empty() and _face_cache_serves(ent, art_file):
+			ready += 1
+	return {
+		"composed_total": _ca_composed,
+		"gate_dropped": _ca_gate_dropped,
+		"decode_failed": _ca_decode_failed,
+		"span_faces": span.size(),
+		"span_ready": ready,
+		"travel_dir": _travel_dir,
+		"cap_faces": FACE_CACHE_MAX,
+	}
+
+
+## True when no ahead pass is running (the smokes' rest
+## witness; the span's readiness is compose_ahead_stats').
+func compose_ahead_idle() -> bool:
+	return not _art_ahead_busy
 
 
 ## The fill path's face read (GRADFIX6 items 2+3): the
