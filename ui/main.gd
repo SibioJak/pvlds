@@ -12149,10 +12149,15 @@ func _drive_swingprobe_smoke() -> void:
 ## "optimize: eviction keeps the census": after the hard
 ## travel + settle + the room's eviction pass, the visible
 ## census still reads zero, residency stands within its cap,
-## and at least one far face was actually evicted on the run
-## (the leg cannot pass vacuously). Under PVLDS_OPT_NC=
-## evictvis the eviction eats a visible face and the census
-## part fails by that name.
+## and the eviction witness matches the cap's relation to
+## the toured shelf (the leg cannot pass vacuously): a tour
+## that rendered MORE unique games than the cap holds must
+## show an eviction; a tour the cap covers whole must show
+## none. (The COMPOSE-AHEAD round raised the cap from 108
+## to 384 - above this fixture's whole shelf - and amended
+## the witness from its original one-way shape.) Under
+## PVLDS_OPT_NC=evictvis the eviction eats a visible face
+## and the census part fails by that name.
 func _landing_expect(cond: bool, label: String) -> void:
 	if cond:
 		print("  ok - landing smoke: ", label)
@@ -12435,8 +12440,14 @@ func _drive_landing_smoke() -> void:
 				var res7: Dictionary = _room.residency_stats()
 				_landing_expect(int(res7.get("resident_faces", -1)) >= 0 and int(res7.get("resident_faces", 0)) <= int(res7.get("cap_faces", 0)),
 					"optimize: eviction keeps the census: residency stands within its cap (%d resident faces, cap %d, %d resident bytes, margin %d cols)" % [int(res7.get("resident_faces", 0)), int(res7.get("cap_faces", 0)), int(res7.get("resident_bytes", 0)), int(res7.get("margin_cols", 0))])
-				_landing_expect(int(res7.get("evicted_total", 0)) > 0,
-					"optimize: eviction keeps the census: at least one far game's face was actually evicted during the run (evicted_total %d after travelling the full shelf)" % int(res7.get("evicted_total", 0)))
+				var fc7: Dictionary = _room.face_cache_stats()
+				var unique7: int = int(fc7.get("unique_games", 0))
+				if unique7 > int(res7.get("cap_faces", 0)):
+					_landing_expect(int(res7.get("evicted_total", 0)) > 0,
+						"optimize: eviction keeps the census: at least one far game's face was actually evicted during the run (evicted_total %d after travelling a shelf of %d unique games past the %d cap)" % [int(res7.get("evicted_total", 0)), unique7, int(res7.get("cap_faces", 0))])
+				else:
+					_landing_expect(int(res7.get("evicted_total", 0)) == 0,
+						"optimize: eviction keeps the census: no face was evicted on a tour the cap covers whole (%d unique games within cap %d, evicted_total %d)" % [unique7, int(res7.get("cap_faces", 0)), int(res7.get("evicted_total", 0))])
 				_land_phase = 6
 				_land_wait = 0
 		6:
