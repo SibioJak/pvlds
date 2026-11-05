@@ -679,6 +679,12 @@ func _ready() -> void:
 	# refreshes (fault 1), "pager" drops the page-travel focus
 	# landing (fault 2). Set here, before any room exists.
 	RoomView.debug_focus_nc = OS.get_environment("PVLDS_FOCUS_NC")
+	# The NEXTROUND strip-colour negative-control seam
+	# (PVLDS_STRIP_NC=stale): the strip's presence freezes
+	# at the first refresh after the library lands, so the
+	# tiles keep the boot filter's colours - the letters
+	# smoke's strip-colour legs fail against it by name.
+	RoomView.debug_strip_nc = OS.get_environment("PVLDS_STRIP_NC")
 	# The board-layout negative-control seam (PVLDS_BOARD_NC=
 	# oldlayout): restores the pre-TR3 board presentation so
 	# the tournament smoke's layout legs fail against it.
@@ -10436,10 +10442,60 @@ func _drive_letters_smoke() -> void:
 					rcam_r.rotation_degrees = Vector3.ZERO
 				_letters_expect(blue_r >= 6,
 					"user route: the rendered frame shows the focus frame around '#' reached by holding RIGHT (%d frame-blue band samples)" % blue_r)
-				_finish_letters_smoke()
+				_letters_step = 0
+				_letters_smoke_wait = 0
+				_letters_smoke_phase = 9
 			elif _letters_smoke_wait > 3600:
 				_letters_smoke_fail("user route: the # grab never came due")
 				_finish_letters_smoke()
+		9:
+			# NEXTROUND (item 1): the strip-colour legs. The
+			# encoding under test: a slot wears "plain"
+			# (bright) exactly when its letter holds games
+			# under the CURRENT filter, "dim" otherwise -
+			# recomputed at every filter change, never the
+			# previous filter's read (Chris's field report,
+			# 2026-11-02). The fixture's ALL presence is
+			# #, A, F, G, M, S, T, W, THE; favouriting
+			# Funhouse + White Water makes FAVORITES' truth
+			# exactly F + W. Under PVLDS_STRIP_NC=stale the
+			# presence freezes at the boot read, so the
+			# FAVORITES legs fail by name.
+			match _letters_step:
+				0:
+					_room._handle_rail("filter:all")
+					_letters_step = 1
+					_letters_smoke_wait = 0
+				1:
+					_letters_smoke_wait += 1
+					if (_room.wall_ready and _letters_smoke_wait >= 6 and _letters_strip_settled(["#", "A", "F", "G", "M", "S", "T", "W", "THE"])) or _letters_smoke_wait > 1800:
+						_letters_assert_strip(["#", "A", "F", "G", "M", "S", "T", "W", "THE"], "ALL")
+						for g: GameEntry in _scanner.games:
+							if g.title == "Funhouse" or g.title == "White Water":
+								_room._store.set_favorite(g.game_id, true)
+						_room._handle_rail("filter:favorites")
+						_letters_step = 2
+						_letters_smoke_wait = 0
+				2:
+					_letters_smoke_wait += 1
+					if (_room.wall_ready and _letters_smoke_wait >= 6 and _letters_strip_settled(["F", "W"])) or _letters_smoke_wait > 1800:
+						_letters_assert_strip(["F", "W"], "FAVORITES")
+						_letters_expect(not _room.strip_slot_pickable("A"),
+							"strip colours: under FAVORITES, A is not pickable (it holds no favorites)")
+						_letters_expect(_room.strip_slot_pickable("F"),
+							"strip colours: under FAVORITES, F stays pickable (Funhouse is a favorite)")
+						_letters_leg_strip_pixel()
+						_room._handle_rail("filter:all")
+						_letters_step = 3
+						_letters_smoke_wait = 0
+				3:
+					_letters_smoke_wait += 1
+					if (_room.wall_ready and _letters_smoke_wait >= 6 and _letters_strip_settled(["#", "A", "F", "G", "M", "S", "T", "W", "THE"])) or _letters_smoke_wait > 1800:
+						_letters_assert_strip(["#", "A", "F", "G", "M", "S", "T", "W", "THE"], "ALL again")
+						for g: GameEntry in _scanner.games:
+							if g.title == "Funhouse" or g.title == "White Water":
+								_room._store.set_favorite(g.game_id, false)
+						_finish_letters_smoke()
 
 
 func _letters_expect(cond: bool, label: String) -> void:
@@ -10511,6 +10567,78 @@ func _letters_leg_fixtures() -> void:
 		"fixtures: the wall's title order is the census order (got %s)" % str(_letters_visible_titles()))
 	_letters_expect(_letters_visible_titles().find("The Addams Family") == 1,
 		"canonical-The: title order files The Addams Family under A, not T")
+
+
+## NEXTROUND (item 1): have the strip's worn states settled
+## onto the given presence (plain exactly for plain_keys,
+## dim for every other laid-out slot)? Polled by the phase-9
+## legs while the fill's renders land.
+func _letters_strip_settled(plain_keys: Array) -> bool:
+	if _room == null:
+		return false
+	for k: String in _room._strip_slot_keys():
+		var want: String = "plain" if plain_keys.has(k) else "dim"
+		if _room.strip_slot_state(k) != want:
+			return false
+	return true
+
+
+## NEXTROUND (item 1): the aggregate strip-colour assertion
+## for one standing filter - one named leg per filter, with
+## every mismatching slot spelled out in the failure.
+func _letters_assert_strip(plain_keys: Array, filter_label: String) -> void:
+	var bad: Array[String] = []
+	for k: String in _room._strip_slot_keys():
+		var want: String = "plain" if plain_keys.has(k) else "dim"
+		var got: String = _room.strip_slot_state(k)
+		if got != want:
+			bad.append("%s='%s' (want '%s')" % [k, got, want])
+	_letters_expect(bad.is_empty(),
+		"strip colours: under %s every slot wears its filtered state%s" % [
+			filter_label, "" if bad.is_empty() else " - mismatches: " + ", ".join(bad)])
+
+
+## NEXTROUND (item 1): the rendered-pixel leg - the cached
+## "A|plain" face (rendered under ALL) must be visibly
+## brighter than the cached "A|dim" face (rendered under
+## FAVORITES): the two states are a real brightness
+## encoding, not two names for one face.
+func _letters_leg_strip_pixel() -> void:
+	var plain_tex: Texture2D = _room._strip_tex_cache.get("A|plain") as Texture2D if _room != null else null
+	var dim_tex: Texture2D = _room._strip_tex_cache.get("A|dim") as Texture2D if _room != null else null
+	var lum_ok: bool = false
+	var note: String = "a cached face is missing"
+	if plain_tex != null and dim_tex != null:
+		var pi: Image = plain_tex.get_image()
+		var di: Image = dim_tex.get_image()
+		if pi != null and di != null and not pi.is_empty() and not di.is_empty():
+			var pl: float = _letters_mean_lum(pi)
+			var dl: float = _letters_mean_lum(di)
+			lum_ok = pl > dl + 0.03
+			note = "plain mean %.3f vs dim mean %.3f" % [pl, dl]
+		else:
+			note = "a cached face's image is unreadable"
+	_letters_expect(lum_ok,
+		"strip colours: the plain face renders visibly brighter than the dim face (%s)" % note)
+
+
+## Mean luminance over a coarse pixel grid (the pixel leg's
+## sampler - the faces are flat grounds with one glyph, so a
+## grid mean separates the two states by construction).
+func _letters_mean_lum(img: Image) -> float:
+	var total: float = 0.0
+	var n: int = 0
+	var step: int = 16
+	var x: int = step / 2
+	while x < img.get_width():
+		var y: int = step / 2
+		while y < img.get_height():
+			var c: Color = img.get_pixel(x, y)
+			total += 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+			n += 1
+			y += step
+		x += step
+	return total / float(maxi(1, n))
 
 
 func _letters_leg_presence() -> void:

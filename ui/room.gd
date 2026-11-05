@@ -743,6 +743,17 @@ static func clear_tex() -> Texture2D:
 ## every laid-out slot, greyed ones included (the bumper-
 ## anchors round's shape). Empty in every real run.
 static var debug_focus_nc: String = ""
+## Negative-control seam for the strip colour encoding (the
+## NEXTROUND round's harness env PVLDS_STRIP_NC, set by Main
+## before any room exists): "stale" freezes the strip's
+## presence at the first refresh after the library lands and
+## reuses it for every later refresh, so the tiles keep the
+## boot filter's colours no matter what filter stands - the
+## field symptom (Chris, 2026-11-02: tiles reading as stale
+## state that does not track filter changes) restored, so
+## the letters smoke's strip-colour legs fail by name.
+## Empty in every real run.
+static var debug_strip_nc: String = ""
 ## Bench seam (the focus-law round's harness env PVLDS_BENCH,
 ## set by Main before any room exists): when true, every wall
 ## fill prints its phase timings (banner / furniture / panels)
@@ -1072,6 +1083,10 @@ var _rail_tex_lifted: Dictionary = {} ## GRADFIX14 (item 1): key -> whether the 
 var _rail_applied_key: Dictionary = {} ## GRADFIX14 (item 1): key -> the strip cache key last applied to the section (change guard)
 var _strip_quads: Dictionary = {} ## letter key ("A".."Z", "THE", "#") -> ClickableQuad: the alphabet strip, built once with the rail
 var _strip_tex_cache: Dictionary = {} ## "key|state" -> Texture2D: every strip slot face ever rendered (the rail cache's pattern)
+var _strip_worn_state: Dictionary = {} ## NEXTROUND (item 1): letter key -> the colour state ("plain"/"dim"/"accent") the slot's worn face was rendered for, recorded at BOTH dress sites (the synchronous cache dress and the fill's render) - the strip-colour smoke reads the encoding from here, and the record is what makes a slot's standing colour assertable at all
+var _strip_frozen_presence: Dictionary = {} ## PVLDS_STRIP_NC=stale only: the presence frozen at the first refresh (see debug_strip_nc)
+var _strip_frozen_valid: bool = false ## PVLDS_STRIP_NC=stale only: _strip_frozen_presence holds the frozen read
+var _strip_presence_now: Dictionary = {} ## NEXTROUND (item 1): the presence the latest _refresh_strip read - the fill's strip loop dresses from THIS read, so the synchronous dress and the async render can never disagree about which filter's colours the strip wears
 var _btn_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: the panels' Launch/Failed button faces - two textures in existence, once rendered per panel per rebuild before the pick-latency fix. GRADFIX13 (item 2): dormant in the shipped build (no plinth is dressed); the plinth NC's minted buttons use it as before
 var _face_tex_cache: Dictionary = {} ## "game_id|art_path|fav" -> [Texture2D, art_aspect]: rendered panel faces (the pick-latency fix - a revisit re-rendered every face from scratch)
 var _face_cache_order: Array[String] = [] ## the face cache's LRU order (oldest first)
@@ -1230,6 +1245,7 @@ func setup(factory: TextureFactory, scanner: LibraryScanner, store: StateStore, 
 
 func refresh_library() -> void:
 	_letter_net = "" ## a fresh library lifts any standing net: its set was the old scan's truth
+	_strip_frozen_valid = false ## NEXTROUND (item 1): a fresh library re-arms the strip NC's freeze at the new library's first refresh - and in production (NC unset) this is the only trace the seam leaves
 	# GRADFIX14 (item 2): the player's place survives an
 	# adoption. Before this, every landed scan reset the
 	# centre to the shelf's head and dropped the focus, so
@@ -3770,9 +3786,31 @@ func _build_strip(placeholder: Texture2D) -> void:
 func _refresh_strip() -> void:
 	var lib_presence: Dictionary = {}
 	var presence: Dictionary = {}
+	var colour_presence: Dictionary = {}
 	if _scanner != null:
 		lib_presence = LetterIndex.presence_over(_scanner.games)
+		# NEXTROUND (item 1): presence over the CURRENT
+		# filter's collection, taken fresh at every refresh
+		# (every rebuild follows a filter press, a library
+		# adoption, a favourite-driven rebuild or a net
+		# change, so the strip's truth is the standing
+		# filter's by construction). This read drives the
+		# slots' PICK state and layout, always fresh.
 		presence = LetterIndex.presence_over(_collect_filtered())
+		# The COLOUR encoding's read is the same presence -
+		# except under the PVLDS_STRIP_NC=stale seam, which
+		# freezes the colour read at the first refresh after
+		# the library landed (the pick state above never
+		# freezes: the seam restores stale COLOURS, the
+		# field symptom, not a broken strip).
+		if debug_strip_nc == "stale" and _strip_frozen_valid:
+			colour_presence = _strip_frozen_presence
+		else:
+			colour_presence = presence
+			if debug_strip_nc == "stale":
+				_strip_frozen_presence = colour_presence
+				_strip_frozen_valid = true
+	_strip_presence_now = colour_presence
 	_strip_has_number = lib_presence.has("#")
 	var keys: Array[String] = _strip_slot_keys()
 	var total: float = 0.0
@@ -3809,7 +3847,7 @@ func _refresh_strip() -> void:
 			if hq != null:
 				hq.visible = false
 				hq.pick_enabled = false
-	_apply_strip_textures(presence)
+	_apply_strip_textures(colour_presence)
 
 
 func _strip_slot_size(key: String) -> Vector2:
@@ -3866,6 +3904,8 @@ func _apply_strip_textures(presence: Dictionary) -> void:
 				# dress ran on every rebuild, same texture).
 				_sc_label_reassign += 1 ## OPTIMIZE standing-cost audit (observation only)
 				quad.set_texture(want_tex)
+			if quad.current_texture() == want_tex:
+				_strip_worn_state[key] = str(ls[1]) ## NEXTROUND (item 1): the worn-state record (see _strip_worn_state) - recorded on the wear, not the assignment, so a slot already wearing its face still testifies
 
 
 ## A strip pick: the jump itself. An ordinary letter files
@@ -4372,7 +4412,12 @@ func _fill_wall_textures(gen: int) -> void:
 	# label+state that has never rendered (a first-ever dim
 	# letter, the accent of a net just raised) renders now,
 	# ahead of the panels, and joins the cache.
-	var strip_presence: Dictionary = LetterIndex.presence_over(_collect_filtered()) if _scanner != null else {}
+	# NEXTROUND (item 1): the fill dresses from the SAME
+	# presence read _refresh_strip just took (_strip_
+	# presence_now), never a second read of its own - the
+	# two dress sites can no longer disagree about which
+	# filter's colours the strip wears.
+	var strip_presence: Dictionary = _strip_presence_now if _scanner != null else {}
 	for skey: String in _strip_slot_keys():
 		var squad: ClickableQuad = _strip_quads.get(skey) as ClickableQuad
 		if squad == null:
@@ -4381,6 +4426,7 @@ func _fill_wall_textures(gen: int) -> void:
 		var sck: String = str(ls[0]) + "|" + str(ls[1])
 		if _strip_tex_cache.has(sck):
 			squad.set_texture(_strip_tex_cache[sck] as Texture2D)
+			_strip_worn_state[skey] = str(ls[1]) ## NEXTROUND (item 1): the worn-state record
 			continue
 		var spx: Vector2i = Vector2i(500, 250) if skey == "THE" else Vector2i(229, 250) ## the Console pads' own aspect (pass 2: 0.170/0.085 and 0.078/0.085), so the glyphs are not stretched (GRADFIX5's rule, GRADFIX6's numbers)
 		bench_renders += 1
@@ -4389,6 +4435,7 @@ func _fill_wall_textures(gen: int) -> void:
 			return
 		_strip_tex_cache[sck] = stex
 		squad.set_texture(stex)
+		_strip_worn_state[skey] = str(ls[1]) ## NEXTROUND (item 1): the worn-state record
 	var bench_t_furniture: int = Time.get_ticks_msec()
 	if _tournament:
 		# The Tournament Room's challenge panels are cards and
@@ -8954,6 +9001,14 @@ func active_letter_net() -> String:
 func strip_slot_pickable(key: String) -> bool:
 	var q: ClickableQuad = letter_quad(key)
 	return q != null and q.visible and q.pick_enabled
+
+
+## NEXTROUND (item 1): the colour state the slot's worn face
+## was rendered for ("plain" / "dim" / "accent"), or "" when
+## the slot has not been dressed yet. The letters smoke's
+## strip-colour legs assert the encoding from this record.
+func strip_slot_state(key: String) -> String:
+	return str(_strip_worn_state.get(key, ""))
 
 
 ## Pop-out queries (the pop shot hook reads the room the way the
