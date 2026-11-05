@@ -7299,7 +7299,7 @@ func _activate(quad: ClickableQuad) -> void:
 					_start_setup_panel_download()
 			"setup_panel_ipdb":
 				quad.pulse()
-				set_setup_panel_message("Fetching IPDB data - the coverage line below counts it...")
+				set_setup_panel_message("Re-applying the bundled IPDB snapshot - the coverage line below counts it...")
 				setup_panel_ipdb_requested.emit()
 			"setup_panel_wovp_paste":
 				quad.pulse()
