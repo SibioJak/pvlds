@@ -308,6 +308,13 @@ var _letters_smoke_failures: int = 0
 var _letters_step: int = 0 ## the focus-fix legs' sub-state (strip visual grab, pager turns)
 var _letters_focus_key: String = "" ## the strip slot the entry walk landed on
 var _smoke_bootfocus: bool = false ## --pvlds-smoke-bootfocus: the boot-focused (last-played) card renders fully with NO input
+var _smoke_cardback: bool = false ## --pvlds-smoke-cardback: CARDBACK round - flips each card of the 3-game fixture library (cache SEEDED in app_userdata) and judges the Spec Sheet backs off the rendered rows: both wells dotted, the disagreement standing as two rows, the db-only game clean, and the fetcher's request count at 0 throughout
+var _cb_phase: int = 0
+var _cb_wait: int = 0
+var _cb_failures: int = 0
+var _cb_target: int = 0 ## index into the driver's target game list
+var _cb_judged: bool = false
+var _cb_seat_tries: int = 0 ## focus seats attempted for the standing target (a target that never centres fails instead of looping)
 var _bootfocus_phase: int = 0
 var _bootfocus_wait: int = 0
 var _bootfocus_failures: int = 0
@@ -661,6 +668,8 @@ func _ready() -> void:
 	if user_args.has("--pvlds-smoke-bootfocus"):
 		_smoke_bootfocus = true
 		_bootfocus_game = OS.get_environment("PVLDS_BOOTFOCUS_GAME")
+	if user_args.has("--pvlds-smoke-cardback"):
+		_smoke_cardback = true
 	if user_args.has("--pvlds-smoke-motion"):
 		_smoke_motion = true
 	if user_args.has("--pvlds-smoke-swingprobe"):
@@ -876,7 +885,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1061,6 +1070,8 @@ func _process(_delta: float) -> void:
 		_drive_tournament_smoke()
 	if _smoke_bootfocus:
 		_drive_bootfocus_smoke()
+	if _smoke_cardback:
+		_drive_cardback_smoke()
 	if _smoke_motion:
 		_drive_motion_smoke()
 	if _smoke_swingprobe:
@@ -14406,6 +14417,190 @@ func _finish_bootfocus_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS BOOTFOCUS SMOKE: FAIL (%d)" % _bootfocus_failures)
+		get_tree().quit(1)
+
+
+## CARDBACK smoke: the fixture library's three games, in
+## judging order - Indiana Jones (both wells, the designer
+## disagreement), Beetlejuice (db-only: no ipdbUrl in its
+## record, nothing seeded), The Addams Family (a seeded
+## disagreement of the same shape as Indy's).
+const CB_TARGETS: Array[String] = ["lkSumsrF", "1vJ_ZQYe", "aT_GONvw"]
+
+
+func _drive_cardback_smoke() -> void:
+	match _cb_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and _room._visible_games.size() >= 3:
+				_cb_phase = 1
+				_cb_wait = 0
+			else:
+				_cb_wait += 1
+				if _cb_wait > 7200:
+					_cb_fail("the room never came up on the real boot path")
+					_finish_cardback_smoke()
+		1:
+			# The seeded cache reached the room through
+			# Main's real boot path (load + push) - and the
+			# fetcher has not fired: no fetch on boot, ever.
+			var pushed: Dictionary = _room._ipdb_facts
+			_cb_expect(pushed.has("lkSumsrF") and str((pushed.get("lkSumsrF", {}) as Dictionary).get("units", "")) == "12,716",
+				"the seeded IPDB cache loaded at boot and reached the room (Indy's facts stand in the push)")
+			_cb_expect(_ipdb_fetcher != null and _ipdb_fetcher.fetch_count == 0,
+				"no IPDB request fired on boot (fetch_count = %d)" % (_ipdb_fetcher.fetch_count if _ipdb_fetcher != null else -1))
+			# Park the harness pointer in a corner: the
+			# room's centre follows the pointer's hover
+			# before the focus (_follow_centre), and the
+			# resting pointer sits on the boot-centre card -
+			# with the ray missing the wall, the follow runs
+			# on the focus the driver seats.
+			get_viewport().warp_mouse(Vector2(8.0, 592.0))
+			_cb_phase = 2
+			_cb_wait = 0
+			_cb_target = 0
+		2:
+			var game_id: String = CB_TARGETS[_cb_target]
+			var idx: int = _cb_visible_idx(game_id)
+			if idx < 0:
+				_cb_fail("fixture game %s never stood on the wall" % game_id)
+				_cb_advance()
+			elif _room._centre_index != idx:
+				# The flip stands only on the CENTRE card
+				# (_update_flip's closing law), and the centre
+				# follows the focus (_follow_centre) once the
+				# pointer's ray is parked off the wall (phase
+				# 1) - so the driver seats the target by
+				# moving the focus to its panel, the same seat
+				# the input smoke's legs use.
+				var panel: ClickableQuad = null
+				for p: ClickableQuad in _room._panels:
+					if p.payload == game_id:
+						panel = p
+						break
+				_cb_seat_tries += 1
+				if _cb_seat_tries > 12:
+					_cb_fail("the wall never centred %s (centre stands at %d)" % [game_id, _room._centre_index])
+					_cb_advance()
+				elif panel != null:
+					_room._set_focused(panel)
+					_cb_wait = 0
+					_cb_phase = 6
+				else:
+					_cb_fail("no panel carries %s" % game_id)
+					_cb_advance()
+			elif _room._flip_idx != idx:
+				_room._toggle_flip(idx)
+				_cb_wait = 0
+				_cb_phase = 3
+			else:
+				_cb_phase = 3
+				_cb_wait = 0
+		3:
+			_cb_wait += 1
+			var idx2: int = _cb_visible_idx(CB_TARGETS[_cb_target])
+			if idx2 >= 0 and _room._flip_idx == idx2 and _room._flip_tex_real:
+				_cb_expect(true, "the flip of %s rendered a real back from the cache" % CB_TARGETS[_cb_target])
+				_cb_judged = false
+				_cb_judge(idx2)
+				_cb_phase = 4
+				_cb_wait = 0
+			elif _cb_wait > 1800:
+				_cb_fail("the flip of %s never rendered a real back (flip_idx=%d, flip_key='%s', tex_key='%s', render_key='%s', retries=%d, nodes_empty=%s)" % [
+					CB_TARGETS[_cb_target], _room._flip_idx, _room._flip_key, _room._flip_tex_key,
+					_room._flip_render_key, _room._flip_retries, str(_room._flip_nodes(idx2).is_empty())])
+				_cb_advance()
+		4:
+			_cb_wait += 1
+			if _cb_judged:
+				_cb_advance()
+			elif _cb_wait > 1800:
+				_cb_fail("the back render for %s never landed" % CB_TARGETS[_cb_target])
+				_cb_advance()
+		5:
+			_cb_expect(_ipdb_fetcher != null and _ipdb_fetcher.fetch_count == 0,
+				"three flips rendered with networking unused (fetch_count = %d)" % (_ipdb_fetcher.fetch_count if _ipdb_fetcher != null else -1))
+			_finish_cardback_smoke()
+		6:
+			_cb_wait += 1
+			if _cb_wait >= 45:
+				_cb_phase = 2
+				_cb_wait = 0
+
+
+func _cb_advance() -> void:
+	_cb_target += 1
+	_cb_wait = 0
+	_cb_seat_tries = 0
+	_cb_phase = 2 if _cb_target < CB_TARGETS.size() else 5
+
+
+func _cb_visible_idx(game_id: String) -> int:
+	if _room == null:
+		return -1
+	for i: int in range(_room._visible_games.size()):
+		if (_room._visible_games[i] as GameEntry).game_id == game_id:
+			return i
+	return -1
+
+
+func _cb_judge(idx: int) -> void:
+	var game: GameEntry = _room._visible_games[idx] as GameEntry
+	var spec: Dictionary = _room._card_back_spec(idx)
+	var tex: Texture2D = await _room._factory.render_texture(spec, RoomSpecs.BACK_FACE_PX)
+	_cb_expect(tex != null and tex.get_width() > 16, "the back of %s renders at full size" % game.game_id)
+	var metrics: Dictionary = _room._factory.face_board_metrics()
+	var kv: Dictionary = {}
+	var ipdb_rows: int = 0
+	var empty_rows: int = 0
+	var undotted: int = 0
+	for rv: Variant in (metrics.get("rows", []) as Array):
+		var rd: Dictionary = rv as Dictionary
+		if str(rd.get("kind", "")) != "kv":
+			continue
+		kv[str(rd.get("kv_key", ""))] = {"v": str(rd.get("kv_value", "")), "src": str(rd.get("kv_src", ""))}
+		if str(rd.get("kv_src", "")) == "ipdb":
+			ipdb_rows += 1
+		if str(rd.get("kv_src", "")) == "":
+			undotted += 1
+		if str(rd.get("kv_value", "")) == "":
+			empty_rows += 1
+	match game.game_id:
+		"lkSumsrF":
+			_cb_expect(str((kv.get("Designer", {}) as Dictionary).get("v", "")) == "Mark Ritchie" and str((kv.get("Designer", {}) as Dictionary).get("src", "")) == "db",
+				"Indy: the db designer row stands with its db dot (got '%s' / '%s')" % [str((kv.get("Designer", {}) as Dictionary).get("v", "<none>")), str((kv.get("Designer", {}) as Dictionary).get("src", "<none>"))])
+			_cb_expect(str((kv.get("Design", {}) as Dictionary).get("v", "")) == "Mark Ritchie, Doug Watson" and str((kv.get("Design", {}) as Dictionary).get("src", "")) == "ipdb",
+				"Indy: the IPDB design row stands beside it with its ipdb dot - the disagreement shown, never merged (got '%s')" % str((kv.get("Design", {}) as Dictionary).get("v", "<none>")))
+			_cb_expect(str((kv.get("Units produced", {}) as Dictionary).get("v", "")) == "12,716" and str((kv.get("Fun rating", {}) as Dictionary).get("v", "")) == "8.3 / 10",
+				"Indy: the IPDB production and rating rows stand (units '%s', fun '%s')" % [str((kv.get("Units produced", {}) as Dictionary).get("v", "<none>")), str((kv.get("Fun rating", {}) as Dictionary).get("v", "<none>"))])
+			_cb_expect(undotted == 0, "Indy: every grid row carries its source dot (%d undotted)" % undotted)
+		"1vJ_ZQYe":
+			_cb_expect(kv.size() >= 3, "Beetlejuice: the db-only back still stands a grid (%d rows)" % kv.size())
+			_cb_expect(ipdb_rows == 0, "Beetlejuice: a game with no IPDB data shows NO ipdb rows (degrades honestly)")
+		"aT_GONvw":
+			_cb_expect(str((kv.get("Designer", {}) as Dictionary).get("v", "")) == "Pat Lawlor" and str((kv.get("Design", {}) as Dictionary).get("v", "")) == "Pat Lawlor, John Youssi",
+				"Addams: both designer rows stand - db '%s', ipdb '%s'" % [str((kv.get("Designer", {}) as Dictionary).get("v", "<none>")), str((kv.get("Design", {}) as Dictionary).get("v", "<none>"))])
+	_cb_expect(empty_rows == 0, "%s: the grid carries no empty rows" % game.game_id)
+	_cb_judged = true
+
+
+func _cb_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - cardback smoke: ", label)
+	else:
+		_cb_fail(label)
+
+
+func _cb_fail(label: String) -> void:
+	_cb_failures += 1
+	printerr("  FAIL - cardback smoke: ", label)
+
+
+func _finish_cardback_smoke() -> void:
+	if _cb_failures == 0:
+		print("PVLDS CARDBACK SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS CARDBACK SMOKE: FAIL (%d)" % _cb_failures)
 		get_tree().quit(1)
 
 
