@@ -345,6 +345,7 @@ var _ret_done: bool = false
 var _ret_deadline: int = 0
 var _ret_idx: int = -1 ## the target's row/panel index (the Twilight Zone challenge, or its library card)
 var _ret_seen_pending: bool = false ## the load wait was seen running (a settle back to not-pending with the process alive is a FAILED load, not a return)
+var _ret_grace: int = 0 ## frames the settled-but-still-standing state gets to exit before it is called a failed settle (a successful settle's quit lands at the frame's end; the driver can see the settled state first)
 var _bt_phase: int = 0
 var _bt_wait: int = 0
 var _bt_failures: int = 0
@@ -15794,8 +15795,15 @@ func _drive_return_smoke() -> void:
 					_ret_seen_pending = true
 					print("PVLDS RETURN SMOKE: launch wait running - the origin record should be on disk")
 			elif _ret_seen_pending:
-				_ret_expect(false, "launch: the hand-off completed (a failed settle leaves the process standing)")
-				_ret_finish_smoke()
+				# The settle ran. A success quits at the
+				# frame's end, but the driver can see the
+				# settled state first - a grace window
+				# separates the exit from a failed settle
+				# (which leaves the process standing for good).
+				_ret_grace += 1
+				if _ret_grace > 120:
+					_ret_expect(false, "launch: the hand-off completed (a failed settle leaves the process standing)")
+					_ret_finish_smoke()
 			elif Time.get_ticks_msec() > _ret_deadline:
 				_ret_expect(false, "launch: the load wait never began")
 				_ret_finish_smoke()

@@ -2124,8 +2124,33 @@ func set_wovp_data(d: Dictionary) -> void:
 	_wovp_live = bool(d.get("live", false))
 	_wovp_fetch_error = str(d.get("fetch_error", ""))
 	if _tournament:
+		# RETURN round: the player's place survives a boards
+		# landing. _rebuild_wall drops the focus to nothing,
+		# and a fetch lands on every tournament entry (the
+		# rail press asks for one; a return restore asks too) -
+		# so a player standing focused on a challenge card
+		# when the live boards arrived lost his focus to the
+		# rebuild, and the return landing's seat with it (the
+		# submit loop's first step: exit table, back at its
+		# board, Y - with no focus there is no Y). The place
+		# law is refresh_library's own (GRADFIX14 item 2)
+		# carried to this rebuild: the focused card's game is
+		# read before the recompute and re-seated after, when
+		# it still stands. Focus anywhere else (a rail stop,
+		# a modal panel's quads) reads no place and keeps
+		# today's landing exactly.
+		var place_id: String = ""
+		if _focused != null and _panels.has(_focused):
+			place_id = _focused.payload
 		_recompute_visible()
 		_rebuild_wall()
+		if place_id != "":
+			for i: int in range(_visible_games.size()):
+				if _visible_games[i].game_id == place_id:
+					_set_centre(i, true)
+					if i < _panels.size():
+						_set_focused(_panels[i])
+					break
 	else:
 		# Fresh boards can give the flipped card a back it
 		# did not have (or change the one it has): the back's
