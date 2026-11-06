@@ -12,7 +12,7 @@ signal wovp_key_saved ## the WoVP key was saved from this desk: Main refreshes t
 signal pinemhi_settings_saved ## NEXTROUND (item 4): the PINemHi folder/toggle was saved from this desk: Main re-reads the bests and re-pushes them to the room
 signal ipdb_snapshot_requested ## IPDBFIX: re-apply the bundled IPDB snapshot to the cache (the CARDBACK live fetch is retired - IPDB's site refuses app requests): Main owns the cache and answers on the IPDB status line
 signal wovp_test_requested(api_key: String) ## Test key: Main validates this text against WoVP and answers on the status line
-signal wovp_submit_requested(challenge_id: String, photo_path: String) ## Submit a score (the SUBMIT round): Main runs the two-step WoVP submission and answers on the submit status line
+signal wovp_submit_requested(challenge_id: String, photo_path: String, score_text: String) ## Submit a score (the SUBMIT round): Main runs the two-step WoVP submission and answers on the submit status line. score_text is the SUBMIT2 record field's raw text - Main parses it into the LOCAL log only; it never rides the wire
 
 var _config: PvldsConfig
 var _filling_from_config: bool = false ## true while _fill_from_config sets widget state (its signal emissions are not user flips)
@@ -47,6 +47,9 @@ var _submit_preview: TextureRect
 var _submit_verify_label: Label
 var _submit_button: Button
 var _submit_label: Label
+var _submit_score_edit: LineEdit ## SUBMIT2: the optional score-record field - his notebook, never sent
+var _submit_history_title: Label ## SUBMIT2: "Your recent submissions" - stands only when the log has entries
+var _submit_history_label: Label ## SUBMIT2: Main-built lines from the local submission log, newest first
 var _submit_rows: Array = [] ## Main's submit rows (set_wovp_submit_data): one Dictionary per live challenge
 var _submit_photo_path: String = "" ## the chosen score photo (filesystem path); only its name is ever shown or logged
 var _submit_has_key: bool = false
@@ -211,6 +214,24 @@ func _build_ui() -> void:
 	_submit_verify_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_submit_verify_label.visible = false
 	vbox.add_child(_submit_verify_label)
+	# SUBMIT2: the score-record field. What he types is
+	# his own notebook - it lands in the local submission
+	# log beside the attempt and NOWHERE else: the league
+	# reads the score off the photo, and the payload keeps
+	# its 0 stub. Its one job is memory: the league's own
+	# History page is otherwise the only place a submitted
+	# score can be looked back up, and a blind (Knockout)
+	# round shows nobody's number anywhere.
+	var submit_score_row: HBoxContainer = HBoxContainer.new()
+	submit_score_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(submit_score_row)
+	var submit_score_label: Label = Label.new()
+	submit_score_label.text = "Score in this photo (optional - your record only):"
+	submit_score_row.add_child(submit_score_label)
+	_submit_score_edit = LineEdit.new()
+	_submit_score_edit.placeholder_text = "e.g. 16,638,090 - leave empty to skip"
+	_submit_score_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	submit_score_row.add_child(_submit_score_edit)
 	var submit_row: HBoxContainer = HBoxContainer.new()
 	submit_row.add_theme_constant_override("separation", 8)
 	vbox.add_child(submit_row)
@@ -222,6 +243,19 @@ func _build_ui() -> void:
 	_submit_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_submit_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	submit_row.add_child(_submit_label)
+	# SUBMIT2: the receipt book, on the desk - his recent
+	# submissions read back from the local log (Main builds
+	# the lines: date, challenge, his recorded score when
+	# he typed one, the outcome). Stands only when the log
+	# has entries: no empty furniture.
+	_submit_history_title = Label.new()
+	_submit_history_title.text = "Your recent submissions"
+	_submit_history_title.visible = false
+	vbox.add_child(_submit_history_title)
+	_submit_history_label = Label.new()
+	_submit_history_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_submit_history_label.visible = false
+	vbox.add_child(_submit_history_label)
 
 	# The PINemHi section (NEXTROUND item 4): the folder
 	# PVLDS READS TOP10_Personal files from, plus the
@@ -617,6 +651,8 @@ func set_wovp_submit_data(rows: Array, has_key: bool) -> void:
 	_submit_picker.disabled = not has_key
 	_submit_button.disabled = not has_key
 	_submit_photo_button.disabled = not has_key
+	if _submit_score_edit != null:
+		_submit_score_edit.editable = has_key
 	_refresh_submit_info()
 
 
@@ -678,7 +714,8 @@ func _on_submit_pressed() -> void:
 		_submit_label.text = "Choose the score photo first."
 		return
 	_submit_label.text = "Submitting..."
-	wovp_submit_requested.emit(str(row.get("challenge_id", "")), _submit_photo_path)
+	wovp_submit_requested.emit(str(row.get("challenge_id", "")), _submit_photo_path,
+		_submit_score_edit.text if _submit_score_edit != null else "")
 
 
 ## Main's submission verdict (success or the server's own
@@ -686,6 +723,24 @@ func _on_submit_pressed() -> void:
 func set_wovp_submit_status(text: String) -> void:
 	if _submit_label != null:
 		_submit_label.text = text
+
+
+## The receipt book's lines (SUBMIT2): Main reads the
+## local submission log and builds one line per recent
+## attempt - date, challenge, his recorded score when he
+## typed one, the outcome - newest first. An empty log
+## hides the block entirely: no empty furniture.
+func set_wovp_submission_history(lines: Array) -> void:
+	if _submit_history_label == null:
+		return
+	var texts: Array[String] = []
+	for lv: Variant in lines:
+		texts.append(str(lv))
+	_submit_history_label.text = "\n".join(texts)
+	var stands: bool = not texts.is_empty()
+	_submit_history_label.visible = stands
+	if _submit_history_title != null:
+		_submit_history_title.visible = stands
 
 
 ## The chosen photo stands on the desk (the verify step -

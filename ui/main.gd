@@ -193,6 +193,8 @@ var _ipdb_pushed_size: int = -1 ## BACKTRIM: the facts content last handed to th
 var _ipdb_pushed_hash: int = 0
 var _ipdb_seeded: int = 0 ## IPDBFIX: games that gained facts at the last bundled-snapshot seed (boot or a SETUP re-apply) - the smoke's seed witness
 var _wovp_user_id: String = "" ## whose key is saved (validate's answer, or the cache's when its key hash matches)
+var _pending_recorded_score: int = 0 ## SUBMIT2: the desk record field's parsed value for the in-flight submission - consumed by _record_submit_outcome into the LOCAL log only, never sent
+var _pending_recorded_junk: bool = false ## SUBMIT2: the record field held non-numeric junk for the in-flight submission - the send still happens; one plain line rides the outcome words
 var _wovp_user_name: String = ""
 var _wovp_identity_key_hash: int = 0 ## the hash of the key _wovp_user_id was resolved for
 var _wovp_identity_state: String = "untested" ## "untested" | "ok" | "failed" - this session's last validation outcome
@@ -961,6 +963,9 @@ func _ready() -> void:
 	if submit_nc != "":
 		WovpClient.debug_submit_nc = submit_nc
 		WovpChallenge.debug_submit_no_warn = submit_nc == "nowarn"
+	var submit2_nc: String = OS.get_environment("PVLDS_SUBMIT2_NC")
+	if submit2_nc != "":
+		WovpClient.debug_submit2_nc = submit2_nc
 	_wovp_client = WovpClient.new()
 	add_child(_wovp_client)
 	_wovp_client.validation_finished.connect(_on_wovp_validation_finished)
@@ -1784,6 +1789,40 @@ func _submit_build_owned(game: GameEntry, ch: WovpChallenge) -> bool:
 func _push_submit_data() -> void:
 	if _desk != null:
 		_desk.set_wovp_submit_data(_build_submit_rows(), _config != null and _config.wovp_api_key != "")
+	_push_submission_history()
+
+
+## The receipt book's lines for the desk (SUBMIT2): the
+## local log read back, newest first, at most eight -
+## date, challenge, his recorded score when he typed one
+## (grouped the pinball way), the outcome. Built here,
+## like every string the desk renders: the desk shows,
+## Main composes.
+func _push_submission_history() -> void:
+	if _desk == null:
+		return
+	var entries: Array = WovpClient.load_submission_log()
+	var lines: Array[String] = []
+	var i: int = entries.size() - 1
+	while i >= 0 and lines.size() < 8:
+		var e: Dictionary = entries[i] as Dictionary
+		var parts: Array[String] = [_history_date(int(e.get("time", 0))), str(e.get("challenge", ""))]
+		var rec: int = int(e.get("recorded_score", 0))
+		if rec > 0:
+			parts.append(WovpChallenge.format_score(float(rec)))
+		parts.append(str(e.get("result", "")))
+		lines.append(" - ".join(parts))
+		i -= 1
+	_desk.set_wovp_submission_history(lines)
+
+
+## A log entry's date, in the player's own timezone
+## (the stored time is a unix stamp, which reads as UTC
+## until the system bias is laid on it).
+static func _history_date(unix: int) -> String:
+	var bias: int = int(Time.get_time_zone_from_system().get("bias", 0))
+	var dt: Dictionary = Time.get_datetime_dict_from_unix_time(unix + bias * 60)
+	return "%04d-%02d-%02d" % [int(dt.get("year", 0)), int(dt.get("month", 0)), int(dt.get("day", 0))]
 
 
 ## The desk's Submit: the local refusals speak first (no
@@ -1793,7 +1832,16 @@ func _push_submit_data() -> void:
 ## ships "" - no ROM name is known anywhere in PVLDS (the
 ## scanner and the db carry none), and the contract takes
 ## the file name as the identity that matters.
-func _on_desk_wovp_submit_requested(challenge_id: String, photo_path: String) -> void:
+func _on_desk_wovp_submit_requested(challenge_id: String, photo_path: String, score_text: String = "") -> void:
+	# SUBMIT2: the record field is parsed ONCE, here - its
+	# value is parked for the log entry whichever way the
+	# attempt lands, and junk is remembered for one plain
+	# line in the outcome words. Neither ever rides the
+	# wire: the client gets the parsed value only so the
+	# wireleak NC has a seam (see WovpClient.submit_score).
+	var parsed_rec: Dictionary = WovpClient.parse_recorded_score(score_text)
+	_pending_recorded_score = int(parsed_rec.get("value", 0))
+	_pending_recorded_junk = bool(parsed_rec.get("junk", false))
 	if _config == null or _config.wovp_api_key == "":
 		_record_submit_outcome(challenge_id, photo_path, "No WoVP key saved - save your key above first; submissions use the same key.")
 		return
@@ -1810,7 +1858,7 @@ func _on_desk_wovp_submit_requested(challenge_id: String, photo_path: String) ->
 		if str(row.get("challenge_id", "")) == challenge_id:
 			vpx_file = str(row.get("vpx_file", ""))
 			break
-	_wovp_client.submit_score(_config.wovp_api_key, challenge_id, photo_path, vpx_file, "")
+	_wovp_client.submit_score(_config.wovp_api_key, challenge_id, photo_path, vpx_file, "", _pending_recorded_score)
 
 
 ## The client's verdict: the words land on the desk's
@@ -1827,21 +1875,37 @@ func _on_wovp_submit_finished(ok: bool, message: String, challenge_id: String, p
 ## the local refusals alike: the desk's status line and
 ## the local submission log both take the same words.
 func _record_submit_outcome(challenge_id: String, photo_path: String, result: String, photo_name: String = "") -> void:
+	# SUBMIT2: the parked record is consumed exactly once,
+	# here - the value joins the log entry (never the
+	# wire), and junk earns one plain line on the desk's
+	# status (the logged result keeps the verdict's own
+	# words, unadorned).
+	var recorded: int = _pending_recorded_score
+	var junk: bool = _pending_recorded_junk
+	_pending_recorded_score = 0
+	_pending_recorded_junk = false
+	var status: String = result
+	if junk:
+		status += " The score you typed could not be read as a number, so it was not recorded."
 	if _desk != null:
-		_desk.set_wovp_submit_status(result)
+		_desk.set_wovp_submit_status(status)
 	var challenge_name: String = challenge_id
 	for cv: Variant in _wovp_challenges:
 		var ch: WovpChallenge = cv as WovpChallenge
 		if ch != null and ch.challenge_id == challenge_id:
 			challenge_name = ch.name
 			break
-	WovpClient.append_submission_log({
+	var entry: Dictionary = {
 		"time": int(Time.get_unix_time_from_system()),
 		"challenge_id": challenge_id,
 		"challenge": challenge_name,
 		"photo": photo_name if photo_name != "" else photo_path.get_file(),
 		"result": result,
-	})
+	}
+	if recorded > 0:
+		entry["recorded_score"] = recorded
+	WovpClient.append_submission_log(entry)
+	_push_submission_history()
 
 
 ## Human-readable summary of the last completed scan, for the desk pass.

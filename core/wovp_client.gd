@@ -93,6 +93,15 @@ static var debug_client_id_override: String = ""
 ## name. Production never sets this.
 static var debug_submit_nc: String = ""
 
+## Negative-control seam for the SUBMIT2 round (harness env
+## PVLDS_SUBMIT2_NC, set by Main before any request):
+## "wireleak" - _start_submit puts the player's typed score
+## record into the body's score field, the one thing the
+## SUBMIT2 law forbids (the record is the player's notebook;
+## the wire carries the 0 stub), so the submit smoke's
+## wire-law leg fails by name. Production never sets this.
+static var debug_submit2_nc: String = ""
+
 var _http: HTTPRequest
 var _busy: bool = false
 var _pending_kind: String = "" ## "validate" | "search" | "submit_photo" | "submit"
@@ -253,7 +262,13 @@ static func search_body() -> String:
 ## key rides in _pending_submit only between the two steps
 ## and is dropped when the flow finishes; it is never
 ## printed and never logged.
-func submit_score(api_key: String, challenge_id: String, photo_path: String, vpx_file: String, rom_name: String) -> void:
+## recorded_score (SUBMIT2) is the player's own typed
+## record of the score in the photo. IT IS NEVER SENT:
+## the submit body's score stays the literal 0 stub and
+## no metadata field carries it. Main keeps its own copy
+## for the local log; the value rides here only so the
+## wireleak negative control has a seam to leak it from.
+func submit_score(api_key: String, challenge_id: String, photo_path: String, vpx_file: String, rom_name: String, recorded_score: int = 0) -> void:
 	if _busy:
 		# Refused without touching the in-flight flow's
 		# trail (the read side's busy shape): the answer
@@ -265,6 +280,7 @@ func submit_score(api_key: String, challenge_id: String, photo_path: String, vpx
 		"photo_name": photo_path.get_file(),
 		"vpx_file": vpx_file,
 		"rom": rom_name,
+		"recorded_score": recorded_score,
 	}
 	if api_key.strip_edges() == "":
 		_finish_submit(false, "No WoVP key saved - add it in SETUP first.")
@@ -309,9 +325,15 @@ func submit_score(api_key: String, challenge_id: String, photo_path: String, vpx
 func _start_submit(photo_temp_id: String) -> void:
 	_busy = true ## the completion handler cleared it between the two steps; the transaction is still in flight
 	_pending_kind = "submit"
+	# The wire score is the 0 stub, always - except under
+	# the wireleak negative control, the seam that exists
+	# to break the SUBMIT2 law by name.
+	var wire_score: int = 0
+	if debug_submit2_nc == "wireleak":
+		wire_score = int(_pending_submit.get("recorded_score", 0))
 	var body: String = submit_body(
 		str(_pending_submit.get("challenge_id", "")), photo_temp_id,
-		str(_pending_submit.get("vpx_file", "")), str(_pending_submit.get("rom", "")))
+		str(_pending_submit.get("vpx_file", "")), str(_pending_submit.get("rom", "")), wire_score)
 	var headers: PackedStringArray = PackedStringArray([
 		"Content-Type: application/json",
 		"X-Client-ID: " + client_id(),
@@ -358,12 +380,14 @@ static func multipart_body(file_name: String, data: PackedByteArray, boundary: S
 ## would be impersonation, the same line the client-id
 ## draws), and the score is the literal 0 stub (the server
 ## reads the photo). playingPlatform and metadata.platform
-## are the ONE platform slot (SUBMIT_PLATFORM).
-static func submit_body(challenge_id: String, photo_temp_id: String, vpx_file: String, rom_name: String) -> String:
+## are the ONE platform slot (SUBMIT_PLATFORM). The
+## score_value parameter exists for ONE caller: the
+## wireleak negative control; production never passes it.
+static func submit_body(challenge_id: String, photo_temp_id: String, vpx_file: String, rom_name: String, score_value: int = 0) -> String:
 	return JSON.stringify({
 		"challengeId": challenge_id,
 		"photoTempId": photo_temp_id,
-		"score": 0,
+		"score": score_value,
 		"metadata": {
 			"pvlds-version": PVLDS_VERSION,
 			"vpx-file": vpx_file,
@@ -806,6 +830,33 @@ static func load_cache() -> Dictionary:
 	}
 
 
+## The player's typed score record (SUBMIT2): the desk's
+## optional "score in this photo" field, parsed leniently
+## - digits with commas or spaces as grouping separators.
+## Returns {"value": int, "junk": bool}: an empty field
+## (or separators alone) is value 0 with junk false (no
+## record, no complaint - last round's behaviour); a
+## value of 0 records nothing either. Anything else that
+## is not plain digits is junk: the submission still goes
+## out, the value is simply never recorded. The result
+## feeds the local log ONLY - the wire never sees it
+## (see submit_score).
+static func parse_recorded_score(text: String) -> Dictionary:
+	var t: String = text.strip_edges()
+	if t == "":
+		return {"value": 0, "junk": false}
+	var digits: String = t.replace(",", "").replace(" ", "")
+	if digits == "":
+		return {"value": 0, "junk": false}
+	if digits.length() > 15:
+		return {"value": 0, "junk": true}
+	for i: int in range(digits.length()):
+		var c: String = digits[i]
+		if c < "0" or c > "9":
+			return {"value": 0, "junk": true}
+	return {"value": digits.to_int(), "junk": false}
+
+
 # ------------------------------------------------------------ the submission log
 
 static func submission_log_path() -> String:
@@ -816,7 +867,11 @@ static func submission_log_path() -> String:
 ## round): every attempt's outcome, appended as
 ## {time, challenge_id, challenge, photo, result} - the
 ## photo's NAME only, never its path or bytes, and never
-## any key material. The league keeps the authoritative
+## any key material. An entry may also carry
+## recorded_score (SUBMIT2): the player's own typed
+## record of the score in the photo, kept so he can see
+## what he posted without the league's website - it is
+## never sent anywhere. The league keeps the authoritative
 ## record; this is the player's own receipt book, so a
 ## submission made weeks ago can still be answered for.
 static func load_submission_log() -> Array:
