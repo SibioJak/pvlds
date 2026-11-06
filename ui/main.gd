@@ -942,10 +942,18 @@ func _ready() -> void:
 	# only when the cache's key hash matches the key now
 	# saved - a swapped key never inherits another player's
 	# highlighted rows.
+	# The submit negative controls (harness env
+	# PVLDS_SUBMIT_NC): set before the client exists, so no
+	# request can precede them.
+	var submit_nc: String = OS.get_environment("PVLDS_SUBMIT_NC")
+	if submit_nc != "":
+		WovpClient.debug_submit_nc = submit_nc
+		WovpChallenge.debug_submit_no_warn = submit_nc == "nowarn"
 	_wovp_client = WovpClient.new()
 	add_child(_wovp_client)
 	_wovp_client.validation_finished.connect(_on_wovp_validation_finished)
 	_wovp_client.challenges_finished.connect(_on_wovp_challenges_finished)
+	_wovp_client.submit_finished.connect(_on_wovp_submit_finished)
 	var wovp_cache: Dictionary = WovpClient.load_cache()
 	if bool(wovp_cache.get("ok", false)):
 		_wovp_challenges = wovp_cache.get("challenges", [])
@@ -1220,6 +1228,9 @@ func _finish_scan() -> void:
 	var summary: String = build_scan_summary()
 	if _desk != null:
 		_desk.apply_scan_summary(summary)
+	# The scan changed the library the submit rows join
+	# against (the SUBMIT round).
+	_push_submit_data()
 	# The missing-backglass list (Chris's ask, 2026-10-23): every
 	# completed scan regenerates missing_b2s.txt from the scanner's
 	# own pairing record, so the file on disk is always the current
@@ -1449,6 +1460,10 @@ func _refresh_setup_panel_health() -> void:
 ## Push the standing WoVP truth to the room (its banner,
 ## boards, and state panels render exactly this).
 func _push_wovp_data() -> void:
+	# The desk's submit rows ride every boards change too
+	# (the SUBMIT round) - they are not the room's data, so
+	# they push before the room's early return.
+	_push_submit_data()
 	if _room == null:
 		return
 	_room.set_wovp_data({
@@ -1678,6 +1693,141 @@ func _on_desk_wovp_test_requested(api_key: String) -> void:
 		_wovp_client.validate_key(api_key)
 	elif _desk != null:
 		_desk.set_wovp_status("Another WoVP request is already running - one moment.")
+
+
+# ------------------------------------------------------------
+# Score submission (the SUBMIT round): Main's half of the
+# desk's submit section - the picker rows, the two-step
+# call, the local log, and the boards refresh a success
+# triggers.
+
+## The desk's picker rows: one per live challenge, carrying
+## everything the section shows before a submission is
+## spent - the library's standing (the room's own join,
+## mirrored below) and the posted-score warning. Rebuilt
+## via _push_submit_data on every boards / identity / scan
+## change, so the picker never offers a dead challenge or
+## a stale warning.
+func _build_submit_rows() -> Array:
+	var rows: Array = []
+	var now_unix: int = int(Time.get_unix_time_from_system())
+	for cv: Variant in _wovp_challenges:
+		var ch: WovpChallenge = cv as WovpChallenge
+		if ch == null:
+			continue
+		var game: GameEntry = null
+		if _scanner != null and ch.table_external_id != "":
+			game = _scanner.game_by_id(ch.table_external_id)
+		var library_note: String = "Not in your library."
+		var vpx_file: String = ""
+		if game != null:
+			if _submit_build_owned(game, ch):
+				library_note = "In your library - the challenge's build."
+				if ch.version_external_id != "":
+					for b: TableBuild in game.builds:
+						if b.table_file_id == ch.version_external_id:
+							vpx_file = b.file_name
+							break
+				elif game.current_build() != null:
+					vpx_file = game.current_build().file_name
+			else:
+				library_note = "Different build in your library."
+		var posted: String = ""
+		if _wovp_user_id != "":
+			posted = ch.posted_note(_wovp_user_id)
+		else:
+			posted = "Whose key this is isn't resolved yet - Test key names it, and the posted-score warning needs it."
+		rows.append({
+			"challenge_id": ch.challenge_id,
+			"challenge_name": ch.name,
+			"picker_text": "%s - %s" % [ch.name, ch.table_name if ch.table_name != "" else ch.name],
+			"type_label": ch.type_label(),
+			"table_name": ch.table_name if ch.table_name != "" else ch.name,
+			"deadline_text": "%s - %s" % [WovpTime.format_deadline(ch.end_unix), WovpTime.format_remaining(ch.end_unix, now_unix)],
+			"library_note": library_note,
+			"posted_note": posted,
+			"vpx_file": vpx_file,
+		})
+	return rows
+
+
+## The room's build test, mirrored (room.gd's
+## _challenge_build_owned): one of his builds IS the
+## challenge's build when its VPS table-file id matches
+## the challenge's; a challenge naming no version is
+## served by any build of the game.
+func _submit_build_owned(game: GameEntry, ch: WovpChallenge) -> bool:
+	if game == null or ch == null:
+		return false
+	if ch.version_external_id == "":
+		return true
+	for b: TableBuild in game.builds:
+		if b.table_file_id == ch.version_external_id:
+			return true
+	return false
+
+
+func _push_submit_data() -> void:
+	if _desk != null:
+		_desk.set_wovp_submit_data(_build_submit_rows(), _config != null and _config.wovp_api_key != "")
+
+
+## The desk's Submit: the local refusals speak first (no
+## key; a key WoVP would refuse on shape - nothing is sent
+## for either), then the client's two-step transaction runs
+## and its signal carries the verdict. The metadata's rom
+## ships "" - no ROM name is known anywhere in PVLDS (the
+## scanner and the db carry none), and the contract takes
+## the file name as the identity that matters.
+func _on_desk_wovp_submit_requested(challenge_id: String, photo_path: String) -> void:
+	if _config == null or _config.wovp_api_key == "":
+		_record_submit_outcome(challenge_id, photo_path, "No WoVP key saved - save your key above first; submissions use the same key.")
+		return
+	var length_note: String = WovpClient.key_length_note(_config.wovp_api_key)
+	if length_note != "":
+		_record_submit_outcome(challenge_id, photo_path, length_note)
+		return
+	if _wovp_client == null:
+		_record_submit_outcome(challenge_id, photo_path, "The WoVP client is not running - restart PVLDS.")
+		return
+	var vpx_file: String = ""
+	for rv: Variant in _build_submit_rows():
+		var row: Dictionary = rv as Dictionary
+		if str(row.get("challenge_id", "")) == challenge_id:
+			vpx_file = str(row.get("vpx_file", ""))
+			break
+	_wovp_client.submit_score(_config.wovp_api_key, challenge_id, photo_path, vpx_file, "")
+
+
+## The client's verdict: the words land on the desk's
+## status line AND in the local log (see
+## _record_submit_outcome), and a success refreshes the
+## boards so his row can come back pending.
+func _on_wovp_submit_finished(ok: bool, message: String, challenge_id: String, photo_name: String) -> void:
+	_record_submit_outcome(challenge_id, "", message, photo_name)
+	if ok:
+		_wovp_fetch_boards()
+
+
+## Every attempt's landing, from the client's signal and
+## the local refusals alike: the desk's status line and
+## the local submission log both take the same words.
+func _record_submit_outcome(challenge_id: String, photo_path: String, result: String, photo_name: String = "") -> void:
+	if _desk != null:
+		_desk.set_wovp_submit_status(result)
+	var challenge_name: String = challenge_id
+	for cv: Variant in _wovp_challenges:
+		var ch: WovpChallenge = cv as WovpChallenge
+		if ch != null and ch.challenge_id == challenge_id:
+			challenge_name = ch.name
+			break
+	WovpClient.append_submission_log({
+		"time": int(Time.get_unix_time_from_system()),
+		"challenge_id": challenge_id,
+		"challenge": challenge_name,
+		"photo": photo_name if photo_name != "" else photo_path.get_file(),
+		"result": result,
+	})
 
 
 ## Human-readable summary of the last completed scan, for the desk pass.
@@ -3115,9 +3265,11 @@ func _show_desk(message: String = "") -> void:
 		_desk.enter_room_requested.connect(_enter_room)
 		_desk.wovp_key_saved.connect(_on_desk_wovp_key_saved)
 		_desk.wovp_test_requested.connect(_on_desk_wovp_test_requested)
+		_desk.wovp_submit_requested.connect(_on_desk_wovp_submit_requested)
 		_desk.pinemhi_settings_saved.connect(_push_wovp_data)
 		_desk.ipdb_snapshot_requested.connect(_apply_ipdb_snapshot)
 		_desk.set_ipdb_status(_ipdb_health_line())
+		_push_submit_data()
 	_desk.visible = true
 
 

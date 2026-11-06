@@ -12,6 +12,7 @@ signal wovp_key_saved ## the WoVP key was saved from this desk: Main refreshes t
 signal pinemhi_settings_saved ## NEXTROUND (item 4): the PINemHi folder/toggle was saved from this desk: Main re-reads the bests and re-pushes them to the room
 signal ipdb_snapshot_requested ## IPDBFIX: re-apply the bundled IPDB snapshot to the cache (the CARDBACK live fetch is retired - IPDB's site refuses app requests): Main owns the cache and answers on the IPDB status line
 signal wovp_test_requested(api_key: String) ## Test key: Main validates this text against WoVP and answers on the status line
+signal wovp_submit_requested(challenge_id: String, photo_path: String) ## Submit a score (the SUBMIT round): Main runs the two-step WoVP submission and answers on the submit status line
 
 var _config: PvldsConfig
 var _filling_from_config: bool = false ## true while _fill_from_config sets widget state (its signal emissions are not user flips)
@@ -29,7 +30,7 @@ var _unplaced_label: Label
 var _unplaced_button: Button
 var _enter_button: Button
 var _dialog: FileDialog
-var _dialog_target: String = "" ## "exe" | "db" | "folder:<index>"
+var _dialog_target: String = "" ## "exe" | "db" | "photo" | "folder:<index>"
 var _scanned: bool = false
 var _dl_button: Button
 var _dl_label: Label
@@ -38,6 +39,15 @@ var _wovp_edit: LineEdit
 var _wovp_save_button: Button
 var _wovp_test_button: Button
 var _wovp_label: Label
+var _submit_picker: OptionButton
+var _submit_info: Label
+var _submit_photo_button: Button
+var _submit_photo_label: Label
+var _submit_button: Button
+var _submit_label: Label
+var _submit_rows: Array = [] ## Main's submit rows (set_wovp_submit_data): one Dictionary per live challenge
+var _submit_photo_path: String = "" ## the chosen score photo (filesystem path); only its name is ever shown or logged
+var _submit_has_key: bool = false
 var _pinemhi_edit: LineEdit
 var _pinemhi_check: CheckBox
 var _pinemhi_label: Label
@@ -142,6 +152,56 @@ func _build_ui() -> void:
 	_wovp_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_wovp_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	wovp_row.add_child(_wovp_label)
+
+	# The score submission section (the SUBMIT round): the
+	# desk half of the WoVP write side. Pick a live
+	# challenge, attach the score photo (taken the league's
+	# own way - the Quest camera method - and moved to this
+	# PC), and submit: Main runs the two-step call and the
+	# verdict lands on the status line. The rows Main pushes
+	# (set_wovp_submit_data) carry the challenge's library
+	# state and the standing warning - the league accepts
+	# only a HIGHER score than the one already posted - so
+	# both are read BEFORE anything is sent. Nothing here
+	# gates on the library state: it is shown, never a lock.
+	var submit_title: Label = Label.new()
+	submit_title.text = "Submit a score to WoVP"
+	submit_title.add_theme_font_size_override("font_size", 20)
+	vbox.add_child(submit_title)
+	var submit_intro: Label = Label.new()
+	submit_intro.text = "Finished a game on a live challenge? Take the photo the league's way (last score, DMD and full playfield in frame), move it to this PC, then pick the challenge and the photo here. The photo carries the score - PVLDS sends it with your key, and the league validates it."
+	submit_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(submit_intro)
+	_submit_picker = OptionButton.new()
+	_submit_picker.item_selected.connect(_on_submit_challenge_selected)
+	vbox.add_child(_submit_picker)
+	_submit_info = Label.new()
+	_submit_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_submit_info.text = "No WoVP key saved - save your key above first; submissions use the same key."
+	vbox.add_child(_submit_info)
+	var submit_photo_row: HBoxContainer = HBoxContainer.new()
+	submit_photo_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(submit_photo_row)
+	_submit_photo_button = Button.new()
+	_submit_photo_button.text = "Choose photo..."
+	_submit_photo_button.pressed.connect(func() -> void: _open_dialog_for("photo"))
+	submit_photo_row.add_child(_submit_photo_button)
+	_submit_photo_label = Label.new()
+	_submit_photo_label.text = "No photo chosen yet."
+	_submit_photo_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_submit_photo_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	submit_photo_row.add_child(_submit_photo_label)
+	var submit_row: HBoxContainer = HBoxContainer.new()
+	submit_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(submit_row)
+	_submit_button = Button.new()
+	_submit_button.text = "Submit score"
+	_submit_button.pressed.connect(_on_submit_pressed)
+	submit_row.add_child(_submit_button)
+	_submit_label = Label.new()
+	_submit_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_submit_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	submit_row.add_child(_submit_label)
 
 	# The PINemHi section (NEXTROUND item 4): the folder
 	# PVLDS READS TOP10_Personal files from, plus the
@@ -339,6 +399,10 @@ func _open_dialog_for(target: String) -> void:
 		_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 		_dialog.filters = PackedStringArray(["*.json ; vpsdb.json"])
 		_dialog.title = "Find a cached vpsdb.json (optional)"
+	elif target == "photo":
+		_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+		_dialog.filters = PackedStringArray(["*.jpg, *.jpeg, *.png ; Score photos"])
+		_dialog.title = "Choose the score photo (last score - DMD and full playfield in frame)"
 	else:
 		_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 		_dialog.title = "Pick a folder full of .vpx tables"
@@ -350,6 +414,9 @@ func _on_dialog_file(path: String) -> void:
 		_exe_edit.text = path
 	elif _dialog_target == "db":
 		_db_edit.text = path
+	elif _dialog_target == "photo":
+		_submit_photo_path = path
+		_submit_photo_label.text = path.get_file()
 
 
 func _on_dialog_dir(path: String) -> void:
@@ -497,6 +564,107 @@ func _on_wovp_test_pressed() -> void:
 ## the section's own status line.
 func set_wovp_status(text: String) -> void:
 	_wovp_label.text = text
+
+
+## Main's standing challenge data for the submit section
+## (the SUBMIT round): one row per live challenge, rebuilt
+## on every boards/identity/scan change so the picker never
+## offers a dead challenge or a stale warning. The selected
+## challenge survives a rebuild when it is still live. The
+## library state in a row is information, never a gate -
+## the picker offers every live challenge, owned or not.
+func set_wovp_submit_data(rows: Array, has_key: bool) -> void:
+	var keep_id: String = ""
+	var current: Dictionary = _selected_submit_row()
+	if not current.is_empty():
+		keep_id = str(current.get("challenge_id", ""))
+	_submit_rows = rows
+	_submit_has_key = has_key
+	if _submit_picker == null:
+		return
+	_submit_picker.clear()
+	for rv: Variant in rows:
+		var row: Dictionary = rv as Dictionary
+		_submit_picker.add_item(str(row.get("picker_text", "")))
+	if not rows.is_empty():
+		var sel: int = 0
+		for i: int in range(rows.size()):
+			if str((rows[i] as Dictionary).get("challenge_id", "")) == keep_id:
+				sel = i
+				break
+		_submit_picker.selected = sel
+	_submit_picker.disabled = not has_key
+	_submit_button.disabled = not has_key
+	_submit_photo_button.disabled = not has_key
+	_refresh_submit_info()
+
+
+func _selected_submit_row() -> Dictionary:
+	if _submit_picker == null or _submit_rows.is_empty():
+		return {}
+	var idx: int = _submit_picker.selected
+	if idx < 0 or idx >= _submit_rows.size():
+		return {}
+	return _submit_rows[idx] as Dictionary
+
+
+func _on_submit_challenge_selected(_idx: int) -> void:
+	_refresh_submit_info()
+
+
+## The chosen challenge's whole case, in plain lines: what
+## it is, when it ends, where the library stands on it, and
+## the standing warning - his posted score named, or the
+## open door when he has none. Read BEFORE the submit, by
+## design: the league accepts only a higher score, and a
+## submission spent under a score it cannot beat is spent
+## for nothing.
+func _refresh_submit_info() -> void:
+	if _submit_info == null:
+		return
+	if not _submit_has_key:
+		_submit_info.text = "No WoVP key saved - save your key above first; submissions use the same key."
+		return
+	var row: Dictionary = _selected_submit_row()
+	if row.is_empty():
+		_submit_info.text = "No live challenges right now - once the boards fetch lands, the challenges to submit to stand here."
+		return
+	var lines: Array[String] = []
+	lines.append("%s - %s" % [str(row.get("type_label", "")), str(row.get("table_name", ""))])
+	lines.append("Ends " + str(row.get("deadline_text", "")))
+	lines.append(str(row.get("library_note", "")))
+	var posted: String = str(row.get("posted_note", ""))
+	if posted != "":
+		lines.append(posted)
+	var vpx: String = str(row.get("vpx_file", ""))
+	lines.append("Sent with the photo: your file name for the challenge's build (%s)." % (vpx if vpx != "" else "none - no matched build"))
+	_submit_info.text = "\n".join(lines)
+
+
+## Submit: the guards speak in words on the status line
+## (no key, no challenge, no photo), then the request rides
+## to Main - the client, the metadata, and the log are all
+## Main's side of the desk's signal discipline.
+func _on_submit_pressed() -> void:
+	if not _submit_has_key:
+		_submit_label.text = "No WoVP key saved - save your key above first; submissions use the same key."
+		return
+	var row: Dictionary = _selected_submit_row()
+	if row.is_empty():
+		_submit_label.text = "No live challenge to submit to right now."
+		return
+	if _submit_photo_path == "":
+		_submit_label.text = "Choose the score photo first."
+		return
+	_submit_label.text = "Submitting..."
+	wovp_submit_requested.emit(str(row.get("challenge_id", "")), _submit_photo_path)
+
+
+## Main's submission verdict (success or the server's own
+## refusal words) in the section's status line.
+func set_wovp_submit_status(text: String) -> void:
+	if _submit_label != null:
+		_submit_label.text = text
 
 
 ## Save PINemHi settings: the live apply, on the WoVP key
