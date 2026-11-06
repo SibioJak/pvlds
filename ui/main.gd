@@ -15726,6 +15726,9 @@ func _drive_return_smoke() -> void:
 					_ret_expect(_room.tournament_active(), "launch: the TOURNAMENT stop raises the Tournament Room")
 					_ret_phase = 1
 				elif _ret_mode == "launch_lib":
+					# A fresh room stands on the VR filter;
+					# the library leg plays from the full shelf.
+					_room._handle_rail("filter:all")
 					_ret_phase = 5
 				else:
 					_ret_phase = 7 ## verify modes judge the landing as it stands
@@ -15819,6 +15822,13 @@ func _drive_return_smoke() -> void:
 				if _ret_wait >= 15:
 					_ret_verify_legs()
 					_ret_finish_smoke()
+			elif _ret_wait > 300:
+				# No fetch ever landed (the NC's old world:
+				# no tournament entry, no fetch, the library
+				# stands). Judge the landing as it stands -
+				# the legs convict by name.
+				_ret_verify_legs()
+				_ret_finish_smoke()
 			elif Time.get_ticks_msec() > _ret_deadline:
 				_ret_expect(false, "verify: the boards never went live against the stub")
 				_ret_finish_smoke()

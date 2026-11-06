@@ -2140,8 +2140,18 @@ func set_wovp_data(d: Dictionary) -> void:
 		# a modal panel's quads) reads no place and keeps
 		# today's landing exactly.
 		var place_id: String = ""
+		var place_stop: String = ""
 		if _focused != null and _panels.has(_focused):
 			place_id = _focused.payload
+		elif _focused != null:
+			# A rail stop's focus is a place too: a return
+			# that lands at the room's default (the TOURNAMENT
+			# stop) must still be standing on it after the
+			# entry fetch's rebuild, not nowhere.
+			for k: Variant in _rail_quads.keys():
+				if _rail_quads[k] == _focused:
+					place_stop = str(k)
+					break
 		_recompute_visible()
 		_rebuild_wall()
 		if place_id != "":
@@ -2151,6 +2161,8 @@ func set_wovp_data(d: Dictionary) -> void:
 					if i < _panels.size():
 						_set_focused(_panels[i])
 					break
+		elif place_stop != "":
+			_land_on_rail_stop(place_stop)
 	else:
 		# Fresh boards can give the flipped card a back it
 		# did not have (or change the one it has): the back's
