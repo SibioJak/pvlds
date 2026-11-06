@@ -319,7 +319,7 @@ var _cb_target: int = 0 ## index into the driver's target game list
 var _cb_judged: bool = false
 var _cb_seat_tries: int = 0 ## focus seats attempted for the standing target (a target that never centres fails instead of looping)
 var _smoke_backtrim: bool = false ## --pvlds-smoke-backtrim: BACKTRIM round - stages the IPDBFIX field bug end to end: the room is reset to its virgin pre-push state (no facts, stamp 0), Indy is flipped (an empty-facts back renders under the ipdb0 key), then the NORMAL push sequence runs and Indy is flipped again - the healed back must stand with its IPDB rows because the stamp bumped on the changed facts, and repeat pushes must not churn it
-var _smoke_submit: bool = false ## --pvlds-smoke-submit (SUBMIT round): the desk-stay submission smoke - scans the letter library, fetches the stub's boards, drives the desk's REAL submit section (picker, warning, photo attach, submit press) and reads the stub's request log as the wire's witness. Modes in PVLDS_SUBMIT_SMOKE_MODE: happy | noscore | badphoto | nothigher | shortkey
+var _smoke_submit: bool = false ## --pvlds-smoke-submit (SUBMIT round): the desk-stay submission smoke - scans the letter library, fetches the stub's boards, drives the desk's REAL submit section (picker, warning, photo attach, submit press) and reads the stub's request log as the wire's witness. Modes in PVLDS_SUBMIT_SMOKE_MODE: happy | noscore | badphoto | nothigher | shortkey | recorded | junk (SUBMIT2: the record field filled / filled with junk; PVLDS_SUBMIT_SCORE_TEXT carries the text, PVLDS_SUBMIT2_NC=wireleak must fail the wire-law leg by name)
 var _submit_mode: String = ""
 var _submit_phase: int = 0
 var _submit_wait: int = 0
@@ -14974,6 +14974,16 @@ func _submit_run_form_legs() -> void:
 	_desk._on_dialog_file(photo)
 	_submit_expect(_desk._submit_photo_label.text == photo.get_file() and _desk._submit_photo_path == photo, "photo name: the chosen file's name shows")
 	_submit_expect(_desk._submit_preview.texture != null and _desk._submit_preview.visible and _desk._submit_verify_label.visible, "photo preview: the chosen photo stands on the desk to be read")
+	# SUBMIT2 modes: the record field is filled through
+	# the real LineEdit before the press, and in recorded
+	# mode the receipt book is seeded with two older
+	# attempts so the history legs can read them back
+	# standing beside the fresh one.
+	if _submit_mode == "recorded" or _submit_mode == "junk":
+		_desk._submit_score_edit.text = OS.get_environment("PVLDS_SUBMIT_SCORE_TEXT")
+	if _submit_mode == "recorded":
+		WovpClient.append_submission_log({"time": 1762300000, "challenge_id": "seed-earlier", "challenge": "Seeded Earlier Challenge", "photo": "old-shot.jpg", "result": "Submitted - awaiting validation.", "recorded_score": 7654321})
+		WovpClient.append_submission_log({"time": 1762400000, "challenge_id": "seed-plain", "challenge": "Seeded Plain Challenge", "photo": "old-shot2.jpg", "result": "WoVP refused the photo: too dark"})
 	_desk._on_submit_pressed()
 
 
@@ -15012,6 +15022,39 @@ func _submit_run_verdict_legs(verdict: String) -> void:
 					if str(e.get("challenge_id", "")) == "fixture-ch-season-main-w3" and str(e.get("result", "")).contains("awaiting validation"):
 						logged = true
 				_submit_expect(logged, "submission log: the attempt stands in the local log")
+		"recorded":
+			_submit_expect(verdict.contains("Submitted - awaiting validation."), "success words: Submitted - awaiting validation")
+			_submit_expect(not verdict.contains("could not be read as a number"), "record field: a clean number earns no complaint")
+			var rec_body: Dictionary = {}
+			var rec_line: String = ""
+			for lv2: Variant in _submit_stub_lines():
+				var ld: Dictionary = lv2 as Dictionary
+				if str(ld.get("path", "")).ends_with("/scores/submit"):
+					rec_line = JSON.stringify(ld)
+					var sbv: Variant = ld.get("submit_body", {})
+					if sbv is Dictionary:
+						rec_body = sbv
+			_submit_expect(int(rec_body.get("score", -1)) == 0 and not rec_line.contains("16638090"),
+				"wire law: the typed score never reaches the payload - the body keeps its 0 stub and no field carries the number")
+			var rec_logged: int = -1
+			for ev2: Variant in WovpClient.load_submission_log():
+				var e2: Dictionary = ev2 as Dictionary
+				if str(e2.get("challenge_id", "")) == "fixture-ch-season-main-w3":
+					rec_logged = int(e2.get("recorded_score", -1))
+			_submit_expect(rec_logged == 16638090, "submission log: the typed score stands in the local log as recorded_score")
+			_submit_expect(_desk._submit_history_label.visible and _desk._submit_history_label.text.contains("Seeded Earlier Challenge") and _desk._submit_history_label.text.contains("7,654,321"),
+				"recent submissions: a seeded older attempt reads back with its recorded score, grouped")
+			_submit_expect(_desk._submit_history_label.text.split("\n")[0].contains("16,638,090"),
+				"recent submissions: the fresh attempt stands first, its recorded score beside it")
+		"junk":
+			_submit_expect(verdict.contains("Submitted - awaiting validation."), "success words: Submitted - awaiting validation")
+			_submit_expect(verdict.contains("could not be read as a number, so it was not recorded."),
+				"record field: junk is answered in plain words - ignored, never blocking")
+			var junk_clean: bool = true
+			for ev3: Variant in WovpClient.load_submission_log():
+				if (ev3 as Dictionary).has("recorded_score"):
+					junk_clean = false
+			_submit_expect(junk_clean, "submission log: junk leaves no recorded score behind")
 		"badphoto":
 			_submit_expect(verdict.contains("STUB-PHOTO-REFUSED"), "errors abort: the envelope's words reach the player")
 			var saw_submit: bool = false
@@ -20449,6 +20492,28 @@ func _run_core_test() -> void:
 	_expect(sub_log.size() == 2 and str((sub_log[0] as Dictionary).get("photo", "")) == "shot.jpg"
 		and str((sub_log[1] as Dictionary).get("result", "")).contains("refused"),
 		"wovp submit: the log loads back - challenge, photo name, outcome (never a key)", failures)
+	# SUBMIT2: the score-record parser - lenient digits,
+	# honest junk. The value is the player's notebook only;
+	# the body's 0 stub is already pinned above.
+	_expect(int(WovpClient.parse_recorded_score("").get("value", -1)) == 0 and not bool(WovpClient.parse_recorded_score("").get("junk", true)),
+		"wovp submit2: an empty record field reads as no record and no complaint", failures)
+	_expect(int(WovpClient.parse_recorded_score("16,638,090").get("value", -1)) == 16638090 and not bool(WovpClient.parse_recorded_score("16,638,090").get("junk", true)),
+		"wovp submit2: comma-grouped digits parse to the number", failures)
+	_expect(int(WovpClient.parse_recorded_score("16 638 090").get("value", -1)) == 16638090,
+		"wovp submit2: space-grouped digits parse too", failures)
+	_expect(int(WovpClient.parse_recorded_score("  935240 ").get("value", -1)) == 935240,
+		"wovp submit2: padding never counts against the number", failures)
+	_expect(bool(WovpClient.parse_recorded_score("about a million").get("junk", false)) and int(WovpClient.parse_recorded_score("about a million").get("value", -1)) == 0,
+		"wovp submit2: words are junk - ignored, never recorded, never blocking", failures)
+	_expect(bool(WovpClient.parse_recorded_score("12a3").get("junk", false)),
+		"wovp submit2: one stray letter makes the whole thing junk", failures)
+	_expect(int(WovpClient.parse_recorded_score(",,,").get("value", -1)) == 0 and not bool(WovpClient.parse_recorded_score(",,,").get("junk", true)),
+		"wovp submit2: separators alone are an empty field, not junk", failures)
+	_expect(WovpClient.append_submission_log({"time": 1761435800, "challenge_id": "ch-3", "challenge": "KO - Classification", "photo": "shot3.jpg", "result": "Submitted - awaiting validation.", "recorded_score": 16638090}),
+		"wovp submit2: an entry carrying a recorded score appends", failures)
+	var sub_log2: Array = WovpClient.load_submission_log()
+	_expect(sub_log2.size() == 3 and int((sub_log2[2] as Dictionary).get("recorded_score", 0)) == 16638090,
+		"wovp submit2: the recorded score loads back whole - the receipt book remembers what he posted", failures)
 	if sub_log_backup != "":
 		var slf: FileAccess = FileAccess.open(sub_log_file, FileAccess.WRITE)
 		if slf != null:
