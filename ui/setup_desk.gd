@@ -43,6 +43,8 @@ var _submit_picker: OptionButton
 var _submit_info: Label
 var _submit_photo_button: Button
 var _submit_photo_label: Label
+var _submit_preview: TextureRect
+var _submit_verify_label: Label
 var _submit_button: Button
 var _submit_label: Label
 var _submit_rows: Array = [] ## Main's submit rows (set_wovp_submit_data): one Dictionary per live challenge
@@ -191,6 +193,24 @@ func _build_ui() -> void:
 	_submit_photo_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_submit_photo_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	submit_photo_row.add_child(_submit_photo_label)
+	# The verify step (Chris's field note, 2026-11-06): the
+	# pick is not done when the file is named. Some tables
+	# blink their score displays by design - Bad Cats gave
+	# him 1 readable frame in 5 - so the chosen frame stands
+	# here, big enough to read the score in it, and a blank
+	# catch is rejected at the desk by his own eyes before
+	# the submit button is ever used.
+	_submit_preview = TextureRect.new()
+	_submit_preview.custom_minimum_size = Vector2(520, 390)
+	_submit_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_submit_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_submit_preview.visible = false
+	vbox.add_child(_submit_preview)
+	_submit_verify_label = Label.new()
+	_submit_verify_label.text = "Read the score in this frame before submitting - some tables blink their displays, and a photo caught mid-blink carries no score."
+	_submit_verify_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_submit_verify_label.visible = false
+	vbox.add_child(_submit_verify_label)
 	var submit_row: HBoxContainer = HBoxContainer.new()
 	submit_row.add_theme_constant_override("separation", 8)
 	vbox.add_child(submit_row)
@@ -417,6 +437,7 @@ func _on_dialog_file(path: String) -> void:
 	elif _dialog_target == "photo":
 		_submit_photo_path = path
 		_submit_photo_label.text = path.get_file()
+		_show_submit_preview(path)
 
 
 func _on_dialog_dir(path: String) -> void:
@@ -665,6 +686,27 @@ func _on_submit_pressed() -> void:
 func set_wovp_submit_status(text: String) -> void:
 	if _submit_label != null:
 		_submit_label.text = text
+
+
+## The chosen photo stands on the desk (the verify step -
+## see the preview's note in _ready): the frame itself,
+## fitted whole into a box big enough to read a score in.
+## A file that cannot be read as an image says so in
+## words and shows nothing - an unverifiable photo is
+## called out here, not discovered by an admin.
+func _show_submit_preview(path: String) -> void:
+	if _submit_preview == null:
+		return
+	var img: Image = Image.load_from_file(path)
+	if img == null or img.is_empty():
+		_submit_preview.texture = null
+		_submit_preview.visible = false
+		_submit_verify_label.visible = false
+		_submit_photo_label.text = path.get_file() + " - this file could not be read as an image."
+		return
+	_submit_preview.texture = ImageTexture.create_from_image(img)
+	_submit_preview.visible = true
+	_submit_verify_label.visible = true
 
 
 ## Save PINemHi settings: the live apply, on the WoVP key

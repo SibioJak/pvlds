@@ -14900,11 +14900,16 @@ func _submit_run_form_legs() -> void:
 	_submit_expect(_desk._submit_info.text.contains("Not in your library."), "library state: a table he does not own says so")
 	_submit_expect(_submit_select("fixture-ch-season-main-w3"), "picker: back to the Addams challenge")
 	# The photo attach, through the desk's real dialog
-	# handler: the name of the chosen file is what shows.
+	# handler: the name of the chosen file is what shows -
+	# and the frame itself stands on the desk (the verify
+	# step: a display caught mid-blink is rejected by his
+	# eyes here, not by an admin later).
+	_submit_expect(_desk._submit_preview.texture == null and not _desk._submit_preview.visible, "photo preview: nothing stands before a photo is chosen")
 	var photo: String = OS.get_environment("PVLDS_SUBMIT_PHOTO")
 	_desk._dialog_target = "photo"
 	_desk._on_dialog_file(photo)
 	_submit_expect(_desk._submit_photo_label.text == photo.get_file() and _desk._submit_photo_path == photo, "photo name: the chosen file's name shows")
+	_submit_expect(_desk._submit_preview.texture != null and _desk._submit_preview.visible and _desk._submit_verify_label.visible, "photo preview: the chosen photo stands on the desk to be read")
 	_desk._on_submit_pressed()
 
 
