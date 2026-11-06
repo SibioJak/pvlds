@@ -778,6 +778,10 @@ func _ready() -> void:
 	# the tournament smoke's PINemHi legs fail by name.
 	RoomSpecs.pinemhi_nc = OS.get_environment("PVLDS_PINEMHI_NC")
 	RoomSpecs.cardback_nc = OS.get_environment("PVLDS_CARDBACK_NC")
+	# BACKTRIM's negative-control seam (PVLDS_BACKTRIM_NC=
+	# notrim): the grid regains the rows the trim cut, and
+	# the trim legs fail by name. Same seam shape.
+	RoomSpecs.backtrim_nc = OS.get_environment("PVLDS_BACKTRIM_NC")
 	# GRADFIX8's tournie-border negative-control seam
 	# (PVLDS_GRADFIX8_NC=noborder): borders are never
 	# applied, so the census's tourney-border legs fail
@@ -14582,8 +14586,8 @@ func _cb_judge(idx: int) -> void:
 				"Indy: the db designer row stands with its db dot (got '%s' / '%s')" % [str((kv.get("Designer", {}) as Dictionary).get("v", "<none>")), str((kv.get("Designer", {}) as Dictionary).get("src", "<none>"))])
 			_cb_expect(str((kv.get("Design", {}) as Dictionary).get("v", "")) == "Mark Ritchie, Doug Watson" and str((kv.get("Design", {}) as Dictionary).get("src", "")) == "ipdb",
 				"Indy: the IPDB design row stands beside it with its ipdb dot - the disagreement shown, never merged (got '%s')" % str((kv.get("Design", {}) as Dictionary).get("v", "<none>")))
-			_cb_expect(str((kv.get("Units produced", {}) as Dictionary).get("v", "")) == "12,716" and str((kv.get("Fun rating", {}) as Dictionary).get("v", "")) == "8.3 / 10",
-				"Indy: the IPDB production and rating rows stand (units '%s', fun '%s')" % [str((kv.get("Units produced", {}) as Dictionary).get("v", "<none>")), str((kv.get("Fun rating", {}) as Dictionary).get("v", "<none>"))])
+			_cb_expect(str((kv.get("Units produced", {}) as Dictionary).get("v", "")) == "12,716" and not kv.has("Fun rating") and not kv.has("Features") and not kv.has("IPDB entry"),
+				"Indy: the IPDB production row stands (units '%s') and the BACKTRIM cut holds - no Fun rating, Features or IPDB entry rows past it" % str((kv.get("Units produced", {}) as Dictionary).get("v", "<none>")))
 			_cb_expect(undotted == 0, "Indy: every grid row carries its source dot (%d undotted)" % undotted)
 		"1vJ_ZQYe":
 			_cb_expect(kv.size() >= 3, "Beetlejuice: the db-only back still stands a grid (%d rows)" % kv.size())
@@ -14667,6 +14671,8 @@ func _drive_backtrim_smoke() -> void:
 				var kv5: Dictionary = _bt_spec_kv(idx5)
 				_bt_expect(str((kv5.get("Units produced", {}) as Dictionary).get("v", "")) == "12,716" and str((kv5.get("Units produced", {}) as Dictionary).get("src", "")) == "ipdb",
 					"post-push: Indy's healed back stands its IPDB production row (units '%s')" % str((kv5.get("Units produced", {}) as Dictionary).get("v", "<none>")))
+				_bt_expect(not kv5.has("Fun rating") and not kv5.has("Features") and not kv5.has("IPDB entry"),
+					"post-push: the trimmed rows stay cut (no Fun rating, Features or IPDB entry past Units produced)")
 				_bt_phase = 6
 				_bt_wait = 0
 			elif _bt_wait > 1800:
@@ -20054,6 +20060,7 @@ func _run_core_test() -> void:
 	# rows. Under PVLDS_CARDBACK_NC=nodots the spec drops
 	# every row's source, and the dots leg fails by name.
 	RoomSpecs.cardback_nc = OS.get_environment("PVLDS_CARDBACK_NC")
+	RoomSpecs.backtrim_nc = OS.get_environment("PVLDS_BACKTRIM_NC")
 	_expect(IpdbFacts.ipdb_id_from_url("https://www.ipdb.org/machine.cgi?id=1267") == 1267,
 		"cardback: the IPDB id parses out of the db's ipdbUrl", failures)
 	_expect(IpdbFacts.ipdb_id_from_url("") == 0 and IpdbFacts.ipdb_id_from_url("https://example.com/x") == 0,
@@ -20169,8 +20176,18 @@ func _run_core_test() -> void:
 		"cardback: the db well's designer row stands with its db dot (got '%s' / '%s')" % [str(cb_kv.get("Designer", "<none>")), str(cb_srcs.get("Designer", "<none>"))], failures)
 	_expect(str(cb_kv.get("Design", "")) == "Mark Ritchie, Doug Watson" and str(cb_srcs.get("Design", "")) == "ipdb",
 		"cardback: the IPDB design row stands BESIDE the db row - the disagreement is shown, never merged (got '%s')" % str(cb_kv.get("Design", "<none>")), failures)
-	_expect(str(cb_kv.get("Units produced", "")) == "12,716" and str(cb_kv.get("Fun rating", "")) == "8.3 / 10" and str(cb_kv.get("Body", "")) == "Widebody",
-		"cardback: the IPDB production / rating / body rows stand in the grid", failures)
+	_expect(str(cb_kv.get("Units produced", "")) == "12,716" and str(cb_kv.get("Body", "")) == "Widebody",
+		"cardback: the IPDB production / body rows stand in the grid", failures)
+	# BACKTRIM: the grid ends at Units produced - the
+	# three rows after it (Fun rating, Features, IPDB
+	# entry) are cut from the render; Indy's sheet is
+	# exactly 11 kv rows now (14 before the trim). The
+	# facts themselves stay cached (the ipdbfix legs
+	# above still read fun_rating off the snapshot).
+	_expect(not cb_kv.has("Fun rating") and not cb_kv.has("Features") and not cb_kv.has("IPDB entry"),
+		"backtrim: no Fun rating, Features or IPDB entry rows stand past Units produced", failures)
+	_expect(cb_kv.size() == 11,
+		"backtrim: Indy's grid is exactly the 11 rows through Units produced (got %d)" % cb_kv.size(), failures)
 	_expect(str(cb_kv.get("Type", "")) == "Solid State" and str(cb_srcs.get("Type", "")) == "db" and str(cb_kv.get("MPU", "")) == "Williams WPC (DCS)",
 		"cardback: the db machine rows stand in the grid with db dots", failures)
 	_expect(cb_empty_rows == 0, "cardback: the grid carries no empty rows", failures)

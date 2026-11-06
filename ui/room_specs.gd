@@ -478,6 +478,7 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 ## board_deadplank_nc above.
 static var pinemhi_nc: String = ""
 static var cardback_nc: String = "" ## Main sets this from PVLDS_CARDBACK_NC before any room exists (nodots: the Spec Sheet grid's rows lose their source dots - the wells stand unlabelled - so the cardback legs fail by name)
+static var backtrim_nc: String = "" ## Main sets this from PVLDS_BACKTRIM_NC before any room exists (notrim: the Spec Sheet grid regains the three rows BACKTRIM cut after Units produced - Fun rating, Features, IPDB entry - so the trim legs fail by name)
 
 static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}) -> Dictionary:
 	var rows: Array = []
@@ -652,14 +653,22 @@ static func spec_grid_rows(game: GameEntry, ipdb: Dictionary) -> Array:
 	_add_kv(rows, "Software", str(ipdb.get("software", "")), "ipdb")
 	# IPDB production facts.
 	_add_kv(rows, "Units produced", str(ipdb.get("units", "")), "ipdb")
-	var fun: String = str(ipdb.get("fun_rating", ""))
-	_add_kv(rows, "Fun rating", (fun + " / 10") if fun != "" else "", "ipdb")
-	var feats: String = str(ipdb.get("features", ""))
-	if feats.length() > 240:
-		feats = feats.substr(0, 240).strip_edges() + "…"
-	_add_kv(rows, "Features", feats, "ipdb")
-	if not ipdb.is_empty() and game.ipdb_id > 0:
-		_add_kv(rows, "IPDB entry", "#" + str(game.ipdb_id), "ipdb")
+	# BACKTRIM (Chris's design call, literal): the grid
+	# ENDS at Units produced. The Fun rating, Features and
+	# IPDB entry rows are cut from the RENDER only - the
+	# facts stay parsed and cached (the parser, the cache
+	# and the bundled snapshot are untouched). The field
+	# back carried so much text the sheet crowded itself;
+	# everything after Units produced was the bulk.
+	if backtrim_nc == "notrim":
+		var fun: String = str(ipdb.get("fun_rating", ""))
+		_add_kv(rows, "Fun rating", (fun + " / 10") if fun != "" else "", "ipdb")
+		var feats: String = str(ipdb.get("features", ""))
+		if feats.length() > 240:
+			feats = feats.substr(0, 240).strip_edges() + "…"
+		_add_kv(rows, "Features", feats, "ipdb")
+		if not ipdb.is_empty() and game.ipdb_id > 0:
+			_add_kv(rows, "IPDB entry", "#" + str(game.ipdb_id), "ipdb")
 	return rows
 
 
