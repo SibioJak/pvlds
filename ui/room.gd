@@ -2152,6 +2152,65 @@ func tournament_rows() -> Array:
 	return _tournament_rows.duplicate()
 
 
+## RETURN round: where a launch of this game comes from, in
+## the store's record shape ({surface, challenge_id}). The
+## classification keys on (this view, the launched game), not
+## on the input path, so the A-press, the pointer's Launch,
+## and the detail view's Play all classify alike: in the
+## Tournament Room, the launched game's own challenge row
+## names the origin (by challenge ID, never by index); a
+## tournie launch that somehow matches no row still records
+## the tournament surface with an empty ID, which restores
+## to the room's default landing. Everywhere else the origin
+## is the library.
+func launch_origin_for(game: GameEntry) -> Dictionary:
+	if game == null or not _tournament:
+		return {"surface": "library", "challenge_id": ""}
+	for row: Variant in _tournament_rows:
+		var r: Dictionary = row as Dictionary
+		if str(r.get("kind", "")) != "challenge":
+			continue
+		var row_game: GameEntry = r.get("game") as GameEntry
+		if row_game != null and row_game.game_id == game.game_id:
+			var ch: WovpChallenge = r.get("challenge") as WovpChallenge
+			return {"surface": "tournament",
+				"challenge_id": ch.challenge_id if ch != null else ""}
+	return {"surface": "tournament", "challenge_id": ""}
+
+
+## The row index of one challenge in the standing tournament
+## view, by challenge ID - or -1 when it does not stand
+## (ended, refreshed away, never there).
+func _tournament_row_index_for_challenge(challenge_id: String) -> int:
+	if challenge_id == "":
+		return -1
+	for i: int in range(_tournament_rows.size()):
+		var r: Dictionary = _tournament_rows[i] as Dictionary
+		if str(r.get("kind", "")) != "challenge":
+			continue
+		var ch: WovpChallenge = r.get("challenge") as WovpChallenge
+		if ch != null and ch.challenge_id == challenge_id:
+			return i
+	return -1
+
+
+## The challenge ID of the focused card in the Tournament
+## Room, or "" when focus stands anywhere else (a rail stop,
+## a state row, the library). The return smoke's read of
+## where a return landing actually put the player.
+func tournament_focused_challenge_id() -> String:
+	if not _tournament or _focused == null:
+		return ""
+	var idx: int = _panels.find(_focused)
+	if idx < 0 or idx >= _tournament_rows.size():
+		return ""
+	var r: Dictionary = _tournament_rows[idx] as Dictionary
+	if str(r.get("kind", "")) != "challenge":
+		return ""
+	var ch: WovpChallenge = r.get("challenge") as WovpChallenge
+	return ch.challenge_id if ch != null else ""
+
+
 ## The banner while the Tournament Room stands: the boards'
 ## provenance in one line - how many, when they landed, and
 ## when they are not fresh, exactly that.
@@ -2415,6 +2474,40 @@ func _b_exit_tournament() -> void:
 	_rebuild_wall()
 	_persist_view()
 	_land_on_rail_stop("tournament")
+
+
+## RETURN round: a session that launched from the Tournament
+## Room returns to it. Called by Main at room entry when a
+## consumed return-origin record names this surface (the
+## boards Main just pushed are the data the rows build from,
+## cache or live). Mirrors _enter_tournament's landing, then
+## seats the launched challenge - centred, focused, its board
+## beside it - when it still stands; when it has gone (ended,
+## refreshed away, rescanned away), the landing is the manual
+## entry's own default: the TOURNAMENT rail stop, the room at
+## its first row. Either way a fetch is requested, exactly as
+## a manual entry asks, so the board beside the card is live
+## for what the player came back to do (Y - submit).
+func restore_tournament_return(challenge_id: String) -> void:
+	_failed_game_id = ""
+	_status_note = ""
+	_tournament = true
+	_letter_net = ""
+	_page = 0
+	_centre_index = 0
+	_recompute_visible()
+	_rebuild_wall()
+	_persist_view()
+	var idx: int = _tournament_row_index_for_challenge(challenge_id)
+	if idx >= 0:
+		_set_centre(idx, true)
+		if idx < _panels.size():
+			_set_focused(_panels[idx])
+		print("ROOM RETURN: back to the Tournament Room - challenge %s standing, focused" % challenge_id)
+	else:
+		_land_on_rail_stop("tournament")
+		print("ROOM RETURN: back to the Tournament Room - challenge '%s' no longer standing, default landing" % challenge_id)
+	tournament_refresh_requested.emit()
 
 
 func page_count() -> int:

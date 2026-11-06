@@ -19,6 +19,15 @@ var view_filter: String = ""
 var view_sort: String = ""
 var view_page: int = 0
 var selected_game_id: String = ""
+# RETURN round: the return-to-origin record. Written by Main at
+# every good launch spawn ({surface: "library"|"tournament",
+# challenge_id, stamp}) and consumed - read once, then cleared -
+# by the next room entry, so the watchdog's relaunch lands the
+# player on the surface that launched the table: a tournie launch
+# returns to the Tournament Room at its challenge, a library
+# launch to the library as always. A failed load clears it (no
+# session, no return owed). Empty = no return pending.
+var return_origin: Dictionary = {}
 # GRADFIX11 (the NEW filter, Chris's order): the file-age
 # tracker. Scan results are not otherwise persisted, so
 # the library's memory of when each .vpx file first
@@ -74,6 +83,19 @@ func load_from_disk() -> void:
 	view_sort = str(d.get("view_sort", ""))
 	view_page = int(d.get("view_page", 0))
 	selected_game_id = str(d.get("selected_game_id", ""))
+	# RETURN: the return-origin record, parsed as tolerantly as
+	# the fields above - anything that is not a dictionary of
+	# the written shape is simply no record.
+	return_origin = {}
+	var ro: Variant = d.get("return_origin", {})
+	if ro is Dictionary:
+		var rd: Dictionary = ro as Dictionary
+		if str(rd.get("surface", "")) != "":
+			return_origin = {
+				"surface": str(rd.get("surface", "")),
+				"challenge_id": str(rd.get("challenge_id", "")),
+				"stamp": int(rd.get("stamp", 0)),
+			}
 	# GRADFIX11: the file-age tracker round-trips with the
 	# rest of the state, parsed as tolerantly as the fields
 	# above - a record that is not a dictionary, or a state
@@ -113,6 +135,7 @@ func save_to_disk() -> void:
 	d["view_sort"] = view_sort
 	d["view_page"] = view_page
 	d["selected_game_id"] = selected_game_id
+	d["return_origin"] = return_origin
 	d["file_ages"] = file_ages
 	d["file_ages_seeded"] = file_ages_seeded
 	var file: FileAccess = FileAccess.open(StateStore.state_path(), FileAccess.WRITE)
@@ -162,6 +185,20 @@ func set_view_state(filter: String, sort: String, page: int, selected: String) -
 	view_page = page
 	if selected != "":
 		selected_game_id = selected
+
+
+## RETURN round: record where a launch came from. The caller
+## (Main) saves immediately - the record must be on disk before
+## the load wait can exit the process at hand-off.
+func set_return_origin(origin: Dictionary) -> void:
+	return_origin = origin.duplicate()
+
+
+## RETURN round: the record is one-shot. Room entry consumes it
+## (applied or not), and a failed load clears it - either way it
+## never survives past the first landing it was written for.
+func clear_return_origin() -> void:
+	return_origin = {}
 
 
 ## GRADFIX11 (the NEW filter): fold one landed scan's file

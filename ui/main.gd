@@ -2082,6 +2082,10 @@ func _enter_room() -> void:
 	# The Tournament Room's standing data (the cache's boards
 	# at boot) reaches the room here.
 	_push_wovp_data()
+	# RETURN: a launch record from the session just played
+	# routes this entry back to its launching surface (the
+	# record is consumed either way - see _apply_return_origin).
+	_apply_return_origin()
 	_room.visible = true
 	if _seated_cam:
 		# Dev hooks only (--pvlds-seated-cam, --pvlds-smoke-nav):
@@ -2091,6 +2095,36 @@ func _enter_room() -> void:
 	# rescan): make sure a warm pass is queued.
 	if _art_warmer != null and _scanner != null:
 		_art_warmer.warm_library(_scanner.games)
+
+
+## RETURN round: route a room entry back to the surface that
+## launched the table just played. The record (written at the
+## launch, on disk because this process did not exist while
+## the table played) is CONSUMED here whatever it says - read
+## once, cleared, saved - so a later entry or a manual boot
+## never replays it. A library record changes nothing: the
+## room's own setup restore (selection / last-played seating)
+## is the library landing, exactly as before this round. A
+## tournament record hands the room its challenge ID; the
+## room seats it if it still stands and lands at its default
+## when it has gone. No record: today's behaviour stands.
+## NC seam: PVLDS_RETURN_NC=oldway consumes the record but
+## ignores it - the pre-RETURN always-library landing - so
+## the return smoke's tournie legs fail against it by name.
+func _apply_return_origin() -> void:
+	if _state == null or _room == null:
+		return
+	var origin: Dictionary = _state.return_origin
+	if origin.is_empty():
+		return
+	_state.clear_return_origin()
+	_state.save_to_disk()
+	if str(origin.get("surface", "")) != "tournament":
+		return
+	if OS.get_environment("PVLDS_RETURN_NC") == "oldway":
+		print("PVLDS RETURN: a tournament origin stands but is ignored (NC oldway) - the pre-RETURN landing")
+		return
+	_room.restore_tournament_return(str(origin.get("challenge_id", "")))
 
 
 # ------------------------------------------------------- the hand-off
@@ -2114,6 +2148,18 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 		_launch_started_msec = Time.get_ticks_msec()
 		_launch_runtime_seen_msec = -1
 		_launch_pid_dead_msec = -1
+		# RETURN: record where this launch came from, on disk
+		# NOW - the load wait can exit this process at
+		# hand-off, and the record is what the return boot
+		# reads to land the player back on the launching
+		# surface (see _apply_return_origin). The room names
+		# the origin (its view, the launched game); a failed
+		# load clears it again in _settle_launch.
+		var origin: Dictionary = _room.launch_origin_for(game) if _room != null \
+			else {"surface": "library", "challenge_id": ""}
+		origin["stamp"] = int(Time.get_unix_time_from_system())
+		_state.set_return_origin(origin)
+		_state.save_to_disk()
 		print("PVLDS LAUNCH: %s -> build %s (pid %d); staying in the room while it loads" % [
 			game.title, build.file_name, _launch_pid])
 		if _room != null:
@@ -2199,6 +2245,11 @@ func _settle_launch(ok: bool, reason: String) -> void:
 			print("PVLDS LOCKOUT SMOKE: PASS - the wait stayed deaf, the window close was ignored, and the hand-off completed (%s)" % reason)
 		get_tree().quit()
 	else:
+		# RETURN: a failed load owes no return - the record
+		# the launch wrote is cleared before it can misroute
+		# a later room entry.
+		_state.clear_return_origin()
+		_state.save_to_disk()
 		_launch_service.fail_launch()
 		printerr("PVLDS LAUNCH: failed - ", reason)
 		if _smoke_verdict_pending:
