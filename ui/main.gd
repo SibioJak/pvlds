@@ -327,6 +327,15 @@ var _submit_wait: int = 0
 var _submit_failures: int = 0
 var _submit_scan_kicked: bool = false
 var _submit_done: bool = false
+var _smoke_roomsubmit: bool = false ## --pvlds-smoke-roomsubmit (ROOMSUBMIT round): the in-room submission smoke - enters the Tournament Room against the stub, seats the Addams challenge, opens the submit panel with REAL pad presses through the room's poll (Y opens, A sends, B / D-pad Right back out), and judges the panel standing: case + warning lines, the fixture shots newest-first, the focused shot large (texture means), rendered grabs, the wire through the stub's log, the local log without recorded_score. Modes in PVLDS_ROOMSUBMIT_SMOKE_MODE: happy | nothigher | unset | empty | nokey. The SUBMIT NC seams double as this smoke's: PVLDS_SUBMIT_NC=nowarn must fail the "warning posted" leg by name, noupload the "wire order" leg
+var _rs_mode: String = ""
+var _rs_phase: int = 0
+var _rs_wait: int = 0
+var _rs_failures: int = 0
+var _rs_done: bool = false
+var _rs_deadline: int = 0
+var _rs_idx: int = -1 ## the Addams challenge's row/panel index in the standing tournament view
+var _rs_searches_before: int = 0 ## the stub's search count when the send fired (the refresh leg's baseline)
 var _bt_phase: int = 0
 var _bt_wait: int = 0
 var _bt_failures: int = 0
@@ -695,6 +704,11 @@ func _ready() -> void:
 		_submit_mode = OS.get_environment("PVLDS_SUBMIT_SMOKE_MODE")
 		if _submit_mode == "":
 			_submit_mode = "happy"
+	if user_args.has("--pvlds-smoke-roomsubmit"):
+		_smoke_roomsubmit = true
+		_rs_mode = OS.get_environment("PVLDS_ROOMSUBMIT_SMOKE_MODE")
+		if _rs_mode == "":
+			_rs_mode = "happy"
 	if user_args.has("--pvlds-smoke-motion"):
 		_smoke_motion = true
 	if user_args.has("--pvlds-smoke-swingprobe"):
@@ -914,7 +928,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1113,6 +1127,8 @@ func _process(_delta: float) -> void:
 		_drive_backtrim_smoke()
 	if _smoke_submit:
 		_drive_submit_smoke()
+	if _smoke_roomsubmit:
+		_drive_roomsubmit_smoke()
 	if _smoke_motion:
 		_drive_motion_smoke()
 	if _smoke_swingprobe:
@@ -15140,6 +15156,439 @@ func _submit_finish_smoke() -> void:
 		get_tree().quit(1)
 
 
+## Roomsubmit smoke (--pvlds-smoke-roomsubmit; the
+## ROOMSUBMIT round). Boots the room against the stub like
+## the tournament smoke, seats the Addams challenge, and
+## drives the submit panel with REAL pad presses through
+## the room's own poll (synthetic joypad events - the input
+## smoke's proven route): Y opens, A sends, B and D-pad
+## Right back out. Modes (PVLDS_ROOMSUBMIT_SMOKE_MODE):
+## happy (the full dance: open, BACK sends nothing, reopen,
+## the focus walk across the shots, grabs, SEND, verdict,
+## refresh, B home), nothigher (the stub refuses the submit
+## - the server's words stand in the room), unset / empty
+## (the folder states in words, SEND answered, nothing
+## sent), nokey (boards standing, the key cleared in
+## memory - SEND is refused in the room's words before the
+## wire). The fixture shots (the harness script makes
+## them): score-vivid.png newest, score-mid.png,
+## score-blank.png oldest - plus a notes.txt the strip
+## must ignore.
+
+const RS_ADDAMS_ID: String = "fixture-ch-season-main-w3"
+const RS_UNSET_WORDS: String = "No screenshots folder set yet - set it on the desktop desk (Screenshots section); the room reads photos from there."
+const RS_EMPTY_WORDS: String = "No screenshots in that folder yet - take the shot in the headset first; it lands there."
+const RS_NOKEY_WORDS: String = "No WoVP key saved - submissions use the same key as the boards. Add it in SETUP."
+
+
+func _rs_expect(ok: bool, label: String) -> void:
+	if ok:
+		print("PVLDS ROOMSUBMIT SMOKE OK: ", label)
+	else:
+		_rs_failures += 1
+		printerr("PVLDS ROOMSUBMIT SMOKE FAIL: ", label)
+
+
+func _rs_inject(button: JoyButton, pressed: bool) -> void:
+	var ev: InputEventJoypadButton = InputEventJoypadButton.new()
+	ev.device = 0
+	ev.button_index = button
+	ev.pressed = pressed
+	Input.parse_input_event(ev)
+
+
+func _rs_stub_scores_count() -> int:
+	var n: int = 0
+	for lv: Variant in _submit_stub_lines():
+		if str((lv as Dictionary).get("path", "")).contains("/scores/"):
+			n += 1
+	return n
+
+
+func _rs_addams_idx() -> int:
+	var rows: Array = _room.tournament_rows()
+	for i: int in range(rows.size()):
+		var row: Dictionary = rows[i] as Dictionary
+		if str(row.get("kind", "")) == "challenge":
+			var ch: WovpChallenge = row.get("challenge") as WovpChallenge
+			if ch != null and ch.challenge_id == RS_ADDAMS_ID:
+				return i
+	return -1
+
+
+## A texture's mean colour over a coarse sample grid - the
+## pixel witness for which fixture shot stands large.
+func _rs_mean_rgb(tex: Texture2D) -> Vector3:
+	if tex == null:
+		return Vector3(-1, -1, -1)
+	var img: Image = tex.get_image()
+	if img == null or img.is_empty():
+		return Vector3(-1, -1, -1)
+	var acc: Vector3 = Vector3.ZERO
+	var n: int = 0
+	var y: int = 0
+	while y < img.get_height():
+		var x: int = 0
+		while x < img.get_width():
+			var c: Color = img.get_pixel(x, y)
+			acc += Vector3(c.r, c.g, c.b)
+			n += 1
+			x += 25
+		y += 25
+	if n == 0:
+		return Vector3(-1, -1, -1)
+	return acc / float(n)
+
+
+func _rs_log_entry() -> Dictionary:
+	var found: Dictionary = {}
+	for ev: Variant in WovpClient.load_submission_log():
+		var e: Dictionary = ev as Dictionary
+		if str(e.get("challenge_id", "")) == RS_ADDAMS_ID:
+			found = e
+	return found
+
+
+func _drive_roomsubmit_smoke() -> void:
+	if _rs_done:
+		return
+	_rs_wait += 1
+	match _rs_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_room._handle_rail("tournament")
+				_rs_expect(_room.tournament_active(), "enter: the TOURNAMENT stop raises the Tournament Room")
+				_rs_deadline = Time.get_ticks_msec() + 45000
+				_rs_phase = 1
+				_rs_wait = 0
+			elif _rs_wait > 3600:
+				_rs_expect(false, "boot: the room never came up")
+				_rs_finish_smoke()
+		1:
+			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _tournament_boards_all_real():
+				_rs_idx = _rs_addams_idx()
+				_rs_expect(_rs_idx >= 0, "boards: the Addams challenge stands in the tournament view")
+				if _rs_idx < 0:
+					_rs_finish_smoke()
+					return
+				get_viewport().warp_mouse(Vector2(512, 764))
+				_room._set_centre(_rs_idx, false)
+				_room._set_focused(_room._panels[_rs_idx])
+				_rs_deadline = Time.get_ticks_msec() + 20000
+				_rs_phase = 2
+				_rs_wait = 0
+			elif Time.get_ticks_msec() > _rs_deadline:
+				_rs_expect(false, "boards: the boards never went live against the stub")
+				_rs_finish_smoke()
+		2:
+			if _room.centre_index() == _rs_idx and not _room.page_slide_active() and _rs_wait >= 6:
+				_rs_expect(_rs_stub_scores_count() == 0, "wire: nothing submitted before the panel opens")
+				_rs_inject(JOY_BUTTON_Y, true)
+				_rs_phase = 3
+				_rs_wait = 0
+			elif Time.get_ticks_msec() > _rs_deadline:
+				_rs_expect(false, "seat: the Addams card never centred")
+				_rs_finish_smoke()
+		3:
+			if _rs_wait >= 2:
+				_rs_inject(JOY_BUTTON_Y, false)
+				_rs_deadline = Time.get_ticks_msec() + 30000
+				_rs_phase = 4
+				_rs_wait = 0
+		4:
+			# The panel stands and its face is dressed (the
+			# rendered surface, not a flag): judge the open.
+			var face: ClickableQuad = _room.submit_panel_face_quad() if _room != null else null
+			var dressed: bool = face != null and face.current_texture() != null \
+				and face.current_texture().get_size() == Vector2(1024, 532)
+			if _room.is_submit_panel_up() and dressed:
+				_rs_open_legs()
+				if _rs_mode == "happy":
+					_rs_phase = 45 ## the grab waits for presentation (phase 45)
+				else:
+					if _rs_mode == "nokey":
+						_config.wovp_api_key = "" ## the key vanishes behind the standing panel: SEND must refuse in words, in the room
+					_room._set_focused(_room.submit_send_quad())
+					_rs_searches_before = _tournament_search_count()
+					_rs_inject(JOY_BUTTON_A, true)
+					_rs_phase = 20
+				_rs_wait = 0
+			elif Time.get_ticks_msec() > _rs_deadline:
+				_rs_expect(false, "panel: the submit panel never stood dressed")
+				_rs_finish_smoke()
+		45:
+			# Presentation settle before the grab: a grab
+			# on the dressed condition's own tick reads the
+			# previous frame - the face and buttons are
+			# factory renders and present a beat after their
+			# textures land (the tournament pairing legs'
+			# lesson). Fifteen frames is the standing wait.
+			if _rs_wait >= 15:
+				_grad_save_grab("roomsubmit_panel_vivid.png")
+				_rs_inject(JOY_BUTTON_DPAD_RIGHT, true)
+				_rs_phase = 5
+				_rs_wait = 0
+		5:
+			if _rs_wait >= 2:
+				_rs_inject(JOY_BUTTON_DPAD_RIGHT, false)
+				_rs_phase = 6
+				_rs_wait = 0
+		6:
+			if not _room.is_submit_panel_up():
+				_rs_expect(true, "back sends nothing: D-pad Right closed the panel")
+				_rs_expect(_rs_stub_scores_count() == 0, "back sends nothing: the wire stayed silent through the open and the close")
+				_rs_expect(_room.focused_quad() == _room._panels[_rs_idx], "back: focus lands back on the challenge's card")
+				_rs_inject(JOY_BUTTON_Y, true)
+				_rs_phase = 7
+				_rs_wait = 0
+			elif _rs_wait > 600:
+				_rs_expect(false, "back: D-pad Right never closed the panel")
+				_rs_finish_smoke()
+		7:
+			if _rs_wait >= 2:
+				_rs_inject(JOY_BUTTON_Y, false)
+				_rs_deadline = Time.get_ticks_msec() + 30000
+				_rs_phase = 8
+				_rs_wait = 0
+		8:
+			# Reopened: the focus walk across the shots -
+			# each thumb that takes focus stands its shot
+			# large (the verify step), judged on the big
+			# quad's own pixels.
+			var face8: ClickableQuad = _room.submit_panel_face_quad() if _room != null else null
+			var dressed8: bool = face8 != null and face8.current_texture() != null \
+				and face8.current_texture().get_size() == Vector2(1024, 532)
+			if not (_room.is_submit_panel_up() and dressed8):
+				if Time.get_ticks_msec() > _rs_deadline:
+					_rs_expect(false, "reopen: the panel never stood dressed again")
+					_rs_finish_smoke()
+				return
+			match _rs_sub:
+				0:
+					_room._cycle_focus(1)
+					_rs_sub = 1
+					_rs_wait = 0
+				1:
+					if _rs_wait >= 4:
+						var mid_mean: Vector3 = _rs_mean_rgb(_room.submit_big_quad().current_texture())
+						_rs_expect(mid_mean.z > mid_mean.x and mid_mean.z > 0.25,
+							"verify step: focusing the second thumb stands ITS shot large (mean %s)" % str(mid_mean))
+						_room._cycle_focus(1)
+						_rs_sub = 2
+						_rs_wait = 0
+				2:
+					if _rs_wait >= 12:
+						var blank_mean: Vector3 = _rs_mean_rgb(_room.submit_big_quad().current_texture())
+						_rs_expect(blank_mean.x < 0.06 and blank_mean.y < 0.06 and blank_mean.z < 0.08,
+							"verify step: the near-blank flicker frame stands large and reads blank (mean %s)" % str(blank_mean))
+						_grad_save_grab("roomsubmit_panel_blank.png")
+						_room._set_focused(_room.submit_send_quad())
+						_rs_searches_before = _tournament_search_count()
+						_rs_inject(JOY_BUTTON_A, true)
+						_rs_phase = 9
+						_rs_wait = 0
+		9:
+			if _rs_wait >= 2:
+				_rs_inject(JOY_BUTTON_A, false)
+				_rs_deadline = Time.get_ticks_msec() + 30000
+				_rs_phase = 10
+				_rs_wait = 0
+		10:
+			if _room.submit_panel_message() == "Submitted - awaiting validation.":
+				_rs_happy_verdict_legs()
+				_rs_deadline = Time.get_ticks_msec() + 15000
+				_rs_phase = 15
+				_rs_wait = 0
+			elif Time.get_ticks_msec() > _rs_deadline:
+				_rs_expect(false, "verdict: the success words never stood in the room (message: %s)" % _room.submit_panel_message())
+				_rs_finish_smoke()
+		15:
+			# The refresh the success triggers is a fetch -
+			# it lands when it lands; the leg waits for the
+			# stub's search count to grow past the send's
+			# baseline rather than judging the verdict's own
+			# frame.
+			if _tournament_search_count() > _rs_searches_before:
+				_rs_expect(true, "refresh: the success re-fetched the boards (searches %d -> %d)" % [_rs_searches_before, _tournament_search_count()])
+				_rs_inject(JOY_BUTTON_B, true)
+				_rs_phase = 11
+				_rs_wait = 0
+			elif Time.get_ticks_msec() > _rs_deadline:
+				_rs_expect(false, "refresh: the success never re-fetched the boards")
+				_rs_inject(JOY_BUTTON_B, true)
+				_rs_phase = 11
+				_rs_wait = 0
+		11:
+			if _rs_wait >= 2:
+				_rs_inject(JOY_BUTTON_B, false)
+				_rs_phase = 12
+				_rs_wait = 0
+		12:
+			if not _room.is_submit_panel_up():
+				_rs_expect(true, "back: B closed the panel after the send")
+				_rs_expect(_room.focused_quad() == _room._panels[_rs_idx], "back: focus lands back on the challenge's card")
+				_rs_finish_smoke()
+			elif _rs_wait > 600:
+				_rs_expect(false, "back: B never closed the panel")
+				_rs_finish_smoke()
+		20:
+			if _rs_wait >= 2:
+				_rs_inject(JOY_BUTTON_A, false)
+				_rs_deadline = Time.get_ticks_msec() + 30000
+				_rs_phase = 21
+				_rs_wait = 0
+		21:
+			var msg: String = _room.submit_panel_message()
+			var landed: bool = false
+			match _rs_mode:
+				"nothigher":
+					landed = msg.contains("WOVP-STUB-NOT-HIGHER")
+				"unset":
+					landed = msg == RS_UNSET_WORDS
+				"empty":
+					landed = msg == RS_EMPTY_WORDS
+				"nokey":
+					landed = msg == RS_NOKEY_WORDS
+			if landed:
+				_rs_mode_verdict_legs()
+				_rs_inject(JOY_BUTTON_B, true)
+				_rs_phase = 22
+				_rs_wait = 0
+			elif Time.get_ticks_msec() > _rs_deadline:
+				_rs_expect(false, "verdict: the %s words never stood in the room (message: %s)" % [_rs_mode, msg])
+				_rs_finish_smoke()
+		22:
+			if _rs_wait >= 2:
+				_rs_inject(JOY_BUTTON_B, false)
+				_rs_phase = 23
+				_rs_wait = 0
+		23:
+			if not _room.is_submit_panel_up():
+				_rs_expect(true, "back: B closed the panel")
+				_rs_finish_smoke()
+			elif _rs_wait > 600:
+				_rs_expect(false, "back: B never closed the panel")
+				_rs_finish_smoke()
+
+
+var _rs_sub: int = 0 ## the reopened walk's sub-stage (happy mode phase 8)
+
+
+## The open judged: the panel serves the focused
+## challenge, its case lines are the room's own, the
+## warning names his posted number, and the shelf under
+## it is the fixture folder's truth per mode.
+func _rs_open_legs() -> void:
+	_rs_expect(_room.submit_panel_challenge_id() == RS_ADDAMS_ID,
+		"panel opens: Y opened the submit panel for the focused challenge")
+	# The board's own hint (discoverability): the standing
+	# board's spec carries the command, the library
+	# flip-back's does not (the hint is tournie furniture).
+	var addams_ch: WovpChallenge = null
+	for cv: Variant in _wovp_challenges:
+		if (cv as WovpChallenge) != null and (cv as WovpChallenge).challenge_id == RS_ADDAMS_ID:
+			addams_ch = cv as WovpChallenge
+	if addams_ch != null:
+		var hint_rows: Array = (RoomSpecs.tournament_board_spec(addams_ch, true, _wovp_user_id, int(Time.get_unix_time_from_system()), false, {}, true).get("rows", []) as Array)
+		var plain_rows: Array = (RoomSpecs.tournament_board_spec(addams_ch, true, _wovp_user_id, int(Time.get_unix_time_from_system()), false, {}).get("rows", []) as Array)
+		var hint_found: bool = false
+		for hr: Variant in hint_rows:
+			if str((hr as Dictionary).get("text", "")) == "Y - SUBMIT A SCORE":
+				hint_found = true
+		var hint_absent: bool = true
+		for pr: Variant in plain_rows:
+			if str((pr as Dictionary).get("text", "")) == "Y - SUBMIT A SCORE":
+				hint_absent = false
+		_rs_expect(hint_found and hint_absent,
+			"discoverability: the standing board names the command (Y - SUBMIT A SCORE) and the library back does not")
+	var spec: Dictionary = _room.submit_face_spec()
+	var body: String = str(spec.get("body", ""))
+	_rs_expect(str(spec.get("title", "")) != "", "case: the panel names the table")
+	_rs_expect(body.contains("Ends "), "case: the deadline stands on the panel")
+	match _rs_mode:
+		"unset":
+			_rs_expect(body.contains("No screenshots folder set yet"), "folder state: the unset folder is named in words on the panel")
+			_rs_expect(_room.submit_shots().is_empty() and _room.submit_thumb_quads().is_empty(),
+				"folder state: no thumbs stand when no folder is set")
+		"empty":
+			_rs_expect(body.contains("No screenshots in that folder yet"), "folder state: the empty folder is named in words on the panel")
+			_rs_expect(_room.submit_shots().is_empty() and _room.submit_thumb_quads().is_empty(),
+				"folder state: no thumbs stand in an empty folder")
+		_:
+			_rs_expect(body.contains("Your posted score: 24,531,070") and body.contains("beats it"),
+				"warning posted: his posted score is named on the panel face before anything is sent")
+			_rs_expect(body.contains("Different build in your library."),
+				"case: the library standing is the room's own (his Addams is a different build)")
+			var names: Array[String] = []
+			for sv: Variant in _room.submit_shots():
+				names.append(str((sv as Dictionary).get("name", "")))
+			_rs_expect(names == ["score-vivid.png", "score-mid.png", "score-blank.png"],
+				"shots: the strip lists the folder's images newest first, images only (got %s)" % str(names))
+			_rs_expect(_room.submit_thumb_quads().size() == 3, "shots: three thumbs stand")
+			_rs_expect(_room.submit_selected_path().ends_with("score-vivid.png"),
+				"shots: the newest shot is the standing selection")
+			var vivid_mean: Vector3 = _rs_mean_rgb(_room.submit_big_quad().current_texture())
+			_rs_expect(vivid_mean.x > 0.55 and vivid_mean.x > vivid_mean.z + 0.3,
+				"big photo: the newest shot stands large enough to read (mean %s)" % str(vivid_mean))
+
+
+func _rs_happy_verdict_legs() -> void:
+	_rs_expect(true, "success words: Submitted - awaiting validation stands in the room")
+	var lines: Array = _submit_stub_lines()
+	var photo_idx: int = -1
+	var submit_idx: int = -1
+	var body: Dictionary = {}
+	for i: int in range(lines.size()):
+		var p: String = str((lines[i] as Dictionary).get("path", ""))
+		if p.ends_with("/scores/submit-photo") and photo_idx < 0:
+			photo_idx = i
+		if p.ends_with("/scores/submit"):
+			submit_idx = i
+			var sb: Variant = (lines[i] as Dictionary).get("submit_body", {})
+			if sb is Dictionary:
+				body = sb
+	_rs_expect(photo_idx >= 0 and submit_idx > photo_idx, "wire order: the photo went up before the submit")
+	_rs_expect(int(body.get("score", -1)) == 0, "wire: the score stays the literal 0 stub")
+	_rs_expect(str(body.get("challengeId", "")) == RS_ADDAMS_ID, "wire: the submit binds the panel's challenge")
+	var meta: Dictionary = body.get("metadata", {}) as Dictionary
+	_rs_expect(meta.has("pvlds-version") and not meta.has("vpin-studio-version"), "wire: the metadata is honest to PVLDS")
+	var entry: Dictionary = _rs_log_entry()
+	_rs_expect(not entry.is_empty() and str(entry.get("result", "")).contains("awaiting validation"),
+		"log: the room's attempt stands in the local submission log")
+	_rs_expect(not entry.has("recorded_score"),
+		"log: the room's entry carries NO recorded score (the typed field stays desk-only)")
+
+
+func _rs_mode_verdict_legs() -> void:
+	match _rs_mode:
+		"nothigher":
+			_rs_expect(true, "refusal words: the server's refusal stands in the room in its own words")
+			_rs_expect(_rs_stub_scores_count() >= 2, "refusal: the attempt reached the wire (photo + submit) and was refused there")
+			var entry: Dictionary = _rs_log_entry()
+			_rs_expect(not entry.is_empty() and str(entry.get("result", "")).contains("WOVP-STUB-NOT-HIGHER"),
+				"log: the refusal stands in the local log in the server's words")
+		"unset", "empty":
+			_rs_expect(true, "folder state: SEND is answered with the state's own words, in the room")
+			_rs_expect(_rs_stub_scores_count() == 0, "folder state: nothing was sent")
+			_rs_expect(_rs_log_entry().is_empty(), "folder state: no attempt reached the log - nothing was attempted")
+		"nokey":
+			_rs_expect(true, "no key: the refusal stands in the room in words")
+			_rs_expect(_rs_stub_scores_count() == 0, "no key: nothing was sent")
+			var entry2: Dictionary = _rs_log_entry()
+			_rs_expect(not entry2.is_empty() and str(entry2.get("result", "")) == RS_NOKEY_WORDS,
+				"log: the no-key refusal stands in the local log")
+
+
+func _rs_finish_smoke() -> void:
+	_rs_done = true
+	if _rs_failures == 0:
+		print("PVLDS ROOMSUBMIT SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS ROOMSUBMIT SMOKE: FAIL (%d)" % _rs_failures)
+		get_tree().quit(1)
+
+
 func _drive_backtrim_smoke() -> void:
 	match _bt_phase:
 		0:
@@ -16148,8 +16597,10 @@ func _drive_tournament_full() -> void:
 		3:
 			# The rendered legs read the season board off the
 			# board STANDING beside the season card (GRADFIX7
-			# item 2): centre the card, prove Y is inert here,
-			# and judge only once the standing board's texture
+			# item 2): centre the card, prove Y turns nothing
+			# here (ROOMSUBMIT: it opens the submit panel
+			# instead - judged standing, then closed), and
+			# judge only once the standing board's texture
 			# is really rendered.
 			_tournament_smoke_wait += 1
 			match _tournament_rendered_flip:
@@ -16160,20 +16611,32 @@ func _drive_tournament_full() -> void:
 						_tournament_smoke_wait = 0
 				1:
 					if _room.centre_index() == 0 and not _room.page_slide_active() and _tournament_smoke_wait >= 6:
-						# The Y-inert judge (GRADFIX7 item 2): a Y
-						# press on a focused tournie card turns
-						# nothing, and every board still stands.
+						# The Y judge (GRADFIX7 item 2, ROOMSUBMIT):
+						# a Y press on a focused tournie card turns
+						# nothing - the flip stays refused in
+						# tournie, permanently - and every board
+						# still stands. What Y does since
+						# ROOMSUBMIT is open the submit panel for
+						# the focused challenge: judged standing
+						# here, then closed, and the run goes on.
 						_room._info_focused_card()
 						var yfs: Dictionary = _room.flip_state()
 						_tournament_expect(not bool(yfs.get("active", true)) and absf(float(yfs.get("angle_deg", 1.0))) <= 0.5,
-							"Y inert: Y on a focused tournie card flips nothing (no turn stands, every angle 0)")
+							"Y no-flip: Y on a focused tournie card flips nothing (no turn stands, every angle 0)")
 						var ybs: Array = _room.board_state()
 						var y_standing: bool = ybs.size() == _room.tournament_rows().size()
 						for ye: Variant in ybs:
 							if not bool((ye as Dictionary).get("board_visible", false)):
 								y_standing = false
 						_tournament_expect(y_standing,
-							"Y inert: every standing board still stands after the Y press")
+							"Y no-flip: every standing board still stands after the Y press")
+						var yrow0: Dictionary = _room.tournament_rows()[0] as Dictionary if _room.tournament_rows().size() >= 1 else {}
+						var ych0: WovpChallenge = yrow0.get("challenge") as WovpChallenge
+						_tournament_expect(_room.is_submit_panel_up() and ych0 != null and _room.submit_panel_challenge_id() == ych0.challenge_id,
+							"Y submit: Y on a focused tournie card opens the submit panel for that challenge (ROOMSUBMIT)")
+						_room.hide_submit_panel()
+						_tournament_expect(not _room.is_submit_panel_up() and _room.focused_quad() == _room._panels[0],
+							"Y submit: the panel's BACK lands focus back on the challenge's card")
 						_tournament_rendered_flip = 2
 						_tournament_smoke_wait = 0
 					elif _tournament_smoke_wait > 900:
