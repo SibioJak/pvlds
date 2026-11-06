@@ -195,6 +195,7 @@ var _ipdb_seeded: int = 0 ## IPDBFIX: games that gained facts at the last bundle
 var _wovp_user_id: String = "" ## whose key is saved (validate's answer, or the cache's when its key hash matches)
 var _pending_recorded_score: int = 0 ## SUBMIT2: the desk record field's parsed value for the in-flight submission - consumed by _record_submit_outcome into the LOCAL log only, never sent
 var _pending_recorded_junk: bool = false ## SUBMIT2: the record field held non-numeric junk for the in-flight submission - the send still happens; one plain line rides the outcome words
+var _submit_origin: String = "desk" ## ROOMSUBMIT: which surface the in-flight submission came from ("desk" | "room") - the verdict routes back to its surface (the room's panel gets its words through set_wovp_submit_result); the log and the desk history take every attempt either way
 var _wovp_user_name: String = ""
 var _wovp_identity_key_hash: int = 0 ## the hash of the key _wovp_user_id was resolved for
 var _wovp_identity_state: String = "untested" ## "untested" | "ok" | "failed" - this session's last validation outcome
@@ -1493,6 +1494,7 @@ func _push_wovp_data() -> void:
 		"fetched_at": _wovp_fetched_at,
 		"live": _wovp_boards_live,
 		"fetch_error": _wovp_fetch_error,
+		"shots_folder": _config.screenshots_folder if _config != null else "", ## ROOMSUBMIT: the submit panel's photo shelf rides the same push
 	})
 	# NEXTROUND (item 4): the PINemHi bests ride the same
 	# push - re-read from the player's own install each
@@ -1834,6 +1836,7 @@ static func _history_date(unix: int) -> String:
 ## scanner and the db carry none), and the contract takes
 ## the file name as the identity that matters.
 func _on_desk_wovp_submit_requested(challenge_id: String, photo_path: String, score_text: String = "") -> void:
+	_submit_origin = "desk"
 	# SUBMIT2: the record field is parsed ONCE, here - its
 	# value is parked for the log entry whichever way the
 	# attempt lands, and junk is remembered for one plain
@@ -1862,12 +1865,62 @@ func _on_desk_wovp_submit_requested(challenge_id: String, photo_path: String, sc
 	_wovp_client.submit_score(_config.wovp_api_key, challenge_id, photo_path, vpx_file, "", _pending_recorded_score)
 
 
+## ROOMSUBMIT: the room's SEND - the same transaction the
+## desk runs, from the panel standing in the Tournament
+## Room. The differences are the surface's own, and they
+## are deliberate: no record field (the typed score stays
+## desk-only, so the parked value is 0 and the log entry
+## carries no recorded_score), room-shaped refusal words
+## where the desk's point at the desk ("save your key
+## above first"), and the verdict routed back to the
+## panel as well as to the log (see _on_wovp_submit_finished).
+## Everything else - the 32-char pre-check, the two-step
+## client call, the log, the boards refresh - is shared.
+func _on_room_wovp_submit_requested(challenge_id: String, photo_path: String) -> void:
+	_submit_origin = "room"
+	_pending_recorded_score = 0
+	_pending_recorded_junk = false
+	if _config == null or _config.wovp_api_key == "":
+		_record_room_submit_refusal(challenge_id, photo_path, "No WoVP key saved - submissions use the same key as the boards. Add it in SETUP.")
+		return
+	var length_note: String = WovpClient.key_length_note(_config.wovp_api_key)
+	if length_note != "":
+		_record_room_submit_refusal(challenge_id, photo_path, length_note)
+		return
+	if _wovp_client == null:
+		_record_room_submit_refusal(challenge_id, photo_path, "The WoVP client is not running - restart PVLDS.")
+		return
+	var vpx_file: String = ""
+	for rv: Variant in _build_submit_rows():
+		var row: Dictionary = rv as Dictionary
+		if str(row.get("challenge_id", "")) == challenge_id:
+			vpx_file = str(row.get("vpx_file", ""))
+			break
+	_wovp_client.submit_score(_config.wovp_api_key, challenge_id, photo_path, vpx_file, "", 0)
+
+
+## A room submission refused before the wire: the attempt
+## lands in the same log the desk's does (one receipt
+## book), and the words land on the panel that asked.
+func _record_room_submit_refusal(challenge_id: String, photo_path: String, result: String) -> void:
+	_record_submit_outcome(challenge_id, photo_path, result)
+	if _room != null:
+		_room.set_wovp_submit_result(false, result, challenge_id)
+
+
 ## The client's verdict: the words land on the desk's
 ## status line AND in the local log (see
 ## _record_submit_outcome), and a success refreshes the
-## boards so his row can come back pending.
+## boards so his row can come back pending. ROOMSUBMIT: a
+## room-born attempt's words ALSO land on the panel that
+## sent it - the player is standing in the headset, and
+## the desk's status line is not a surface he can see
+## from there.
 func _on_wovp_submit_finished(ok: bool, message: String, challenge_id: String, photo_name: String) -> void:
 	_record_submit_outcome(challenge_id, "", message, photo_name)
+	if _submit_origin == "room" and _room != null:
+		_room.set_wovp_submit_result(ok, message, challenge_id)
+	_submit_origin = "desk"
 	if ok:
 		_wovp_fetch_boards()
 
@@ -1992,6 +2045,7 @@ func _enter_room() -> void:
 		_room.setup_panel_ipdb_requested.connect(func() -> void: _apply_ipdb_snapshot())
 		_room.tournament_refresh_requested.connect(_wovp_fetch_boards)
 		_room.wovp_key_pasted.connect(_on_room_wovp_key_pasted)
+		_room.wovp_submit_requested.connect(_on_room_wovp_submit_requested)
 		_room.wovp_key_test_requested.connect(_on_room_wovp_key_test)
 		_room.display_settings_changed.connect(_on_display_settings_changed)
 		_room.set_starfield_mode(_config.starfield_mode)
@@ -2005,6 +2059,7 @@ func _enter_room() -> void:
 		# placard stood in the headset) never leaves a stale placard.
 		_room.clear_setup_placard()
 		_room.clear_setup_panel()
+		_room.clear_submit_panel()
 	# The SETUP panel's health rows start from the last scan's
 	# numbers, whichever route built the room.
 	_room.set_setup_health(_setup_panel_health())

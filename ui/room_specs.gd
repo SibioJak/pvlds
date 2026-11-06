@@ -451,6 +451,50 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 	}
 
 
+## ROOMSUBMIT: the submit panel's face - one challenge's
+## case in plain lines, in the SETUP panel's banner family
+## (the room's operations-panel grammar): the table's name
+## as the title; the status line as the sub (the panel's
+## message - sending, the verdict, a refusal's words; the
+## standing instruction when nothing has happened yet);
+## and the case as the body: which challenge this is, when
+## it ends, where the table stands in his library (the
+## desk's own three sentences), the higher-score warning
+## with his posted number named (WovpChallenge.posted_note,
+## verbatim - the desk's unresolved-identity sentence when
+## the key's owner is not known yet), and the shots line
+## (ShotsFolder.panel_line - the folder read's truth).
+## The photos themselves stand BELOW this face as their
+## own quads; the face never carries one.
+static func submit_panel_spec(ch: WovpChallenge, owned: bool, build_owned: bool, user_id: String, now_unix: int, status: String, shots_line: String) -> Dictionary:
+	var lines: Array[String] = []
+	lines.append("%s - %s" % [ch.type_label(), ch.name])
+	lines.append("Ends %s - %s" % [WovpTime.format_deadline(ch.end_unix), WovpTime.format_remaining(ch.end_unix, now_unix)])
+	if not owned:
+		lines.append("Not in your library.")
+	elif build_owned:
+		lines.append("In your library - the challenge's build.")
+	else:
+		lines.append("Different build in your library.")
+	if user_id != "":
+		lines.append(ch.posted_note(user_id))
+	else:
+		lines.append("Whose key this is isn't resolved yet - Test key names it, and the posted-score warning needs it.")
+	if shots_line != "":
+		lines.append(shots_line)
+	return {
+		"kind": "banner",
+		"bg": Color(0.05, 0.05, 0.09),
+		"title": ch.table_name if ch.table_name != "" else ch.name,
+		"title_size": 64,
+		"title_max_lines": 1,
+		"sub": status if status != "" else "Pick the shot that shows your score, then SEND.",
+		"sub_size": 36,
+		"body": "\n".join(lines),
+		"body_size": 32,
+	}
+
+
 ## One Tournament Room board face: a challenge's standings
 ## on its table's wall panel, glanceable - the leader, his
 ## own row on the accent ground, the rows around the cutoff
@@ -486,7 +530,7 @@ static var pinemhi_nc: String = ""
 static var cardback_nc: String = "" ## Main sets this from PVLDS_CARDBACK_NC before any room exists (nodots: the Spec Sheet grid's rows lose their source dots - the wells stand unlabelled - so the cardback legs fail by name)
 static var backtrim_nc: String = "" ## Main sets this from PVLDS_BACKTRIM_NC before any room exists (notrim: the Spec Sheet grid regains the three rows BACKTRIM cut after Units produced - Fun rating, Features, IPDB entry - so the trim legs fail by name)
 
-static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}) -> Dictionary:
+static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}, submit_hint: bool = false) -> Dictionary:
 	var rows: Array = []
 	for entry: Variant in ch.board_rows(user_id):
 		var e: Dictionary = entry
@@ -518,6 +562,18 @@ static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: Strin
 				rows.append({"kind": "divider", "text": str(e.get("label", "")), "size": 28, "tone": tone})
 			"note":
 				rows.append({"kind": "note", "text": str(e.get("text", "")), "size": 34})
+	# ROOMSUBMIT: the submit hint - the standing board
+	# itself names the command that opens the submit panel
+	# (Y on the challenge's card), because the room has no
+	# controls surface to list it on and a command that
+	# exists must read where the player can see it. Only
+	# the room's standing-board render passes submit_hint;
+	# the library flip-back's board (wing_spec) and the
+	# spec legs keep the default. The hint stands BELOW the
+	# league rows and ABOVE the PINemHi best: the pinemhi
+	# legs pin the best as the board's LAST row.
+	if submit_hint:
+		rows.append({"kind": "note", "text": "Y - SUBMIT A SCORE", "size": 30})
 	# NEXTROUND (item 4): the PINemHi personal-best line -
 	# appended BELOW the league rows as a plain note, never
 	# a score row: it is the player's own best from their

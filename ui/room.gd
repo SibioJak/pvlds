@@ -26,6 +26,7 @@ signal art_prefetch_requested(games: Array) ## a page settled: Main's warmer sho
 signal tournament_refresh_requested ## the Tournament Room wants its boards (re)fetched: entering the view, or REFRESH pressed - Main owns the WoVP client
 signal wovp_key_pasted(api_key: String) ## the SETUP panel's PASTE KEY read a key off the clipboard: Main saves it to the config
 signal wovp_key_test_requested ## the SETUP panel's TEST KEY: Main validates the saved key and reports whose it is
+signal wovp_submit_requested(challenge_id: String, photo_path: String) ## ROOMSUBMIT: the submit panel's SEND: Main runs the same two-step WoVP submission the desk runs (its refusals, its log, its boards refresh) and answers through set_wovp_submit_result
 signal display_settings_changed ## a SETUP display dial turned (the starfield): Main persists the room's standing values to the config
 
 const PAGE_COLS: int = 4
@@ -1071,6 +1072,32 @@ var _setup_panel_back_btn: ClickableQuad = null
 var _setup_panel_ipdb_btn: ClickableQuad = null ## CARDBACK/IPDBFIX: RE-APPLY IPDB DATA - Main re-applies the bundled snapshot, the panel's mirror of the desk's button
 var _setup_panel_up: bool = false
 var _setup_panel_gen: int = 0
+## ROOMSUBMIT: the submit panel - the SETUP panel's sibling
+## (same seat, same modal grammar), opened by Y on a focused
+## challenge card in the Tournament Room. It carries one
+## challenge's case, the newest screenshots from the
+## player's screenshots folder (thumbs), one focused shot
+## standing large for the flicker check, SEND and BACK.
+var _submit_panel: Node3D = null ## the panel's holder; in the tree only while the panel stands
+var _submit_panel_face: ClickableQuad = null
+var _submit_big_quad: ClickableQuad = null ## the focused shot, standing large (a display surface - never a focus stop)
+var _submit_thumb_quads: Array[ClickableQuad] = [] ## the shot strip, newest first; payload = the shot's path
+var _submit_send_btn: ClickableQuad = null
+var _submit_back_btn: ClickableQuad = null
+var _submit_panel_up: bool = false
+var _submit_panel_gen: int = 0
+var _submit_render_in_flight: bool = false
+var _submit_render_pending: bool = false
+var _submit_render_msec: int = 0
+var _submit_challenge: WovpChallenge = null ## the challenge the standing panel serves (held by reference; SEND uses its id, never a row)
+var _submit_challenge_id: String = ""
+var _submit_owned: bool = false
+var _submit_build_owned: bool = false
+var _submit_shots: Array = [] ## the folder read at open: [{path, name, mtime}], newest first, capped at the strip's five
+var _submit_shots_line: String = "" ## ShotsFolder.panel_line for the folder read at open
+var _submit_selected_path: String = "" ## the shot SEND would post: the focused thumb's (focus IS the verify step)
+var _submit_status: String = "" ## the face's message line: states and verdicts in words
+var _submit_sending: bool = false
 var _setup_health: Dictionary = {} ## the last completed scan's numbers, fed by Main (see set_setup_health)
 var _setup_message: String = "" ## the panel's message line: the last action's outcome, in plain words
 var _setup_scanning: bool = false ## a scan Main started for the panel is running (its progress feeds the message line)
@@ -1112,6 +1139,7 @@ var _wovp_challenges: Array = [] ## the last-good boards (Array of WovpChallenge
 var _pinemhi_bests: Dictionary = {} ## NEXTROUND (item 4): PINemHi personal bests by PinemhiScores title key, pushed by Main (set_pinemhi_bests); a challenge whose title keys into this map gets the subordinate best line on its standing board
 var _ipdb_facts: Dictionary = {} ## CARDBACK: the IPDB cache's facts by game id, pushed by Main (set_ipdb_facts); backs read ONLY this map - the flip path never fetches
 var _ipdb_stamp: int = 0 ## CARDBACK: Main's cache stamp; it rides _card_back_key so a snapshot apply re-renders a standing back under its new key
+var _wovp_shots_folder: String = "" ## ROOMSUBMIT: the config's screenshots folder, pushed by Main with the boards - the submit panel reads its photos from there
 var _wovp_fetched_at: int = 0 ## unix time the standing boards landed (0 = never)
 var _wovp_live: bool = false ## the standing boards came from a fetch this session (false = the disk cache's)
 var _wovp_fetch_error: String = "" ## the last fetch's failure, in words, when it failed - the wall says so rather than dressing stale boards as live
@@ -1638,6 +1666,7 @@ func _telemetry_context() -> Dictionary:
 		"room_mode": _mode,
 		"tournament": _tournament,
 		"setup_panel_up": _setup_panel_up,
+		"submit_panel_up": _submit_panel_up,
 		"placard_up": _placard_up,
 		"launch_wait": _launching_game_id != "",
 		"focused_panel_index": _panels.find(_focused) if _focused != null else -1,
@@ -2083,6 +2112,7 @@ func set_ipdb_facts(facts: Dictionary, stamp: int) -> void:
 func set_wovp_data(d: Dictionary) -> void:
 	_wovp_has_key = bool(d.get("has_key", false))
 	_wovp_user_id = str(d.get("user_id", ""))
+	_wovp_shots_folder = str(d.get("shots_folder", _wovp_shots_folder))
 	_wovp_challenges = []
 	var arr: Variant = d.get("challenges", [])
 	if arr is Array:
@@ -3220,7 +3250,7 @@ func _refresh_window() -> void:
 	var fc: int = _grid_coord(_centre_index).x
 	_panel_window_lo = maxi(0, fc - VISIBLE_HALF_COLUMNS)
 	_panel_window_hi = mini(_columns - 1, fc + VISIBLE_HALF_COLUMNS)
-	var browsing: bool = _mode == "wall" and not _placard_up and not _setup_panel_up and _launching_game_id == ""
+	var browsing: bool = _mode == "wall" and not _placard_up and not _setup_panel_up and not _submit_panel_up and _launching_game_id == ""
 	for idx: int in range(_panels.size()):
 		var c: int = _grid_coord(idx).x
 		var vis: bool = c >= _panel_window_lo and c <= _panel_window_hi
@@ -6262,7 +6292,8 @@ func _render_tournament_board(idx: int) -> void:
 	var spec: Dictionary = RoomSpecs.tournament_board_spec(
 		ch, bool(row.get("owned", false)), _wovp_user_id, int(Time.get_unix_time_from_system()),
 		bool(row.get("build_owned", false)),
-		_pinemhi_bests.get(PinemhiScores.challenge_key(ch.table_name), {}) as Dictionary)
+		_pinemhi_bests.get(PinemhiScores.challenge_key(ch.table_name), {}) as Dictionary,
+		true) ## ROOMSUBMIT: the standing board names its submit command (Y - SUBMIT A SCORE)
 	var bc: Vector2i = _board_coord(idx)
 	var cc: Vector2i = _grid_coord(idx)
 	spec["spine_side"] = "right" if bc.x < cc.x else "left"
@@ -6442,6 +6473,19 @@ func _refresh_focusables() -> void:
 			_focusables.append(_setup_panel_ipdb_btn)
 		if _setup_panel_back_btn != null:
 			_focusables.append(_setup_panel_back_btn)
+	elif _submit_panel_up:
+		# ROOMSUBMIT: the submit panel owns the room while
+		# it stands - its stops are the shot thumbs (newest
+		# first), then SEND, then BACK. The big photo quad
+		# is a display surface, never a stop: focus moving
+		# across the thumbs is what changes it.
+		for tq: ClickableQuad in _submit_thumb_quads:
+			if tq != null:
+				_focusables.append(tq)
+		if _submit_send_btn != null:
+			_focusables.append(_submit_send_btn)
+		if _submit_back_btn != null:
+			_focusables.append(_submit_back_btn)
 	elif _mode == "detail" and _detail != null:
 		_focusables = _detail.get_clickables()
 	else:
@@ -6476,6 +6520,13 @@ func _refresh_focusables() -> void:
 func _set_focused(q: ClickableQuad) -> void:
 	_focused = q
 	_refresh_quad_states()
+	# ROOMSUBMIT: on the submit panel, focus IS the verify
+	# step - the focused thumb's shot stands large. This is
+	# the one door every focus move passes through (stick
+	# walk, cycle, landings), so the big photo can never
+	# disagree with the frame the player sees.
+	if _submit_panel_up and q != null and _submit_thumb_quads.has(q):
+		_submit_show_shot(q.payload)
 
 
 func _refresh_quad_states() -> void:
@@ -6529,6 +6580,19 @@ func _refresh_quad_states() -> void:
 		all.append(_setup_panel_ipdb_btn)
 	if _setup_panel_back_btn != null:
 		all.append(_setup_panel_back_btn)
+	# ROOMSUBMIT: the submit panel's stops take visual
+	# state like every other stop (the letter-strip lesson:
+	# a stop set_visual_state never reaches shows no frame,
+	# and focus reads as vanished exactly there).
+	if _submit_panel_face != null:
+		all.append(_submit_panel_face)
+	for stq: ClickableQuad in _submit_thumb_quads:
+		if stq != null:
+			all.append(stq)
+	if _submit_send_btn != null:
+		all.append(_submit_send_btn)
+	if _submit_back_btn != null:
+		all.append(_submit_back_btn)
 	for q: ClickableQuad in all:
 		q.set_visual_state(q == hovered, q == _focused)
 	# GRADFIX17 telemetry: this sweep walks every quad in
@@ -6568,7 +6632,7 @@ func _panel_for(q: ClickableQuad) -> ClickableQuad:
 ## detail view or the placard owns the room, and none during
 ## the load wait - the wall is frozen behind the marquee.
 func _pop_target_panel() -> ClickableQuad:
-	if _mode != "wall" or _placard_up or _setup_panel_up or _launching_game_id != "":
+	if _mode != "wall" or _placard_up or _setup_panel_up or _submit_panel_up or _launching_game_id != "":
 		return null
 	if _centre_index < 0 or _centre_index >= _panels.size():
 		return null
@@ -6583,7 +6647,7 @@ func _pop_target_panel() -> ClickableQuad:
 ## from the drum's current angle, so a sweeping point swings
 ## the drum with it - input is never gated by the travel.
 func _follow_centre() -> void:
-	if _mode != "wall" or _placard_up or _setup_panel_up or _launching_game_id != "":
+	if _mode != "wall" or _placard_up or _setup_panel_up or _submit_panel_up or _launching_game_id != "":
 		return
 	var hovered: ClickableQuad = _rig.hovered if _rig != null else null
 	if _boot_guard:
@@ -7332,6 +7396,23 @@ func _activate(quad: ClickableQuad) -> void:
 				display_settings_changed.emit()
 				_request_setup_panel_render(true)
 		return
+	if _submit_panel_up:
+		# ROOMSUBMIT: while the submit panel stands, its
+		# stops are the room - the same lock the SETUP panel
+		# keeps, for the same reason (the pick flags say it
+		# for the pointer; this is the lock for the pad and
+		# keyboard paths).
+		match quad.action_id:
+			"submit_shot":
+				quad.pulse()
+				_set_focused(quad) ## focus is the selection: the shot stands large (see _set_focused)
+			"submit_send":
+				quad.pulse()
+				_submit_panel_send()
+			"submit_back":
+				quad.pulse()
+				hide_submit_panel()
+		return
 	if _placard_up:
 		# While the placard stands, everything else is inert. The
 		# pick flags already say so for the pointer; this is the
@@ -7395,7 +7476,7 @@ func _activate(quad: ClickableQuad) -> void:
 ## the slide's pending travel then drops whole at its far
 ## point, by its own rule.
 func _launch_focused_card() -> void:
-	if _mode != "wall" or _placard_up or _setup_panel_up or _focused == null:
+	if _mode != "wall" or _placard_up or _setup_panel_up or _submit_panel_up or _focused == null:
 		return
 	var idx: int = _panels.find(_focused)
 	if idx < 0 or idx >= _visible_games.size():
@@ -7424,7 +7505,7 @@ func _launch_focused_card() -> void:
 func _a_press() -> void:
 	if _focused == null:
 		return
-	if _mode == "wall" and not _placard_up and not _setup_panel_up and _panels.has(_focused):
+	if _mode == "wall" and not _placard_up and not _setup_panel_up and not _submit_panel_up and _panels.has(_focused):
 		_launch_focused_card()
 	else:
 		_activate(_focused)
@@ -7445,7 +7526,17 @@ func _a_press() -> void:
 ## noflip NC the press is inert (the pre-flip world).
 func _info_focused_card() -> void:
 	if _tournament:
-		return ## GRADFIX7 item 2: Y is inert in the Tournament Room - its boards stand open beside their cards, nothing needs turning
+		# ROOMSUBMIT: Y in the Tournament Room opens the
+		# SUBMIT panel for the focused challenge (see
+		# _open_submit_for_focused). GRADFIX7's inertness
+		# was about the FLIP - boards stand open beside
+		# their cards, nothing needs turning - and the flip
+		# stays refused here: no card turns in tournie,
+		# ever. Y's new business is the panel, which is not
+		# a flip: the board names the command itself
+		# ("Y - SUBMIT A SCORE").
+		_open_submit_for_focused()
+		return
 	if _mode != "wall" or _placard_up or _setup_panel_up or _focused == null:
 		return
 	if not _panels.has(_focused):
@@ -7856,7 +7947,7 @@ func _rail_anchor_step(step: int) -> void:
 ## NOTHING in the bar zone (rail or strip focus) moves
 ## the wall; nothing on the wall reaches the bar.
 func _bumper_page(step: int) -> void:
-	if _launching_game_id != "" or _placard_up or _setup_panel_up or _mode != "wall":
+	if _launching_game_id != "" or _placard_up or _setup_panel_up or _submit_panel_up or _mode != "wall":
 		return
 	# The strip country spends its bumpers at home
 	# (GRADFIX14 supersession (a)): one slot along the
@@ -8043,7 +8134,7 @@ func wall_anchor_columns() -> Array[int]:
 ##   view. The grammar reconciles as: anchors = the
 ##   focused block's own columns.
 func _trigger_anchor(step: int) -> void:
-	if _launching_game_id != "" or _placard_up or _setup_panel_up or _mode != "wall":
+	if _launching_game_id != "" or _placard_up or _setup_panel_up or _submit_panel_up or _mode != "wall":
 		return
 	if _focused == null:
 		return
@@ -8702,6 +8793,390 @@ func _fill_setup_panel_textures(gen: int) -> void:
 		return
 	_setup_panel_back_btn.set_texture(back_tex)
 	_after_setup_render()
+
+
+# ------------------------------------------------------- submit panel
+
+## ROOMSUBMIT: submit a WoVP score without leaving the
+## room. The player already submits today without removing
+## his headset - double-tap to Virtual Desktop's desktop
+## view, website form, double-tap back - and the desk flow
+## broke that: it asked him to leave the Tournament Room,
+## relaunch to the desk, and work a form there. This panel
+## puts the send where he already stands: on the challenge
+## whose board he is looking at. No desktop trips, no view
+## breaks (the standing VR law), headset never comes off.
+##
+## The mount is the SETUP panel's: the room's proven
+## operations-panel grammar. Same seat (front and centre
+## at reading distance), same modal discipline - pick
+## snapshot/inert/restore, focus confined to the panel's
+## stops, generation-guarded factory renders, B / D-pad
+## Right as BACK (never an exit), freed on close, never
+## parked. The alternative - a panel riding the drum
+## beside the focused board - fights the drum's panel
+## pool, swing, pop and fill pipeline, and the verify step
+## below needs a surface that stands STILL and BIG.
+##
+## The command is Y on a focused challenge card
+## (_info_focused_card's tournament branch): Y is free in
+## the Tournament Room (its flip is refused there -
+## GRADFIX7: boards stand open, nothing needs turning) and
+## its library meaning is "this card's other business",
+## which is exactly what submitting is. The standing board
+## names the command itself ("Y - SUBMIT A SCORE" on every
+## board), because the room has no controls surface to
+## list it on.
+##
+## The panel, top to bottom: the case face (the challenge,
+## its deadline, the library standing, the higher-score
+## warning with his posted number named); ONE shot standing
+## large; the newest screenshots from his screenshots
+## folder as a thumb strip; SEND and BACK. FOCUS IS THE
+## VERIFY STEP: the focused thumb's shot is the one
+## standing large, big enough to read a score and reject a
+## blank flicker frame (some tables' LEDs blink by design,
+## and a burst of shots holds duds - the pick must be a
+## check, not a guess). SEND posts the focused shot
+## through Main to WovpClient - the desk's own two-step
+## transaction, its refusals, its log (the room's entries
+## carry no recorded score: the typed field stays
+## desk-only) - and the verdict lands on the face's status
+## line in the client's own words.
+##
+## Every state is honest in words on the face: no key
+## saved, folder unset, folder missing, folder empty,
+## sending, submitted, refused. No dead panels, no crashes.
+
+func _open_submit_for_focused() -> void:
+	if not _tournament or _mode != "wall" or _placard_up or _setup_panel_up or _submit_panel_up:
+		return
+	if _focused == null or _launching_game_id != "":
+		return
+	var idx: int = _panels.find(_focused)
+	if idx < 0 or idx >= _tournament_rows.size():
+		return
+	var row: Dictionary = _tournament_rows[idx] as Dictionary
+	if str(row.get("kind", "")) != "challenge":
+		return
+	var ch: WovpChallenge = row["challenge"] as WovpChallenge
+	if ch == null:
+		return
+	show_submit_panel(ch, bool(row.get("owned", false)), bool(row.get("build_owned", false)))
+
+
+func show_submit_panel(ch: WovpChallenge, owned: bool, build_owned: bool) -> void:
+	_submit_challenge = ch
+	_submit_challenge_id = ch.challenge_id
+	_submit_owned = owned
+	_submit_build_owned = build_owned
+	_submit_sending = false
+	_submit_status = ""
+	if not _wovp_has_key:
+		_submit_status = "No WoVP key saved - submissions use the same key as the boards. Add it in SETUP."
+	# The folder read happens AT OPEN, every open: his
+	# shots land minutes before he opens this panel, and a
+	# list cached any earlier would lie about the shelf.
+	_submit_shots = ShotsFolder.list_shots(_wovp_shots_folder, 5)
+	_submit_shots_line = ShotsFolder.panel_line(_wovp_shots_folder)
+	_submit_selected_path = ""
+	if not _submit_shots.is_empty():
+		_submit_selected_path = str((_submit_shots[0] as Dictionary).get("path", ""))
+	if _submit_panel == null:
+		_build_submit_panel()
+	if not _submit_panel_up:
+		_pick_snapshot.clear()
+		for q: ClickableQuad in _room_pickables():
+			_pick_snapshot[q] = q.pick_enabled
+		_submit_panel_up = true
+		add_child(_submit_panel)
+		ClickableQuad.face_point(_submit_panel, EYE)
+		_inert_room_quads()
+	_refresh_focusables()
+	if not _submit_thumb_quads.is_empty():
+		_set_focused(_submit_thumb_quads[0]) ## the hook in _set_focused stands its shot large
+	elif _submit_send_btn != null:
+		_set_focused(_submit_send_btn)
+	_request_submit_panel_render(true)
+
+
+func _build_submit_panel() -> void:
+	_submit_panel = Node3D.new()
+	_submit_panel.name = "SubmitPanel"
+	_submit_panel.position = Vector3(0.0, 1.32, -1.72)
+	var placeholder: Texture2D = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
+	_submit_panel_face = ClickableQuad.new()
+	_submit_panel_face.setup("submit_panel_face", "", placeholder, Vector2(1.5, 0.78))
+	_submit_panel_face.position = Vector3(0.0, 0.58, 0.0)
+	_submit_panel_face.pick_enabled = false
+	_submit_panel.add_child(_submit_panel_face)
+	_submit_big_quad = ClickableQuad.new()
+	_submit_big_quad.setup("submit_photo", "", placeholder, Vector2(1.06, 0.76))
+	_submit_big_quad.position = Vector3(0.0, -0.24, 0.0)
+	_submit_big_quad.pick_enabled = false
+	_submit_panel.add_child(_submit_big_quad)
+	_submit_thumb_quads.clear()
+	var tx: float = -0.58
+	for sv: Variant in _submit_shots:
+		var shot: Dictionary = sv as Dictionary
+		var tq: ClickableQuad = ClickableQuad.new()
+		tq.setup("submit_shot", str(shot.get("path", "")), placeholder, Vector2(0.27, 0.20))
+		tq.position = Vector3(tx, -0.78, 0.0)
+		_submit_panel.add_child(tq)
+		_submit_thumb_quads.append(tq)
+		tx += 0.29
+	_submit_send_btn = ClickableQuad.new()
+	_submit_send_btn.setup("submit_send", "", placeholder, Vector2(0.52, 0.15))
+	_submit_send_btn.position = Vector3(-0.28, -1.06, 0.0)
+	_submit_panel.add_child(_submit_send_btn)
+	_submit_back_btn = ClickableQuad.new()
+	_submit_back_btn.setup("submit_back", "", placeholder, Vector2(0.52, 0.15))
+	_submit_back_btn.position = Vector3(0.28, -1.06, 0.0)
+	_submit_panel.add_child(_submit_back_btn)
+	# The photos' textures: the house decode path
+	# (TextureFactory.load_art_texture - shared cache,
+	# capped at 1024 wide). A thumb and the big view of the
+	# same shot are ONE cache entry; the big view loads
+	# when its shot is focused (see _submit_show_shot).
+	for tq2: ClickableQuad in _submit_thumb_quads:
+		var tex: Texture2D = TextureFactory.load_art_texture(tq2.payload)
+		if tex != null:
+			tq2.set_texture(tex)
+			_fit_photo_quad(tq2, tex)
+	# No face_point here: the holder is oriented in
+	# show_submit_panel, once it is inside the tree (the
+	# SETUP panel's lesson).
+
+
+## Aspect-fit a photo quad inside its box: the quad is
+## built at the box size and scaled down on the long axis,
+## so a shot is never stretched - what he reads in the big
+## view is the shot as the camera took it. (pulse() tweens
+## scale from its standing value, so a press keeps the fit.)
+func _fit_photo_quad(q: ClickableQuad, tex: Texture2D) -> void:
+	if tex == null or tex.get_height() == 0:
+		return
+	var box: Vector2 = q.quad_size()
+	if box.y == 0.0:
+		return
+	var aspect: float = float(tex.get_width()) / float(tex.get_height())
+	var box_aspect: float = box.x / box.y
+	if aspect > box_aspect:
+		q.scale = Vector3(1.0, box_aspect / aspect, 1.0)
+	else:
+		q.scale = Vector3(aspect / box_aspect, 1.0, 1.0)
+
+
+## The verify step's other half: stand a shot large. The
+## one caller door is _set_focused (a thumb taking focus),
+## plus the panel's open - so the big view can never
+## disagree with the frame the player sees.
+func _submit_show_shot(path: String) -> void:
+	_submit_selected_path = path
+	if _submit_big_quad == null:
+		return
+	var tex: Texture2D = TextureFactory.load_art_texture(path)
+	if tex != null:
+		_submit_big_quad.set_texture(tex)
+		_fit_photo_quad(_submit_big_quad, tex)
+
+
+## SEND: hand the focused shot to Main (the signal route,
+## like the SETUP panel's SCAN). With no shot focused -
+## folder unset, missing, or empty - the press is answered
+## with the state's own words, never a mute panel and
+## never a send.
+func _submit_panel_send() -> void:
+	if _submit_sending or _submit_challenge_id == "":
+		return
+	if _submit_selected_path == "":
+		_submit_status = _submit_shots_line
+		_request_submit_panel_render(true)
+		return
+	_submit_sending = true
+	_submit_status = "Sending your photo to WoVP..."
+	_request_submit_panel_render(true)
+	wovp_submit_requested.emit(_submit_challenge_id, _submit_selected_path)
+
+
+## Main's answer door for a room submission (the desk's
+## verdicts land on the desk's status line; the room's land
+## here): the words stand on the panel's status line
+## verbatim - a success is the client's "Submitted -
+## awaiting validation.", a refusal carries the server's
+## own words inside the client's message (the HTTP400
+## surfacing law). A verdict for a panel that has closed,
+## or for another challenge, is not this panel's to show -
+## the log and the desk still carry it.
+func set_wovp_submit_result(_ok: bool, message: String, challenge_id: String) -> void:
+	if not _submit_panel_up:
+		return
+	if challenge_id != "" and challenge_id != _submit_challenge_id:
+		return
+	_submit_sending = false
+	_submit_status = message
+	_request_submit_panel_render(true)
+
+
+## The panel's BACK: tear it down, hand the room back, and
+## land focus on the challenge's card - re-resolved by id,
+## because a boards refresh may have rebuilt the wall (and
+## renumbered the rows) behind the panel. When the
+## challenge no longer stands, the landing is the rail's
+## TOURNAMENT stop.
+func hide_submit_panel() -> void:
+	if not _submit_panel_up:
+		return
+	var cid: String = _submit_challenge_id
+	clear_submit_panel()
+	for i: int in range(_tournament_rows.size()):
+		var row: Dictionary = _tournament_rows[i] as Dictionary
+		if str(row.get("kind", "")) == "challenge":
+			var ch: WovpChallenge = row["challenge"] as WovpChallenge
+			if ch != null and ch.challenge_id == cid and i < _panels.size():
+				_set_focused(_panels[i])
+				return
+	_land_on_rail_stop("tournament")
+
+
+## Silent teardown for Main's own routes (a fresh room
+## entry): no landing - Main is already driving.
+func clear_submit_panel() -> void:
+	if not _submit_panel_up:
+		return
+	_submit_panel_up = false
+	_submit_panel_gen += 1
+	_submit_sending = false
+	_submit_challenge = null
+	_submit_challenge_id = ""
+	_submit_shots = []
+	_submit_shots_line = ""
+	_submit_selected_path = ""
+	_submit_status = ""
+	if _submit_panel != null:
+		# Freed, not parked - the SETUP panel's rule:
+		# parked holders orphan their meshes.
+		if _submit_panel.get_parent() != null:
+			remove_child(_submit_panel)
+		_submit_panel.queue_free()
+		_submit_panel = null
+		_submit_panel_face = null
+		_submit_big_quad = null
+		_submit_thumb_quads.clear()
+		_submit_send_btn = null
+		_submit_back_btn = null
+	_restore_room_pick_states()
+	_set_focused(null)
+	_refresh_focusables()
+
+
+## Panel queries (Main's feeds and the smokes read the
+## panel the way the other smokes read their subjects).
+func is_submit_panel_up() -> bool:
+	return _submit_panel_up
+
+
+func submit_panel_holder() -> Node3D:
+	return _submit_panel
+
+
+func submit_panel_face_quad() -> ClickableQuad:
+	return _submit_panel_face
+
+
+func submit_big_quad() -> ClickableQuad:
+	return _submit_big_quad
+
+
+func submit_thumb_quads() -> Array:
+	return _submit_thumb_quads.duplicate()
+
+
+func submit_send_quad() -> ClickableQuad:
+	return _submit_send_btn
+
+
+func submit_back_quad() -> ClickableQuad:
+	return _submit_back_btn
+
+
+func submit_panel_message() -> String:
+	return _submit_status
+
+
+func submit_panel_challenge_id() -> String:
+	return _submit_challenge_id
+
+
+func submit_shots() -> Array:
+	return _submit_shots.duplicate()
+
+
+func submit_selected_path() -> String:
+	return _submit_selected_path
+
+
+## The spec the face renders from, standing state and all
+## (the smoke's content read - the warning, the case lines,
+## the shots line - without reaching into the panel).
+func submit_face_spec() -> Dictionary:
+	if _submit_challenge == null:
+		return {}
+	return RoomSpecs.submit_panel_spec(_submit_challenge, _submit_owned, _submit_build_owned,
+		_wovp_user_id, int(Time.get_unix_time_from_system()), _submit_status, _submit_shots_line)
+
+
+## Panel textures - face plus the two buttons - render
+## from current state, generation-guarded like the SETUP
+## panel's: renders serialize through the shared factory,
+## a state change during a render marks pending, and the
+## follow-up runs when the live one lands.
+func _request_submit_panel_render(immediate: bool) -> void:
+	if not _submit_panel_up:
+		return
+	if _submit_render_in_flight or (not immediate and Time.get_ticks_msec() - _submit_render_msec < 250):
+		_submit_render_pending = true
+		return
+	_submit_render_pending = false
+	_submit_render_in_flight = true
+	_submit_render_msec = Time.get_ticks_msec()
+	_submit_panel_gen += 1
+	_fill_submit_panel_textures(_submit_panel_gen)
+
+
+func _after_submit_render() -> void:
+	_submit_render_in_flight = false
+	if _submit_render_pending and _submit_panel_up:
+		_submit_render_pending = false
+		_submit_render_in_flight = true
+		_submit_render_msec = Time.get_ticks_msec()
+		_submit_panel_gen += 1
+		_fill_submit_panel_textures(_submit_panel_gen)
+
+
+func _fill_submit_panel_textures(gen: int) -> void:
+	if _submit_challenge == null:
+		_after_submit_render()
+		return
+	var face_tex: Texture2D = await _factory.render_texture(
+		submit_face_spec(), Vector2i(1024, 532))
+	if gen != _submit_panel_gen or not _submit_panel_up or _submit_panel_face == null:
+		_after_submit_render()
+		return
+	_submit_panel_face.set_texture(face_tex)
+	var send_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.button_spec("SENDING..." if _submit_sending else "SEND", true), Vector2i(512, 164))
+	if gen != _submit_panel_gen or not _submit_panel_up or _submit_send_btn == null:
+		_after_submit_render()
+		return
+	_submit_send_btn.set_texture(send_tex)
+	var back_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.button_spec("BACK", false), Vector2i(512, 124))
+	if gen != _submit_panel_gen or not _submit_panel_up or _submit_back_btn == null:
+		_after_submit_render()
+		return
+	_submit_back_btn.set_texture(back_tex)
+	_after_submit_render()
 
 
 # ------------------------------------------------------- launch states
@@ -10115,6 +10590,8 @@ func _process(delta: float) -> void:
 	if b_now and not _joy_prev_b and not deaf:
 		if _mode == "detail":
 			_detail.handle_escape()
+		elif _submit_panel_up:
+			hide_submit_panel() ## B is BACK on the submit panel - it never exits the tournament from behind the panel
 		elif _setup_panel_up:
 			hide_setup_panel() ## B is BACK on the SETUP panel too
 		elif _tournament and _mode == "wall" and debug_b_nc != "nobexit":
@@ -10194,7 +10671,9 @@ func _process(delta: float) -> void:
 	if not right_now:
 		_joy_right_armed = true ## a witnessed released poll: fresh press edges count from here on
 	if right_now and not _joy_prev_right and _joy_right_armed and not deaf:
-		if _setup_panel_up:
+		if _submit_panel_up:
+			hide_submit_panel() ## on the submit panel D-pad Right is BACK - it never exits
+		elif _setup_panel_up:
 			hide_setup_panel() ## on the SETUP panel the BACK button goes back - it never exits
 		elif not _placard_up:
 			_handle_rail("exit")
