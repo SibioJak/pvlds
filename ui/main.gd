@@ -14553,8 +14553,10 @@ func _cb_judge(idx: int) -> void:
 			_cb_expect(kv.size() >= 3, "Beetlejuice: the db-only back still stands a grid (%d rows)" % kv.size())
 			_cb_expect(ipdb_rows == 0, "Beetlejuice: a game with no IPDB data shows NO ipdb rows (degrades honestly)")
 		"aT_GONvw":
-			_cb_expect(str((kv.get("Designer", {}) as Dictionary).get("v", "")) == "Pat Lawlor" and str((kv.get("Design", {}) as Dictionary).get("v", "")) == "Pat Lawlor, John Youssi",
+			_cb_expect(str((kv.get("Designer", {}) as Dictionary).get("v", "")) == "Pat Lawlor" and str((kv.get("Design", {}) as Dictionary).get("v", "")) == "Larry DeMar, Pat Lawlor",
 				"Addams: both designer rows stand - db '%s', ipdb '%s'" % [str((kv.get("Designer", {}) as Dictionary).get("v", "<none>")), str((kv.get("Design", {}) as Dictionary).get("v", "<none>"))])
+			_cb_expect(str((kv.get("Units produced", {}) as Dictionary).get("v", "")) == "20,270" and str((kv.get("Units produced", {}) as Dictionary).get("src", "")) == "ipdb",
+				"Addams: the IPDB production row stands with its ipdb dot (units '%s')" % str((kv.get("Units produced", {}) as Dictionary).get("v", "<none>")))
 	_cb_expect(empty_rows == 0, "%s: the grid carries no empty rows" % game.game_id)
 	_cb_judged = true
 
@@ -19940,6 +19942,24 @@ func _run_core_test() -> void:
 	var cb_gained3: int = IpdbFacts.seed_from_snapshot(cb_empty_held, cb_snap)
 	_expect(cb_gained3 == 2 and str(((cb_empty_held.get("facts", {}) as Dictionary).get("lkSumsrF", {}) as Dictionary).get("units", "")) == "12,716",
 		"ipdbfix: an empty held entry counts as missing and is filled (gained %d)" % cb_gained3, failures)
+	# IPDBFIX M2: the BUNDLED snapshot file itself - the
+	# partial crawl Chris chose to ship (630 games; the
+	# rest backfill in a future release). Its Indy entry
+	# must carry the real page's facts, exactly as parsed.
+	var cb_bundle: Dictionary = IpdbFacts.load_snapshot()
+	var cb_bundle_facts: Dictionary = cb_bundle.get("facts", {}) as Dictionary
+	_expect(cb_bundle_facts.size() >= 600,
+		"ipdbfix: the bundled snapshot ships real coverage (%d games)" % cb_bundle_facts.size(), failures)
+	var cb_bundle_indy: Dictionary = cb_bundle_facts.get("lkSumsrF", {}) as Dictionary
+	_expect(str(cb_bundle_indy.get("units", "")) == "12,716" and str(cb_bundle_indy.get("fun_rating", "")) == "8.3" and str(cb_bundle_indy.get("specialty", "")) == "Widebody",
+		"ipdbfix: the bundled Indy carries the real page's units / rating / specialty (got '%s' / '%s' / '%s')" % [str(cb_bundle_indy.get("units", "<none>")), str(cb_bundle_indy.get("fun_rating", "<none>")), str(cb_bundle_indy.get("specialty", "<none>"))], failures)
+	_expect(str(cb_bundle_indy.get("design", "")) == "Mark Ritchie, Doug Watson" and str(cb_bundle_indy.get("art", "")) == "Doug Watson" and str(cb_bundle_indy.get("music", "")) == "Chris Granner" and str(cb_bundle_indy.get("software", "")) == "Brian Eddy",
+		"ipdbfix: the bundled Indy carries the real page's design / art / music / software credits", failures)
+	_expect((cb_bundle.get("failed", {}) as Dictionary).is_empty(),
+		"ipdbfix: the bundled snapshot records no failures (its misses are simply absent)", failures)
+	var cb_bundle_addams: Dictionary = cb_bundle_facts.get("aT_GONvw", {}) as Dictionary
+	_expect(str(cb_bundle_addams.get("design", "")) == "Larry DeMar, Pat Lawlor" and str(cb_bundle_addams.get("units", "")) == "20,270",
+		"ipdbfix: the bundled Addams carries the real page's design credit and units (got '%s' / '%s')" % [str(cb_bundle_addams.get("design", "<none>")), str(cb_bundle_addams.get("units", "<none>"))], failures)
 	# The grid itself: wing_spec rows for Indy (both wells,
 	# the disagreement shown twice) and for the db-only
 	# game (no IPDB rows, no empty rows anywhere).
