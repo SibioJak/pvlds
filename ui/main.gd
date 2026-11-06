@@ -188,7 +188,9 @@ var _intentional_launch_exit: bool = false ## quitting FOR a launch must not dis
 # config - never in these vars, never in a print.
 var _wovp_client: WovpClient = null
 var _ipdb_cache: Dictionary = {"facts": {}, "failed": {}} ## CARDBACK: the IPDB facts cache (user://ipdb_cache.json), loaded at boot; the room's backs read it through the push. IPDBFIX: the bundled snapshot seeds it at boot - the app never fetches from ipdb.org (its bot wall 403'd all 288 of the old pass's requests in the field)
-var _ipdb_stamp: int = 0 ## CARDBACK: bumped whenever the cache changes; rides the room backs' content keys
+var _ipdb_stamp: int = 0 ## CARDBACK: bumped whenever the cache changes; rides the room backs' content keys. BACKTRIM: the bump lives in _push_ipdb_data, the one door the facts take to the room - it fires iff the pushed facts differ from the last pushed
+var _ipdb_pushed_size: int = -1 ## BACKTRIM: the facts content last handed to the room (size + content hash fingerprint); -1 = nothing pushed yet, so the first push always bumps
+var _ipdb_pushed_hash: int = 0
 var _ipdb_seeded: int = 0 ## IPDBFIX: games that gained facts at the last bundled-snapshot seed (boot or a SETUP re-apply) - the smoke's seed witness
 var _wovp_user_id: String = "" ## whose key is saved (validate's answer, or the cache's when its key hash matches)
 var _wovp_user_name: String = ""
@@ -314,6 +316,13 @@ var _cb_failures: int = 0
 var _cb_target: int = 0 ## index into the driver's target game list
 var _cb_judged: bool = false
 var _cb_seat_tries: int = 0 ## focus seats attempted for the standing target (a target that never centres fails instead of looping)
+var _smoke_backtrim: bool = false ## --pvlds-smoke-backtrim: BACKTRIM round - stages the IPDBFIX field bug end to end: the room is reset to its virgin pre-push state (no facts, stamp 0), Indy is flipped (an empty-facts back renders under the ipdb0 key), then the NORMAL push sequence runs and Indy is flipped again - the healed back must stand with its IPDB rows because the stamp bumped on the changed facts, and repeat pushes must not churn it
+var _bt_phase: int = 0
+var _bt_wait: int = 0
+var _bt_failures: int = 0
+var _bt_seat_tries: int = 0
+var _bt_tex_key: String = "" ## the pre-push back's standing key (the stale key the bug served all session)
+var _bt_stamp: int = 0 ## Main's stamp once the push landed (the no-churn witness)
 var _bootfocus_phase: int = 0
 var _bootfocus_wait: int = 0
 var _bootfocus_failures: int = 0
@@ -669,6 +678,8 @@ func _ready() -> void:
 		_bootfocus_game = OS.get_environment("PVLDS_BOOTFOCUS_GAME")
 	if user_args.has("--pvlds-smoke-cardback"):
 		_smoke_cardback = true
+	if user_args.has("--pvlds-smoke-backtrim"):
+		_smoke_backtrim = true
 	if user_args.has("--pvlds-smoke-motion"):
 		_smoke_motion = true
 	if user_args.has("--pvlds-smoke-swingprobe"):
@@ -1068,6 +1079,8 @@ func _process(_delta: float) -> void:
 		_drive_bootfocus_smoke()
 	if _smoke_cardback:
 		_drive_cardback_smoke()
+	if _smoke_backtrim:
+		_drive_backtrim_smoke()
 	if _smoke_motion:
 		_drive_motion_smoke()
 	if _smoke_swingprobe:
@@ -1334,10 +1347,31 @@ func _ipdb_health_line() -> String:
 
 ## Push the cache's facts to the room (its backs render
 ## exactly this map - the flip path never fetches).
+## BACKTRIM: this is the ONLY door the facts take to the
+## room, and it carries the stamp law: the stamp bumps
+## iff the facts being pushed differ from the facts last
+## pushed (size + content hash). The boot seed changes
+## the cache before the first push, so that push bumps -
+## a back rendered before it (empty facts, stamp 0) can
+## never be re-served after it under a matching key (the
+## IPDBFIX field bug: Addams flipped after the push stood
+## full, both Indiana Jones backs flipped before it stayed
+## empty-facts all session). Repeat pushes of unchanged
+## facts (every WoVP push rides this door) hand the
+## standing stamp, so standing backs never churn.
+## Under PVLDS_BACKTRIM_NC=nostamp the stamp never bumps:
+## the pre-fix behaviour, kept as the negative control -
+## the backtrim smoke's stale-back legs fail by name.
 func _push_ipdb_data() -> void:
-	_ipdb_stamp += 1
-	if _room != null:
-		_room.set_ipdb_facts(_ipdb_cache.get("facts", {}) as Dictionary, _ipdb_stamp)
+	if _room == null:
+		return
+	var facts: Dictionary = _ipdb_cache.get("facts", {}) as Dictionary
+	if OS.get_environment("PVLDS_BACKTRIM_NC") != "nostamp":
+		if facts.size() != _ipdb_pushed_size or facts.hash() != _ipdb_pushed_hash:
+			_ipdb_stamp += 1
+			_ipdb_pushed_size = facts.size()
+			_ipdb_pushed_hash = facts.hash()
+	_room.set_ipdb_facts(facts, _ipdb_stamp)
 
 
 ## IPDBFIX: merge the bundled snapshot into the user
@@ -1426,9 +1460,11 @@ func _push_wovp_data() -> void:
 	# time, so a folder/toggle change or fresh files land
 	# on the boards without a restart.
 	_room.set_pinemhi_bests(PinemhiScores.load_for_config(_config))
-	# CARDBACK: the IPDB facts ride the same push (the
-	# standing stamp - only a cache change bumps it).
-	_room.set_ipdb_facts(_ipdb_cache.get("facts", {}) as Dictionary, _ipdb_stamp)
+	# CARDBACK + BACKTRIM: the IPDB facts ride the same
+	# push, through the one door that carries the stamp
+	# law - a repeat ride of unchanged facts never bumps,
+	# and the boot seed's changed facts always do.
+	_push_ipdb_data()
 	_resolve_unowned_shots()
 	# GRADFIX6 (item 3): pre-warm the challenge set's art at
 	# push time - boot/cache-load, long before anyone enters
@@ -14566,6 +14602,160 @@ func _cb_expect(cond: bool, label: String) -> void:
 		print("  ok - cardback smoke: ", label)
 	else:
 		_cb_fail(label)
+
+
+## BACKTRIM smoke: the staged IPDBFIX field bug, judged
+## on the standing back itself. Phase map: 0 the room
+## comes up on the real boot path; 1 the room is reset to
+## its virgin pre-push state (empty facts, stamp 0 - the
+## state a first flip met in the boot window before the
+## first push landed); 2/8 Indy is seated and flipped;
+## 3 the pre-push back is judged (real texture, NO ipdb
+## rows, standing key ends ipdb0) and LEFT STANDING OPEN;
+## 4 the NORMAL push sequence runs (_push_wovp_data, the
+## boot push's own shape); 5 the standing back must heal
+## (its texture re-rendered under a NEW key, and the spec
+## stands Units produced); 6 repeat pushes move nothing.
+func _drive_backtrim_smoke() -> void:
+	match _bt_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and _room._visible_games.size() >= 3:
+				_bt_phase = 1
+				_bt_wait = 0
+			else:
+				_bt_wait += 1
+				if _bt_wait > 7200:
+					_bt_fail("the room never came up on the real boot path")
+					_finish_backtrim_smoke()
+		1:
+			_room.set_ipdb_facts({}, 0)
+			get_viewport().warp_mouse(Vector2(8.0, 592.0))
+			_bt_phase = 2
+			_bt_wait = 0
+			_bt_seat_tries = 0
+		2:
+			if _bt_seat_or_flip("lkSumsrF"):
+				_bt_phase = 3
+				_bt_wait = 0
+		3:
+			_bt_wait += 1
+			var idx3: int = _cb_visible_idx("lkSumsrF")
+			if idx3 >= 0 and _room._flip_idx == idx3 and _room._flip_tex_real:
+				var kv3: Dictionary = _bt_spec_kv(idx3)
+				_bt_expect(int(kv3.get("__ipdb_rows", 0)) == 0 and not kv3.has("Units produced"),
+					"pre-push: Indy's first back stands with NO ipdb rows (the empty-facts render the field met)")
+				_bt_tex_key = _room._flip_tex_key
+				_bt_expect(_bt_tex_key.ends_with("|ipdb0"),
+					"pre-push: the back rendered under the virgin stamp key ('%s')" % _bt_tex_key)
+				_bt_phase = 4
+				_bt_wait = 0
+			elif _bt_wait > 1800:
+				_bt_fail("the pre-push flip of Indy never rendered a real back (flip_idx=%d, tex_key='%s')" % [_room._flip_idx, _room._flip_tex_key])
+				_finish_backtrim_smoke()
+		4:
+			_push_wovp_data()
+			_bt_stamp = _ipdb_stamp
+			_bt_expect((_room._ipdb_facts as Dictionary).has("lkSumsrF"),
+				"the normal push landed: the room holds the seeded facts (Indy among them)")
+			_bt_phase = 5
+			_bt_wait = 0
+		5:
+			_bt_wait += 1
+			var idx5: int = _cb_visible_idx("lkSumsrF")
+			if idx5 >= 0 and _room._flip_idx == idx5 and _room._flip_tex_real and _room._flip_tex_key != _bt_tex_key:
+				_bt_expect(true, "post-push: the standing back re-rendered under a new key ('%s' -> '%s')" % [_bt_tex_key, _room._flip_tex_key])
+				var kv5: Dictionary = _bt_spec_kv(idx5)
+				_bt_expect(str((kv5.get("Units produced", {}) as Dictionary).get("v", "")) == "12,716" and str((kv5.get("Units produced", {}) as Dictionary).get("src", "")) == "ipdb",
+					"post-push: Indy's healed back stands its IPDB production row (units '%s')" % str((kv5.get("Units produced", {}) as Dictionary).get("v", "<none>")))
+				_bt_phase = 6
+				_bt_wait = 0
+			elif _bt_wait > 1800:
+				_bt_fail("the standing back never re-rendered after the facts push (stale key '%s' still stands, tex_key '%s') - the pre-push back is served forever" % [_bt_tex_key, _room._flip_tex_key])
+				_finish_backtrim_smoke()
+		6:
+			var key6: String = _room._flip_tex_key
+			_push_wovp_data()
+			_push_wovp_data()
+			_bt_expect(_ipdb_stamp == _bt_stamp and _room._flip_tex_key == key6,
+				"no churn: repeat pushes of the unchanged facts move neither the stamp (%d -> %d) nor the standing back" % [_bt_stamp, _ipdb_stamp])
+			_finish_backtrim_smoke()
+		8:
+			_bt_wait += 1
+			if _bt_wait >= 45:
+				_bt_phase = 2
+				_bt_wait = 0
+
+
+## Seat the named game at the centre and flip it (the
+## cardback driver's seat discipline). Returns true once
+## the flip is away; on failure records it and finishes.
+func _bt_seat_or_flip(game_id: String) -> bool:
+	var idx: int = _cb_visible_idx(game_id)
+	if idx < 0:
+		_bt_fail("fixture game %s never stood on the wall" % game_id)
+		_finish_backtrim_smoke()
+		return false
+	if _room._centre_index != idx:
+		var panel: ClickableQuad = null
+		for p: ClickableQuad in _room._panels:
+			if p.payload == game_id:
+				panel = p
+				break
+		_bt_seat_tries += 1
+		if _bt_seat_tries > 12:
+			_bt_fail("the wall never centred %s (centre stands at %d)" % [game_id, _room._centre_index])
+			_finish_backtrim_smoke()
+		elif panel != null:
+			_room._set_focused(panel)
+			_bt_wait = 0
+			_bt_phase = 8
+		else:
+			_bt_fail("no panel carries %s" % game_id)
+			_finish_backtrim_smoke()
+		return false
+	if _room._flip_idx != idx:
+		_room._toggle_flip(idx)
+	return true
+
+
+## The spec the room draws for idx, as {row key: {v, src}}
+## + "__ipdb_rows" (the count of ipdb-dotted kv rows) -
+## judged off _card_back_spec, the exact spec
+## _render_card_back draws from.
+func _bt_spec_kv(idx: int) -> Dictionary:
+	var spec: Dictionary = _room._card_back_spec(idx)
+	var kv: Dictionary = {}
+	var ipdb_rows: int = 0
+	for rv: Variant in (spec.get("rows", []) as Array):
+		var rd: Dictionary = rv as Dictionary
+		if str(rd.get("kind", "")) != "kv":
+			continue
+		kv[str(rd.get("k", ""))] = {"v": str(rd.get("v", "")), "src": str(rd.get("src", ""))}
+		if str(rd.get("src", "")) == "ipdb":
+			ipdb_rows += 1
+	kv["__ipdb_rows"] = ipdb_rows
+	return kv
+
+
+func _bt_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - backtrim smoke: ", label)
+	else:
+		_bt_fail(label)
+
+
+func _bt_fail(label: String) -> void:
+	_bt_failures += 1
+	printerr("  FAIL - backtrim smoke: ", label)
+
+
+func _finish_backtrim_smoke() -> void:
+	if _bt_failures == 0:
+		print("PVLDS BACKTRIM SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS BACKTRIM SMOKE: FAIL (%d)" % _bt_failures)
+		get_tree().quit(1)
 
 
 func _cb_fail(label: String) -> void:

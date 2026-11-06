@@ -2065,8 +2065,19 @@ func set_pinemhi_bests(bests: Dictionary) -> void:
 ## flipped, the back heal re-renders it under the new key -
 ## the same discipline the boards' fetch stamp uses.
 func set_ipdb_facts(facts: Dictionary, stamp: int) -> void:
+	var stamp_changed: bool = stamp != _ipdb_stamp
 	_ipdb_facts = facts
 	_ipdb_stamp = stamp
+	# BACKTRIM: a changed stamp is the facts' new name -
+	# a back standing open under the old name re-renders
+	# under the new key, the same heal fresh boards get
+	# in set_wovp_data (whose own heal reads the stamp
+	# before this push lands, so it cannot carry this
+	# one). An unchanged stamp - a repeat push of the
+	# same facts - touches nothing: no churn.
+	if stamp_changed and _flip_idx >= 0:
+		_flip_key = _card_back_key(_flip_idx)
+		_refresh_card_back()
 
 
 func set_wovp_data(d: Dictionary) -> void:
