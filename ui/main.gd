@@ -317,6 +317,13 @@ var _cb_target: int = 0 ## index into the driver's target game list
 var _cb_judged: bool = false
 var _cb_seat_tries: int = 0 ## focus seats attempted for the standing target (a target that never centres fails instead of looping)
 var _smoke_backtrim: bool = false ## --pvlds-smoke-backtrim: BACKTRIM round - stages the IPDBFIX field bug end to end: the room is reset to its virgin pre-push state (no facts, stamp 0), Indy is flipped (an empty-facts back renders under the ipdb0 key), then the NORMAL push sequence runs and Indy is flipped again - the healed back must stand with its IPDB rows because the stamp bumped on the changed facts, and repeat pushes must not churn it
+var _smoke_submit: bool = false ## --pvlds-smoke-submit (SUBMIT round): the desk-stay submission smoke - scans the letter library, fetches the stub's boards, drives the desk's REAL submit section (picker, warning, photo attach, submit press) and reads the stub's request log as the wire's witness. Modes in PVLDS_SUBMIT_SMOKE_MODE: happy | noscore | badphoto | nothigher | shortkey
+var _submit_mode: String = ""
+var _submit_phase: int = 0
+var _submit_wait: int = 0
+var _submit_failures: int = 0
+var _submit_scan_kicked: bool = false
+var _submit_done: bool = false
 var _bt_phase: int = 0
 var _bt_wait: int = 0
 var _bt_failures: int = 0
@@ -680,6 +687,11 @@ func _ready() -> void:
 		_smoke_cardback = true
 	if user_args.has("--pvlds-smoke-backtrim"):
 		_smoke_backtrim = true
+	if user_args.has("--pvlds-smoke-submit"):
+		_smoke_submit = true
+		_submit_mode = OS.get_environment("PVLDS_SUBMIT_SMOKE_MODE")
+		if _submit_mode == "":
+			_submit_mode = "happy"
 	if user_args.has("--pvlds-smoke-motion"):
 		_smoke_motion = true
 	if user_args.has("--pvlds-smoke-swingprobe"):
@@ -963,7 +975,7 @@ func _ready() -> void:
 			_wovp_user_name = str(wovp_cache.get("user_name", ""))
 			_wovp_identity_key_hash = _wovp_key_hash()
 			_wovp_identity_state = "ok"
-	if configured and _config.is_configured() and not user_args.has("--setup") and not _smoke_desk:
+	if configured and _config.is_configured() and not user_args.has("--setup") and not _smoke_desk and not _smoke_submit:
 		# Configured boot: present the desk as a live shell immediately
 		# (first frame, progress ticking) and enter the room only when
 		# the threaded scan lands. No scan runs before the first frame.
@@ -1093,6 +1105,8 @@ func _process(_delta: float) -> void:
 		_drive_cardback_smoke()
 	if _smoke_backtrim:
 		_drive_backtrim_smoke()
+	if _smoke_submit:
+		_drive_submit_smoke()
 	if _smoke_motion:
 		_drive_motion_smoke()
 	if _smoke_swingprobe:
@@ -14772,6 +14786,191 @@ func _cb_expect(cond: bool, label: String) -> void:
 ## boot push's own shape); 5 the standing back must heal
 ## (its texture re-rendered under a NEW key, and the spec
 ## stands Units produced); 6 repeat pushes move nothing.
+## ------------------------------------------------------------
+## Submit smoke (--pvlds-smoke-submit; the SUBMIT round).
+## A desk-stay boot: scan the letter library, fetch the
+## stub's boards, then drive the desk's REAL submit
+## section - the picker, the warning, the photo attach via
+## the real dialog handler, the real submit press - and
+## read the stub's request log as the wire's witness.
+## Modes (PVLDS_SUBMIT_SMOKE_MODE): happy (the full
+## transaction), noscore (the stub's baduser variant: the
+## warning's open door), badphoto (the envelope refuses),
+## nothigher (the submit refuses with words), shortkey
+## (a 5-character key: refused locally, nothing sent).
+
+func _submit_expect(ok: bool, label: String) -> void:
+	if ok:
+		print("PVLDS SUBMIT SMOKE OK: ", label)
+	else:
+		_submit_failures += 1
+		printerr("PVLDS SUBMIT SMOKE FAIL: ", label)
+
+
+func _submit_stub_lines() -> Array:
+	var path: String = OS.get_environment("PVLDS_WOVP_STUB_LOG")
+	var out: Array = []
+	if path == "" or not FileAccess.file_exists(path):
+		return out
+	var f: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return out
+	while not f.eof_reached():
+		var line: String = f.get_line().strip_edges()
+		if line == "":
+			continue
+		var parsed: Variant = JSON.parse_string(line)
+		if parsed is Dictionary:
+			out.append(parsed)
+	return out
+
+
+func _submit_select(challenge_id: String) -> bool:
+	for i: int in range(_desk._submit_rows.size()):
+		if str((_desk._submit_rows[i] as Dictionary).get("challenge_id", "")) == challenge_id:
+			_desk._submit_picker.selected = i
+			_desk._on_submit_challenge_selected(i)
+			return true
+	return false
+
+
+func _drive_submit_smoke() -> void:
+	if _submit_done:
+		return
+	_submit_wait += 1
+	match _submit_phase:
+		0:
+			if _desk == null:
+				if _submit_wait > 3600:
+					_submit_expect(false, "boot: the desk never stood")
+					_submit_finish_smoke()
+				return
+			if _submit_mode == "shortkey":
+				_submit_phase = 10
+				return
+			if not _submit_scan_kicked:
+				_submit_scan_kicked = true
+				start_scan()
+				return
+			if _scan_active:
+				return
+			_wovp_fetch_boards()
+			_submit_phase = 1
+			_submit_wait = 0
+		1:
+			if _desk._submit_rows.size() < 5:
+				if _submit_wait > 7200:
+					_submit_expect(false, "rows: the boards never reached the picker")
+					_submit_finish_smoke()
+				return
+			_submit_run_form_legs()
+			_submit_phase = 2
+			_submit_wait = 0
+		2:
+			var verdict: String = _desk._submit_label.text
+			if verdict == "" or verdict == "Submitting...":
+				if _submit_wait > 7200:
+					_submit_expect(false, "verdict: the submission never answered")
+					_submit_finish_smoke()
+				return
+			_submit_run_verdict_legs(verdict)
+			_submit_finish_smoke()
+		10:
+			# shortkey: no fetch at all - Main's own handler
+			# with the mode's short key must refuse in words
+			# before anything is sent.
+			_on_desk_wovp_submit_requested("fixture-ch-season-main-w3", OS.get_environment("PVLDS_SUBMIT_PHOTO"))
+			_submit_run_verdict_legs(_desk._submit_label.text)
+			_submit_finish_smoke()
+
+
+func _submit_run_form_legs() -> void:
+	_submit_expect(_desk._submit_rows.size() == 5, "picker: all five live challenges stand")
+	_submit_expect(_submit_select("fixture-ch-season-main-w3"), "picker: the Addams challenge selects")
+	# On this fixture his Addams scan resolves to the game
+	# only (no build-level match), so the room's own join
+	# calls it a different build - the section must say so,
+	# and the metadata's file name then honestly ships "".
+	_submit_expect(_desk._submit_info.text.contains("Different build in your library."), "library state: his Addams is a different build and says so")
+	if _submit_mode == "noscore":
+		_submit_expect(_desk._submit_info.text.contains("No score posted yet - any finished game counts."), "warning none: the open door stands when he has no score")
+	else:
+		_submit_expect(_desk._submit_info.text.contains("Your posted score: 24,531,070") and _desk._submit_info.text.contains("beats it"), "warning posted: his posted score is named before anything is sent")
+	_submit_expect(_submit_select("fixture-ch-season-acdc-w3"), "picker: the AC/DC challenge selects")
+	_submit_expect(_desk._submit_info.text.contains("Not in your library."), "library state: a table he does not own says so")
+	_submit_expect(_submit_select("fixture-ch-season-main-w3"), "picker: back to the Addams challenge")
+	# The photo attach, through the desk's real dialog
+	# handler: the name of the chosen file is what shows.
+	var photo: String = OS.get_environment("PVLDS_SUBMIT_PHOTO")
+	_desk._dialog_target = "photo"
+	_desk._on_dialog_file(photo)
+	_submit_expect(_desk._submit_photo_label.text == photo.get_file() and _desk._submit_photo_path == photo, "photo name: the chosen file's name shows")
+	_desk._on_submit_pressed()
+
+
+func _submit_run_verdict_legs(verdict: String) -> void:
+	match _submit_mode:
+		"happy", "noscore":
+			_submit_expect(verdict.contains("Submitted - awaiting validation."), "success words: Submitted - awaiting validation")
+			if _submit_mode == "happy":
+				var lines: Array = _submit_stub_lines()
+				var photo_idx: int = -1
+				var submit_idx: int = -1
+				var body: Dictionary = {}
+				for i: int in range(lines.size()):
+					var p: String = str((lines[i] as Dictionary).get("path", ""))
+					if p.ends_with("/scores/submit-photo") and photo_idx < 0:
+						photo_idx = i
+					if p.ends_with("/scores/submit"):
+						submit_idx = i
+						var sb: Variant = (lines[i] as Dictionary).get("submit_body", {})
+						if sb is Dictionary:
+							body = sb
+				_submit_expect(photo_idx >= 0 and submit_idx > photo_idx, "happy path: the photo went up before the submit")
+				var meta: Dictionary = body.get("metadata", {}) as Dictionary
+				_submit_expect(int(body.get("score", -1)) == 0, "submit body: the score is the literal 0 stub")
+				_submit_expect(str(body.get("challengeId", "")) == "fixture-ch-season-main-w3", "submit body: the challenge binds")
+				_submit_expect(meta.has("pvlds-version") and not meta.has("vpin-studio-version"), "submit body: the metadata is honest to PVLDS")
+				_submit_expect(int(body.get("playingPlatform", -1)) == WovpClient.SUBMIT_PLATFORM and int(meta.get("platform", -2)) == WovpClient.SUBMIT_PLATFORM, "submit body: one platform slot in both fields")
+				var promised: String = "<no row>"
+				for rv2: Variant in _desk._submit_rows:
+					if str((rv2 as Dictionary).get("challenge_id", "")) == "fixture-ch-season-main-w3":
+						promised = str((rv2 as Dictionary).get("vpx_file", ""))
+				_submit_expect(str(meta.get("vpx-file", "")) == promised, "submit body: the file name the section promised is the one sent")
+				var logged: bool = false
+				for ev: Variant in WovpClient.load_submission_log():
+					var e: Dictionary = ev as Dictionary
+					if str(e.get("challenge_id", "")) == "fixture-ch-season-main-w3" and str(e.get("result", "")).contains("awaiting validation"):
+						logged = true
+				_submit_expect(logged, "submission log: the attempt stands in the local log")
+		"badphoto":
+			_submit_expect(verdict.contains("STUB-PHOTO-REFUSED"), "errors abort: the envelope's words reach the player")
+			var saw_submit: bool = false
+			for lv: Variant in _submit_stub_lines():
+				if str((lv as Dictionary).get("path", "")).ends_with("/scores/submit"):
+					saw_submit = true
+			_submit_expect(not saw_submit, "errors abort: the submit was never sent")
+		"nothigher":
+			_submit_expect(verdict.contains("WOVP-STUB-NOT-HIGHER"), "server words: a non-200 refusal reaches the player in the server's words")
+		"shortkey":
+			_submit_expect(verdict.contains("characters"), "key shape: a short key is refused in words before anything is sent")
+			var saw_any: bool = false
+			for lv: Variant in _submit_stub_lines():
+				if str((lv as Dictionary).get("path", "")).contains("/scores/"):
+					saw_any = true
+			_submit_expect(not saw_any, "key shape: nothing was sent")
+
+
+func _submit_finish_smoke() -> void:
+	_submit_done = true
+	if _submit_failures == 0:
+		print("PVLDS SUBMIT SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS SUBMIT SMOKE: FAIL (%d)" % _submit_failures)
+		get_tree().quit(1)
+
+
 func _drive_backtrim_smoke() -> void:
 	match _bt_phase:
 		0:
