@@ -74,6 +74,29 @@ func his_row(user_id: String) -> WovpScoreRow:
 	return null
 
 
+## Negative-control seam (harness env PVLDS_SUBMIT_NC=nowarn,
+## set by Main before anything renders): posted_note answers
+## "" so the submit smoke's warning legs fail by name.
+## Production never sets this.
+static var debug_submit_no_warn: bool = false
+
+
+## The desk submit section's standing warning (the SUBMIT
+## round): the league accepts only a HIGHER score than the
+## one already posted (Chris's rule, stated 2026-11-06), so
+## a submission against a board he already stands on counts
+## only when the photo beats his own number - said plainly,
+## with the number, before he spends the submission. No
+## score yet: any finished game counts.
+func posted_note(user_id: String) -> String:
+	if debug_submit_no_warn:
+		return ""
+	var mine: WovpScoreRow = his_row(user_id)
+	if mine != null:
+		return "Your posted score: %s - a submission only counts if the photo beats it." % format_score(mine.score)
+	return "No score posted yet - any finished game counts."
+
+
 ## The position the cutoff line sits UNDER, per the
 ## challenge type (0 = this type draws no line):
 ## - Battle Royale: under the last survivor - with N rows

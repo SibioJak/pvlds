@@ -19923,6 +19923,120 @@ func _run_core_test() -> void:
 		"wovp: validate on a short key sends nothing - the refusal is local and instant", failures)
 	wovp_probe_client.queue_free()
 
+	# WoVP submit side (the SUBMIT round, 2026-11-06): the
+	# two-step transaction's shapes - the submit body's
+	# honesty (PVLDS's own version key; the score the literal
+	# 0 stub; the platform slot read twice from one place),
+	# the multipart photo part, the upload envelope parser,
+	# the refusal paths driven through the real completion
+	# handler, the posted-score warning, and the local
+	# submission log. No network is touched: refusal legs
+	# finish locally by construction, and the wire itself is
+	# the submit smoke's (stub) business.
+	var sub_body_text: String = WovpClient.submit_body("ch-1", "temp-9", "Some Table (Maker 1990).vpx", "")
+	var sub_body: Variant = JSON.parse_string(sub_body_text)
+	_expect(sub_body is Dictionary, "wovp submit: the submit body is JSON", failures)
+	if sub_body is Dictionary:
+		var sb: Dictionary = sub_body
+		_expect(str(sb.get("challengeId", "")) == "ch-1" and str(sb.get("photoTempId", "")) == "temp-9",
+			"wovp submit: the body binds the challenge and the photo temp id", failures)
+		_expect(int(sb.get("score", -1)) == 0,
+			"wovp submit: the score field is the literal 0 stub - the server reads the photo (Studio's shape)", failures)
+		var sb_meta: Dictionary = sb.get("metadata", {}) as Dictionary
+		_expect(str(sb_meta.get("pvlds-version", "")) == WovpClient.PVLDS_VERSION and str(sb_meta.get("vpx-file", "")) == "Some Table (Maker 1990).vpx"
+			and str(sb_meta.get("rom", "x")) == "" and int(sb_meta.get("platform", -1)) == WovpClient.SUBMIT_PLATFORM,
+			"wovp submit: the metadata names PVLDS's version, his file, the (unknown) rom, and the platform slot", failures)
+		_expect(int(sb.get("playingPlatform", -1)) == WovpClient.SUBMIT_PLATFORM and int(sb.get("playingPlatform", -2)) == int(sb_meta.get("platform", -3)),
+			"wovp submit: playingPlatform and metadata.platform are the ONE slot (SUBMIT_PLATFORM = %d)" % WovpClient.SUBMIT_PLATFORM, failures)
+		_expect(not sub_body_text.contains("vpin-studio"),
+			"wovp submit: nothing in the body claims to be Studio (no vpin-studio-version, ever)", failures)
+	var sub_photo_bytes: PackedByteArray = "JPEG-BYTES-HERE".to_utf8_buffer()
+	var sub_mp: PackedByteArray = WovpClient.multipart_body("My \"Quoted\" Shot.jpg", sub_photo_bytes, "BOUNDARY-X")
+	var sub_mp_text: String = sub_mp.get_string_from_utf8()
+	_expect(sub_mp_text.begins_with("--BOUNDARY-X\r\n") and sub_mp_text.contains("Content-Disposition: form-data; name=\"file\"; filename=\"My _Quoted_ Shot.jpg\"")
+		and sub_mp_text.contains("Content-Type: application/octet-stream") and sub_mp_text.contains("JPEG-BYTES-HERE")
+		and sub_mp_text.ends_with("\r\n--BOUNDARY-X--\r\n"),
+		"wovp submit: the photo part is one binary part named file, filename flattened, bytes untouched, boundary closed", failures)
+	var sub_up_ok: Dictionary = WovpClient.parse_upload_response("{\"data\": {\"photoTempId\": \"tmp-42\", \"photos\": [], \"hasSucceeded\": true, \"errors\": []}}")
+	_expect(bool(sub_up_ok.get("ok", false)) and str(sub_up_ok.get("photo_temp_id", "")) == "tmp-42" and bool(sub_up_ok.get("has_succeeded", false))
+		and (sub_up_ok.get("errors", []) as Array).is_empty(),
+		"wovp submit: a good upload envelope reads its temp id", failures)
+	var sub_up_err: Dictionary = WovpClient.parse_upload_response("{\"data\": {\"photoTempId\": \"\", \"photos\": [], \"hasSucceeded\": false, \"errors\": [\"photo unreadable\", \"too dark\"]}}")
+	_expect(bool(sub_up_err.get("ok", false)) and (sub_up_err.get("errors", []) as Array).size() == 2,
+		"wovp submit: a refusing envelope carries its errors verbatim", failures)
+	_expect(not bool(WovpClient.parse_upload_response("not json").get("ok", true))
+		and not bool(WovpClient.parse_upload_response("{}").get("ok", true)),
+		"wovp submit: an envelope that is not the shape fails closed", failures)
+	# The refusal paths, driven through the real completion
+	# handler (a fresh probe client; its step-2 is never
+	# armed here - a refusal finishes before any request).
+	var sub_probe: WovpClient = WovpClient.new()
+	add_child(sub_probe)
+	var sub_answers: Array = []
+	sub_probe.submit_finished.connect(func(ok: bool, message: String, cid: String, photo: String) -> void: sub_answers.append({"ok": ok, "message": message, "cid": cid, "photo": photo}))
+	sub_probe._pending_submit = {"challenge_id": "fixture-ch-season-main-w3", "photo_name": "shot.jpg"}
+	sub_probe._pending_kind = "submit_photo"
+	sub_probe._on_request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(),
+		"{\"data\": {\"photoTempId\": \"\", \"photos\": [], \"hasSucceeded\": false, \"errors\": [\"DISTINCTIVE-PHOTO-REFUSAL\"]}}".to_utf8_buffer())
+	_expect(sub_answers.size() == 1 and not bool((sub_answers[0] as Dictionary).get("ok", true))
+		and str((sub_answers[0] as Dictionary).get("message", "")).contains("WoVP refused the photo: DISTINCTIVE-PHOTO-REFUSAL")
+		and sub_probe._pending_kind == "" and not sub_probe.is_busy(),
+		"wovp submit: an errors[] answer aborts the transaction - the submit is never armed", failures)
+	sub_probe._pending_submit = {"challenge_id": "fixture-ch-season-main-w3", "photo_name": "shot.jpg"}
+	sub_probe._pending_kind = "submit"
+	sub_probe._on_request_completed(HTTPRequest.RESULT_SUCCESS, 400, PackedStringArray(), "\"DISTINCTIVE-SUBMIT-REFUSAL\"".to_utf8_buffer())
+	_expect(sub_answers.size() == 2 and not bool((sub_answers[1] as Dictionary).get("ok", true))
+		and str((sub_answers[1] as Dictionary).get("message", "")).contains("DISTINCTIVE-SUBMIT-REFUSAL")
+		and str((sub_answers[1] as Dictionary).get("message", "")).contains("HTTP 400"),
+		"wovp submit: a submit refusal carries WoVP's own words, like every refusal here", failures)
+	sub_probe._pending_submit = {"challenge_id": "fixture-ch-season-main-w3", "photo_name": "shot.jpg"}
+	sub_probe._pending_kind = "submit"
+	sub_probe._on_request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), "{}".to_utf8_buffer())
+	_expect(sub_answers.size() == 3 and bool((sub_answers[2] as Dictionary).get("ok", false))
+		and str((sub_answers[2] as Dictionary).get("message", "")) == "Submitted - awaiting validation.",
+		"wovp submit: a 200 the envelope cannot speak for still succeeds - the status is the answer (Studio's rule)", failures)
+	sub_answers.clear()
+	sub_probe.submit_score("short", "fixture-ch-season-main-w3", "/nonexistent/shot.jpg", "", "")
+	_expect(sub_answers.size() == 1 and not bool((sub_answers[0] as Dictionary).get("ok", true))
+		and str((sub_answers[0] as Dictionary).get("message", "")).contains("5 characters") and not sub_probe.is_busy(),
+		"wovp submit: a short key is refused in words before anything is sent", failures)
+	sub_probe.queue_free()
+	# The warning (Chris's rule): his number, named; no
+	# number, the open door; the seam, silence.
+	if wovp_challenges.size() == 5:
+		var sub_ch: WovpChallenge = wovp_challenges[0] as WovpChallenge
+		_expect(sub_ch.posted_note("fixture-user-1") == "Your posted score: 24,531,070 - a submission only counts if the photo beats it.",
+			"wovp submit: the warning names his posted score, grouped the pinball way", failures)
+		_expect(sub_ch.posted_note("fixture-user-ghost") == "No score posted yet - any finished game counts.",
+			"wovp submit: no posted score reads as the open door", failures)
+		WovpChallenge.debug_submit_no_warn = true
+		_expect(sub_ch.posted_note("fixture-user-1") == "",
+			"wovp submit: the nowarn seam silences the warning (the smoke's NC drives it)", failures)
+		WovpChallenge.debug_submit_no_warn = false
+	# The local submission log: appended entries load back
+	# whole (backed up + restored like the cache above).
+	var sub_log_file: String = WovpClient.submission_log_path()
+	var sub_log_backup: String = ""
+	if FileAccess.file_exists(sub_log_file):
+		sub_log_backup = FileAccess.get_file_as_string(sub_log_file)
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(sub_log_file))
+	_expect(WovpClient.load_submission_log().is_empty(),
+		"wovp submit: no log file yet reads as an empty trail", failures)
+	_expect(WovpClient.append_submission_log({"time": 1761435600, "challenge_id": "ch-1", "challenge": "Main - Week 3", "photo": "shot.jpg", "result": "Submitted - awaiting validation."})
+		and WovpClient.append_submission_log({"time": 1761435700, "challenge_id": "ch-2", "challenge": "Extra - Biweekly 2", "photo": "shot2.jpg", "result": "WoVP refused the photo: too dark"}),
+		"wovp submit: attempts append to the local log", failures)
+	var sub_log: Array = WovpClient.load_submission_log()
+	_expect(sub_log.size() == 2 and str((sub_log[0] as Dictionary).get("photo", "")) == "shot.jpg"
+		and str((sub_log[1] as Dictionary).get("result", "")).contains("refused"),
+		"wovp submit: the log loads back - challenge, photo name, outcome (never a key)", failures)
+	if sub_log_backup != "":
+		var slf: FileAccess = FileAccess.open(sub_log_file, FileAccess.WRITE)
+		if slf != null:
+			slf.store_string(sub_log_backup)
+			slf.close()
+	elif FileAccess.file_exists(sub_log_file):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(sub_log_file))
+
 	# NEXTROUND (item 4): the PINemHi reader. A fabricated
 	# install tree under user:// (the genuine Apollo 13
 	# file's parse is proven in the tournament smoke, whose

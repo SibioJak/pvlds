@@ -1,16 +1,21 @@
 class_name WovpClient
 extends Node
 
-## The World of Virtual Pinball client - READ SIDE ONLY.
-## Two calls exist here, the two the Tournament Room's wall
-## needs (contract: the scores spike, FINDINGS.md, from VPin
-## Studio's published connector source):
+## The World of Virtual Pinball client.
+## Four calls (contract: the scores spike, FINDINGS.md, from
+## VPin Studio's published connector source):
 ##   POST validate-apikey   - whose key is this?
 ##   POST challenges/search - every in-progress challenge
 ##                            with its full scoreboard
-## There is deliberately NO submission code in this file -
-## no submit endpoint is named, let alone called (the round's
-## scope, 2026-10-28: read side first, zero submission risk).
+##   POST scores/submit-photo - upload the evidence photo,
+##                            get its temp id (SUBMIT round)
+##   POST scores/submit       - submit against a challenge
+##                            with that temp id (SUBMIT round)
+## The read side shipped first (2026-10-28) with submission
+## deliberately absent; the SUBMIT round (2026-11-06) adds
+## the two-step submission after Chris's notice to the
+## league admin went out - see the submission section below
+## for its own honesty rules.
 ##
 ## Honesty rules this file lives by:
 ## - X-Client-ID identifies PVLDS as itself ("pvlds"). It
@@ -39,16 +44,38 @@ extends Node
 
 signal validation_finished(ok: bool, message: String, user_id: String, display_name: String)
 signal challenges_finished(ok: bool, message: String, challenges: Array, raw_body: String)
+signal submit_finished(ok: bool, message: String, challenge_id: String, photo_name: String)
 
 const BASE_URL: String = "https://worldofvirtualpinball.com/api/whsc/v1/"
 const VALIDATE_PATH: String = "validate-apikey"
 const CHALLENGES_PATH: String = "challenges/search"
+const SUBMIT_PHOTO_PATH: String = "scores/submit-photo"
+const SUBMIT_PATH: String = "scores/submit"
 const CLIENT_ID: String = "pvlds"
+## The version the submit metadata names as PVLDS's own
+## (the "pvlds-version" key - never Studio's key, see
+## submit_body). PVLDS carries no other version number;
+## this wire identity is the first.
+const PVLDS_VERSION: String = "1.0.0"
+## ============================================================
+## THE PLATFORM SLOT (SUBMIT round): the playingPlatform
+## value PVLDS sends, read by BOTH the submit body's
+## "platform" metadata and its top-level "playingPlatform"
+## (Studio sets the two equal). What the WoVP server's
+## values mean - in particular which one denotes VR - is
+## unknown from every client source (spike §8); Chris has
+## asked the league admin (email sent 2026-11-06) and the
+## answer lands HERE, in this one constant, and nowhere
+## else. Default 0 = Studio's multi-screen value, the
+## least-wrong placeholder until the answer arrives.
+## ============================================================
+const SUBMIT_PLATFORM: int = 0
 const KEY_LENGTH: int = 32 ## the league's own rule, proven live by probe (HTTP400.md): a WoVP key is exactly 32 characters - any other length is refused before the key is even read
 const ERROR_BODY_MAX_CHARS: int = 200 ## how much of WoVP's own answer an error line will quote before the quote is cut and the cut is stated
 const REQUEST_TIMEOUT_SEC: float = 30.0 ## Studio's request timeout (spike); its connect timeout maps to the same budget headless
 
 const CACHE_FILE_NAME: String = "wovp_cache.json"
+const SUBMISSION_LOG_FILE_NAME: String = "wovp_submissions.json"
 
 ## Negative-control seam (harness env PVLDS_WOVP_NC=clientid,
 ## set by Main before any request): send Studio's client id
@@ -56,9 +83,20 @@ const CACHE_FILE_NAME: String = "wovp_cache.json"
 ## leg fails by name. Production never sets this.
 static var debug_client_id_override: String = ""
 
+## Negative-control seams for the submit side (harness env
+## PVLDS_SUBMIT_NC, set by Main before any request):
+## "noupload" - submit_score skips the photo step entirely
+## and submits with no temp id, so the submit smoke's
+## upload-order leg fails by name; "nosurface" - a non-200
+## on a submit call answers with the bare code and none of
+## the server's words, so the error-surfacing leg fails by
+## name. Production never sets this.
+static var debug_submit_nc: String = ""
+
 var _http: HTTPRequest
 var _busy: bool = false
-var _pending_kind: String = "" ## "validate" | "search"
+var _pending_kind: String = "" ## "validate" | "search" | "submit_photo" | "submit"
+var _pending_submit: Dictionary = {} ## the in-flight submission's trail: challenge_id, photo_name, vpx_file, rom (the answer + the log entry are built from it)
 
 
 func _init() -> void:
@@ -197,17 +235,188 @@ static func search_body() -> String:
 	})
 
 
+## ------------------------------------------------------------
+## Submission (the SUBMIT round): Studio's two-step
+## transaction, field for field (spike §1):
+##   1. scores/submit-photo - the evidence photo, multipart
+##      with a single binary part named "file"; the answer's
+##      envelope names a photoTempId, or refuses with
+##      errors[] - and a refusal ABORTS: the submit call is
+##      never sent.
+##   2. scores/submit - the challenge id, the temp id, and
+##      score 0: the number is a stub (Studio sends literal
+##      0; the server reads the score off the photo).
+## Local refusals come first and send nothing: a busy
+## client, no key, a key of the wrong length (WoVP's own
+## 32-character rule, answered in words before the wire -
+## the HTTP400.md law), a photo that cannot be read. The
+## key rides in _pending_submit only between the two steps
+## and is dropped when the flow finishes; it is never
+## printed and never logged.
+func submit_score(api_key: String, challenge_id: String, photo_path: String, vpx_file: String, rom_name: String) -> void:
+	if _busy:
+		# Refused without touching the in-flight flow's
+		# trail (the read side's busy shape): the answer
+		# names this call's own challenge and photo.
+		submit_finished.emit(false, "Another WoVP request is already running - one moment.", challenge_id, photo_path.get_file())
+		return
+	_pending_submit = {
+		"challenge_id": challenge_id,
+		"photo_name": photo_path.get_file(),
+		"vpx_file": vpx_file,
+		"rom": rom_name,
+	}
+	if api_key.strip_edges() == "":
+		_finish_submit(false, "No WoVP key saved - add it in SETUP first.")
+		return
+	var length_note: String = key_length_note(api_key)
+	if length_note != "":
+		_finish_submit(false, length_note)
+		return
+	if challenge_id == "":
+		_finish_submit(false, "No challenge chosen - pick one first.")
+		return
+	_pending_submit["api_key"] = api_key
+	_busy = true
+	if debug_submit_nc == "noupload":
+		_start_submit("")
+		return
+	var f: FileAccess = FileAccess.open(photo_path, FileAccess.READ)
+	if f == null:
+		_finish_submit(false, "That photo could not be read: %s" % photo_path)
+		return
+	var data: PackedByteArray = f.get_buffer(f.get_length())
+	f.close()
+	if data.is_empty():
+		_finish_submit(false, "That photo is empty: %s" % photo_path)
+		return
+	_pending_kind = "submit_photo"
+	var boundary: String = "----PVLDSFormBoundary" + str(Time.get_ticks_msec()) + "x" + str(data.size())
+	var headers: PackedStringArray = PackedStringArray([
+		"Content-Type: multipart/form-data; boundary=" + boundary,
+		"X-Client-ID: " + client_id(),
+		"Authorization: Bearer " + api_key,
+	])
+	var err: Error = _http.request_raw(base_url() + SUBMIT_PHOTO_PATH, headers, HTTPClient.METHOD_POST,
+		multipart_body(str(_pending_submit.get("photo_name", "")), data, boundary))
+	if err != OK:
+		_finish_submit(false, "Could not start the photo upload to WoVP (error %d)." % err)
+
+
+## Step 2 of the transaction: the JSON submit, carrying the
+## temp id step 1 issued ("" only under the noupload
+## negative control, which exists to break this order).
+func _start_submit(photo_temp_id: String) -> void:
+	_busy = true ## the completion handler cleared it between the two steps; the transaction is still in flight
+	_pending_kind = "submit"
+	var body: String = submit_body(
+		str(_pending_submit.get("challenge_id", "")), photo_temp_id,
+		str(_pending_submit.get("vpx_file", "")), str(_pending_submit.get("rom", "")))
+	var headers: PackedStringArray = PackedStringArray([
+		"Content-Type: application/json",
+		"X-Client-ID: " + client_id(),
+		"Authorization: Bearer " + str(_pending_submit.get("api_key", "")),
+	])
+	var err: Error = _http.request(base_url() + SUBMIT_PATH, headers, HTTPClient.METHOD_POST, body)
+	if err != OK:
+		_finish_submit(false, "Could not start the submission to WoVP (error %d)." % err)
+
+
+## The submission's one exit: the signal fires exactly once
+## per submit_score call, and the pending trail (the key
+## included) is dropped.
+func _finish_submit(ok: bool, message: String) -> void:
+	_busy = false
+	_pending_kind = ""
+	var challenge_id: String = str(_pending_submit.get("challenge_id", ""))
+	var photo_name: String = str(_pending_submit.get("photo_name", ""))
+	_pending_submit = {}
+	submit_finished.emit(ok, message, challenge_id, photo_name)
+
+
+## The multipart body for the photo upload: one binary part
+## named "file", the local file's name riding as the
+## filename (quotes and line breaks in a name are flattened
+## - they would break the part header). Studio's shape,
+## byte for byte: header, the file's bytes untouched, the
+## closing boundary.
+static func multipart_body(file_name: String, data: PackedByteArray, boundary: String) -> PackedByteArray:
+	var safe_name: String = file_name.replace("\"", "_").replace("\r", "_").replace("\n", "_")
+	var head: String = "--" + boundary + "\r\n" \
+		+ "Content-Disposition: form-data; name=\"file\"; filename=\"" + safe_name + "\"\r\n" \
+		+ "Content-Type: application/octet-stream\r\n\r\n"
+	var tail: String = "\r\n--" + boundary + "--\r\n"
+	var out: PackedByteArray = head.to_utf8_buffer()
+	out.append_array(data)
+	out.append_array(tail.to_utf8_buffer())
+	return out
+
+
+## The scores/submit body, Studio's ScoreSubmit shape with
+## PVLDS's own honesty applied: the version key names
+## PVLDS ("pvlds-version" - Studio's "vpin-studio-version"
+## would be impersonation, the same line the client-id
+## draws), and the score is the literal 0 stub (the server
+## reads the photo). playingPlatform and metadata.platform
+## are the ONE platform slot (SUBMIT_PLATFORM).
+static func submit_body(challenge_id: String, photo_temp_id: String, vpx_file: String, rom_name: String) -> String:
+	return JSON.stringify({
+		"challengeId": challenge_id,
+		"photoTempId": photo_temp_id,
+		"score": 0,
+		"metadata": {
+			"pvlds-version": PVLDS_VERSION,
+			"vpx-file": vpx_file,
+			"rom": rom_name,
+			"platform": SUBMIT_PLATFORM,
+		},
+		"playingPlatform": SUBMIT_PLATFORM,
+		"note": "",
+	})
+
+
+## Parse a submit-photo / submit answer envelope:
+## {data: {photoTempId, photos[], hasSucceeded, errors[]}}
+## (the spike's UploadResponse). Fails closed like every
+## parser here: a body that is not that shape is not ok,
+## with the reason stated.
+static func parse_upload_response(text: String) -> Dictionary:
+	var parsed: Variant = JSON.parse_string(text)
+	if not (parsed is Dictionary):
+		return _fail("WoVP's answer was not readable (not the expected shape).")
+	var top: Dictionary = _ci(parsed)
+	var data_raw: Variant = top.get("data")
+	if not (data_raw is Dictionary):
+		return _fail("WoVP's answer carried no result data.")
+	var d: Dictionary = _ci(data_raw)
+	var errors: Array[String] = []
+	var errors_raw: Variant = d.get("errors")
+	if errors_raw is Array:
+		var errs: Array = errors_raw
+		for e: Variant in errs:
+			errors.append(str(e))
+	return {
+		"ok": true,
+		"photo_temp_id": _ci_str(d, "photoTempId"),
+		"has_succeeded": _ci_bool(d, "hasSucceeded", errors.is_empty()),
+		"errors": errors,
+	}
+
+
 func _on_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	var kind: String = _pending_kind
 	_busy = false
 	_pending_kind = ""
+	var is_submit: bool = kind == "submit_photo" or kind == "submit"
 	if result != HTTPRequest.RESULT_SUCCESS:
 		var why: String = "Could not reach WoVP - check the network connection."
 		if result == HTTPRequest.RESULT_TIMEOUT:
 			why = "WoVP did not answer in time."
 		elif result == HTTPRequest.RESULT_CANT_CONNECT or result == HTTPRequest.RESULT_CONNECTION_ERROR:
 			why = "Could not connect to WoVP - check the network connection."
-		if kind == "validate":
+		if is_submit:
+			_finish_submit(false, why)
+		elif kind == "validate":
 			validation_finished.emit(false, why, "", "")
 		else:
 			challenges_finished.emit(false, why, [], "")
@@ -217,14 +426,63 @@ func _on_request_completed(result: int, response_code: int, _headers: PackedStri
 		if response_code == 401 or response_code == 403:
 			why = "WoVP did not accept that key (HTTP %d)." % response_code
 		var words: String = server_words(body)
+		# The error-surfacing law (HTTP400.md): the server's
+		# own words ride the message - except under the
+		# nosurface negative control, which drops them so the
+		# submit smoke's surfacing leg fails by name.
+		if is_submit and debug_submit_nc == "nosurface":
+			words = ""
 		if words != "":
 			why += " WoVP said: " + words
-		if kind == "validate":
+		if is_submit:
+			_finish_submit(false, why)
+		elif kind == "validate":
 			validation_finished.emit(false, why, "", "")
 		else:
 			challenges_finished.emit(false, why, [], "")
 		return
 	var text: String = body.get_string_from_utf8()
+	if kind == "submit_photo":
+		var up: Dictionary = parse_upload_response(text)
+		if not bool(up.get("ok", false)):
+			_finish_submit(false, str(up.get("error", "WoVP's answer could not be read.")))
+			return
+		var up_errors: Array = up.get("errors", [])
+		if not up_errors.is_empty():
+			# The envelope's refusal: the transaction aborts
+			# here - the submit call is never sent (Studio's
+			# rule, and the league's photo is the whole case).
+			var parts: Array[String] = []
+			for e: Variant in up_errors:
+				parts.append(str(e))
+			_finish_submit(false, "WoVP refused the photo: " + "; ".join(parts))
+			return
+		if not bool(up.get("has_succeeded", false)):
+			_finish_submit(false, "WoVP did not accept the photo.")
+			return
+		var temp_id: String = str(up.get("photo_temp_id", ""))
+		if temp_id == "":
+			_finish_submit(false, "WoVP accepted the photo but named no upload id for it.")
+			return
+		_start_submit(temp_id)
+		return
+	if kind == "submit":
+		# Studio ignores the submit answer beyond its status;
+		# PVLDS reads one thing more - an envelope carrying
+		# errors[] is a stated refusal, and its words are the
+		# player's answer (e.g. a score that does not beat the
+		# posted one must never read as a success).
+		var sub: Dictionary = parse_upload_response(text)
+		if bool(sub.get("ok", false)):
+			var sub_errors: Array = sub.get("errors", [])
+			if not sub_errors.is_empty():
+				var sparts: Array[String] = []
+				for e2: Variant in sub_errors:
+					sparts.append(str(e2))
+				_finish_submit(false, "WoVP refused the submission: " + "; ".join(sparts))
+				return
+		_finish_submit(true, "Submitted - awaiting validation.")
+		return
 	if kind == "validate":
 		var v: Dictionary = parse_validation(text)
 		if bool(v.get("ok", false)):
@@ -546,3 +804,39 @@ static func load_cache() -> Dictionary:
 		"key_hash": int(d.get("key_hash", 0)),
 		"fetched_at": int(d.get("fetched_at", 0)),
 	}
+
+
+# ------------------------------------------------------------ the submission log
+
+static func submission_log_path() -> String:
+	return "user://".path_join(SUBMISSION_LOG_FILE_NAME)
+
+
+## The local trail of submission attempts (the SUBMIT
+## round): every attempt's outcome, appended as
+## {time, challenge_id, challenge, photo, result} - the
+## photo's NAME only, never its path or bytes, and never
+## any key material. The league keeps the authoritative
+## record; this is the player's own receipt book, so a
+## submission made weeks ago can still be answered for.
+static func load_submission_log() -> Array:
+	if not FileAccess.file_exists(submission_log_path()):
+		return []
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(submission_log_path()))
+	if not (parsed is Dictionary):
+		return []
+	var entries: Variant = (parsed as Dictionary).get("entries")
+	if entries is Array:
+		return entries
+	return []
+
+
+static func append_submission_log(entry: Dictionary) -> bool:
+	var entries: Array = load_submission_log()
+	entries.append(entry)
+	var f: FileAccess = FileAccess.open(submission_log_path(), FileAccess.WRITE)
+	if f == null:
+		return false
+	f.store_string(JSON.stringify({"entries": entries}, "\t"))
+	f.close()
+	return true
