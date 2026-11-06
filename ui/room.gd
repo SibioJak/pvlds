@@ -8903,7 +8903,13 @@ func show_submit_panel(ch: WovpChallenge, owned: bool, build_owned: bool) -> voi
 func _build_submit_panel() -> void:
 	_submit_panel = Node3D.new()
 	_submit_panel.name = "SubmitPanel"
-	_submit_panel.position = Vector3(0.0, 1.32, -1.72)
+	# SUBMITDIST: the seat is the submit panel's OWN, pushed
+	# back from the SETUP family's -1.72 to -2.30 - at -1.72
+	# the 1024x532 face plus the 1.06x0.76 photo filled the
+	# view ("its in your face", field 2026-11-06). Distance
+	# is the only knob: the panel keeps its physical size,
+	# and the SETUP panel keeps its own -1.72 seat.
+	_submit_panel.position = Vector3(0.0, 1.32, -2.30)
 	var placeholder: Texture2D = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
 	_submit_panel_face = ClickableQuad.new()
 	_submit_panel_face.setup("submit_panel_face", "", placeholder, Vector2(1.5, 0.78))
