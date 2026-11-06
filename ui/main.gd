@@ -336,6 +336,15 @@ var _rs_done: bool = false
 var _rs_deadline: int = 0
 var _rs_idx: int = -1 ## the Addams challenge's row/panel index in the standing tournament view
 var _rs_searches_before: int = 0 ## the stub's search count when the send fired (the refresh leg's baseline)
+var _smoke_return: bool = false ## --pvlds-smoke-return (RETURN round): the return-to-origin smoke - a launch boot fires a real launch (from the Tournament Room or the library wall) and the hand-off exits; a verify boot on the same staged HOME judges where the return landing put the player. Modes in PVLDS_RETURN_SMOKE_MODE: launch_tourn | launch_lib | verify_tourn | verify_lib | verify_vanish. PVLDS_RETURN_NC=oldway on the verify boot must fail the "tourn: returns to the tournament room" leg by name
+var _ret_mode: String = ""
+var _ret_phase: int = 0
+var _ret_wait: int = 0
+var _ret_failures: int = 0
+var _ret_done: bool = false
+var _ret_deadline: int = 0
+var _ret_idx: int = -1 ## the target's row/panel index (the Twilight Zone challenge, or its library card)
+var _ret_seen_pending: bool = false ## the load wait was seen running (a settle back to not-pending with the process alive is a FAILED load, not a return)
 var _bt_phase: int = 0
 var _bt_wait: int = 0
 var _bt_failures: int = 0
@@ -709,6 +718,11 @@ func _ready() -> void:
 		_rs_mode = OS.get_environment("PVLDS_ROOMSUBMIT_SMOKE_MODE")
 		if _rs_mode == "":
 			_rs_mode = "happy"
+	if user_args.has("--pvlds-smoke-return"):
+		_smoke_return = true
+		_ret_mode = OS.get_environment("PVLDS_RETURN_SMOKE_MODE")
+		if _ret_mode == "":
+			_ret_mode = "verify_tourn"
 	if user_args.has("--pvlds-smoke-motion"):
 		_smoke_motion = true
 	if user_args.has("--pvlds-smoke-swingprobe"):
@@ -928,7 +942,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1129,6 +1143,8 @@ func _process(_delta: float) -> void:
 		_drive_submit_smoke()
 	if _smoke_roomsubmit:
 		_drive_roomsubmit_smoke()
+	if _smoke_return:
+		_drive_return_smoke()
 	if _smoke_motion:
 		_drive_motion_smoke()
 	if _smoke_swingprobe:
@@ -15637,6 +15653,207 @@ func _rs_finish_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS ROOMSUBMIT SMOKE: FAIL (%d)" % _rs_failures)
+		get_tree().quit(1)
+
+
+## Return smoke (--pvlds-smoke-return; the RETURN round).
+## Two boots share one staged HOME (the harness script runs
+## them back to back): a launch boot fires a REAL launch -
+## from the Tournament Room (launch_tourn) or the library
+## wall (launch_lib) - against the stub VPX with the real
+## watchdog on duty; the hand-off exits the process, and the
+## script reads the origin record off the state file. The
+## verify boot (verify_tourn | verify_lib | verify_vanish)
+## is the return boot's stand-in: same HOME, and it judges
+## where the room entry landed once the entry's own boards
+## fetch has settled. The target is Twilight Zone both ways:
+## its challenge (fixture-ch-br-r4) stands at row 2 of the
+## stub's boards - deep enough that no default landing (the
+## rail stop, the first row) can fake the seat - and its
+## library card is the just-played seating's witness.
+
+const RET_TZ_ID: String = "fixture-ch-br-r4"
+const RET_TZ_TITLE: String = "Twilight Zone"
+
+
+func _ret_expect(ok: bool, label: String) -> void:
+	if ok:
+		print("PVLDS RETURN SMOKE OK: ", label)
+	else:
+		_ret_failures += 1
+		printerr("PVLDS RETURN SMOKE FAIL: ", label)
+
+
+func _ret_inject(button: JoyButton, pressed: bool) -> void:
+	var ev: InputEventJoypadButton = InputEventJoypadButton.new()
+	ev.device = 0
+	ev.button_index = button
+	ev.pressed = pressed
+	Input.parse_input_event(ev)
+
+
+func _ret_challenge_idx(challenge_id: String) -> int:
+	var rows: Array = _room.tournament_rows()
+	for i: int in range(rows.size()):
+		var row: Dictionary = rows[i] as Dictionary
+		if str(row.get("kind", "")) == "challenge":
+			var ch: WovpChallenge = row.get("challenge") as WovpChallenge
+			if ch != null and ch.challenge_id == challenge_id:
+				return i
+	return -1
+
+
+func _ret_tz_game_id() -> String:
+	if _scanner == null:
+		return ""
+	for g: GameEntry in _scanner.games:
+		if g != null and g.title == RET_TZ_TITLE:
+			return g.game_id
+	return ""
+
+
+func _drive_return_smoke() -> void:
+	if _ret_done:
+		return
+	_ret_wait += 1
+	match _ret_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_ret_deadline = Time.get_ticks_msec() + 45000
+				if _ret_mode == "launch_tourn":
+					_room._handle_rail("tournament")
+					_ret_expect(_room.tournament_active(), "launch: the TOURNAMENT stop raises the Tournament Room")
+					_ret_phase = 1
+				elif _ret_mode == "launch_lib":
+					_ret_phase = 5
+				else:
+					_ret_phase = 7 ## verify modes judge the landing as it stands
+				_ret_wait = 0
+			elif _ret_wait > 3600:
+				_ret_expect(false, "boot: the room never came up")
+				_ret_finish_smoke()
+		1:
+			# launch_tourn: the boards live, then seat the target.
+			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _tournament_boards_all_real():
+				_ret_idx = _ret_challenge_idx(RET_TZ_ID)
+				_ret_expect(_ret_idx >= 0, "launch: the Twilight Zone challenge stands in the tournament view")
+				if _ret_idx < 0:
+					_ret_finish_smoke()
+					return
+				get_viewport().warp_mouse(Vector2(512, 764))
+				_room._set_centre(_ret_idx, false)
+				_room._set_focused(_room._panels[_ret_idx])
+				_ret_deadline = Time.get_ticks_msec() + 20000
+				_ret_phase = 2
+				_ret_wait = 0
+			elif Time.get_ticks_msec() > _ret_deadline:
+				_ret_expect(false, "launch: the boards never went live against the stub")
+				_ret_finish_smoke()
+		5:
+			# launch_lib: seat the same table on the library wall.
+			var gid: String = _ret_tz_game_id()
+			_ret_idx = -1
+			if gid != "":
+				for i: int in range(_room._visible_games.size()):
+					if _room._visible_games[i].game_id == gid:
+						_ret_idx = i
+						break
+			_ret_expect(_ret_idx >= 0, "launch: Twilight Zone stands in the library")
+			if _ret_idx < 0:
+				_ret_finish_smoke()
+				return
+			get_viewport().warp_mouse(Vector2(512, 764))
+			_room._set_centre(_ret_idx, false)
+			_room._set_focused(_room._panels[_ret_idx])
+			_ret_deadline = Time.get_ticks_msec() + 20000
+			_ret_phase = 2
+			_ret_wait = 0
+		2:
+			# Both launch modes: centred on the target, then A.
+			if _room.centre_index() == _ret_idx and not _room.page_slide_active() and _ret_wait >= 6:
+				_ret_expect(_room.focused_quad() == _room._panels[_ret_idx], "launch: the target card stands focused")
+				_ret_inject(JOY_BUTTON_A, true)
+				_ret_phase = 3
+				_ret_wait = 0
+			elif Time.get_ticks_msec() > _ret_deadline:
+				_ret_expect(false, "launch: the target card never centred")
+				_ret_finish_smoke()
+		3:
+			if _ret_wait >= 2:
+				_ret_inject(JOY_BUTTON_A, false)
+				_ret_deadline = Time.get_ticks_msec() + 120000
+				_ret_phase = 4
+				_ret_wait = 0
+		4:
+			# The load wait: success exits this process at the
+			# hand-off (the script + the state file judge it).
+			# A settle back to not-pending with the process
+			# still standing is a FAILED load, not a return.
+			if _launch_pending:
+				if not _ret_seen_pending:
+					_ret_seen_pending = true
+					print("PVLDS RETURN SMOKE: launch wait running - the origin record should be on disk")
+			elif _ret_seen_pending:
+				_ret_expect(false, "launch: the hand-off completed (a failed settle leaves the process standing)")
+				_ret_finish_smoke()
+			elif Time.get_ticks_msec() > _ret_deadline:
+				_ret_expect(false, "launch: the load wait never began")
+				_ret_finish_smoke()
+		7:
+			# Verify modes: the landing was decided at room
+			# entry; let the entry's boards fetch settle, then
+			# judge where the player stands.
+			if _ret_mode == "verify_lib":
+				if _ret_wait >= 30:
+					_ret_verify_legs()
+					_ret_finish_smoke()
+			elif _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy():
+				if _ret_wait >= 15:
+					_ret_verify_legs()
+					_ret_finish_smoke()
+			elif Time.get_ticks_msec() > _ret_deadline:
+				_ret_expect(false, "verify: the boards never went live against the stub")
+				_ret_finish_smoke()
+
+
+func _ret_verify_legs() -> void:
+	match _ret_mode:
+		"verify_tourn":
+			_ret_expect(_room.tournament_active(), "tourn: returns to the tournament room")
+			_ret_expect(_room.tournament_focused_challenge_id() == RET_TZ_ID,
+				"tourn: the launched challenge stands focused")
+			var idx: int = _ret_challenge_idx(RET_TZ_ID)
+			_ret_expect(idx >= 0 and _room.centre_index() == idx,
+				"tourn: the launched challenge stands centred")
+			_grad_save_grab("return_tourn.png")
+		"verify_vanish":
+			_ret_expect(_room.tournament_active(), "vanish: returns to the tournament room")
+			_ret_expect(_ret_challenge_idx(RET_TZ_ID) < 0,
+				"vanish: the gone challenge no longer stands")
+			_ret_expect(_room.tournament_focused_challenge_id() == "",
+				"vanish: no challenge stands focused in its place")
+			var stop: ClickableQuad = _room._rail_quads.get("tournament") as ClickableQuad
+			_ret_expect(stop != null and _room.focused_quad() == stop,
+				"vanish: focus lands on the TOURNAMENT stop - the room's default landing")
+			_grad_save_grab("return_vanish.png")
+		"verify_lib":
+			_ret_expect(not _room.tournament_active(), "lib: returns to the library, not the tournament room")
+			var gid: String = _ret_tz_game_id()
+			var fidx: int = _room._panels.find(_room.focused_quad())
+			var fgame: String = ""
+			if fidx >= 0 and fidx < _room._visible_games.size():
+				fgame = _room._visible_games[fidx].game_id
+			_ret_expect(gid != "" and fgame == gid,
+				"lib: the just-played table stands seated as before (focused game '%s')" % fgame)
+
+
+func _ret_finish_smoke() -> void:
+	_ret_done = true
+	if _ret_failures == 0:
+		print("PVLDS RETURN SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS RETURN SMOKE: FAIL (%d)" % _ret_failures)
 		get_tree().quit(1)
 
 
