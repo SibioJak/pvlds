@@ -1349,7 +1349,7 @@ func _on_setup_panel_scan_requested() -> void:
 ## dictionary).
 func _setup_panel_health() -> Dictionary:
 	if _scanner == null:
-		return {"wovp_line": _wovp_health_line(), "pinemhi_line": PinemhiScores.status_line(_config), "ipdb_line": _ipdb_health_line()}
+		return {"wovp_line": _wovp_health_line(), "pinemhi_line": PinemhiScores.status_line(_config), "ipdb_line": _ipdb_health_line(), "shots_line": ShotsFolder.status_line(_config)}
 	return {
 		"files": _scanner.total_files,
 		"games": _scanner.games.size(),
@@ -1362,6 +1362,7 @@ func _setup_panel_health() -> Dictionary:
 		"wovp_line": _wovp_health_line(),
 		"pinemhi_line": PinemhiScores.status_line(_config),
 		"ipdb_line": _ipdb_health_line(),
+		"shots_line": ShotsFolder.status_line(_config),
 	}
 
 
@@ -3345,6 +3346,7 @@ func _show_desk(message: String = "") -> void:
 		_desk.wovp_test_requested.connect(_on_desk_wovp_test_requested)
 		_desk.wovp_submit_requested.connect(_on_desk_wovp_submit_requested)
 		_desk.pinemhi_settings_saved.connect(_push_wovp_data)
+		_desk.screenshots_settings_saved.connect(_push_wovp_data)
 		_desk.ipdb_snapshot_requested.connect(_apply_ipdb_snapshot)
 		_desk.set_ipdb_status(_ipdb_health_line())
 		_push_submit_data()
@@ -18521,6 +18523,75 @@ func _run_core_test() -> void:
 	var resaved_cfg: PvldsConfig = PvldsConfig.new()
 	_expect(resaved_cfg.load_from_disk() and not resaved_cfg.focus_herding,
 		"the cleaned config round-trips through save", failures)
+
+	# ROOMSUBMIT (M1): the screenshots folder round-trips
+	# through the config file - set on the desk, read by the
+	# room's submit panel. A config written before the key
+	# existed loads it as unset (""), never an error.
+	_expect(_write_text_file(config_file, JSON.stringify({"screenshots_folder": "D:/Shots"})),
+		"roomsubmit: config carrying a screenshots folder written", failures)
+	var shots_cfg: PvldsConfig = PvldsConfig.new()
+	_expect(shots_cfg.load_from_disk() and shots_cfg.screenshots_folder == "D:/Shots",
+		"roomsubmit: the screenshots folder loads from the config file", failures)
+	_expect(shots_cfg.save_to_disk(), "roomsubmit: config with a screenshots folder saves", failures)
+	var shots_raw: String = FileAccess.get_file_as_string(config_file)
+	_expect(shots_raw.contains("\"screenshots_folder\""),
+		"roomsubmit: the saved config carries the screenshots_folder key", failures)
+	var shots_cfg2: PvldsConfig = PvldsConfig.new()
+	_expect(shots_cfg2.load_from_disk() and shots_cfg2.screenshots_folder == "D:/Shots",
+		"roomsubmit: the screenshots folder round-trips through save", failures)
+	_expect(_write_text_file(config_file, JSON.stringify({"focus_herding": true})),
+		"roomsubmit: pre-key config written", failures)
+	var shots_cfg3: PvldsConfig = PvldsConfig.new()
+	_expect(shots_cfg3.load_from_disk() and shots_cfg3.screenshots_folder == "",
+		"roomsubmit: a config with no screenshots key loads the folder as unset", failures)
+
+	# ROOMSUBMIT (M1): the folder reader - image files only,
+	# dotfiles skipped, every absence a stated state. The
+	# fixture's files are never decoded (the scan reads
+	# names and times only); newest-first ORDER across real
+	# mtimes is the room smoke's leg (the shell sets them).
+	var shots_root: String = "user://core_test_shots"
+	var shots_user: DirAccess = DirAccess.open("user://")
+	if shots_user != null and not shots_user.dir_exists("core_test_shots"):
+		shots_user.make_dir("core_test_shots")
+	var shots_abs: String = ProjectSettings.globalize_path(shots_root)
+	_write_text_file(shots_root.path_join("shot-b.png"), "fake png bytes")
+	_write_text_file(shots_root.path_join("shot-a.jpg"), "fake jpg bytes")
+	_write_text_file(shots_root.path_join("notes.txt"), "not an image")
+	_write_text_file(shots_root.path_join(".hidden.png"), "dotfile")
+	var scan_res: Dictionary = ShotsFolder.scan(shots_abs)
+	_expect(bool(scan_res.get("exists", false)), "roomsubmit: the fixture folder reads as existing", failures)
+	var scan_shots: Array = scan_res.get("shots", []) as Array
+	_expect(scan_shots.size() == 2, "roomsubmit: the scan lists image files only - no .txt, no dotfiles (got %d)" % scan_shots.size(), failures)
+	var scan_names: Array[String] = []
+	for sv: Variant in scan_shots:
+		scan_names.append(str((sv as Dictionary).get("name", "")))
+	_expect(scan_names.has("shot-b.png") and scan_names.has("shot-a.jpg"),
+		"roomsubmit: the scan names both image files", failures)
+	_expect(ShotsFolder.list_shots(shots_abs, 1).size() == 1, "roomsubmit: the listing honours its limit", failures)
+	_expect(not bool(ShotsFolder.scan("").get("exists", true)), "roomsubmit: an unset folder scans as not existing", failures)
+	_expect(not bool(ShotsFolder.scan(shots_abs.path_join("no_such_dir")).get("exists", true)),
+		"roomsubmit: a missing folder scans as not existing", failures)
+	var shots_words_cfg: PvldsConfig = PvldsConfig.new()
+	_expect(ShotsFolder.status_line(shots_words_cfg).begins_with("Screenshots folder: not set"),
+		"roomsubmit: the SETUP words name the unset state", failures)
+	shots_words_cfg.screenshots_folder = shots_abs
+	_expect(ShotsFolder.status_line(shots_words_cfg).contains("2 screenshots on file"),
+		"roomsubmit: the SETUP words count the folder's screenshots", failures)
+	_expect(ShotsFolder.panel_line("").begins_with("No screenshots folder set yet"),
+		"roomsubmit: the panel words name the unset state", failures)
+	_expect(ShotsFolder.panel_line(shots_abs.path_join("no_such_dir")).begins_with("That screenshots folder is not there"),
+		"roomsubmit: the panel words name the missing folder", failures)
+	_expect(ShotsFolder.panel_line(shots_abs).begins_with("Newest screenshots in the folder"),
+		"roomsubmit: the panel words name the stocked state", failures)
+	# The wipe cannot see the dotfile fixture (DirAccess
+	# hides dotfiles), so it is removed by name first -
+	# otherwise the folder survives, honestly EMPTY.
+	DirAccess.remove_absolute(shots_abs.path_join(".hidden.png"))
+	_wipe_tree(shots_abs)
+	_expect(ShotsFolder.panel_line(shots_abs).begins_with("That screenshots folder is not there"),
+		"roomsubmit: a folder removed after the fact reads as missing, not empty", failures)
 	if config_backup != "":
 		_write_text_file(config_file, config_backup)
 	elif FileAccess.file_exists(config_file):

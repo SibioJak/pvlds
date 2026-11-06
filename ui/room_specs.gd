@@ -433,6 +433,12 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 	# panel, the desk, and the backs all agree on the count.
 	if health.has("ipdb_line"):
 		lines.append(str(health["ipdb_line"]))
+	# ROOMSUBMIT: the screenshots-folder line rides beside
+	# the IPDB line - information parity with the desk (the
+	# folder is SET on the desk; the room's submit panel
+	# reads photos from it, and this line says from where).
+	if health.has("shots_line"):
+		lines.append(str(health["shots_line"]))
 	return {
 		"kind": "banner",
 		"bg": Color(0.05, 0.05, 0.09),

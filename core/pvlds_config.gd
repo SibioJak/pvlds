@@ -49,6 +49,16 @@ var starfield_mode: String = "layered" ## "layered" | "flat" | "off"
 ## appears (and the folder is never read).
 var pinemhi_folder: String = ""
 var pinemhi_enabled: bool = true
+## ROOMSUBMIT: the screenshots folder the in-room WoVP
+## score submission reads score photos from - the folder
+## his headset screenshots land in on this PC. "" = not
+## set: the submit panel says so in words and sends
+## nothing. Deliberately NO toggle (unlike PINemHi above):
+## the folder's emptiness IS the off state - PINemHi's
+## toggle exists because its auto-detect can find the
+## wrong install, and a folder the player picks himself
+## needs no second switch.
+var screenshots_folder: String = ""
 const STARFIELD_MODES: Array[String] = ["layered", "flat", "off"]
 ## Wall travel gait (was the GRADFIX10 item 3 display dial):
 ## the OPTIMIZE round closed the smooth-cruise saga by the
@@ -119,6 +129,7 @@ func load_from_disk() -> bool:
 		starfield_mode = "layered"
 	pinemhi_folder = str(d.get("pinemhi_folder", ""))
 	pinemhi_enabled = bool(d.get("pinemhi_enabled", true))
+	screenshots_folder = str(d.get("screenshots_folder", ""))
 	# OPTIMIZE: any stored gait coerces to the one gait -
 	# a config written by a shipped build may carry "smooth"
 	# (the old default) and must load as "stepped", never error.
@@ -144,6 +155,7 @@ func save_to_disk() -> bool:
 	d["starfield_mode"] = starfield_mode
 	d["pinemhi_folder"] = pinemhi_folder
 	d["pinemhi_enabled"] = pinemhi_enabled
+	d["screenshots_folder"] = screenshots_folder
 	wall_motion_mode = "stepped" ## OPTIMIZE: saves write the one gait, whatever a caller left standing in the var
 	d["wall_motion_mode"] = wall_motion_mode
 	var folders: Array = []

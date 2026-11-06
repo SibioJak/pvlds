@@ -10,6 +10,7 @@ extends CanvasLayer
 signal enter_room_requested
 signal wovp_key_saved ## the WoVP key was saved from this desk: Main refreshes the Tournament Room's boards
 signal pinemhi_settings_saved ## NEXTROUND (item 4): the PINemHi folder/toggle was saved from this desk: Main re-reads the bests and re-pushes them to the room
+signal screenshots_settings_saved ## ROOMSUBMIT: the screenshots folder was saved from this desk: Main re-pushes the config's folder to the room, whose submit panel reads its photos from there
 signal ipdb_snapshot_requested ## IPDBFIX: re-apply the bundled IPDB snapshot to the cache (the CARDBACK live fetch is retired - IPDB's site refuses app requests): Main owns the cache and answers on the IPDB status line
 signal wovp_test_requested(api_key: String) ## Test key: Main validates this text against WoVP and answers on the status line
 signal wovp_submit_requested(challenge_id: String, photo_path: String, score_text: String) ## Submit a score (the SUBMIT round): Main runs the two-step WoVP submission and answers on the submit status line. score_text is the SUBMIT2 record field's raw text - Main parses it into the LOCAL log only; it never rides the wire
@@ -56,6 +57,8 @@ var _submit_has_key: bool = false
 var _pinemhi_edit: LineEdit
 var _pinemhi_check: CheckBox
 var _pinemhi_label: Label
+var _shots_edit: LineEdit
+var _shots_label: Label
 var _ipdb_label: Label
 
 const MAX_FOLDER_ROWS: int = 6
@@ -257,6 +260,45 @@ func _build_ui() -> void:
 	_submit_history_label.visible = false
 	vbox.add_child(_submit_history_label)
 
+	# The Screenshots section (ROOMSUBMIT): the folder his
+	# headset score screenshots land in. The in-room submit
+	# panel reads its photos from there - newest first, one
+	# standing large for the flicker check - so a score can
+	# be sent without leaving the room. Like the key and
+	# the PINemHi settings, this is a live setting: Save
+	# writes the config on the spot. No toggle: an unset
+	# folder is the off state, and the panel says so.
+	var shots_title: Label = Label.new()
+	shots_title.text = "Screenshots - the folder your score photos land in"
+	shots_title.add_theme_font_size_override("font_size", 20)
+	vbox.add_child(shots_title)
+	var shots_intro: Label = Label.new()
+	shots_intro.text = "Point this at the folder your headset screenshots end up in on this PC. In the Tournament Room, press Y on a challenge card and the newest shots in this folder stand on the submit panel - pick the one that shows your score and send it, headset on. Submitting from the room uses the same WoVP key and the same two-step send as the desk above."
+	shots_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(shots_intro)
+	var shots_row: HBoxContainer = HBoxContainer.new()
+	shots_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(shots_row)
+	_shots_edit = LineEdit.new()
+	_shots_edit.placeholder_text = "Screenshots folder - where your headset shots land"
+	_shots_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	shots_row.add_child(_shots_edit)
+	var shots_browse: Button = Button.new()
+	shots_browse.text = "Browse..."
+	shots_browse.pressed.connect(func() -> void: _open_dialog_for("shots"))
+	shots_row.add_child(shots_browse)
+	var shots_save_row: HBoxContainer = HBoxContainer.new()
+	shots_save_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(shots_save_row)
+	var shots_save: Button = Button.new()
+	shots_save.text = "Save screenshots folder"
+	shots_save.pressed.connect(_on_shots_save_pressed)
+	shots_save_row.add_child(shots_save)
+	_shots_label = Label.new()
+	_shots_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_shots_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	shots_save_row.add_child(_shots_label)
+
 	# The PINemHi section (NEXTROUND item 4): the folder
 	# PVLDS READS TOP10_Personal files from, plus the
 	# toggle. PVLDS never runs PINemHi - it reads the
@@ -457,6 +499,9 @@ func _open_dialog_for(target: String) -> void:
 		_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 		_dialog.filters = PackedStringArray(["*.jpg, *.jpeg, *.png ; Score photos"])
 		_dialog.title = "Choose the score photo (last score - DMD and full playfield in frame)"
+	elif target == "shots":
+		_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
+		_dialog.title = "Pick the folder your headset screenshots land in"
 	else:
 		_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 		_dialog.title = "Pick a folder full of .vpx tables"
@@ -475,7 +520,9 @@ func _on_dialog_file(path: String) -> void:
 
 
 func _on_dialog_dir(path: String) -> void:
-	if _dialog_target.begins_with("folder:"):
+	if _dialog_target == "shots":
+		_shots_edit.text = path
+	elif _dialog_target.begins_with("folder:"):
 		var idx: int = _dialog_target.trim_prefix("folder:").to_int()
 		if idx >= 0 and idx < _folder_edits.size():
 			_folder_edits[idx].text = path
@@ -491,6 +538,8 @@ func _fill_from_config() -> void:
 	_pinemhi_edit.text = _config.pinemhi_folder
 	_pinemhi_check.button_pressed = _config.pinemhi_enabled
 	_pinemhi_label.text = PinemhiScores.status_line(_config)
+	_shots_edit.text = _config.screenshots_folder
+	_shots_label.text = ShotsFolder.status_line(_config)
 	_fill_session_widgets()
 	for f: String in _config.table_folders:
 		_add_folder_row(f)
@@ -523,6 +572,7 @@ func _collect_into_config() -> void:
 	_config.wovp_api_key = _wovp_edit.text.strip_edges()
 	_config.pinemhi_folder = _pinemhi_edit.text.strip_edges()
 	_config.pinemhi_enabled = _pinemhi_check.button_pressed
+	_config.screenshots_folder = _shots_edit.text.strip_edges()
 	_config.launch_args_template = _args_edit.text.strip_edges()
 	if _config.launch_args_template == "":
 		_config.launch_args_template = PvldsConfig.DEFAULT_LAUNCH_ARGS
@@ -787,6 +837,27 @@ func _on_pinemhi_save_pressed() -> void:
 	_pinemhi_edit.text = prev_folder
 	_pinemhi_check.button_pressed = prev_enabled
 	_pinemhi_label.text = "Those PINemHi settings could NOT be saved - the config file is not writable, so nothing changed. Fix the config file, then save again."
+
+
+## Save screenshots folder: the live apply, on the
+## PINemHi pattern - the folder lands in the config file
+## the moment the button is pressed; a failed save
+## restores field, config and label to exactly what they
+## were. The status line always answers from a fresh read
+## of the folder (ShotsFolder.status_line), so it says
+## what PVLDS actually found there.
+func _on_shots_save_pressed() -> void:
+	if _config == null:
+		return
+	var prev_folder: String = _config.screenshots_folder
+	_config.screenshots_folder = _shots_edit.text.strip_edges()
+	if _config.save_to_disk():
+		_shots_label.text = ShotsFolder.status_line(_config)
+		screenshots_settings_saved.emit()
+		return
+	_config.screenshots_folder = prev_folder
+	_shots_edit.text = prev_folder
+	_shots_label.text = "That screenshots folder could NOT be saved - the config file is not writable, so nothing changed. Fix the config file, then save again."
 
 
 ## CARDBACK/IPDBFIX: Main drives the IPDB status line
