@@ -590,6 +590,11 @@ func apply_spec(spec: Dictionary) -> void:
 		_rows_box.remove_child(child)
 		child.queue_free()
 	_rows_box.visible = kind == "board"
+	# The row stack's own separation rides the same spec
+	# key as the outer box's (see the separation note in
+	# the centring block below): 6 unless the spec says
+	# otherwise, re-asserted on every spec.
+	_rows_box.add_theme_constant_override("separation", int(spec.get("row_separation", 6)) if kind == "board" else 6)
 	if kind == "board":
 		var rows_v: Variant = spec.get("rows", [])
 		if rows_v is Array:
@@ -668,8 +673,13 @@ func apply_spec(spec: Dictionary) -> void:
 	# Boards breathe tighter than cards: their section gaps
 	# run 6px, not 12, so a full board (four score rows, the
 	# line, a note) plus its footer band fits the face with
-	# room to spare. Re-asserted on every spec.
-	_vbox.add_theme_constant_override("separation", 6 if kind == "board" else 12)
+	# room to spare. A spec may carry its own separation
+	# (the ONETEN card back does: its fullest composition -
+	# his #1, the divider, the Best ten, two wrapped notes -
+	# stands 1084 px at 6, over the face; at 2 it fits with
+	# every type size and line untouched). Re-asserted on
+	# every spec, so it can never leak into the next face.
+	_vbox.add_theme_constant_override("separation", int(spec.get("row_separation", 6 if kind == "board" else 12)))
 	# A footer board's band owns the face's bottom edge to
 	# itself: the stock bottom margin would leave a dead
 	# strip under the plinth and shift the band off the

@@ -15096,7 +15096,7 @@ func _cb_judge(idx: int) -> void:
 			var want: Array = ["1,638,803,870", "2,045,310,600", "1,902,455,100", "1,755,880,200", "1,602,334,750", "1,499,000,110", "1,333,372,730", "1,210,455,990", "987,654,320", "876,543,210", "765,432,100"]
 			_cb_expect(score_texts == want,
 				"ONETEN back: Apollo stands his #1 alone, then its Best ten whole in file order (got %s)" % str(score_texts))
-			_cb_expect(before_divider == 1 and not score_texts.has("1,333,372,730"),
+			_cb_expect(before_divider == 1,
 				"ONETEN back: Apollo's back is ONE Kubrick - his file's other rows do NOT stand (personal rows: %d)" % before_divider)
 			_cb_expect(dividers == ["ONLINE BEST"] and world1_count == 1 and world1_spec.size() == 11 and bool(world1_spec[1]),
 				"ONETEN back: Apollo's Best section stands under its ONLINE BEST divider, its #1 flagged on its ground (dividers: %s)" % str(dividers))

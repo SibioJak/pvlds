@@ -934,6 +934,7 @@ static func pinemhi_back_spec(game: GameEntry, record: Dictionary, best_record: 
 		rows.append({"kind": "note", "text": PUP_NOTE, "size": 30})
 	return {
 		"kind": "board",
+		"row_separation": 2,
 		"bg": CARD_BG,
 		"band": manufacturer_color(game.manufacturer),
 		"band_text": "PINEMHI",
