@@ -46,9 +46,15 @@ const SORT_LABELS: Dictionary = {"name": "NAME", "year": "YEAR", "manufacturer":
 ## no progress bar, no percentage, no LOADING text. While a table
 ## loads, the wall of cards fades down and the launched table's
 ## year, with its designer beneath, flies in from the wall in big
-## marquee letters, settles at reading distance, and holds with a
-## gentle pulse until the wait settles. Every feel knob is a
-## constant here, for one-line retunes after Chris's verdict.
+## marquee letters, settles at reading distance, and holds still
+## until the wait settles. Every feel knob is a constant here, for
+## one-line retunes after Chris's verdict. PINEMHI1: the settled
+## marquee also carries the table's fact lines (below), and the
+## settle PULSE is gone (Chris, 2026-11-07: the fonts
+## embiggen-and-shrink was dropped - "the starfield is visual
+## indicator enough that nothing is frozen"). Only the
+## PVLDS_PINEMHI1_NC=pulse seam restores it, so the pulse leg
+## can fail against it by name.
 const MARQUEE_FADE_SEC: float = 0.6 ## wall fade-down duration
 const MARQUEE_WALL_ALPHA: float = 0.16 ## the wall's alpha while the marquee stands
 const MARQUEE_FLY_IN_SEC: float = 1.4 ## the letters' travel time, wall -> settle
@@ -59,8 +65,9 @@ const MARQUEE_YEAR_FONT_SIZE: int = 110 ## retuned 2026-10-22: 170 read too big 
 const MARQUEE_NAME_FONT_SIZE: int = 56 ## the designer/title line (Chris's "date and designer"); 84 -> 56 in the same retune
 const MARQUEE_YEAR_Y: float = 0.30 ## year line's offset from the holder's centre
 const MARQUEE_NAME_Y: float = -0.34 ## designer/title line's offset
-const MARQUEE_PULSE_RATE: float = 1.6 ## settle pulse, cycles per second
-const MARQUEE_PULSE_AMOUNT: float = 0.025 ## settle pulse, scale amplitude
+const MARQUEE_FACT_FONT_SIZE: int = 30 ## PINEMHI1: the fact lines under the headline (RoomSpecs.marquee_fact_lines)
+const MARQUEE_FACT_Y0: float = -0.66 ## the first fact line's offset (below the name line)
+const MARQUEE_FACT_STEP: float = 0.17 ## fact line spacing
 ## NEXTROUND (item 2): the marquee's type treatment joins
 ## the frameless graphite house look (the filter strip /
 ## SETUP furniture language) - the year takes the strip's
@@ -69,7 +76,8 @@ const MARQUEE_PULSE_AMOUNT: float = 0.025 ## settle pulse, scale amplitude
 ## same values), and the heavy display outline gives way
 ## to a graphite hairline that only keeps the letters
 ## defined over bright art. Presentational only: sizes,
-## positions, the fly-in and the pulse are untouched.
+## positions and the fly-in are untouched. (Its pulse
+## clause is history since PINEMHI1 removed the pulse.)
 const MARQUEE_YEAR_COLOR: Color = Color(0.847, 0.867, 0.910) ## = RoomSpecs.STRIP_LABEL_ACCENT (#d8dde8)
 const MARQUEE_NAME_COLOR: Color = Color(0.659, 0.678, 0.722) ## = RoomSpecs.STRIP_LABEL_REST (#a8adb8)
 const MARQUEE_OUTLINE_COLOR: Color = Color(0.102, 0.106, 0.122) ## the strip gradient's deep graphite family (#1a1c20)
@@ -1011,6 +1019,7 @@ var _selected_game_id: String = "" ## last game opened/launched; restored + pers
 var _marquee: Node3D = null ## the loading marquee's holder; in the tree only during a load wait
 var _marquee_year: Label3D = null
 var _marquee_name: Label3D = null
+var _marquee_facts: Array[Label3D] = [] ## PINEMHI1: the fact-line labels under the headline (up to 5, hidden when unused)
 var _marquee_up: bool = false
 var _marquee_t: float = 0.0 ## seconds since the marquee rose
 var _wall_alpha_applied: float = 1.0 ## the wall fade's last applied alpha (change guard)
@@ -9520,6 +9529,19 @@ func _raise_marquee(game: GameEntry) -> void:
 	_marquee_year.text = top
 	_marquee_name.text = bottom
 	_marquee_name.visible = bottom != ""
+	# PINEMHI1: the fact lines - the pick of the retired
+	# Spec Sheet, read live from the pushed facts at raise
+	# time (never fetched here). Unused labels hide.
+	var facts: Array = RoomSpecs.marquee_fact_lines(game,
+		_ipdb_facts.get(game.game_id, {}) as Dictionary)
+	for i: int in range(_marquee_facts.size()):
+		var fl: Label3D = _marquee_facts[i]
+		if i < facts.size():
+			fl.text = str(facts[i])
+			fl.visible = true
+		else:
+			fl.text = ""
+			fl.visible = false
 	_marquee_t = 0.0
 	_marquee_up = true
 	add_child(_marquee)
@@ -9550,6 +9572,24 @@ func _build_marquee() -> void:
 	_marquee_name.modulate = Color(MARQUEE_NAME_COLOR, 0.0)
 	_marquee_name.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, 0.0)
 	_marquee.add_child(_marquee_name)
+	# PINEMHI1: the fact-line labels stack under the name
+	# line at reading size - built hidden, filled (or left
+	# hidden) by _raise_marquee.
+	_marquee_facts.clear()
+	for i: int in range(5):
+		var fl: Label3D = Label3D.new()
+		fl.pixel_size = MARQUEE_PIXEL_SIZE
+		fl.font_size = MARQUEE_FACT_FONT_SIZE
+		fl.outline_size = MARQUEE_OUTLINE_SIZE
+		fl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		fl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		fl.width = 700.0
+		fl.position = Vector3(0.0, MARQUEE_FACT_Y0 - MARQUEE_FACT_STEP * float(i), 0.0)
+		fl.modulate = Color(MARQUEE_NAME_COLOR, 0.0)
+		fl.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, 0.0)
+		fl.visible = false
+		_marquee.add_child(fl)
+		_marquee_facts.append(fl)
 	# No face_point here: the holder is oriented in _raise_marquee,
 	# once it is inside the tree (the placard's lesson).
 
@@ -9569,6 +9609,19 @@ func marquee_text() -> Array[String]:
 	return [_marquee_year.text, _marquee_name.text]
 
 
+## PINEMHI1: the marquee's fact lines as they stand (the
+## visible labels' texts, in order). [] while no marquee
+## stands or no fact lines show.
+func marquee_fact_text() -> Array[String]:
+	var out: Array[String] = []
+	if not _marquee_up:
+		return out
+	for fl: Label3D in _marquee_facts:
+		if fl != null and fl.visible:
+			out.append(fl.text)
+	return out
+
+
 func _dismiss_marquee() -> void:
 	_marquee_up = false
 	if _marquee != null:
@@ -9578,12 +9631,15 @@ func _dismiss_marquee() -> void:
 		_marquee = null
 		_marquee_year = null
 		_marquee_name = null
+		_marquee_facts.clear()
 	_apply_wall_alpha(1.0)
 
 
 ## Per-frame marquee animation, driven from _process: the wall
-## fades down and stays down; the letters fly from the wall to the
-## settle point and hold there with a gentle pulse.
+## fades down and stays down; the letters fly from the wall to
+## the settle point and hold there, STILL (PINEMHI1: the settle
+## pulse is removed - the scale below is the fly-in ease alone;
+## only the pulse NC seam breathes again).
 func _update_marquee(delta: float) -> void:
 	if not _marquee_up or _marquee == null:
 		return
@@ -9595,16 +9651,21 @@ func _update_marquee(delta: float) -> void:
 	var fly_e: float = 1.0 - pow(1.0 - fly_p, 3.0)
 	_marquee.position = Vector3(MARQUEE_SETTLE_POS.x, MARQUEE_SETTLE_POS.y,
 		lerpf(MARQUEE_START_Z, MARQUEE_SETTLE_POS.z, fly_e))
-	# The pulse ramps in across the fly-in (multiplied by fly_p)
-	# and the scale eases up from the wall, so neither jumps at
-	# the settle point.
-	var pulse: float = 1.0 + MARQUEE_PULSE_AMOUNT * sin(_marquee_t * MARQUEE_PULSE_RATE * TAU) * fly_p
-	_marquee.scale = Vector3.ONE * pulse * lerpf(0.85, 1.0, fly_e)
+	var settle_scale: float = lerpf(0.85, 1.0, fly_e)
+	if RoomSpecs.pinemhi1_nc == "pulse":
+		# NC seam (PVLDS_PINEMHI1_NC=pulse): the retired
+		# pulse, restored so the pulse leg fails by name.
+		settle_scale *= 1.0 + 0.025 * sin(_marquee_t * 1.6 * TAU) * fly_p
+	_marquee.scale = Vector3.ONE * settle_scale
 	var alpha: float = clampf(_marquee_t / (MARQUEE_FLY_IN_SEC * 0.4), 0.0, 1.0)
 	_marquee_year.modulate = Color(MARQUEE_YEAR_COLOR, alpha)
 	_marquee_year.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, alpha)
 	_marquee_name.modulate = Color(MARQUEE_NAME_COLOR, alpha)
 	_marquee_name.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, alpha)
+	for fl: Label3D in _marquee_facts:
+		if fl != null:
+			fl.modulate = Color(MARQUEE_NAME_COLOR, alpha)
+			fl.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, alpha)
 
 
 ## The wall fade itself: panels, their Launch buttons, the rail,
