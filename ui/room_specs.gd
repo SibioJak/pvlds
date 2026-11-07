@@ -531,7 +531,7 @@ static var cardback_nc: String = "" ## Main sets this from PVLDS_CARDBACK_NC bef
 static var backtrim_nc: String = "" ## Main sets this from PVLDS_BACKTRIM_NC before any room exists (PINEMHI1: nostamp = the room's PINemHi rows push never bumps its stamp, so a standing back never heals - the rewritten backtrim legs fail by name; the CARDBACK-era notrim value has no surface left and is ignored)
 static var pinemhi1_nc: String = "" ## Main sets this from PVLDS_PINEMHI1_NC before any room exists (PINEMHI1 seams: oldgrid = the card back renders the retired Spec Sheet wing again, so the back legs fail by name; pulse = the loading marquee's font pulse returns, so the pulse leg fails by name)
 static var backfine_nc: String = "" ## Main sets this from PVLDS_BACKFINE_NC before any room exists (BACKFINE seams: dateback = the card back's personal rows carry the date again, so the no-date legs fail by name; ghostbest = the room seats a Best section for a game whose install holds no Best file, so the no-file-no-section legs fail by name)
-static var bestline_nc: String = "" ## Main sets this from PVLDS_BESTLINE_NC before any room exists (BESTLINE seam: fulllist = the card back's Best section renders the file's whole list again, so the #1-only legs fail by name)
+static var oneten_nc: String = "" ## Main sets this from PVLDS_ONETEN_NC before any room exists (ONETEN seams: allpersonal = the back's personal block renders every file row again, so the one-Kubrick legs fail by name; best1only = the Best section renders divider + #1 alone again, so the full-ten legs fail by name)
 
 static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}, submit_hint: bool = false) -> Dictionary:
 	var rows: Array = []
@@ -843,10 +843,10 @@ static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_u
 
 
 ## PINEMHI1: the card back's new tenant (Chris, 2026-11-07:
-## "we nuke table info and include pinemhi"). The back is
-## the game's PINemHi Personal scores: the title line, then
-## the file's rows AS THEY STAND - as many as the file
-## holds, never padded - in the boards' own score-row shape
+## "we nuke table info and include pinemhi"). The back
+## carried the game's PINemHi Personal rows AS THEY STOOD
+## at first - the multi-Kubrick shape ONETEN corrects
+## below. Rows wear the boards' own score-row shape
 ## (rank / player / board-formatted score). BACKFINE
 ## (Chris, from his PINEMHI1 field session): the date
 ## column is NUKED - it clipped mid-year on the standing
@@ -862,54 +862,72 @@ static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_u
 ## score... including the Top 10 scores under or above
 ## would be a nice touch."
 ##
-## BESTLINE (Chris's ruling on the BACKFINE field check -
-## "works, but inconsistent", then tapped: "#1 only, on
-## every back"): the Best section is EXACTLY the ONLINE
-## BEST divider + the world #1 row (the "world1" flag -
-## the face draws it on its own steel-blue ground), on
-## every back that holds a Best file, whatever the
-## personal count. BACKFINE's fit-reduction - full list
-## when the composition fit the back's height budget,
-## #1 alone when it didn't - changed the feature's shape
-## card to card, unexplained, and is REMOVED here, fit
-## arithmetic and all: there is no budget decision left
-## in this spec. The fullest standing composition (10
-## personal + divider + #1 + the PuP note) stands ~950 px
-## of the face's 1044 px inside its margins - the boot
-## smoke's FIT leg judges that on the rendered face.
-## Personal empty + Best present: the honest empty line
-## stands above the Best section. Neither: the empty
-## line alone. The PuP note survives as the last line in
-## EVERY state. Under the fulllist NC the section renders
-## the file's whole list again, so the #1-only legs fail
-## by name. Under the oldgrid NC the room routes to
-## wing_spec instead (the retired Spec Sheet), so this
-## spec is never built.
+## BESTLINE interlude (Chris's ruling on the BACKFINE
+## field check - "works, but inconsistent", then tapped:
+## "#1 only, on every back"): the Best section shrank to
+## the divider + the world #1 - consistent, but built on
+## a misreading (below).
+##
+## ONETEN (Chris's correction, 2026-11-07, verbatim:
+## "i thought the point was to have only the top player
+## score, followed by the top 10 on table. There are
+## multiple kubricks on each card"): the "#1 player high
+## score" in his design was HIS OWN #1 all along - the
+## back is: ONE personal row (his #1, the same best the
+## tournie note reads), then the ONLINE BEST divider and
+## the Best file's rows WHOLE - the #1 in its steel-blue
+## two-line block (BESTLINE's geometry: the name stands
+## whole over its score), rows #2-10 as standard rows in
+## file order, as many as the file holds, max 10. His
+## standing exhibit was the Lost in Space back: one
+## personal row over the full ten. The composition NEVER
+## varies with the personal count - a file holding 8 or
+## 10 rows renders exactly one - and no fit arithmetic
+## survives anywhere: the fullest shape (his #1 + the
+## divider + ten + the PuP note) stands ~890 px of the
+## face's 1044 px. Personal empty + Best present: the
+## honest empty line stands above the full ten. Neither:
+## the empty line alone. The PuP note survives as the
+## last line in EVERY state. Under the ONETEN NCs the
+## retired shapes return - allpersonal renders every
+## personal row (the PINEMHI1 shape), best1only renders
+## the section as divider + #1 alone (the BESTLINE
+## shape) - and the matching legs fail by name. Under
+## the oldgrid NC the room routes to wing_spec instead
+## (the retired Spec Sheet), so this spec is never built.
 
 static func pinemhi_back_spec(game: GameEntry, record: Dictionary, best_record: Dictionary = {}) -> Dictionary:
 	var rows: Array = []
 	var file_rows: Array = record.get("rows", []) as Array
 	if file_rows.is_empty():
 		rows.append({"kind": "note", "text": "No PINemHi scores on file for this table yet.", "size": 32})
-	else:
+	elif oneten_nc == "allpersonal":
+		# ONETEN NC seam: the retired multi-row personal
+		# block returns (the PINEMHI1 shape), so the
+		# one-Kubrick legs fail by name.
 		for rv: Variant in file_rows:
 			var r: Dictionary = rv as Dictionary
 			rows.append(_pinemhi_score_row(r, false, true))
+	else:
+		# ONETEN: the personal block is his #1 ALONE -
+		# the file's top row, however many rows the file
+		# holds behind it.
+		rows.append(_pinemhi_score_row(file_rows[0] as Dictionary, false, true))
 	var sub: String = ""
 	if game.manufacturer != "":
 		sub = game.manufacturer.to_upper()
 	if game.year > 0:
 		sub = (sub + " · " if sub != "" else "") + str(game.year)
-	# BESTLINE: the Best section is the divider + the
-	# world #1 row - the same two entries on every back,
-	# regardless of the personal count. (Under the
-	# fulllist NC the file's remaining rows ride again,
-	# so the #1-only legs fail by name.)
+	# ONETEN: the Best section is the divider + the
+	# file's rows WHOLE - the #1 in its steel-blue block,
+	# then rows #2-10 in file order. (Under the best1only
+	# NC the section stops at the #1 again - the BESTLINE
+	# shape - so the full-ten legs fail by name.)
 	var best_rows: Array = best_record.get("rows", []) as Array
 	if not best_rows.is_empty():
 		rows.append({"kind": "divider", "text": "ONLINE BEST", "size": 28, "tone": ""})
 		rows.append(_pinemhi_score_row(best_rows[0] as Dictionary, true, false))
-		if bestline_nc == "fulllist":
+		if oneten_nc != "best1only":
 			for i: int in range(1, mini(best_rows.size(), 10)):
 				rows.append(_pinemhi_score_row(best_rows[i] as Dictionary, false, false))
 	if game.is_pup_tagged():
