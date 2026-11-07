@@ -530,6 +530,7 @@ static var pinemhi_nc: String = ""
 static var cardback_nc: String = "" ## Main sets this from PVLDS_CARDBACK_NC before any room exists (nodots: the Spec Sheet grid's rows lose their source dots - the wells stand unlabelled - so the cardback legs fail by name)
 static var backtrim_nc: String = "" ## Main sets this from PVLDS_BACKTRIM_NC before any room exists (PINEMHI1: nostamp = the room's PINemHi rows push never bumps its stamp, so a standing back never heals - the rewritten backtrim legs fail by name; the CARDBACK-era notrim value has no surface left and is ignored)
 static var pinemhi1_nc: String = "" ## Main sets this from PVLDS_PINEMHI1_NC before any room exists (PINEMHI1 seams: oldgrid = the card back renders the retired Spec Sheet wing again, so the back legs fail by name; pulse = the loading marquee's font pulse returns, so the pulse leg fails by name)
+static var backfine_nc: String = "" ## Main sets this from PVLDS_BACKFINE_NC before any room exists (BACKFINE seams: dateback = the card back's personal rows carry the date again, so the no-date legs fail by name; ghostbest = the room seats a Best section for a game whose install holds no Best file, so the no-file-no-section legs fail by name)
 
 static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}, submit_hint: bool = false) -> Dictionary:
 	var rows: Array = []
@@ -845,13 +846,19 @@ static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_u
 ## the game's PINemHi Personal scores: the title line, then
 ## the file's rows AS THEY STAND - as many as the file
 ## holds, never padded - in the boards' own score-row shape
-## (rank / player / board-formatted score, the date riding
-## the name). A game with no Personal file (or no rows)
-## gets one honest note line instead - no fact grid, no
-## invented rows. The PuP note survives the tenancy change
-## as the footer's last line, in both states. Under the
-## oldgrid NC the room routes to wing_spec instead (the
-## retired Spec Sheet), so this spec is never built.
+## (rank / player / board-formatted score). BACKFINE
+## (Chris, from his PINEMHI1 field session): the date
+## column is NUKED - it clipped mid-year on the standing
+## back and ate a third of every row; the name is the
+## player alone now, and the freed width is breathing
+## room. (Under the dateback NC the date rides again, so
+## the no-date legs fail by name.) A game with no Personal
+## file (or no rows) gets one honest note line instead -
+## no fact grid, no invented rows. The PuP note survives
+## the tenancy change as the footer's last line, in both
+## states. Under the oldgrid NC the room routes to
+## wing_spec instead (the retired Spec Sheet), so this
+## spec is never built.
 static func pinemhi_back_spec(game: GameEntry, record: Dictionary) -> Dictionary:
 	var rows: Array = []
 	var file_rows: Array = record.get("rows", []) as Array
@@ -862,11 +869,13 @@ static func pinemhi_back_spec(game: GameEntry, record: Dictionary) -> Dictionary
 			var r: Dictionary = rv as Dictionary
 			var score: int = int(r.get("score", 0))
 			var name_text: String = str(r.get("player", ""))
-			var when: String = str(r.get("when", ""))
-			if when != "":
-				# The row's date half (the time stays in the
-				# file; the back reads at a glance).
-				name_text += " · " + when.split(" ")[0]
+			if backfine_nc == "dateback":
+				# BACKFINE NC seam: the retired date column
+				# returns (the PINEMHI1 shape), so the
+				# no-date legs fail by name.
+				var when: String = str(r.get("when", ""))
+				if when != "":
+					name_text += " · " + when.split(" ")[0]
 			rows.append({
 				"kind": "score",
 				"text": "#%d  %s  %s" % [int(r.get("rank", 0)), name_text, WovpChallenge.format_score(float(score))],

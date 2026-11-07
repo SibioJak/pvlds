@@ -838,6 +838,12 @@ func _ready() -> void:
 	# the trim legs fail by name. Same seam shape.
 	RoomSpecs.backtrim_nc = OS.get_environment("PVLDS_BACKTRIM_NC")
 	RoomSpecs.pinemhi1_nc = OS.get_environment("PVLDS_PINEMHI1_NC")
+	# BACKFINE's negative-control seams (PVLDS_BACKFINE_NC=
+	# dateback / ghostbest): the date column returns to the
+	# back's personal rows / a Best section stands for a
+	# game with no Best file, and the matching legs fail by
+	# name. Same seam shape.
+	RoomSpecs.backfine_nc = OS.get_environment("PVLDS_BACKFINE_NC")
 	# GRADFIX8's tournie-border negative-control seam
 	# (PVLDS_GRADFIX8_NC=noborder): borders are never
 	# applied, so the census's tourney-border legs fail
