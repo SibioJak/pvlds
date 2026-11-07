@@ -1137,8 +1137,10 @@ var _wovp_has_key: bool = false ## Main's word on the config: a WoVP key is save
 var _wovp_user_id: String = "" ## whose key it is (validate-apikey's answer, or the cache's) - how the wall knows which row is HIS
 var _wovp_challenges: Array = [] ## the last-good boards (Array of WovpChallenge), live or from the disk cache
 var _pinemhi_bests: Dictionary = {} ## NEXTROUND (item 4): PINemHi personal bests by PinemhiScores title key, pushed by Main (set_pinemhi_bests); a challenge whose title keys into this map gets the subordinate best line on its standing board
-var _ipdb_facts: Dictionary = {} ## CARDBACK: the IPDB cache's facts by game id, pushed by Main (set_ipdb_facts); backs read ONLY this map - the flip path never fetches
-var _ipdb_stamp: int = 0 ## CARDBACK: Main's cache stamp; it rides _card_back_key so a snapshot apply re-renders a standing back under its new key
+var _ipdb_facts: Dictionary = {} ## CARDBACK: the IPDB cache's facts by game id, pushed by Main (set_ipdb_facts); PINEMHI1: the loading marquee reads ONLY this map - the flip path never fetches
+var _ipdb_stamp: int = 0 ## CARDBACK: Main's cache stamp (the facts' name; the marquee reads live at raise, so no render key rides it since PINEMHI1)
+var _pinemhi_rows: Dictionary = {} ## PINEMHI1: PINemHi Personal full row lists by PinemhiScores title key, pushed by Main (set_pinemhi_rows); the card back renders these
+var _pinemhi_stamp: int = 0 ## PINEMHI1: the rows' name - bumped by set_pinemhi_rows when the pushed rows differ; it rides _card_back_key so a standing back heals under its new key
 var _wovp_shots_folder: String = "" ## ROOMSUBMIT: the config's screenshots folder, pushed by Main with the boards - the submit panel reads its photos from there
 var _wovp_fetched_at: int = 0 ## unix time the standing boards landed (0 = never)
 var _wovp_live: bool = false ## the standing boards came from a fetch this session (false = the disk cache's)
@@ -2088,25 +2090,38 @@ func set_pinemhi_bests(bests: Dictionary) -> void:
 			_render_tournament_board(idx)
 
 
-## CARDBACK: Main's push of the IPDB cache (facts by game
-## id + the cache stamp). The stamp rides the back's
-## content key, so when a fetch lands while a card stands
-## flipped, the back heal re-renders it under the new key -
-## the same discipline the boards' fetch stamp uses.
-func set_ipdb_facts(facts: Dictionary, stamp: int) -> void:
-	var stamp_changed: bool = stamp != _ipdb_stamp
-	_ipdb_facts = facts
-	_ipdb_stamp = stamp
-	# BACKTRIM: a changed stamp is the facts' new name -
-	# a back standing open under the old name re-renders
-	# under the new key, the same heal fresh boards get
-	# in set_wovp_data (whose own heal reads the stamp
-	# before this push lands, so it cannot carry this
-	# one). An unchanged stamp - a repeat push of the
-	# same facts - touches nothing: no churn.
-	if stamp_changed and _flip_idx >= 0:
+## PINEMHI1: Main's push of the PINemHi Personal full row
+## lists (the card back's read, sibling to the bests push
+## above). The rows' stamp is their name: when a push
+## carries different rows, the stamp bumps and a back
+## standing open re-renders under its new key - the heal
+## the facts push used to perform for the old tenant,
+## kept for the data the back actually renders. A repeat
+## push of the same rows touches nothing: no churn.
+## Under PVLDS_BACKTRIM_NC=nostamp the stamp never bumps
+## and the heal never runs, so the backtrim legs fail by
+## name against the stale back.
+func set_pinemhi_rows(rows_map: Dictionary) -> void:
+	if rows_map == _pinemhi_rows:
+		return
+	_pinemhi_rows = rows_map
+	if RoomSpecs.backtrim_nc == "nostamp":
+		return
+	_pinemhi_stamp += 1
+	if _flip_idx >= 0:
 		_flip_key = _card_back_key(_flip_idx)
 		_refresh_card_back()
+
+
+## CARDBACK: Main's push of the IPDB cache (facts by game
+## id + the cache stamp). PINEMHI1: the facts' consumer
+## is the loading marquee now, which reads this map live
+## at raise time - no standing render keys on the facts,
+## so the push simply stores them (the BACKTRIM back
+## heal retired with the Spec Sheet it served).
+func set_ipdb_facts(facts: Dictionary, stamp: int) -> void:
+	_ipdb_facts = facts
+	_ipdb_stamp = stamp
 
 
 func set_wovp_data(d: Dictionary) -> void:
@@ -7235,13 +7250,15 @@ func _card_back_key(idx: int) -> String:
 			ch2 = cand
 			break
 	return "wing|" + game.game_id + "|" + (ch2.challenge_id if ch2 != null else "") \
-		+ "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id + "|ipdb" + str(_ipdb_stamp)
+		+ "|" + str(_wovp_fetched_at) + "|" + _wovp_user_id + "|pmh" + str(_pinemhi_stamp)
 
 
 ## The spec a panel's back renders: the Tournament board
-## for a challenge card in the Tournament Room, the wing
-## spec (table data, or board + data) in the library -
-## with the book's dressing retired: the spine key goes
+## for a challenge card in the Tournament Room; in the
+## library, PINEMHI1's PINemHi back (RoomSpecs.
+## pinemhi_back_spec - the game's Personal scores, or the
+## honest empty state) - the Spec Sheet wing survives
+## only behind the oldgrid NC seam. With the book's dressing retired: the spine key goes
 ## (a card's back joins nothing). Through GRADFIX12 the
 ## footer plinth the wing waived was restored here, because
 ## the back carried its own Launch button where the board's
@@ -7264,8 +7281,18 @@ func _card_back_spec(idx: int) -> Dictionary:
 		if cand != null and cand.table_external_id == game.game_id:
 			ch2 = cand
 			break
-	var spec: Dictionary = RoomSpecs.wing_spec(game, ch2, _wovp_user_id, now_unix,
-		_ipdb_facts.get(game.game_id, {}) as Dictionary)
+	# PINEMHI1: the back's tenant is the game's PINemHi
+	# record (title-joined like the boards' best line,
+	# through challenge_key's normalization). The retired
+	# Spec Sheet wing stands only under the oldgrid NC.
+	var spec: Dictionary
+	if RoomSpecs.pinemhi1_nc == "oldgrid":
+		spec = RoomSpecs.wing_spec(game, ch2, _wovp_user_id, now_unix,
+			_ipdb_facts.get(game.game_id, {}) as Dictionary)
+	else:
+		var record: Dictionary = _pinemhi_rows.get(
+			PinemhiScores.challenge_key(game.title), {}) as Dictionary
+		spec = RoomSpecs.pinemhi_back_spec(game, record)
 	spec["spine_side"] = ""
 	spec["footer_px"] = RoomSpecs.BOARD_FOOTER_PX if _plinth_nc() else 0
 	spec["ink_centre"] = not _plinth_nc()

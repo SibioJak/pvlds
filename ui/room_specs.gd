@@ -528,7 +528,8 @@ static func submit_panel_spec(ch: WovpChallenge, owned: bool, build_owned: bool,
 ## board_deadplank_nc above.
 static var pinemhi_nc: String = ""
 static var cardback_nc: String = "" ## Main sets this from PVLDS_CARDBACK_NC before any room exists (nodots: the Spec Sheet grid's rows lose their source dots - the wells stand unlabelled - so the cardback legs fail by name)
-static var backtrim_nc: String = "" ## Main sets this from PVLDS_BACKTRIM_NC before any room exists (notrim: the Spec Sheet grid regains the three rows BACKTRIM cut after Units produced - Fun rating, Features, IPDB entry - so the trim legs fail by name)
+static var backtrim_nc: String = "" ## Main sets this from PVLDS_BACKTRIM_NC before any room exists (PINEMHI1: nostamp = the room's PINemHi rows push never bumps its stamp, so a standing back never heals - the rewritten backtrim legs fail by name; the CARDBACK-era notrim value has no surface left and is ignored)
+static var pinemhi1_nc: String = "" ## Main sets this from PVLDS_PINEMHI1_NC before any room exists (PINEMHI1 seams: oldgrid = the card back renders the retired Spec Sheet wing again, so the back legs fail by name; pulse = the loading marquee's font pulse returns, so the pulse leg fails by name)
 
 static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}, submit_hint: bool = false) -> Dictionary:
 	var rows: Array = []
@@ -837,6 +838,99 @@ static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_u
 		"footer_px": 0,
 		"spine_side": "right",
 	}
+
+
+## PINEMHI1: the card back's new tenant (Chris, 2026-11-07:
+## "we nuke table info and include pinemhi"). The back is
+## the game's PINemHi Personal scores: the title line, then
+## the file's rows AS THEY STAND - as many as the file
+## holds, never padded - in the boards' own score-row shape
+## (rank / player / board-formatted score, the date riding
+## the name). A game with no Personal file (or no rows)
+## gets one honest note line instead - no fact grid, no
+## invented rows. The PuP note survives the tenancy change
+## as the footer's last line, in both states. Under the
+## oldgrid NC the room routes to wing_spec instead (the
+## retired Spec Sheet), so this spec is never built.
+static func pinemhi_back_spec(game: GameEntry, record: Dictionary) -> Dictionary:
+	var rows: Array = []
+	var file_rows: Array = record.get("rows", []) as Array
+	if file_rows.is_empty():
+		rows.append({"kind": "note", "text": "No PINemHi scores on file for this table yet.", "size": 32})
+	else:
+		for rv: Variant in file_rows:
+			var r: Dictionary = rv as Dictionary
+			var score: int = int(r.get("score", 0))
+			var name_text: String = str(r.get("player", ""))
+			var when: String = str(r.get("when", ""))
+			if when != "":
+				# The row's date half (the time stays in the
+				# file; the back reads at a glance).
+				name_text += " · " + when.split(" ")[0]
+			rows.append({
+				"kind": "score",
+				"text": "#%d  %s  %s" % [int(r.get("rank", 0)), name_text, WovpChallenge.format_score(float(score))],
+				"pos_text": "#%d" % int(r.get("rank", 0)),
+				"name_text": name_text,
+				"score_text": WovpChallenge.format_score(float(score)),
+				"score": score,
+				"pending": false,
+				"accent": false,
+				"size": 38,
+			})
+	if game.is_pup_tagged():
+		rows.append({"kind": "note", "text": PUP_NOTE, "size": 30})
+	var sub: String = ""
+	if game.manufacturer != "":
+		sub = game.manufacturer.to_upper()
+	if game.year > 0:
+		sub = (sub + " · " if sub != "" else "") + str(game.year)
+	return {
+		"kind": "board",
+		"bg": CARD_BG,
+		"band": manufacturer_color(game.manufacturer),
+		"band_text": "PINEMHI",
+		"band_size": 28,
+		"title": game.title,
+		"title_size": 40,
+		"title_max_lines": 1,
+		"sub": sub,
+		"sub_size": 26,
+		"rows": rows,
+		"footer_px": 0,
+		"spine_side": "right",
+	}
+
+
+## PINEMHI1 (Milestone 2): the loading marquee's fact
+## lines - the salvage of the nuked Spec Sheet (Chris:
+## "expand whats mentioned on the table loading screen").
+## The pick of the old grid, one value per label: the
+## IPDB value when the bundled snapshot / cache holds
+## one, else the db value (the db carries a Designer
+## only; the other four live in the IPDB well alone).
+## Empty labels are skipped entirely and the list caps
+## at five - the marquee drops a line rather than
+## shrink its type.
+static func marquee_fact_lines(game: GameEntry, ipdb: Dictionary) -> Array:
+	var db_designer: String = ", ".join(game.designers)
+	var picks: Array = [
+		["Designer", str(ipdb.get("design", "")), db_designer],
+		["Art", str(ipdb.get("art", "")), ""],
+		["Music", str(ipdb.get("music", "")), ""],
+		["Software", str(ipdb.get("software", "")), ""],
+		["Units produced", str(ipdb.get("units", "")), ""],
+	]
+	var lines: Array = []
+	for pv: Variant in picks:
+		var p: Array = pv as Array
+		var v: String = str(p[1]) if str(p[1]) != "" else str(p[2])
+		if v == "":
+			continue
+		lines.append(str(p[0]) + ": " + v)
+		if lines.size() >= 5:
+			break
+	return lines
 
 
 static func banner_spec(line: String) -> Dictionary:

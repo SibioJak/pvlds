@@ -828,6 +828,7 @@ func _ready() -> void:
 	# notrim): the grid regains the rows the trim cut, and
 	# the trim legs fail by name. Same seam shape.
 	RoomSpecs.backtrim_nc = OS.get_environment("PVLDS_BACKTRIM_NC")
+	RoomSpecs.pinemhi1_nc = OS.get_environment("PVLDS_PINEMHI1_NC")
 	# GRADFIX8's tournie-border negative-control seam
 	# (PVLDS_GRADFIX8_NC=noborder): borders are never
 	# applied, so the census's tourney-border legs fail
@@ -1538,6 +1539,11 @@ func _push_wovp_data() -> void:
 	# time, so a folder/toggle change or fresh files land
 	# on the boards without a restart.
 	_room.set_pinemhi_bests(PinemhiScores.load_for_config(_config))
+	# PINEMHI1: the full Personal row lists ride the same
+	# push (the card back's read), re-read from the same
+	# install read - fresh files land on the backs, and a
+	# standing back heals under the rows' new stamp.
+	_room.set_pinemhi_rows(PinemhiScores.load_rows_for_config(_config))
 	# CARDBACK + BACKTRIM: the IPDB facts ride the same
 	# push, through the one door that carries the stamp
 	# law - a repeat ride of unchanged facts never bumps,
@@ -21971,6 +21977,7 @@ func _run_core_test() -> void:
 	# every row's source, and the dots leg fails by name.
 	RoomSpecs.cardback_nc = OS.get_environment("PVLDS_CARDBACK_NC")
 	RoomSpecs.backtrim_nc = OS.get_environment("PVLDS_BACKTRIM_NC")
+	RoomSpecs.pinemhi1_nc = OS.get_environment("PVLDS_PINEMHI1_NC")
 	_expect(IpdbFacts.ipdb_id_from_url("https://www.ipdb.org/machine.cgi?id=1267") == 1267,
 		"cardback: the IPDB id parses out of the db's ipdbUrl", failures)
 	_expect(IpdbFacts.ipdb_id_from_url("") == 0 and IpdbFacts.ipdb_id_from_url("https://example.com/x") == 0,

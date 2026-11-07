@@ -57,27 +57,46 @@ static func resolve_folder(cfg: PvldsConfig) -> String:
 ## Returns {} when the file is not a parseable TOP10 file
 ## or carries no ranked rows.
 static func parse_file(path: String) -> Dictionary:
+	var full: Dictionary = parse_file_rows(path)
+	if full.is_empty():
+		return {}
+	var rows: Array = full.get("rows", []) as Array
+	if rows.is_empty():
+		return {}
+	var best: Dictionary = (rows[0] as Dictionary).duplicate()
+	best["title"] = str(full.get("title", ""))
+	best["key"] = str(full.get("key", ""))
+	return best
+
+
+## PINEMHI1: the file's FULL ranked row list, in file
+## order: {title, key, rows: [{rank, score_text, score,
+## player, when}]} - "when" is the row's "date time" pair
+## verbatim ("" on a row shape that carries none). The
+## card back renders these rows; parse_file above keeps
+## serving the best-only consumers (the tournament
+## board's note) off the same parse. Returns {} when the
+## file is not a parseable TOP10 file or carries no
+## ranked rows.
+static func parse_file_rows(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):
 		return {}
 	var text: String = FileAccess.get_file_as_string(path)
 	if text == "":
 		return {}
 	var title: String = ""
-	var best: Dictionary = {}
+	var rows: Array = []
 	for raw: String in text.split("\n"):
 		var line: String = raw.strip_edges()
 		if title == "" and line.begins_with("<<<") and line.ends_with(">>>"):
 			title = line.trim_prefix("<<<").trim_suffix(">>>").strip_edges()
 			continue
-		if best.is_empty():
-			var row: Dictionary = _parse_row(line)
-			if not row.is_empty():
-				best = row
-	if title == "" or best.is_empty():
+		var row: Dictionary = _parse_row(line)
+		if not row.is_empty():
+			rows.append(row)
+	if title == "" or rows.is_empty():
 		return {}
-	best["title"] = title
-	best["key"] = title_key(title)
-	return best
+	return {"title": title, "key": title_key(title), "rows": rows}
 
 
 ## One ranked row -> {rank, score_text, score, player}.
@@ -103,6 +122,7 @@ static func _parse_row(line: String) -> Dictionary:
 			"score_text": cscore,
 			"score": cdigits.to_int(),
 			"player": parts[2].strip_edges(),
+			"when": "",
 		}
 	var tokens: PackedStringArray = line.split(" ", false)
 	if tokens.size() < 5:
@@ -124,6 +144,7 @@ static func _parse_row(line: String) -> Dictionary:
 		"score_text": score_s,
 		"score": digits.to_int(),
 		"player": player,
+		"when": date_s + " " + tokens[tokens.size() - 1],
 	}
 
 
@@ -181,6 +202,35 @@ static func load_folder(folder: String) -> Dictionary:
 ## The config-driven read Main pushes to the room.
 static func load_for_config(cfg: PvldsConfig) -> Dictionary:
 	return load_folder(resolve_folder(cfg))
+
+
+## PINEMHI1: every Personal file's FULL row list under a
+## PINemHi folder, keyed by title_key: {key: {title,
+## rows}}. The card back's read. Empty under the same
+## absences load_folder is empty under.
+static func load_folder_rows(folder: String) -> Dictionary:
+	var out: Dictionary = {}
+	if folder == "":
+		return out
+	var dir_path: String = folder.path_join(LEADERBOARD_DIR).path_join(PERSONAL_DIR)
+	var da: DirAccess = DirAccess.open(dir_path)
+	if da == null:
+		return out
+	for file_name: String in da.get_files():
+		if not file_name.to_lower().ends_with(".txt"):
+			continue
+		var rec: Dictionary = parse_file_rows(dir_path.path_join(file_name))
+		if rec.is_empty():
+			continue
+		var key: String = str(rec.get("key", ""))
+		if key != "" and not out.has(key):
+			out[key] = {"title": str(rec.get("title", "")), "rows": rec.get("rows", [])}
+	return out
+
+
+## The config-driven full-row read Main pushes to the room.
+static func load_rows_for_config(cfg: PvldsConfig) -> Dictionary:
+	return load_folder_rows(resolve_folder(cfg))
 
 
 ## The SETUP surfaces' standing line, in plain words.
