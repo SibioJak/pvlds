@@ -1561,6 +1561,10 @@ func _push_wovp_data() -> void:
 	# install read - fresh files land on the backs, and a
 	# standing back heals under the rows' new stamp.
 	_room.set_pinemhi_rows(PinemhiScores.load_rows_for_config(_config))
+	# BACKFINE: the TOP10_Best row lists ride the same push
+	# (the card back's online-best section), re-read from
+	# the same install read.
+	_room.set_pinemhi_best_rows(PinemhiScores.load_best_rows_for_config(_config))
 	# CARDBACK + BACKTRIM: the IPDB facts ride the same
 	# push, through the one door that carries the stamp
 	# law - a repeat ride of unchanged facts never bumps,

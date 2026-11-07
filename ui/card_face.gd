@@ -766,8 +766,19 @@ func _make_board_row(entry: Dictionary, layout: Dictionary, idx: int) -> Control
 		return dp
 	if kind == "score":
 		var accent: bool = bool(entry.get("accent", false))
+		var world1: bool = bool(entry.get("world1", false))
 		var sp: PanelContainer = PanelContainer.new()
-		if accent:
+		if world1:
+			# BACKFINE: the online world's #1 row - its own
+			# steel-blue ground with a pale leading edge, so
+			# the eye separates "the best score anyone has"
+			# from the player's own rows (neutral) and his
+			# league row (amber accent) at a glance.
+			var wsb: StyleBoxFlat = _board_box(Color(0.09, 0.22, 0.40), 6)
+			wsb.border_color = Color(0.45, 0.78, 1.0)
+			wsb.border_width_left = 8
+			sp.add_theme_stylebox_override("panel", wsb)
+		elif accent:
 			# His row, richer (TR3): a brighter amber ground
 			# and a solid gold leading edge, so the eye finds
 			# it before it reads anything.
@@ -780,6 +791,7 @@ func _make_board_row(entry: Dictionary, layout: Dictionary, idx: int) -> Control
 		var ink2: Color = Color(1.0, 0.98, 0.92) if accent else Color(0.90, 0.91, 0.96)
 		sp.set_meta("board_kind", "score")
 		sp.set_meta("score_text", str(entry.get("score_text", "")))
+		sp.set_meta("world1", world1)
 		if RoomSpecs.board_nc_old:
 			# The pre-TR3 row: one label, one line, and the
 			# score ellipsized away with the rest when the
@@ -936,6 +948,7 @@ func board_metrics() -> Dictionary:
 			d["kv_value"] = str(c.get_meta("kv_value"))
 			d["kv_src"] = str(c.get_meta("kv_src"))
 		if str(d["kind"]) == "score":
+			d["world1"] = bool(c.get_meta("world1")) if c.has_meta("world1") else false
 			var sl: Label = c.get_meta("score_label") as Label
 			if sl != null:
 				var need_text: String = str(c.get_meta("need_text")) if c.has_meta("need_text") else str(c.get_meta("score_text"))

@@ -1149,6 +1149,7 @@ var _pinemhi_bests: Dictionary = {} ## NEXTROUND (item 4): PINemHi personal best
 var _ipdb_facts: Dictionary = {} ## CARDBACK: the IPDB cache's facts by game id, pushed by Main (set_ipdb_facts); PINEMHI1: the loading marquee reads ONLY this map - the flip path never fetches
 var _ipdb_stamp: int = 0 ## CARDBACK: Main's cache stamp (the facts' name; the marquee reads live at raise, so no render key rides it since PINEMHI1)
 var _pinemhi_rows: Dictionary = {} ## PINEMHI1: PINemHi Personal full row lists by PinemhiScores title key, pushed by Main (set_pinemhi_rows); the card back renders these
+var _pinemhi_best_rows: Dictionary = {} ## BACKFINE: PINemHi TOP10_Best full row lists by the same title key, pushed by Main (set_pinemhi_best_rows); the card back's online-best section renders these
 var _pinemhi_stamp: int = 0 ## PINEMHI1: the rows' name - bumped by set_pinemhi_rows when the pushed rows differ; it rides _card_back_key so a standing back heals under its new key
 var _wovp_shots_folder: String = "" ## ROOMSUBMIT: the config's screenshots folder, pushed by Main with the boards - the submit panel reads its photos from there
 var _wovp_fetched_at: int = 0 ## unix time the standing boards landed (0 = never)
@@ -2114,6 +2115,23 @@ func set_pinemhi_rows(rows_map: Dictionary) -> void:
 	if rows_map == _pinemhi_rows:
 		return
 	_pinemhi_rows = rows_map
+	if RoomSpecs.backtrim_nc == "nostamp":
+		return
+	_pinemhi_stamp += 1
+	if _flip_idx >= 0:
+		_flip_key = _card_back_key(_flip_idx)
+		_refresh_card_back()
+
+
+## BACKFINE: Main's push of the PINemHi TOP10_Best full row
+## lists (the card back's online-best section, sibling to
+## the Personal rows push above). The two maps share the
+## one stamp: the back renders both, so either map changing
+## re-names the back and a standing back heals the same way.
+func set_pinemhi_best_rows(rows_map: Dictionary) -> void:
+	if rows_map == _pinemhi_best_rows:
+		return
+	_pinemhi_best_rows = rows_map
 	if RoomSpecs.backtrim_nc == "nostamp":
 		return
 	_pinemhi_stamp += 1
@@ -7301,7 +7319,16 @@ func _card_back_spec(idx: int) -> Dictionary:
 	else:
 		var record: Dictionary = _pinemhi_rows.get(
 			PinemhiScores.challenge_key(game.title), {}) as Dictionary
-		spec = RoomSpecs.pinemhi_back_spec(game, record)
+		var best_record: Dictionary = _pinemhi_best_rows.get(
+			PinemhiScores.challenge_key(game.title), {}) as Dictionary
+		if RoomSpecs.backfine_nc == "ghostbest" and best_record.is_empty():
+			# BACKFINE NC seam: a Best section stands for a
+			# game whose install holds NO Best file, so the
+			# no-file-no-section legs fail by name.
+			best_record = {"title": game.title, "rows": [{
+				"rank": 1, "score": 999999999, "score_text": "999.999.999",
+				"player": "GHOST", "when": ""}]}
+		spec = RoomSpecs.pinemhi_back_spec(game, record, best_record)
 	spec["spine_side"] = ""
 	spec["footer_px"] = RoomSpecs.BOARD_FOOTER_PX if _plinth_nc() else 0
 	spec["ink_centre"] = not _plinth_nc()

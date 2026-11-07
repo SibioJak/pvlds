@@ -24,6 +24,7 @@ extends RefCounted
 
 const LEADERBOARD_DIR: String = "PINemHi LeaderBoard"
 const PERSONAL_DIR: String = "TOP10_Personal"
+const BEST_DIR: String = "TOP10_Best"
 
 ## Common install locations, tried in order when the
 ## config's folder is empty (Chris's own install is the
@@ -209,10 +210,30 @@ static func load_for_config(cfg: PvldsConfig) -> Dictionary:
 ## rows}}. The card back's read. Empty under the same
 ## absences load_folder is empty under.
 static func load_folder_rows(folder: String) -> Dictionary:
+	return _load_folder_rows_from(folder, PERSONAL_DIR)
+
+
+## BACKFINE: every TOP10_Best file's FULL row list, same
+## keying, same parser - the Best shelf is written by the
+## same PINemHi program in the same shape as Personal (the
+## file header carries the game's title inside <<< >>>;
+## the shelf's own name is the only difference). The card
+## back's online-best read: the world #1 line and, where
+## the back's readability law lets them stand, the full
+## list under the personal rows. NOTE: no real Best file
+## exists in the build workspace - this parse stands as a
+## same-writer assumption until a field check on a table
+## with a real Best file (BACKFINE STATUS.md carries the
+## flag). Empty under the same absences as Personal.
+static func load_folder_best_rows(folder: String) -> Dictionary:
+	return _load_folder_rows_from(folder, BEST_DIR)
+
+
+static func _load_folder_rows_from(folder: String, shelf: String) -> Dictionary:
 	var out: Dictionary = {}
 	if folder == "":
 		return out
-	var dir_path: String = folder.path_join(LEADERBOARD_DIR).path_join(PERSONAL_DIR)
+	var dir_path: String = folder.path_join(LEADERBOARD_DIR).path_join(shelf)
 	var da: DirAccess = DirAccess.open(dir_path)
 	if da == null:
 		return out
@@ -231,6 +252,11 @@ static func load_folder_rows(folder: String) -> Dictionary:
 ## The config-driven full-row read Main pushes to the room.
 static func load_rows_for_config(cfg: PvldsConfig) -> Dictionary:
 	return load_folder_rows(resolve_folder(cfg))
+
+
+## The config-driven Best read Main pushes to the room.
+static func load_best_rows_for_config(cfg: PvldsConfig) -> Dictionary:
+	return load_folder_best_rows(resolve_folder(cfg))
 
 
 ## The SETUP surfaces' standing line, in plain words.
