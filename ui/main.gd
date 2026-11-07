@@ -326,7 +326,7 @@ var _pm1_phase: int = 0
 var _pm1_wait: int = 0
 var _pm1_failures: int = 0
 var _pm1_done: bool = false
-var _smoke_scoremark: bool = false ## --pvlds-smoke-scoremark: SCOREMARK round - boots the 6-game PINemHi fixture library through the normal path and judges the FRONT marks on the rendered faces: standing panel faces (PINEMHI BEST chip pixels), factory-rendered art faces (the medallion's pixels, wall + detail sizes), the detail view's inheritance, and a heal leg (a rows push raises a standing card's mark, another drops one); under PVLDS_SCOREMARK_NC=bestkey the Best-only game gains a mark and the semantic leg fails by name; under =ghostmark every game is marked and the scoreless legs fail by name
+var _smoke_scoremark: bool = false ## --pvlds-smoke-scoremark: SCOREMARK round - boots the 5-game PINemHi fixture library through the normal path and judges the FRONT marks on the rendered faces: standing panel faces (PINEMHI BEST chip pixels), factory-rendered art faces (the medallion's pixels, wall + detail sizes), the detail view's inheritance, and a heal leg (a rows push raises a standing card's mark, another drops one); under PVLDS_SCOREMARK_NC=bestkey the Best-only game gains a mark and the semantic leg fails by name; under =ghostmark every game is marked and the scoreless legs fail by name
 var _sm_phase: int = 0
 var _sm_wait: int = 0
 var _sm_failures: int = 0
@@ -16784,11 +16784,12 @@ func _finish_cardback_smoke() -> void:
 
 
 ## SCOREMARK smoke (--pvlds-smoke-scoremark): the front
-## marks, judged on the RENDERED faces of the 6-game
+## marks, judged on the RENDERED faces of the 5-game
 ## PINemHi fixture library (the ONETEN install: Apollo 13
 ## Personal+Best, Congo Personal+Best+PuP, Beetlejuice
 ## Personal+Best, Johnny Mnemonic Best ONLY, Indiana
-## Jones and Addams Family neither). The standing wall
+## Jones neither; the runner's sixth table file stands as
+## an unmatched local game and is not a target). The
 ## faces are panel kind on this harness (no downloadable
 ## art), so the mark's standing citizen is the PINEMHI
 ## BEST chip - judged by its band-colour pixels on the
@@ -16809,7 +16810,6 @@ const SM_TARGETS: Dictionary = {
 	"1vJ_ZQYe": true, # Beetlejuice - Personal (a full 10) + Best
 	"-SbeVjPA": false, # Johnny Mnemonic - a Best file ONLY: NO mark (the semantic leg)
 	"lkSumsrF": false, # Indiana Jones - no PINemHi files at all
-	"aT_GONvw": false, # The Addams Family - no PINemHi files at all
 }
 
 
