@@ -2741,6 +2741,24 @@ func restore_library_return(filter: String, game_id: String) -> void:
 		print("ROOM RETURN: back to the library's %s view - the launched game no longer stands in it, the view's default landing" % filter)
 	else:
 		print("ROOM RETURN: back to the library's %s view - no card stands in it, the rail landing stands" % filter)
+	# The restore is this entry's boot seating, and it takes
+	# the boot seating guard with it (the BOOTFIX law, see
+	# setup and _follow_centre): the seating above moved the
+	# focus and centre "by another path", which by the
+	# guard's own release rule would drop it - and a pointer
+	# that has not moved yet (a resting mouse on the flat
+	# path, a resting laser in the headset) would then walk
+	# the centre off the restored seat through _follow_centre
+	# while the focus stays, splitting drawn focus from real.
+	# Re-armed on the restore's seating, the guard holds the
+	# landing until the player's first genuine act, exactly
+	# as it holds the setup restore's. The hover reference
+	# re-samples against the restored wall.
+	_boot_guard = true
+	_boot_focus_ref = _focused
+	_boot_centre_ref = _centre_index
+	_boot_hover_sampled = false
+	_boot_hover_ref = null
 
 
 func page_count() -> int:
