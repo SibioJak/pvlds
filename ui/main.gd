@@ -282,6 +282,14 @@ var _input_smoke_failures: int = 0
 var _input_started: bool = false ## the input legs run async (they feed real pad events and wait out frames); kicked off once
 var _input_done: bool = false ## the input legs have reported
 var _input_exit_fired: bool = false ## the D-pad Right BACK probe's witness (exit_requested caught by a test lambda, not the quit handler)
+var _smoke_backstep: bool = false ## --pvlds-smoke-backstep: BACKSTEP - BACK from a filter view steps home to ALL before any exit; B is its twin
+var _bs_phase: int = 0
+var _bs_wait: int = 0
+var _bs_failures: int = 0
+var _bs_started: bool = false ## the backstep legs run async (real pad events + settle frames); kicked off once
+var _bs_done: bool = false
+var _bs_exit_fired: bool = false ## the exit probe's witness for the whole backstep run (the quit handler is swapped out)
+var _bs_probe: Callable = Callable() ## the probe standing on exit_requested for the backstep run
 var _input_refresh_fired: bool = false ## the GRADFIX16 REFRESH probe's witness (tournament_refresh_requested caught by a test lambda)
 var _smoke_nav: bool = false ## --pvlds-smoke-nav: the focus graph + seated wall clearance contract
 var _nav_smoke_phase: int = 0
@@ -743,6 +751,8 @@ func _ready() -> void:
 			_ret_mode = "verify_tourn"
 	if user_args.has("--pvlds-smoke-focusfix"):
 		_smoke_focusfix = true
+	if user_args.has("--pvlds-smoke-backstep"):
+		_smoke_backstep = true
 	if user_args.has("--pvlds-smoke-motion"):
 		_smoke_motion = true
 	if user_args.has("--pvlds-smoke-swingprobe"):
@@ -809,6 +819,12 @@ func _ready() -> void:
 	# nobexit): B stays unassigned in the Tournament view, so
 	# the nav smoke's B-exit leg fails against it by name.
 	RoomView.debug_b_nc = OS.get_environment("PVLDS_B_NC")
+	# BACKSTEP's negative-control seam (PVLDS_BACKSTEP_NC=
+	# oldback | nobind): "oldback" removes the filter-view
+	# step (BACK skips the main screen again), "nobind"
+	# leaves B unbound in the library wall - each so the
+	# backstep smoke's matching legs fail by name.
+	RoomView.debug_backstep_nc = OS.get_environment("PVLDS_BACKSTEP_NC")
 	# GRADFIX10's input negative-control seam (PVLDS_INPUT_NC=
 	# dpadmove | notrig): restores the pre-nuke D-pad movement
 	# or the unread triggers, so the input smoke's matching
@@ -987,7 +1003,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return or _smoke_focusfix or _smoke_pinemhi1 or _smoke_scoremark) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_scoremark) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1196,6 +1212,8 @@ func _process(_delta: float) -> void:
 		_drive_return_smoke()
 	if _smoke_focusfix:
 		_drive_focusfix_smoke()
+	if _smoke_backstep:
+		_drive_backstep_smoke()
 	if _smoke_motion:
 		_drive_motion_smoke()
 	if _smoke_swingprobe:
@@ -10182,7 +10200,7 @@ func _nav_leg_bumpers_async() -> void:
 ## button up again before the next press can count.
 ## The B exit (GRADFIX4 item 4, async): in the Tournament
 ## view, B returns to Table Select. B was unassigned in the
-## room's wall mode before this round (it served only the
+## room's wall mode before BACKSTEP (it served only the
 ## detail escape and the SETUP panel's close); the leg
 ## enters the Tournament view on the rail stop, feeds a real
 ## B press through the pad poll, and judges the landing.
@@ -10190,9 +10208,13 @@ func _nav_leg_bumpers_async() -> void:
 ## wall's centred card (it used to rest on the bar's
 ## tournament stop while the top-left card stood popped -
 ## the drawn/real divergence Chris reported, 2026-11-06).
-## A second B in the library must do nothing. Under
-## PVLDS_B_NC=nobexit the press does nothing and the leg
-## fails by name.
+## BACKSTEP (2026-11-07) supersedes the leg's old second
+## half ("a second B in the library does nothing"): B is
+## BACK in the library now, so standing on the ALL wall the
+## second press runs the exit - witnessed by a probe on
+## exit_requested, the input smoke's pattern, so the boot
+## survives its own proof. Under PVLDS_B_NC=nobexit the
+## tournament press does nothing and the leg fails by name.
 func _nav_leg_b_exit_async() -> void:
 	_room._handle_rail("tournament")
 	_nav_expect(_room.tournament_active(), "B exit: the TOURNAMENT stop raises the Tournament view")
@@ -10201,9 +10223,22 @@ func _nav_leg_b_exit_async() -> void:
 		"B exit: B in the Tournament view returns to Table Select")
 	_nav_expect(_room.focused_quad() != null and _room.focused_quad() == _room._panels[_room.centre_index()],
 		"B exit: focus lands on the library wall's centred card")
+	# BACKSTEP: the second B, in Table Select on the ALL
+	# wall, is BACK - it runs the exit. (The pre-BACKSTEP
+	# contract, "B in Table Select does nothing", is retired
+	# by Chris's ruling; the filter-step half of the new law
+	# is the backstep smoke's own legs.) The exit is caught
+	# by a probe so the boot survives to finish the leg.
+	_room._handle_rail("filter:all")
+	_input_exit_fired = false
+	var probe: Callable = func() -> void: _input_exit_fired = true
+	_room.exit_requested.disconnect(Callable(self, "_on_exit_requested"))
+	_room.exit_requested.connect(probe)
 	await _nav_feed_button(JOY_BUTTON_B)
-	_nav_expect(not _room.tournament_active() and _room._mode == "wall",
-		"B exit: B in Table Select does nothing")
+	_room.exit_requested.disconnect(probe)
+	_room.exit_requested.connect(Callable(self, "_on_exit_requested"))
+	_nav_expect(_input_exit_fired,
+		"B exit: B in Table Select performs BACK (the exit path fires from the ALL wall)")
 	_nav_b_done = true
 
 
@@ -19411,6 +19446,13 @@ func _drive_dpadexit_fresh() -> void:
 	match _dpadexit_smoke_phase:
 		0:
 			if _room != null and _room.visible and _room.wall_ready:
+				# BACKSTEP determinism: the contract is a fresh
+				# press on the MAIN screen. The shared user
+				# data's persisted view could stand in a filter
+				# view (where the press now steps home first),
+				# so the driver puts the wall on ALL through
+				# the room's own rail handler before injecting.
+				_room._handle_rail("filter:all")
 				var press: InputEventJoypadButton = InputEventJoypadButton.new()
 				press.device = 0
 				press.button_index = JOY_BUTTON_DPAD_RIGHT
@@ -19444,7 +19486,11 @@ func _drive_dpadexit_held() -> void:
 			# button has read pressed since before this instance
 			# existed - if the exit were going to fire on it, it
 			# fires in the first polls after the room comes up.
+			# (BACKSTEP: the wall is put on ALL first, through
+			# the room's own rail handler - the leg's contract
+			# is the main-screen press; see the fresh leg.)
 			if _room != null and _room.visible and _room.wall_ready:
+				_room._handle_rail("filter:all")
 				_dpadexit_smoke_wait = 0
 				_dpadexit_smoke_phase = 1
 			else:
@@ -19490,6 +19536,213 @@ func _drive_dpadexit_held() -> void:
 			if _dpadexit_smoke_wait > 30:
 				printerr("PVLDS DPAD EXIT SMOKE: FAIL - after a witnessed release, a fresh D-pad Right press did not exit the app (held leg)")
 				get_tree().quit(1)
+
+
+# -------------------------------------------------- backstep smoke
+
+## --pvlds-smoke-backstep: BACKSTEP's contract, driven
+## through the room's real gamepad poll with real
+## InputEventJoypadButton events (the input smoke's feed):
+##   - standing in a FILTER VIEW (FAVORITES / VR / RECENTS /
+##     NEW), a BACK press - D-pad Right or B - steps home
+##     to the ALL wall: the room's filter reads ALL, the
+##     rail's standing section is ALL, the wall shows the
+##     full set, and NO exit fires;
+##   - on the ALL wall itself, either press runs the exit
+##     (witnessed by a probe on exit_requested - the boot
+##     survives its own proof);
+##   - SORT is not a view: BACK from a sorted ALL wall
+##     exits, it does not step;
+##   - B carries the baseline-release arming law: a press
+##     edge that arrives before this room instance has
+##     witnessed a release fires nothing; after a witnessed
+##     release the same press from ALL exits.
+## The walk arranges its own state through the room's store
+## (two favorites, two recents) and the rail's own handlers,
+## in a fresh user-data home where every fixture file is
+## newly stamped (the NEW view stands full). Under
+## PVLDS_BACKSTEP_NC=oldback the step never happens and the
+## step legs fail by name; under =nobind B stays unbound in
+## the wall and the B legs fail by name.
+func _drive_backstep_smoke() -> void:
+	match _bs_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				Input.warp_mouse(Vector2(512.0, 764.0))
+				_bs_wait = 0
+				_bs_phase = 1
+			else:
+				_bs_wait += 1
+				if _bs_wait > 3600:
+					_bs_expect(false, "boot: the room never came up")
+					_bs_finish_smoke()
+		1:
+			if _bs_done:
+				_bs_finish_smoke()
+				return
+			_bs_wait += 1
+			if _bs_wait > 7200:
+				_bs_expect(false, "boot: the backstep legs never finished")
+				_bs_finish_smoke()
+			elif not _bs_started and _room != null and _room.wall_ready and _bs_wait >= 4:
+				_bs_started = true
+				_bs_legs_async()
+
+
+func _bs_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - backstep smoke: ", label)
+	else:
+		_bs_failures += 1
+		printerr("  FAIL - backstep smoke: ", label)
+
+
+func _bs_finish_smoke() -> void:
+	if _room != null and _bs_probe.is_valid() and _room.exit_requested.is_connected(_bs_probe):
+		_room.exit_requested.disconnect(_bs_probe)
+		_room.exit_requested.connect(Callable(self, "_on_exit_requested"))
+	if _bs_failures == 0:
+		print("PVLDS BACKSTEP SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS BACKSTEP SMOKE: FAIL (%d)" % _bs_failures)
+		get_tree().quit(1)
+
+
+func _bs_wait_frames(n: int) -> void:
+	for i: int in range(n):
+		await get_tree().process_frame
+
+
+func _bs_inject(btn: JoyButton, pressed: bool) -> void:
+	var ev: InputEventJoypadButton = InputEventJoypadButton.new()
+	ev.device = 0
+	ev.button_index = btn
+	ev.pressed = pressed
+	Input.parse_input_event(ev)
+
+
+## One full press through the real poll: down for a few
+## frames (the edge fires), up, then a settle long enough
+## for the rebuild the press may have started.
+func _bs_feed_button(btn: JoyButton) -> void:
+	_bs_inject(btn, true)
+	await _bs_wait_frames(3)
+	_bs_inject(btn, false)
+	await _bs_wait_frames(18)
+
+
+## The standing view, read the way it renders: the filter
+## the wall's set is collected under AND the rail accent
+## that names that section standing (the strip face wears
+## the same accent).
+func _bs_standing(f: String) -> bool:
+	if _room == null or _room._filter != f:
+		return false
+	return bool(_room._rail_label_accent("filter:" + f)[1])
+
+
+func _bs_legs_async() -> void:
+	# The exit probe stands for the whole run: a press that
+	# runs the exit is witnessed, never obeyed, so one boot
+	# judges every leg.
+	_bs_probe = func() -> void: _bs_exit_fired = true
+	_room.exit_requested.disconnect(Callable(self, "_on_exit_requested"))
+	_room.exit_requested.connect(_bs_probe)
+	# Fixture state, through the room's own store: two
+	# favorites, two recents, on four distinct games.
+	var games: Array[GameEntry] = _scanner.games
+	if games.size() < 4:
+		_bs_expect(false, "fixture: the library holds fewer than four games")
+		_bs_done = true
+		return
+	_room._store.set_favorite(games[0].game_id, true)
+	_room._store.set_favorite(games[1].game_id, true)
+	_room._store.touch_recent(games[2].game_id)
+	_room._store.touch_recent(games[3].game_id)
+	_room._store.save_to_disk()
+	var all_count: int = games.size()
+	# ---- FAVORITES, stepped home by D-pad Right ----
+	_room._handle_rail("filter:favorites")
+	await _bs_wait_frames(10)
+	_bs_expect(_bs_standing("favorites") and _room._visible_games.size() == 2,
+		"favorites: the FAVORITES view stands with its two games")
+	_grad_save_grab("backstep_favorites.png")
+	_bs_exit_fired = false
+	await _bs_feed_button(JOY_BUTTON_DPAD_RIGHT)
+	_bs_expect(not _bs_exit_fired and _bs_standing("all") and _room._visible_games.size() == all_count,
+		"favorites dpad: BACK lands on ALL (standing section + full wall), no exit")
+	_bs_expect(_room.focused_quad() == _room.rail_quad("filter:all"),
+		"favorites dpad: focus lands on the ALL stop, as a filter press lands")
+	_grad_save_grab("backstep_all.png")
+	# ---- FAVORITES, stepped home by B ----
+	_room._handle_rail("filter:favorites")
+	await _bs_wait_frames(10)
+	_bs_exit_fired = false
+	await _bs_feed_button(JOY_BUTTON_B)
+	_bs_expect(not _bs_exit_fired and _bs_standing("all") and _room._visible_games.size() == all_count,
+		"favorites b: BACK lands on ALL (standing section + full wall), no exit")
+	# ---- VR, stepped home by D-pad Right ----
+	var vr_count: int = 0
+	for g: GameEntry in games:
+		if g.is_vr_tagged():
+			vr_count += 1
+	_room._handle_rail("filter:vr")
+	await _bs_wait_frames(10)
+	_bs_expect(_bs_standing("vr") and _room._visible_games.size() == vr_count,
+		"vr: the VR view stands with the VR-tagged set")
+	_bs_exit_fired = false
+	await _bs_feed_button(JOY_BUTTON_DPAD_RIGHT)
+	_bs_expect(not _bs_exit_fired and _bs_standing("all"),
+		"vr dpad: BACK lands on ALL, no exit")
+	# ---- RECENTS, stepped home by B ----
+	_room._handle_rail("filter:recents")
+	await _bs_wait_frames(10)
+	_bs_expect(_bs_standing("recents") and _room._visible_games.size() == 2,
+		"recents: the RECENTS view stands with its two games")
+	_bs_exit_fired = false
+	await _bs_feed_button(JOY_BUTTON_B)
+	_bs_expect(not _bs_exit_fired and _bs_standing("all"),
+		"recents b: BACK lands on ALL, no exit")
+	# ---- NEW, stepped home by D-pad Right ----
+	_room._handle_rail("filter:new")
+	await _bs_wait_frames(10)
+	_bs_expect(_bs_standing("new") and _room._visible_games.size() == all_count,
+		"new: the NEW view stands (fresh home: every file newly stamped)")
+	_bs_exit_fired = false
+	await _bs_feed_button(JOY_BUTTON_DPAD_RIGHT)
+	_bs_expect(not _bs_exit_fired and _bs_standing("all"),
+		"new dpad: BACK lands on ALL, no exit")
+	# ---- SORT is not a view: BACK from a sorted ALL exits ----
+	_room._handle_rail("sort")
+	await _bs_wait_frames(10)
+	_bs_exit_fired = false
+	await _bs_feed_button(JOY_BUTTON_DPAD_RIGHT)
+	_bs_expect(_bs_exit_fired,
+		"sort dpad: BACK from a sorted ALL wall exits - sort is not a view")
+	# ---- The ALL wall itself: either press runs the exit ----
+	_bs_exit_fired = false
+	await _bs_feed_button(JOY_BUTTON_DPAD_RIGHT)
+	_bs_expect(_bs_exit_fired, "all dpad: BACK from ALL exits")
+	_bs_exit_fired = false
+	await _bs_feed_button(JOY_BUTTON_B)
+	_bs_expect(_bs_exit_fired, "all b: BACK from ALL exits")
+	# ---- B's arming: an edge before any witnessed release
+	# fires nothing; after a release, the press counts. ----
+	_room._joy_b_armed = false
+	_room._joy_prev_b = false
+	_bs_exit_fired = false
+	_bs_inject(JOY_BUTTON_B, true)
+	await _bs_wait_frames(12)
+	_bs_expect(not _bs_exit_fired,
+		"arming b: a B pressed before any witnessed release fires no exit")
+	_bs_inject(JOY_BUTTON_B, false)
+	await _bs_wait_frames(6)
+	_bs_exit_fired = false
+	await _bs_feed_button(JOY_BUTTON_B)
+	_bs_expect(_bs_exit_fired,
+		"arming b: after a witnessed release, B from ALL exits")
+	_bs_done = true
 
 
 # ------------------------------------------------------------ dev hooks

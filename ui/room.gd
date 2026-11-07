@@ -807,6 +807,15 @@ static var debug_grid_nc: String = ""
 ## view again (its pre-GRADFIX4 state), so the nav smoke's
 ## B-exit leg fails by name. Empty in every real run.
 static var debug_b_nc: String = ""
+## Negative-control seam for BACKSTEP (the harness env
+## PVLDS_BACKSTEP_NC, set by Main before any room exists):
+## "oldback" removes the filter-view step (BACK from a
+## filter view skips the main screen and exits, the
+## pre-BACKSTEP behaviour), "nobind" leaves B unbound in
+## the library wall (its pre-BACKSTEP state) - each so the
+## backstep smoke's matching legs fail by name. Empty in
+## every real run.
+static var debug_backstep_nc: String = ""
 ## Negative-control seam for the blank-board heal (the
 ## harness env PVLDS_GRADFIX4_NC, set by Main before any room
 ## exists): "solidboard" makes every board render land
@@ -1196,6 +1205,7 @@ var _joy_prev_lt: bool = false ## trigger edge tracking (GRADFIX10 item 4): the 
 var _joy_prev_rt: bool = false
 var _joy_prev_right: bool = false ## D-pad Right edge tracking: the room's BACK-out press (see _process)
 var _joy_right_armed: bool = false ## baseline-release arming: set once THIS room instance has observed D-pad Right released; until then no right-press edge can exit (see _process)
+var _joy_b_armed: bool = false ## BACKSTEP: the same baseline-release arming for B's wall BACK - set once THIS room instance has observed B released; until then no B-press edge in the wall can step or exit (see _process)
 ## Scroll telemetry (the diagnostic build's witness -
 ## core/scroll_telemetry.gd): observation only. The logger
 ## is started lazily on the room's first visible frame (by
@@ -2613,9 +2623,13 @@ func _exit_tournament() -> void:
 ## B in the Tournament view returns to Table Select
 ## (GRADFIX4 item 4 - the user's hand voted: "I feel like I
 ## want to press B in tournie screen to get to table
-## select"). B was unassigned in the room's wall mode - it
-## served only the detail view's escape and the SETUP
-## panel's close - so this claims no other mapping. The
+## select"). B was unassigned in the room's wall mode when
+## this was written - it served only the detail view's
+## escape and the SETUP panel's close - so this claimed
+## no other mapping. BACKSTEP (2026-11-07) supersedes the
+## wall-mode half: B is now BACK in the library wall too
+## (see _back_step_to_all); this tournament branch keeps
+## its own meaning and its precedence in the poll. The
 ## exit mirrors the rail exits exactly (fresh centre, the
 ## library wall rebuilt, the view persisted). Its landing
 ## originally took the bar's tournament stop; FOCUSFIX
@@ -7825,6 +7839,35 @@ func _info_focused_card() -> void:
 ## _page_travel). after_swap is a press's focus landing, run
 ## in the press's own frame; pointer and keyboard travel
 ## pass none.
+## BACKSTEP (Chris, 2026-11-07: "B button needs to return
+## to main screen from favorites screen"): the pad BACK's
+## first step. Standing in a library FILTER VIEW - anything
+## but ALL: FAVORITES (his named case), VR, RECENTS, NEW -
+## BACK returns to the MAIN SCREEN (the ALL wall) instead
+## of leaving; only a BACK from the ALL wall itself runs
+## the exit, exactly as it always has. The step rides the
+## rail's own filter press, so the wall, the strip's
+## standing section, the focus landing and the persisted
+## view all change exactly as if the player had pressed
+## ALL - and the letter net leaves with the view, as it
+## does on every filter press. Returns true when the step
+## was taken (the caller must NOT continue to the exit).
+## SORT is a sort, not a view, and never steps; a letter
+## landing is a position inside the standing view, so the
+## step keys on _filter alone. The detail view and the
+## Tournament Room never step - the caller gates those,
+## and the mode check here is the second lock. Under the
+## NC (PVLDS_BACKSTEP_NC=oldback) the step never happens:
+## BACK from a filter view skips the main screen again.
+func _back_step_to_all() -> bool:
+	if debug_backstep_nc == "oldback":
+		return false
+	if _tournament or _mode != "wall" or _filter == "all":
+		return false
+	_handle_rail("filter:all")
+	return true
+
+
 func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 	if key.begins_with("filter:") or key == "sort" or key == "page_prev" or key == "page_next":
 		# Browsing onward retires the last launch's marks.
@@ -10690,10 +10733,14 @@ func _process(delta: float) -> void:
 	# ruling, 2026-10-22 - no hold gesture exists anywhere). In
 	# play it is VPX's own Exit Game binding: the press lands in
 	# the editor and the watchdog's close duty brings the room
-	# back. Here in the room, a FRESH press of it quits the app to
-	# the desktop - the rail EXIT action, on the pad. The left
-	# stick still moves focus in all four directions, right
-	# included.
+	# back. Here in the room it is BACK: from a filter view its
+	# first step is home to the main screen (BACKSTEP, 2026-11-07
+	# - _back_step_to_all), and only from the main screen itself
+	# does the press quit the app to the desktop - the rail EXIT
+	# action, on the pad. B is its twin in the library wall
+	# (BACKSTEP: the same step, the same exit, the same arming).
+	# The left stick still moves focus in all four directions,
+	# right included.
 	# The press must also be ARMED (baseline-release arming,
 	# field forensics 2026-10-22): a watchdog-relaunched room
 	# once exited through this very path with no human press -
@@ -10937,6 +10984,8 @@ func _process(delta: float) -> void:
 		_a_press()
 	_joy_prev_a = a_now
 	var b_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_B)
+	if not b_now:
+		_joy_b_armed = true ## a witnessed released poll: B's wall BACK counts press edges from here on (the D-pad Right arming law, mirrored for its twin - see _joy_b_armed)
 	if b_now and not _joy_prev_b and not deaf:
 		if _mode == "detail":
 			_detail.handle_escape()
@@ -10946,6 +10995,18 @@ func _process(delta: float) -> void:
 			hide_setup_panel() ## B is BACK on the SETUP panel too
 		elif _tournament and _mode == "wall" and debug_b_nc != "nobexit":
 			_b_exit_tournament() ## B leaves the Tournament view for Table Select (GRADFIX4 item 4)
+		elif _mode == "wall" and not _tournament and not _placard_up and _joy_b_armed \
+				and debug_backstep_nc != "nobind":
+			# BACKSTEP (Chris, 2026-11-07): B is BACK in the
+			# library too - D-pad Right's twin, under the
+			# same law: from a filter view the first step
+			# home to the ALL wall, from ALL the exit. The
+			# branch is armed like the D-pad's (a B held
+			# from the game through the watchdog's relaunch
+			# manufactures no edge that counts), and on the
+			# SETUP placard B stays inert, as the D-pad is.
+			if not _back_step_to_all():
+				_handle_rail("exit")
 	_joy_prev_b = b_now
 	# Y: flip the focused card (GRADFIX6 item 1 - Chris's
 	# ruling, 2026-10-31; Y's old More Info binding is
@@ -11026,7 +11087,13 @@ func _process(delta: float) -> void:
 		elif _setup_panel_up:
 			hide_setup_panel() ## on the SETUP panel the BACK button goes back - it never exits
 		elif not _placard_up:
-			_handle_rail("exit")
+			# BACKSTEP: the press is BACK - from a filter
+			# view its first step is home to the main
+			# screen; the exit runs only when no step was
+			# taken (the ALL wall, the detail view, the
+			# Tournament Room - their chains untouched).
+			if not _back_step_to_all():
+				_handle_rail("exit")
 	_joy_prev_right = right_now
 	# GRADFIX17 telemetry: the whole _process as one segment
 	# (see process_motion above) - the poll half's cost is
