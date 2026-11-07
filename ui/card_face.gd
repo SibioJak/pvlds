@@ -707,6 +707,21 @@ func _board_layout(entries: Array) -> Dictionary:
 		var font_px: int = base
 		var pos_need: float = _text_w(font, str(e.get("pos_text", "")), font_px)
 		var score_need: float = _text_w(font, str(e.get("score_text", "")), font_px)
+		if bool(e.get("world1", false)):
+			# BESTLINE: the world-#1 row stands on two
+			# lines (name line, then the score right-
+			# aligned) - at the mandated one-size type
+			# the field pair (BaronVanAwesome beside
+			# 635,739,180) measures 641 px with its
+			# rank, wider than the 620 px face itself,
+			# so no one-line share of the row can hold
+			# the name whole. The name's allotment here
+			# is what its own line leaves after the
+			# rank: the full inner width, never a
+			# squeezed share beside the score.
+			per[i] = {"font": font_px, "pos_w": pos_need, "score_w": score_need,
+				"name_w": maxf(24.0, inner - pos_need - 10.0), "w1": true}
+			continue
 		if pos_need + score_need + 60.0 > inner:
 			font_px = maxi(18, int(floor(float(base) * (inner - 60.0) / maxf(1.0, pos_need + score_need))))
 			pos_need = _text_w(font, str(e.get("pos_text", "")), font_px)
@@ -806,12 +821,55 @@ func _make_board_row(entry: Dictionary, layout: Dictionary, idx: int) -> Control
 			sp.set_meta("score_label", sl0)
 			sp.set_meta("need_text", text)
 			return sp
+		var per: Dictionary = (layout.get("rows", {}) as Dictionary).get(idx, {}) as Dictionary
+		var font_px: int = int(per.get("font", int(entry.get("size", 40))))
+		if world1:
+			# BESTLINE: the world-#1 row - ONE row on its
+			# steel-blue ground, standing on two lines:
+			# the rank + name centred as a block on the
+			# first line (the name at the full allotment
+			# its line leaves - see _board_layout for the
+			# measured reason no one-line row can hold
+			# it), the score right-aligned on the second.
+			# Type stays the back's one size; the name
+			# ellipsizes only past its line's own edge.
+			var vb1: VBoxContainer = VBoxContainer.new()
+			vb1.add_theme_constant_override("separation", 0)
+			var h1: HBoxContainer = HBoxContainer.new()
+			h1.alignment = BoxContainer.ALIGNMENT_CENTER
+			h1.add_theme_constant_override("separation", 10)
+			var pl1: Label = Label.new()
+			pl1.text = str(entry.get("pos_text", ""))
+			pl1.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			pl1.add_theme_font_size_override("font_size", font_px)
+			pl1.add_theme_color_override("font_color", ink2)
+			h1.add_child(pl1)
+			var nl1: Label = Label.new()
+			nl1.text = str(entry.get("name_text", ""))
+			nl1.custom_minimum_size = Vector2(float(per.get("name_w", 200.0)), 0.0)
+			nl1.autowrap_mode = TextServer.AUTOWRAP_OFF
+			nl1.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			nl1.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			nl1.add_theme_font_size_override("font_size", font_px)
+			nl1.add_theme_color_override("font_color", ink2)
+			h1.add_child(nl1)
+			vb1.add_child(h1)
+			var sl1: Label = Label.new()
+			sl1.text = str(entry.get("score_text", ""))
+			sl1.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+			sl1.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			sl1.add_theme_font_size_override("font_size", font_px)
+			sl1.add_theme_color_override("font_color", ink2)
+			vb1.add_child(sl1)
+			sp.add_child(vb1)
+			sp.set_meta("score_label", sl1)
+			sp.set_meta("name_label", nl1)
+			sp.set_meta("name_text", str(entry.get("name_text", "")))
+			return sp
 		# The centred block (GRADFIX3): the row's three
 		# parts at their natural widths, centred on the
 		# page as one unit; the name holds the allotment
 		# the layout measured for it and ellipsizes there.
-		var per: Dictionary = (layout.get("rows", {}) as Dictionary).get(idx, {}) as Dictionary
-		var font_px: int = int(per.get("font", int(entry.get("size", 40))))
 		var h: HBoxContainer = HBoxContainer.new()
 		h.alignment = BoxContainer.ALIGNMENT_CENTER
 		h.add_theme_constant_override("separation", 10)
@@ -855,6 +913,8 @@ func _make_board_row(entry: Dictionary, layout: Dictionary, idx: int) -> Control
 		else:
 			sp.add_child(h)
 		sp.set_meta("score_label", sl)
+		sp.set_meta("name_label", nl2)
+		sp.set_meta("name_text", str(entry.get("name_text", "")))
 		return sp
 	if kind == "kv":
 		# CARDBACK (item 3, second leg): a Spec Sheet grid
@@ -957,6 +1017,16 @@ func board_metrics() -> Dictionary:
 				d["font_px"] = sl.get_theme_font_size("font_size")
 				d["score_need_px"] = _text_w(_measure_font(), need_text, int(d["font_px"]))
 				d["score_allot_px"] = sl.get_global_rect().size.x
+			# BESTLINE: the name label's own fit, judged
+			# the same way - the smoke's name leg reads
+			# the world-#1 name whole off the rendered
+			# face (need vs the label's standing width).
+			if c.has_meta("name_label"):
+				var nl3: Label = c.get_meta("name_label") as Label
+				if nl3 != null:
+					d["name_text"] = str(c.get_meta("name_text")) if c.has_meta("name_text") else nl3.text
+					d["name_need_px"] = _text_w(_measure_font(), str(d["name_text"]), int(d.get("font_px", 38)))
+					d["name_allot_px"] = nl3.get_global_rect().size.x
 		rows.append(d)
 	var out: Dictionary = {"rows": rows, "face_size": size}
 	if _footer_panel.visible:

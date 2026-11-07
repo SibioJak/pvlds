@@ -531,6 +531,7 @@ static var cardback_nc: String = "" ## Main sets this from PVLDS_CARDBACK_NC bef
 static var backtrim_nc: String = "" ## Main sets this from PVLDS_BACKTRIM_NC before any room exists (PINEMHI1: nostamp = the room's PINemHi rows push never bumps its stamp, so a standing back never heals - the rewritten backtrim legs fail by name; the CARDBACK-era notrim value has no surface left and is ignored)
 static var pinemhi1_nc: String = "" ## Main sets this from PVLDS_PINEMHI1_NC before any room exists (PINEMHI1 seams: oldgrid = the card back renders the retired Spec Sheet wing again, so the back legs fail by name; pulse = the loading marquee's font pulse returns, so the pulse leg fails by name)
 static var backfine_nc: String = "" ## Main sets this from PVLDS_BACKFINE_NC before any room exists (BACKFINE seams: dateback = the card back's personal rows carry the date again, so the no-date legs fail by name; ghostbest = the room seats a Best section for a game whose install holds no Best file, so the no-file-no-section legs fail by name)
+static var bestline_nc: String = "" ## Main sets this from PVLDS_BESTLINE_NC before any room exists (BESTLINE seam: fulllist = the card back's Best section renders the file's whole list again, so the #1-only legs fail by name)
 
 static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}, submit_hint: bool = false) -> Dictionary:
 	var rows: Array = []
@@ -859,34 +860,31 @@ static func wing_spec(game: GameEntry, ch: WovpChallenge, user_id: String, now_u
 ## BACKFINE (second ruling): the local TOP10_Best file
 ## joins the back - "we only need the #1 player high
 ## score... including the Top 10 scores under or above
-## would be a nice touch." The Best section stands BELOW
-## the personal rows under an ONLINE BEST divider: the
-## world #1 as its own distinct score row (the "world1"
-## flag - the face draws it on its own steel-blue ground),
-## then the file's remaining rows in order, at most 10
-## rows all told. READABILITY LAW: Best type never goes
-## smaller than the personal rows' type (38 - one size for
-## every score row on the back), and the full Best list
-## stands only when personal + divider + full Best + the
-## PuP note FIT the back's height budget at that size;
-## otherwise the Best section reduces to the #1 line
-## alone. The #1 line and the personal rows are never
-## dropped. The budget is the renderer's own arithmetic
-## (measured at BACK_FACE_PX on the real face, BACKFINE
-## probe: the content block - band, title, sub, rows -
-## stands 166 px over its row stack, a 38 px score row
-## stands 57 px, a divider 43 px, rows separate by 6 px;
-## a note stands its wrapped height in the fallback
-## font). The block must fit the face inside its margins:
-## 1080 - 14 top - 22 bottom = 1044 px. Personal empty +
-## Best present: the honest empty line stands above the
-## Best section. Neither: the empty line alone. The PuP
-## note survives as the last line in EVERY state. Under
-## the oldgrid NC the room routes to wing_spec instead
-## (the retired Spec Sheet), so this spec is never built.
-const BACK_CONTENT_BUDGET_PX: float = 1044.0 ## BACK_FACE_PX.y minus the board face's top (14) and bottom (22) margins
-const BACK_BLOCK_OVERHEAD_PX: float = 166.0 ## band + title + sub + their separations, measured on the real face (the sub line's 42 px leave when a game has no sub)
-const BACK_ROW_SEP_PX: float = 6.0 ## the rows stack's separation (CardFace board law)
+## would be a nice touch."
+##
+## BESTLINE (Chris's ruling on the BACKFINE field check -
+## "works, but inconsistent", then tapped: "#1 only, on
+## every back"): the Best section is EXACTLY the ONLINE
+## BEST divider + the world #1 row (the "world1" flag -
+## the face draws it on its own steel-blue ground), on
+## every back that holds a Best file, whatever the
+## personal count. BACKFINE's fit-reduction - full list
+## when the composition fit the back's height budget,
+## #1 alone when it didn't - changed the feature's shape
+## card to card, unexplained, and is REMOVED here, fit
+## arithmetic and all: there is no budget decision left
+## in this spec. The fullest standing composition (10
+## personal + divider + #1 + the PuP note) stands ~950 px
+## of the face's 1044 px inside its margins - the boot
+## smoke's FIT leg judges that on the rendered face.
+## Personal empty + Best present: the honest empty line
+## stands above the Best section. Neither: the empty
+## line alone. The PuP note survives as the last line in
+## EVERY state. Under the fulllist NC the section renders
+## the file's whole list again, so the #1-only legs fail
+## by name. Under the oldgrid NC the room routes to
+## wing_spec instead (the retired Spec Sheet), so this
+## spec is never built.
 
 static func pinemhi_back_spec(game: GameEntry, record: Dictionary, best_record: Dictionary = {}) -> Dictionary:
 	var rows: Array = []
@@ -902,26 +900,19 @@ static func pinemhi_back_spec(game: GameEntry, record: Dictionary, best_record: 
 		sub = game.manufacturer.to_upper()
 	if game.year > 0:
 		sub = (sub + " · " if sub != "" else "") + str(game.year)
-	# The Best section, composed whole first; the
-	# readability law then decides whether its full list
-	# stands or it reduces to the #1 line alone.
+	# BESTLINE: the Best section is the divider + the
+	# world #1 row - the same two entries on every back,
+	# regardless of the personal count. (Under the
+	# fulllist NC the file's remaining rows ride again,
+	# so the #1-only legs fail by name.)
 	var best_rows: Array = best_record.get("rows", []) as Array
 	if not best_rows.is_empty():
-		var pup_row: Dictionary = {"kind": "note", "text": PUP_NOTE, "size": 30} if game.is_pup_tagged() else {}
-		var section: Array = [{"kind": "divider", "text": "ONLINE BEST", "size": 28, "tone": ""}]
-		section.append(_pinemhi_score_row(best_rows[0] as Dictionary, true, false))
-		var full: Array = rows + section
-		for i: int in range(1, mini(best_rows.size(), 10)):
-			full.append(_pinemhi_score_row(best_rows[i] as Dictionary, false, false))
-		if not pup_row.is_empty():
-			full.append(pup_row)
-		if _back_content_height(full, sub != "") <= BACK_CONTENT_BUDGET_PX:
-			rows = full
-		else:
-			rows = rows + section
-			if not pup_row.is_empty():
-				rows.append(pup_row)
-	elif game.is_pup_tagged():
+		rows.append({"kind": "divider", "text": "ONLINE BEST", "size": 28, "tone": ""})
+		rows.append(_pinemhi_score_row(best_rows[0] as Dictionary, true, false))
+		if bestline_nc == "fulllist":
+			for i: int in range(1, mini(best_rows.size(), 10)):
+				rows.append(_pinemhi_score_row(best_rows[i] as Dictionary, false, false))
+	if game.is_pup_tagged():
 		rows.append({"kind": "note", "text": PUP_NOTE, "size": 30})
 	return {
 		"kind": "board",
@@ -967,46 +958,6 @@ static func _pinemhi_score_row(r: Dictionary, world1: bool, personal: bool) -> D
 		"world1": world1,
 		"size": 38,
 	}
-
-
-## The back's content-block height for a candidate row
-## stack, in the renderer's own arithmetic (see the
-## readability law's note on pinemhi_back_spec): the
-## measured block overhead plus each row's standing
-## height and the stack's separations.
-static func _back_content_height(rows: Array, has_sub: bool) -> float:
-	var total: float = BACK_BLOCK_OVERHEAD_PX - (0.0 if has_sub else 42.0)
-	for i: int in range(rows.size()):
-		if i > 0:
-			total += BACK_ROW_SEP_PX
-		total += _back_row_height(rows[i] as Dictionary)
-	return total
-
-
-## One row's standing height on the board face: a score
-## row is its font height plus the row box's squeezed
-## vertical margins (2 + 2, CardFace's board law); a
-## divider the same (its ruled border stands inside the
-## panel); a note its wrapped height at the face's inner
-## width, measured with the face's own font (the fallback
-## font CardFace measures with).
-static func _back_row_height(row: Dictionary) -> float:
-	var size: int = int(row.get("size", 38))
-	var font: Font = ThemeDB.fallback_font
-	match str(row.get("kind", "")):
-		"score", "divider":
-			return font.get_height(size) + 4.0
-		"note":
-			var wrapped: Vector2 = font.get_multiline_string_size(
-				str(row.get("text", "")), HORIZONTAL_ALIGNMENT_CENTER,
-				float(BACK_FACE_PX.x - 52), size)
-			# +4: a standing label renders a few px over
-			# the raw multiline measure (the empty-state
-			# note measures 90, renders 93 - BACKFINE
-			# probe), and the law must never call a fit
-			# the face cannot hold.
-			return wrapped.y + 4.0
-	return font.get_height(size) + 4.0
 
 
 ## PINEMHI1 (Milestone 2): the loading marquee's fact

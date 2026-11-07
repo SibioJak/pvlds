@@ -844,6 +844,7 @@ func _ready() -> void:
 	# game with no Best file, and the matching legs fail by
 	# name. Same seam shape.
 	RoomSpecs.backfine_nc = OS.get_environment("PVLDS_BACKFINE_NC")
+	RoomSpecs.bestline_nc = OS.get_environment("PVLDS_BESTLINE_NC")
 	# GRADFIX8's tournie-border negative-control seam
 	# (PVLDS_GRADFIX8_NC=noborder): borders are never
 	# applied, so the census's tourney-border legs fail
@@ -14837,31 +14838,37 @@ func _finish_bootfocus_smoke() -> void:
 		get_tree().quit(1)
 
 
-## CARDBACK smoke: the fixture library's three games, in
+## CARDBACK smoke: the fixture library's games, in
 ## CARDBACK smoke (PINEMHI1 rewrite; BACKFINE contract
-## since BACKFINE; the round that keeps the
-## --pvlds-smoke-cardback flag): the IPDB cache still
-## seeds at boot and reaches the room (phase 1), but the
-## card back's tenant is the PINemHi row lists now.
-## Judging order - Apollo 13 (the REAL apollo13.txt
-## Personal file joined by title: its 8 rows, player
-## ALONE - the date is nuked - then the Best section
-## reduced by the readability law to the #1 line), Congo
-## (a PuP build with a small Personal file and NO Best
-## file: its rows, no Best section, the PuP note last),
+## through BACKFINE; BESTLINE contract since BESTLINE;
+## the round that keeps the --pvlds-smoke-cardback
+## flag): the IPDB cache still seeds at boot and reaches
+## the room (phase 1), but the card back's tenant is the
+## PINemHi row lists now. Judging order - Apollo 13 (the
+## REAL apollo13.txt Personal file joined by title: its
+## 8 rows, player ALONE - the date is nuked - then the
+## Best section), Congo (a PuP build with 2 Personal
+## rows and a Best file - the Lightning shape: personal
+## rows, then the Best section, the PuP note last),
 ## Johnny Mnemonic (a PuP build with NO Personal file:
-## the honest empty line, then its Best list WHOLE, the
-## PuP note last), Beetlejuice (a full fabricated 10
-## Personal + 10 Best: the law reduces Best to the #1
-## line, all 10 personal rows survive). Every back is
-## also judged FIT: the rendered content block inside
-## the 1044 px budget, every row on the texture. Under
-## the PINEMHI1 oldgrid NC the backs render the retired
-## Spec Sheet grid instead; under PVLDS_BACKFINE_NC=
-## dateback the date column returns; under =ghostbest a
-## Best section stands for Congo with no file - each
-## fails its legs by name.
-const CB_TARGETS: Array[String] = ["dhgyex0l", "0-GeiE03", "-SbeVjPA", "1vJ_ZQYe"]
+## the honest empty line, then the Best section whose
+## #1 is the field pair - BaronVanAwesome beside
+## 635,739,180 - judged WHOLE on the rendered face),
+## Beetlejuice (a full fabricated 10 Personal + 10
+## Best), Indiana Jones (NO PINemHi files at all: the
+## honest empty line alone, no Best section). BESTLINE:
+## on every back that holds a Best file the section is
+## EXACTLY the ONLINE BEST divider + the world #1 row -
+## the same shape at every personal count. Every back
+## is also judged FIT: the rendered content block
+## inside the 1044 px budget, every row on the texture.
+## Under the PINEMHI1 oldgrid NC the backs render the
+## retired Spec Sheet grid instead; under
+## PVLDS_BACKFINE_NC= dateback the date column returns;
+## under =ghostbest a Best section stands for Indy with
+## no file; under PVLDS_BESTLINE_NC=fulllist the whole
+## Best list rides again - each fails its legs by name.
+const CB_TARGETS: Array[String] = ["dhgyex0l", "0-GeiE03", "-SbeVjPA", "1vJ_ZQYe", "lkSumsrF"]
 
 
 func _drive_cardback_smoke() -> void:
@@ -14968,7 +14975,7 @@ func _drive_cardback_smoke() -> void:
 				_cb_advance()
 		5:
 			_cb_expect(_ipdb_seeded > 0 and (_room._ipdb_facts as Dictionary).has("lkSumsrF"),
-				"three flips rendered off the bundled seed - no IPDB fetch path exists in this build (seeded = %d)" % _ipdb_seeded)
+				"five flips rendered off the bundled seed - no IPDB fetch path exists in this build (seeded = %d)" % _ipdb_seeded)
 			_finish_cardback_smoke()
 		6:
 			_cb_wait += 1
@@ -15024,6 +15031,7 @@ func _cb_judge(idx: int) -> void:
 			dividers.append(str(rd.get("text", "")))
 	var drawn_scores: Array = []
 	var world1_drawn: int = 0
+	var w1_name: Dictionary = {}
 	var rows_within: bool = true
 	for rv2: Variant in (metrics.get("rows", []) as Array):
 		var md: Dictionary = rv2 as Dictionary
@@ -15034,21 +15042,34 @@ func _cb_judge(idx: int) -> void:
 			drawn_scores.append(str(md.get("score_text", "")))
 			if bool(md.get("world1", false)):
 				world1_drawn += 1
+				w1_name = md
 	var content_h: float = (metrics.get("content_rect", Rect2()) as Rect2).size.y
 	var world1_count: int = 0
 	for wv: Variant in world1_spec:
 		if bool(wv):
 			world1_count += 1
-	# The universal BACKFINE legs: the rendered column is
-	# the spec's column, the #1 grounds render as flagged,
-	# and the whole composition FITS the face it stands on
-	# (the readability law's rendered proof).
+	# The universal legs: the rendered column is the
+	# spec's column, the #1 grounds render as flagged,
+	# and the whole composition FITS the face it stands
+	# on. BESTLINE's consistency leg rides here too: a
+	# back that carries the ONLINE BEST divider carries
+	# EXACTLY ONE score row after it - the #1 - whatever
+	# its personal count.
 	_cb_expect(drawn_scores == score_texts,
-		"BACKFINE back: %s's rendered score column matches its spec (got %s)" % [game.game_id, str(drawn_scores)])
+		"BESTLINE back: %s's rendered score column matches its spec (got %s)" % [game.game_id, str(drawn_scores)])
 	_cb_expect(world1_drawn == world1_count,
-		"BACKFINE back: %s's world-#1 ground renders where the spec flags it (%d of %d)" % [game.game_id, world1_drawn, world1_count])
+		"BESTLINE back: %s's world-#1 ground renders where the spec flags it (%d of %d)" % [game.game_id, world1_drawn, world1_count])
 	_cb_expect(content_h <= 1044.5 and rows_within,
-		"BACKFINE back: %s's standing back FITS its face - content %.0f px of the 1044 budget, every row on the texture" % [game.game_id, content_h])
+		"BESTLINE back: %s's standing back FITS its face - content %.0f px of the 1044 budget, every row on the texture" % [game.game_id, content_h])
+	var after_divider: int = -1
+	if kinds.has("divider"):
+		var di: int = kinds.find("divider")
+		after_divider = 0
+		for ki: int in range(di + 1, kinds.size()):
+			if str(kinds[ki]) == "score":
+				after_divider += 1
+	_cb_expect(after_divider == -1 or after_divider == 1,
+		"BESTLINE back: %s's Best section is the divider + the #1 row alone - the same shape at every personal count (%d score rows after the divider)" % [game.game_id, after_divider])
 	match game.game_id:
 		"dhgyex0l":
 			var want: Array = ["1,638,803,870", "1,333,372,730", "38,714,470", "36,609,200", "34,559,180", "33,459,180", "27,307,870", "19,950,020"]
@@ -15064,32 +15085,56 @@ func _cb_judge(idx: int) -> void:
 			_cb_expect(dividers == ["ONLINE BEST"] and world1_count == 1 and bool(world1_spec[world1_spec.size() - 1]),
 				"BACKFINE back: Apollo's Best section stands under its ONLINE BEST divider, the #1 line flagged last (dividers: %s)" % str(dividers))
 			_cb_expect(not score_texts.has("1,902,455,100"),
-				"BACKFINE back: the readability law reduces Apollo's Best list to the #1 line alone - 8 personal + 10 Best cannot both fit at full size")
+				"BESTLINE back: no Best row past the #1 stands on Apollo's back - the section is the #1 line alone at 8 personal rows too")
 			_cb_expect(not kinds.has("kv"),
 				"PINEMHI1 back: no Spec Sheet grid stands on Apollo's back (kinds: %s)" % str(kinds))
 		"0-GeiE03":
-			_cb_expect(score_texts == ["512,340,220", "128,004,900"],
-				"PINEMHI1 back: Congo's file renders its 2 rows (got %s)" % str(score_texts))
-			_cb_expect(dividers.is_empty() and world1_count == 0,
-				"BACKFINE back: Congo has NO Best file - no Best section stands (dividers: %s)" % str(dividers))
+			# BESTLINE: Congo is the Lightning shape - 2
+			# personal rows + a full Best file on disk.
+			_cb_expect(score_texts == ["512,340,220", "128,004,900", "876,543,210"],
+				"BESTLINE back: Congo (the Lightning shape) stands its 2 personal rows, then the Best #1 line (got %s)" % str(score_texts))
+			_cb_expect(dividers == ["ONLINE BEST"] and world1_count == 1 and bool(world1_spec[world1_spec.size() - 1]),
+				"BESTLINE back: Congo's Best section stands under its ONLINE BEST divider, the #1 line flagged last (dividers: %s)" % str(dividers))
+			_cb_expect(not score_texts.has("765,432,100"),
+				"BESTLINE back: no Best row past the #1 stands on Congo's back either - the section's shape does not follow the personal count")
 			_cb_expect(notes.size() == 1 and str(notes[0]) == RoomSpecs.PUP_NOTE and kinds[kinds.size() - 1] == "note",
 				"PINEMHI1 back: Congo's PuP note stands as the back's last line under its scores (notes: %s)" % str(notes))
 		"-SbeVjPA":
-			var want_best: Array = ["214,870,300", "198,220,450", "176,540,900", "154,330,670", "132,908,120", "110,475,530", "96,420,880", "74,205,110", "51,969,340", "29,713,570"]
 			_cb_expect(notes.size() == 2 and str(notes[0]).contains("No PINemHi scores"),
-				"BACKFINE back: Johnny has no Personal file - the honest empty line stands above its Best section (notes: %s)" % str(notes))
-			_cb_expect(score_texts == want_best,
-				"BACKFINE back: Johnny's Best list stands WHOLE, in file order (got %s)" % str(score_texts))
+				"BESTLINE back: Johnny has no Personal file - the honest empty line stands above its Best section (notes: %s)" % str(notes))
+			_cb_expect(score_texts == ["635,739,180"],
+				"BESTLINE back: Johnny's Best section is the #1 line alone (got %s)" % str(score_texts))
+			_cb_expect(not score_texts.has("198,220,450"),
+				"BESTLINE back: Johnny's Best rows past the #1 do NOT stand - the full list is gone from the back")
 			_cb_expect(dividers == ["ONLINE BEST"] and world1_count == 1 and bool(world1_spec[0]),
-				"BACKFINE back: Johnny's Best section opens with its divider and the flagged #1 line (dividers: %s)" % str(dividers))
+				"BESTLINE back: Johnny's Best section opens with its divider and the flagged #1 line (dividers: %s)" % str(dividers))
+			# The name leg, judged on the RENDERED face:
+			# Johnny's Best #1 is the field pair (the
+			# LOTR back's clipped row) - BaronVanAwesome
+			# beside 635,739,180 - and the name must
+			# stand WHOLE at the back's one type size.
+			_cb_expect(str(w1_name.get("name_text", "")) == "BaronVanAwesome"
+				and float(w1_name.get("name_need_px", 0.0)) > 0.0
+				and float(w1_name.get("name_need_px", 0.0)) <= float(w1_name.get("name_allot_px", 0.0)) + 0.5,
+				"BESTLINE back: the world-#1 name renders WHOLE on Johnny's back - 'BaronVanAwesome' needs %.0f px of its %.0f px line (field pair: the name the LOTR back clipped)" % [float(w1_name.get("name_need_px", 0.0)), float(w1_name.get("name_allot_px", 0.0))])
 			_cb_expect(str(notes[notes.size() - 1]) == RoomSpecs.PUP_NOTE,
-				"BACKFINE back: the PuP scale note stays the back's last line under the Best section")
+				"BESTLINE back: the PuP scale note stays the back's last line under the Best section")
+		"lkSumsrF":
+			# The no-file control: Indy holds NO PINemHi
+			# files at all - the honest empty line stands
+			# alone, no Best section (the ghostbest NC
+			# seats a phantom section here and fails
+			# these legs by name).
+			_cb_expect(score_texts.is_empty() and dividers.is_empty() and world1_count == 0,
+				"BESTLINE back: Indy holds no PINemHi Best file - no Best section stands (dividers: %s)" % str(dividers))
+			_cb_expect(notes.size() == 1 and str(notes[0]).contains("No PINemHi scores"),
+				"BESTLINE back: Indy's back is the honest empty line alone (notes: %s)" % str(notes))
 		"1vJ_ZQYe":
 			var want_pers: Array = ["45,210,300", "41,098,450", "37,986,600", "34,874,750", "31,762,900", "28,651,050", "25,539,200", "22,427,350", "19,315,500", "16,203,650"]
 			_cb_expect(score_texts == want_pers + ["98,441,020"],
 				"BACKFINE back: Beetlejuice stands all 10 personal rows, then the Best #1 line (got %s)" % str(score_texts))
 			_cb_expect(not score_texts.has("91,220,750"),
-				"BACKFINE back: a full 10 personal + full 10 Best reduces to the #1 line alone - every personal row survives")
+				"BESTLINE back: at a full 10 personal rows the Best section is still the #1 line alone - every personal row survives")
 			var clean10: bool = names.size() == 11
 			if clean10:
 				for i: int in range(10):
@@ -22213,6 +22258,7 @@ func _run_core_test() -> void:
 	RoomSpecs.backtrim_nc = OS.get_environment("PVLDS_BACKTRIM_NC")
 	RoomSpecs.pinemhi1_nc = OS.get_environment("PVLDS_PINEMHI1_NC")
 	RoomSpecs.backfine_nc = OS.get_environment("PVLDS_BACKFINE_NC")
+	RoomSpecs.bestline_nc = OS.get_environment("PVLDS_BESTLINE_NC")
 	_expect(IpdbFacts.ipdb_id_from_url("https://www.ipdb.org/machine.cgi?id=1267") == 1267,
 		"cardback: the IPDB id parses out of the db's ipdbUrl", failures)
 	_expect(IpdbFacts.ipdb_id_from_url("") == 0 and IpdbFacts.ipdb_id_from_url("https://example.com/x") == 0,
@@ -22358,13 +22404,13 @@ func _run_core_test() -> void:
 	_expect(cb_db_empty == 0, "cardback: the db-only back carries no empty rows either", failures)
 
 	# BACKFINE: the PINemHi back, refined - the date is
-	# out, the local TOP10_Best file is in, and the
-	# readability law composes the two lists. Spec-level
-	# legs over synthetic records (the boot smoke judges
-	# the same contract standing in the room): the row
-	# arithmetic is the renderer's own (BACKFINE probes:
-	# predicted content heights matched rendered heights
-	# exactly), so the fit boundaries are judged here.
+	# out, the local TOP10_Best file is in. BESTLINE:
+	# the Best section is divider + #1 at every count -
+	# BACKFINE's fit composition is gone, so these legs
+	# judge the one standing shape at every personal
+	# count. Spec-level legs over synthetic records (the
+	# boot smoke judges the same contract standing in
+	# the room).
 	var bf_game: GameEntry = GameEntry.new()
 	bf_game.game_id = "backfine"
 	bf_game.title = "Backfine Test"
@@ -22394,35 +22440,53 @@ func _run_core_test() -> void:
 	var bf_first: Dictionary = ((bf_spec8.get("rows", []) as Array)[0] as Dictionary)
 	_expect(str(bf_first.get("name_text", "")) == "Kubrick",
 		"backfine: a personal row's name is the player ALONE - no date rides it (got '%s')" % str(bf_first.get("name_text", "<none>")), failures)
-	# 8 personal + 10 Best: the law reduces Best to the
-	# #1 line alone (the composition cannot fit at full
-	# size); the #1 carries the Best file's top player.
+	# BESTLINE: the Best section is the divider + the
+	# #1 line alone at EVERY personal count - the same
+	# section shape on every back (under the fulllist
+	# NC these legs fail by name: the whole list rides
+	# again). 8 personal + 10 Best first: the #1 carries
+	# the Best file's top score, and no Best row past
+	# it stands.
 	var bf_spec8b: Dictionary = RoomSpecs.pinemhi_back_spec(bf_game, bf_rec.call(8, "Kubrick", 1638803870), bf_rec.call(10, "Online", 2000000000))
 	var bf_s8b: Array = bf_scores.call(bf_spec8b)
 	_expect(bf_s8b.size() == 9 and str(bf_s8b[8]) == "2,000,000,000" and bf_kinds.call(bf_spec8b).has("divider"),
-		"backfine: 8 personal + 10 Best reduces to the #1 line alone under its divider (scores: %s)" % str(bf_s8b), failures)
-	# 3 personal + 10 Best: the whole Best list stands,
-	# in file order, under the personal rows.
+		"bestline: 8 personal + 10 Best stands divider + #1 line alone (scores: %s)" % str(bf_s8b), failures)
+	# 3 personal + 10 Best: BACKFINE stood the whole
+	# list here (it fit); BESTLINE stands the #1 alone -
+	# the section does not change shape with the count.
 	var bf_spec3b: Dictionary = RoomSpecs.pinemhi_back_spec(bf_game, bf_rec.call(3, "Kubrick", 900000000), bf_rec.call(10, "Online", 2000000000))
 	var bf_s3b: Array = bf_scores.call(bf_spec3b)
-	_expect(bf_s3b.size() == 13 and str(bf_s3b[3]) == "2,000,000,000" and str(bf_s3b[12]) == "1,991,000,000",
-		"backfine: 3 personal + 10 Best stands WHOLE - every Best row in file order (scores: %s)" % str(bf_s3b), failures)
-	# 10 + 10: reduced; all 10 personal rows survive.
+	_expect(bf_s3b.size() == 4 and str(bf_s3b[3]) == "2,000,000,000" and not bf_s3b.has("1,999,000,000"),
+		"bestline: 3 personal + 10 Best stands divider + #1 line alone - no Best row past the #1 (scores: %s)" % str(bf_s3b), failures)
+	# The brief's fixture shapes at spec level: the
+	# Lightning shape (2 personal + Best) and the LOTR
+	# shape (4 personal + Best) - same section again.
+	var bf_spec2b: Dictionary = RoomSpecs.pinemhi_back_spec(bf_game, bf_rec.call(2, "Kubrick", 20085190), bf_rec.call(10, "Online", 2000000000))
+	var bf_s2b: Array = bf_scores.call(bf_spec2b)
+	_expect(bf_s2b.size() == 3 and str(bf_s2b[2]) == "2,000,000,000",
+		"bestline: 2 personal + 10 Best (the Lightning shape) stands divider + #1 line alone (scores: %s)" % str(bf_s2b), failures)
+	var bf_spec4b: Dictionary = RoomSpecs.pinemhi_back_spec(bf_game, bf_rec.call(4, "Kubrick", 20082770), bf_rec.call(10, "Online", 2000000000))
+	var bf_s4b: Array = bf_scores.call(bf_spec4b)
+	_expect(bf_s4b.size() == 5 and str(bf_s4b[4]) == "2,000,000,000",
+		"bestline: 4 personal + 10 Best (the LOTR shape) stands divider + #1 line alone (scores: %s)" % str(bf_s4b), failures)
+	# 10 + 10: the #1 line alone; all 10 personal rows
+	# survive.
 	var bf_spec10b: Dictionary = RoomSpecs.pinemhi_back_spec(bf_game, bf_rec.call(10, "Kubrick", 1638803870), bf_rec.call(10, "Online", 2000000000))
 	var bf_s10b: Array = bf_scores.call(bf_spec10b)
 	_expect(bf_s10b.size() == 11 and str(bf_s10b[9]) == "1,629,803,870" and str(bf_s10b[10]) == "2,000,000,000",
-		"backfine: 10 personal + 10 Best reduces to the #1 line - all 10 personal rows survive (scores: %s)" % str(bf_s10b), failures)
+		"bestline: 10 personal + 10 Best stands divider + #1 line - all 10 personal rows survive (scores: %s)" % str(bf_s10b), failures)
 	# No Best record: no divider, no Best rows - the
 	# personal block stands alone (the ghostbest NC's
 	# room seam fails the matching boot legs by name).
 	_expect(not bf_kinds.call(bf_spec8).has("divider") and bf_scores.call(bf_spec8).size() == 8,
 		"backfine: no Best file, no Best section - the personal rows stand alone", failures)
 	# Best alone: the honest empty line stands above
-	# the Best section.
+	# the Best section - which is the divider + #1,
+	# three entries all told.
 	var bf_spec0b: Dictionary = RoomSpecs.pinemhi_back_spec(bf_game, {"title": "Backfine Test", "rows": []}, bf_rec.call(10, "Online", 2000000000))
 	var bf_k0b: Array = bf_kinds.call(bf_spec0b)
-	_expect(bf_k0b.size() == 12 and str(bf_k0b[0]) == "note" and str(bf_k0b[1]) == "divider" and bf_scores.call(bf_spec0b).size() == 10,
-		"backfine: Best alone stands under the empty personal line (kinds: %s)" % str(bf_k0b), failures)
+	_expect(bf_k0b.size() == 3 and str(bf_k0b[0]) == "note" and str(bf_k0b[1]) == "divider" and bf_scores.call(bf_spec0b).size() == 1,
+		"bestline: Best alone stands as divider + #1 under the empty personal line (kinds: %s)" % str(bf_k0b), failures)
 	# The Best reader's folder doors: a fabricated
 	# install in the proven file shape (the same shape
 	# the Personal fixture proved) - the Best shelf
