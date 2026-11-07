@@ -14838,19 +14838,29 @@ func _finish_bootfocus_smoke() -> void:
 
 
 ## CARDBACK smoke: the fixture library's three games, in
-## CARDBACK smoke (PINEMHI1 rewrite; the round that keeps
-## the --pvlds-smoke-cardback flag): the IPDB cache still
+## CARDBACK smoke (PINEMHI1 rewrite; BACKFINE contract
+## since BACKFINE; the round that keeps the
+## --pvlds-smoke-cardback flag): the IPDB cache still
 ## seeds at boot and reaches the room (phase 1), but the
-## card back's tenant is the PINemHi Personal row list
-## now. Judging order - Apollo 13 (the real apollo13.txt
-## joined by title: all 8 rows, in file order, #1 =
-## 1,638,803,870), Congo (a PuP build with a small scores
-## file: its rows, then the PuP note as the last line),
-## Johnny Mnemonic (a PuP build with NO file: the honest
-## empty state, then the PuP note), Beetlejuice (no file,
-## no PuP: the empty state alone). Under the PINEMHI1
-## oldgrid NC the backs render the retired Spec Sheet
-## grid instead, and every PINEMHI1 leg fails by name.
+## card back's tenant is the PINemHi row lists now.
+## Judging order - Apollo 13 (the REAL apollo13.txt
+## Personal file joined by title: its 8 rows, player
+## ALONE - the date is nuked - then the Best section
+## reduced by the readability law to the #1 line), Congo
+## (a PuP build with a small Personal file and NO Best
+## file: its rows, no Best section, the PuP note last),
+## Johnny Mnemonic (a PuP build with NO Personal file:
+## the honest empty line, then its Best list WHOLE, the
+## PuP note last), Beetlejuice (a full fabricated 10
+## Personal + 10 Best: the law reduces Best to the #1
+## line, all 10 personal rows survive). Every back is
+## also judged FIT: the rendered content block inside
+## the 1044 px budget, every row on the texture. Under
+## the PINEMHI1 oldgrid NC the backs render the retired
+## Spec Sheet grid instead; under PVLDS_BACKFINE_NC=
+## dateback the date column returns; under =ghostbest a
+## Best section stands for Congo with no file - each
+## fails its legs by name.
 const CB_TARGETS: Array[String] = ["dhgyex0l", "0-GeiE03", "-SbeVjPA", "1vJ_ZQYe"]
 
 
@@ -14991,12 +15001,15 @@ func _cb_judge(idx: int) -> void:
 	_cb_expect(tex != null and tex.get_width() > 16, "the back of %s renders at full size" % game.game_id)
 	var metrics: Dictionary = _room._factory.face_board_metrics()
 	# The back's rows, from the spec itself (content, order,
-	# kinds) and the rendered face (the score column as drawn).
+	# kinds) and the rendered face (the score column as
+	# drawn, the world1 grounds, the content block's fit).
 	var spec_rows: Array = spec.get("rows", []) as Array
 	var kinds: Array = []
 	var score_texts: Array = []
 	var names: Array = []
 	var notes: Array = []
+	var dividers: Array = []
+	var world1_spec: Array = []
 	for rv: Variant in spec_rows:
 		var rd: Dictionary = rv as Dictionary
 		var k: String = str(rd.get("kind", ""))
@@ -15004,37 +15017,86 @@ func _cb_judge(idx: int) -> void:
 		if k == "score":
 			score_texts.append(str(rd.get("score_text", "")))
 			names.append(str(rd.get("name_text", "")))
+			world1_spec.append(bool(rd.get("world1", false)))
 		elif k == "note":
 			notes.append(str(rd.get("text", "")))
+		elif k == "divider":
+			dividers.append(str(rd.get("text", "")))
 	var drawn_scores: Array = []
+	var world1_drawn: int = 0
+	var rows_within: bool = true
 	for rv2: Variant in (metrics.get("rows", []) as Array):
 		var md: Dictionary = rv2 as Dictionary
+		var rr: Rect2 = md.get("rect", Rect2()) as Rect2
+		if rr.position.y < -0.5 or rr.position.y + rr.size.y > 1080.5:
+			rows_within = false
 		if str(md.get("kind", "")) == "score":
 			drawn_scores.append(str(md.get("score_text", "")))
+			if bool(md.get("world1", false)):
+				world1_drawn += 1
+	var content_h: float = (metrics.get("content_rect", Rect2()) as Rect2).size.y
+	var world1_count: int = 0
+	for wv: Variant in world1_spec:
+		if bool(wv):
+			world1_count += 1
+	# The universal BACKFINE legs: the rendered column is
+	# the spec's column, the #1 grounds render as flagged,
+	# and the whole composition FITS the face it stands on
+	# (the readability law's rendered proof).
+	_cb_expect(drawn_scores == score_texts,
+		"BACKFINE back: %s's rendered score column matches its spec (got %s)" % [game.game_id, str(drawn_scores)])
+	_cb_expect(world1_drawn == world1_count,
+		"BACKFINE back: %s's world-#1 ground renders where the spec flags it (%d of %d)" % [game.game_id, world1_drawn, world1_count])
+	_cb_expect(content_h <= 1044.5 and rows_within,
+		"BACKFINE back: %s's standing back FITS its face - content %.0f px of the 1044 budget, every row on the texture" % [game.game_id, content_h])
 	match game.game_id:
 		"dhgyex0l":
 			var want: Array = ["1,638,803,870", "1,333,372,730", "38,714,470", "36,609,200", "34,559,180", "33,459,180", "27,307,870", "19,950,020"]
-			_cb_expect(score_texts == want,
-				"PINEMHI1 back: Apollo's real file renders all 8 rows in file order, board-formatted, #1 = 1,638,803,870 (got %s)" % str(score_texts))
-			_cb_expect(drawn_scores == want,
-				"PINEMHI1 back: Apollo's rendered score column matches the file (got %s)" % str(drawn_scores))
-			_cb_expect(names.size() == 8 and str(names[0]).begins_with("Kubrick") and str(names[0]).contains("2026-07-06"),
-				"PINEMHI1 back: Apollo's rows carry the player and the date (first: '%s')" % (str(names[0]) if names.size() > 0 else "<none>"))
+			_cb_expect(score_texts == want + ["2,045,310,600"],
+				"BACKFINE back: Apollo stands its real file's 8 rows in order, then the Best #1 line (got %s)" % str(score_texts))
+			var clean_names: bool = names.size() == 9
+			if clean_names:
+				for i: int in range(8):
+					if str(names[i]) != "Kubrick":
+						clean_names = false
+			_cb_expect(clean_names,
+				"BACKFINE back: Apollo's rows carry the player ALONE - no date rides the name (first: '%s')" % (str(names[0]) if names.size() > 0 else "<none>"))
+			_cb_expect(dividers == ["ONLINE BEST"] and world1_count == 1 and bool(world1_spec[world1_spec.size() - 1]),
+				"BACKFINE back: Apollo's Best section stands under its ONLINE BEST divider, the #1 line flagged last (dividers: %s)" % str(dividers))
+			_cb_expect(not score_texts.has("1,902,455,100"),
+				"BACKFINE back: the readability law reduces Apollo's Best list to the #1 line alone - 8 personal + 10 Best cannot both fit at full size")
 			_cb_expect(not kinds.has("kv"),
 				"PINEMHI1 back: no Spec Sheet grid stands on Apollo's back (kinds: %s)" % str(kinds))
 		"0-GeiE03":
 			_cb_expect(score_texts == ["512,340,220", "128,004,900"],
 				"PINEMHI1 back: Congo's file renders its 2 rows (got %s)" % str(score_texts))
+			_cb_expect(dividers.is_empty() and world1_count == 0,
+				"BACKFINE back: Congo has NO Best file - no Best section stands (dividers: %s)" % str(dividers))
 			_cb_expect(notes.size() == 1 and str(notes[0]) == RoomSpecs.PUP_NOTE and kinds[kinds.size() - 1] == "note",
 				"PINEMHI1 back: Congo's PuP note stands as the back's last line under its scores (notes: %s)" % str(notes))
 		"-SbeVjPA":
-			_cb_expect(score_texts.is_empty() and notes.size() == 2 and str(notes[0]).contains("No PINemHi scores"),
-				"PINEMHI1 back: Johnny Mnemonic has no file - the honest empty state stands, no invented rows (notes: %s)" % str(notes))
+			var want_best: Array = ["214,870,300", "198,220,450", "176,540,900", "154,330,670", "132,908,120", "110,475,530", "96,420,880", "74,205,110", "51,969,340", "29,713,570"]
+			_cb_expect(notes.size() == 2 and str(notes[0]).contains("No PINemHi scores"),
+				"BACKFINE back: Johnny has no Personal file - the honest empty line stands above its Best section (notes: %s)" % str(notes))
+			_cb_expect(score_texts == want_best,
+				"BACKFINE back: Johnny's Best list stands WHOLE, in file order (got %s)" % str(score_texts))
+			_cb_expect(dividers == ["ONLINE BEST"] and world1_count == 1 and bool(world1_spec[0]),
+				"BACKFINE back: Johnny's Best section opens with its divider and the flagged #1 line (dividers: %s)" % str(dividers))
 			_cb_expect(str(notes[notes.size() - 1]) == RoomSpecs.PUP_NOTE,
-				"PINEMHI1 back: the empty state still carries the PuP scale note under it")
+				"BACKFINE back: the PuP scale note stays the back's last line under the Best section")
 		"1vJ_ZQYe":
-			_cb_expect(score_texts.is_empty() and notes.size() == 1 and str(notes[0]).contains("No PINemHi scores"),
-				"PINEMHI1 back: Beetlejuice shows the empty state alone (notes: %s)" % str(notes))
+			var want_pers: Array = ["45,210,300", "41,098,450", "37,986,600", "34,874,750", "31,762,900", "28,651,050", "25,539,200", "22,427,350", "19,315,500", "16,203,650"]
+			_cb_expect(score_texts == want_pers + ["98,441,020"],
+				"BACKFINE back: Beetlejuice stands all 10 personal rows, then the Best #1 line (got %s)" % str(score_texts))
+			_cb_expect(not score_texts.has("91,220,750"),
+				"BACKFINE back: a full 10 personal + full 10 Best reduces to the #1 line alone - every personal row survives")
+			var clean10: bool = names.size() == 11
+			if clean10:
+				for i: int in range(10):
+					if str(names[i]) != "Kubrick":
+						clean10 = false
+			_cb_expect(clean10,
+				"BACKFINE back: Beetlejuice's rows carry the player ALONE - no date rides the name (first: '%s')" % (str(names[0]) if names.size() > 0 else "<none>"))
 	_cb_expect(str(spec.get("band_text", "")) == "PINEMHI",
 		"PINEMHI1 back: %s wears the PINEMHI band (got '%s')" % [game.game_id, str(spec.get("band_text", "<none>"))])
 	_cb_judged = true
@@ -22150,6 +22212,7 @@ func _run_core_test() -> void:
 	RoomSpecs.cardback_nc = OS.get_environment("PVLDS_CARDBACK_NC")
 	RoomSpecs.backtrim_nc = OS.get_environment("PVLDS_BACKTRIM_NC")
 	RoomSpecs.pinemhi1_nc = OS.get_environment("PVLDS_PINEMHI1_NC")
+	RoomSpecs.backfine_nc = OS.get_environment("PVLDS_BACKFINE_NC")
 	_expect(IpdbFacts.ipdb_id_from_url("https://www.ipdb.org/machine.cgi?id=1267") == 1267,
 		"cardback: the IPDB id parses out of the db's ipdbUrl", failures)
 	_expect(IpdbFacts.ipdb_id_from_url("") == 0 and IpdbFacts.ipdb_id_from_url("https://example.com/x") == 0,
@@ -22293,6 +22356,100 @@ func _run_core_test() -> void:
 			cb_db_empty += 1
 	_expect(cb_ipdb_rows == 0, "cardback: a game with no cached IPDB facts shows NO ipdb rows (degrades honestly)", failures)
 	_expect(cb_db_empty == 0, "cardback: the db-only back carries no empty rows either", failures)
+
+	# BACKFINE: the PINemHi back, refined - the date is
+	# out, the local TOP10_Best file is in, and the
+	# readability law composes the two lists. Spec-level
+	# legs over synthetic records (the boot smoke judges
+	# the same contract standing in the room): the row
+	# arithmetic is the renderer's own (BACKFINE probes:
+	# predicted content heights matched rendered heights
+	# exactly), so the fit boundaries are judged here.
+	var bf_game: GameEntry = GameEntry.new()
+	bf_game.game_id = "backfine"
+	bf_game.title = "Backfine Test"
+	bf_game.manufacturer = "Williams"
+	bf_game.year = 1995
+	var bf_rec := func(n: int, player: String, top: int) -> Dictionary:
+		var rs: Array = []
+		for i: int in range(n):
+			rs.append({"rank": i + 1, "score": top - i * 1000000, "score_text": "", "player": player, "when": "2026-07-06 20:15:24"})
+		return {"title": "Backfine Test", "rows": rs}
+	var bf_kinds := func(spec: Dictionary) -> Array:
+		var ks: Array = []
+		for rv: Variant in (spec.get("rows", []) as Array):
+			ks.append(str((rv as Dictionary).get("kind", "")))
+		return ks
+	var bf_scores := func(spec: Dictionary) -> Array:
+		var ss: Array = []
+		for rv: Variant in (spec.get("rows", []) as Array):
+			var rd: Dictionary = rv as Dictionary
+			if str(rd.get("kind", "")) == "score":
+				ss.append(str(rd.get("score_text", "")))
+		return ss
+	# The date is nuked: a personal row's name is the
+	# player alone (under PVLDS_BACKFINE_NC=dateback this
+	# leg fails by name - the date rides again).
+	var bf_spec8: Dictionary = RoomSpecs.pinemhi_back_spec(bf_game, bf_rec.call(8, "Kubrick", 1638803870))
+	var bf_first: Dictionary = ((bf_spec8.get("rows", []) as Array)[0] as Dictionary)
+	_expect(str(bf_first.get("name_text", "")) == "Kubrick",
+		"backfine: a personal row's name is the player ALONE - no date rides it (got '%s')" % str(bf_first.get("name_text", "<none>")), failures)
+	# 8 personal + 10 Best: the law reduces Best to the
+	# #1 line alone (the composition cannot fit at full
+	# size); the #1 carries the Best file's top player.
+	var bf_spec8b: Dictionary = RoomSpecs.pinemhi_back_spec(bf_game, bf_rec.call(8, "Kubrick", 1638803870), bf_rec.call(10, "Online", 2000000000))
+	var bf_s8b: Array = bf_scores.call(bf_spec8b)
+	_expect(bf_s8b.size() == 9 and str(bf_s8b[8]) == "2,000,000,000" and bf_kinds.call(bf_spec8b).has("divider"),
+		"backfine: 8 personal + 10 Best reduces to the #1 line alone under its divider (scores: %s)" % str(bf_s8b), failures)
+	# 3 personal + 10 Best: the whole Best list stands,
+	# in file order, under the personal rows.
+	var bf_spec3b: Dictionary = RoomSpecs.pinemhi_back_spec(bf_game, bf_rec.call(3, "Kubrick", 900000000), bf_rec.call(10, "Online", 2000000000))
+	var bf_s3b: Array = bf_scores.call(bf_spec3b)
+	_expect(bf_s3b.size() == 13 and str(bf_s3b[3]) == "2,000,000,000" and str(bf_s3b[12]) == "1,991,000,000",
+		"backfine: 3 personal + 10 Best stands WHOLE - every Best row in file order (scores: %s)" % str(bf_s3b), failures)
+	# 10 + 10: reduced; all 10 personal rows survive.
+	var bf_spec10b: Dictionary = RoomSpecs.pinemhi_back_spec(bf_game, bf_rec.call(10, "Kubrick", 1638803870), bf_rec.call(10, "Online", 2000000000))
+	var bf_s10b: Array = bf_scores.call(bf_spec10b)
+	_expect(bf_s10b.size() == 11 and str(bf_s10b[9]) == "1,629,803,870" and str(bf_s10b[10]) == "2,000,000,000",
+		"backfine: 10 personal + 10 Best reduces to the #1 line - all 10 personal rows survive (scores: %s)" % str(bf_s10b), failures)
+	# No Best record: no divider, no Best rows - the
+	# personal block stands alone (the ghostbest NC's
+	# room seam fails the matching boot legs by name).
+	_expect(not bf_kinds.call(bf_spec8).has("divider") and bf_scores.call(bf_spec8).size() == 8,
+		"backfine: no Best file, no Best section - the personal rows stand alone", failures)
+	# Best alone: the honest empty line stands above
+	# the Best section.
+	var bf_spec0b: Dictionary = RoomSpecs.pinemhi_back_spec(bf_game, {"title": "Backfine Test", "rows": []}, bf_rec.call(10, "Online", 2000000000))
+	var bf_k0b: Array = bf_kinds.call(bf_spec0b)
+	_expect(bf_k0b.size() == 12 and str(bf_k0b[0]) == "note" and str(bf_k0b[1]) == "divider" and bf_scores.call(bf_spec0b).size() == 10,
+		"backfine: Best alone stands under the empty personal line (kinds: %s)" % str(bf_k0b), failures)
+	# The Best reader's folder doors: a fabricated
+	# install in the proven file shape (the same shape
+	# the Personal fixture proved) - the Best shelf
+	# loads by title key, the shelves never leak into
+	# each other. (No REAL Best file exists in this
+	# workspace: the parse stands as a same-writer
+	# assumption, flagged in BACKFINE's STATUS.md.)
+	var bf_root: String = "user://core_test_pinemhi_best"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(bf_root + "/PINemHi LeaderBoard/TOP10_Best"))
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(bf_root + "/PINemHi LeaderBoard/TOP10_Personal"))
+	_expect(_write_text_file(bf_root + "/PINemHi LeaderBoard/TOP10_Best/backfine.txt",
+		"PINEMHI ONLINE LEADERBOARD\n\n<<< Backfine Test >>>\n\n\nTOP 10 Best Scores\n1   2.000.000.000      Online  2026-09-30 22:41:07\n2   1.999.000.000      Online  2026-08-19 03:12:55\n"),
+		"backfine: the fabricated Best fixture writes", failures)
+	_expect(_write_text_file(bf_root + "/PINemHi LeaderBoard/TOP10_Personal/backfine.txt",
+		"PINEMHI ONLINE LEADERBOARD\n\n<<< Backfine Test >>>\n\n\nTOP 10 Personal Best Scores\n1   1.638.803.870      Kubrick  2026-07-06 20:15:24\n"),
+		"backfine: the fabricated Personal fixture writes", failures)
+	var bf_best_map: Dictionary = PinemhiScores.load_folder_best_rows(ProjectSettings.globalize_path(bf_root))
+	var bf_pers_map: Dictionary = PinemhiScores.load_folder_rows(ProjectSettings.globalize_path(bf_root))
+	var bf_best_rec: Dictionary = bf_best_map.get("backfine test", {}) as Dictionary
+	var bf_best_rows: Array = bf_best_rec.get("rows", []) as Array
+	_expect(bf_best_rows.size() == 2 and int((bf_best_rows[0] as Dictionary).get("score", 0)) == 2000000000,
+		"backfine: the Best shelf loads by title key, its #1 on top (got %s)" % str(bf_best_rows), failures)
+	var bf_pers_rec: Dictionary = bf_pers_map.get("backfine test", {}) as Dictionary
+	_expect((bf_pers_rec.get("rows", []) as Array).size() == 1,
+		"backfine: the Personal shelf loads its own file beside the Best shelf", failures)
+	_expect(int(((bf_pers_rec.get("rows", []) as Array)[0] as Dictionary).get("score", 0)) == 1638803870,
+		"backfine: the shelves never leak - the Personal read holds the Personal score, not the Best one", failures)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")
