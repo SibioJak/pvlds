@@ -15663,8 +15663,8 @@ func _rs_finish_smoke() -> void:
 
 ## FOCUSFIX smoke (--pvlds-smoke-focusfix). One boot walks
 ## the two view transitions Chris reported (2026-11-06) with
-## REAL pad presses through the room's poll: library at rest,
-## D-pad down to the rail, along it to TOURNAMENT, A to enter;
+## REAL pad input through the room's poll: library at rest,
+## stick down to the rail, along it to TOURNAMENT, A to enter;
 ## then the room at work (travel, Y's submit panel, a pointer
 ## re-press of TOURNAMENT); then B back to Table Select. At
 ## every stop the leg is the round's root rule - the element
@@ -15708,6 +15708,74 @@ func _ff_begin_press(b: JoyButton) -> void:
 	_ff_press_t = 0
 	_ff_presses += 1
 	_ff_inject(b, true)
+
+
+## A stick step: focus travel is the LEFT STICK (the D-pad
+## was nuked in GRADFIX10 - its directions read nothing).
+## Deflect one axis past the deadzone for a few frames (one
+## discrete step), release, and let the poll's 0.24 s step
+## cooldown lapse inside the settle.
+var _ff_step_axis: JoyAxis = JOY_AXIS_LEFT_Y
+var _ff_step_value: float = 0.0
+var _ff_step_t: int = -1
+
+func _ff_inject_axis(axis: JoyAxis, value: float) -> void:
+	var ev: InputEventJoypadMotion = InputEventJoypadMotion.new()
+	ev.device = 0
+	ev.axis = axis
+	ev.axis_value = value
+	Input.parse_input_event(ev)
+
+
+func _ff_begin_step(dir: Vector2) -> void:
+	if absf(dir.x) > 0.5:
+		_ff_step_axis = JOY_AXIS_LEFT_X
+		_ff_step_value = signf(dir.x)
+	else:
+		_ff_step_axis = JOY_AXIS_LEFT_Y
+		_ff_step_value = signf(dir.y)
+	_ff_step_t = 0
+	_ff_presses += 1
+	_ff_inject_axis(_ff_step_axis, _ff_step_value)
+
+
+## True once the begun stick step has fired, released and
+## settled past the poll's step cooldown.
+func _ff_step_settled() -> bool:
+	if _ff_step_t < 0:
+		return true
+	_ff_step_t += 1
+	if _ff_step_t == 5:
+		_ff_inject_axis(_ff_step_axis, 0.0)
+	if _ff_step_t >= 30:
+		_ff_step_t = -1
+		return true
+	return false
+
+
+## A held stick: the player's real walk. Discrete taps race
+## the drum - a step decided mid-swing is QUEUED, and the
+## queue dies with the hold, so a tap taken while the drum
+## still swings is eaten whole. A hold keeps the queue alive
+## and steps at the poll's own cadence until the driver
+## releases it on condition.
+var _ff_holding: bool = false
+
+func _ff_begin_hold(dir: Vector2) -> void:
+	if absf(dir.x) > 0.5:
+		_ff_step_axis = JOY_AXIS_LEFT_X
+		_ff_step_value = signf(dir.x)
+	else:
+		_ff_step_axis = JOY_AXIS_LEFT_Y
+		_ff_step_value = signf(dir.y)
+	_ff_holding = true
+	_ff_inject_axis(_ff_step_axis, _ff_step_value)
+
+
+func _ff_end_hold() -> void:
+	if _ff_holding:
+		_ff_inject_axis(_ff_step_axis, 0.0)
+		_ff_holding = false
 
 
 ## True once the begun press has fired, released and settled
@@ -15758,55 +15826,97 @@ func _ff_identity(label: String) -> void:
 	_ff_expect(f != null and _ff_framed_quad() == f, label)
 
 
+## Diagnostic (driver only): what the focus is, in words.
+func _ff_focus_words() -> String:
+	var f: ClickableQuad = _room.focused_quad()
+	if f == null:
+		return "null"
+	var idx: int = _room._panels.find(f)
+	if idx >= 0:
+		return "panel[%d] payload=%s" % [idx, f.payload]
+	for k: Variant in _room._rail_quads.keys():
+		if _room._rail_quads[k] == f:
+			return "rail:%s" % str(k)
+	for k2: Variant in _room._strip_quads.keys():
+		if _room._strip_quads[k2] == f:
+			return "strip:%s" % str(k2)
+	return "other action=%s payload=%s" % [f.action_id, f.payload]
+
+
 func _drive_focusfix_smoke() -> void:
 	if _ff_done:
 		return
 	_ff_wait += 1
 	match _ff_phase:
 		0:
+			# Boot seats the CENTRE and no focus (the shipped
+			# state - the first step seats _focusables[0]);
+			# take that step, then judge identity at rest.
 			if _room != null and _room.visible and _room.wall_ready and _ff_wait >= 45:
 				get_viewport().warp_mouse(Vector2(512, 764))
-				var f0: ClickableQuad = _room.focused_quad()
-				_ff_expect(f0 != null, "boot: a focus stands in the library")
-				_ff_identity("library: drawn focus is the real focus")
-				if f0 != null and _room._panels.has(f0):
-					_ff_expect(_room.pop_target() == f0, "library: the popped card is the focused card")
-				_ff_presses = 0
-				_ff_phase = 1
-				_ff_wait = 0
+				if _ff_step_t < 0 and _ff_presses == 0:
+					_ff_begin_step(Vector2(0.0, 1.0))
+				elif _ff_step_settled():
+					var f0: ClickableQuad = _room.focused_quad()
+					_ff_expect(f0 != null, "boot: the first step seats a focus in the library")
+					_ff_identity("library: drawn focus is the real focus")
+					if f0 != null and _room._panels.has(f0):
+						_ff_expect(_room.pop_target() == f0, "library: the popped card is the focused card")
+					_ff_presses = 0
+					_ff_phase = 1
+					_ff_wait = 0
 			elif _ff_wait > 3600:
 				_ff_expect(false, "boot: the room never came up")
 				_ff_finish_smoke()
 		1:
-			# Walk DOWN from the wall to the rail, one press
-			# per cycle, until the focus stands on a stop.
-			if _room._is_rail_quad(_room.focused_quad()):
-				_ff_presses = 0
-				_ff_phase = 2
-				_ff_wait = 0
-			elif _ff_press_t < 0 and _ff_presses == 0:
-				_ff_begin_press(JOY_BUTTON_DPAD_DOWN)
-			elif _ff_press_settled():
-				if _ff_presses > 24:
+			# Walk DOWN from the wall to the rail: hold the
+			# stick down until the focus stands on a stop,
+			# release, let it settle, then judge the landing.
+			if _ff_holding:
+				if _room._is_rail_quad(_room.focused_quad()):
+					_ff_end_hold()
+					_ff_wait = 0
+				elif _ff_wait > 2700:
+					_ff_end_hold()
 					_ff_expect(false, "walk: focus never reached the rail")
 					_ff_finish_smoke()
-				else:
-					_ff_begin_press(JOY_BUTTON_DPAD_DOWN)
-		2:
-			# Walk along the rail to the TOURNAMENT stop.
-			var fq: ClickableQuad = _room.focused_quad()
-			if fq != null and fq.payload == "tournament":
-				_ff_presses = 0
-				_ff_phase = 3
+			elif _room._is_rail_quad(_room.focused_quad()):
+				if _ff_wait >= 30:
+					_ff_presses = 0
+					_ff_phase = 2
+					_ff_wait = 0
+			else:
+				_ff_begin_hold(Vector2(0.0, 1.0))
 				_ff_wait = 0
-			elif _ff_press_t < 0 and _ff_presses == 0:
-				_ff_begin_press(_ff_rail_dir())
-			elif _ff_press_settled():
-				if _ff_presses > 14:
+		2:
+			# Walk along the rail to the TOURNAMENT stop: hold
+			# toward it (direction re-read every frame, so an
+			# overshoot turns around), release on arrival.
+			var fq2: ClickableQuad = _room.focused_quad()
+			if _ff_holding:
+				if fq2 != null and fq2.payload == "tournament":
+					_ff_end_hold()
+					_ff_wait = 0
+				elif _ff_wait > 2700:
+					_ff_end_hold()
 					_ff_expect(false, "walk: focus never reached the TOURNAMENT stop")
 					_ff_finish_smoke()
-				else:
-					_ff_begin_press(_ff_rail_dir())
+				elif _ff_wait % 20 == 0:
+					# Re-aim the hold (a fresh deflection in
+					# the other direction ends the old hold's
+					# direction bookkeeping in the poll).
+					var d2: Vector2 = _ff_rail_dir()
+					if signf(d2.x) != _ff_step_value or _ff_step_axis != JOY_AXIS_LEFT_X:
+						_ff_end_hold()
+						_ff_begin_hold(d2)
+			elif fq2 != null and fq2.payload == "tournament":
+				if _ff_wait >= 30:
+					_ff_presses = 0
+					_ff_phase = 3
+					_ff_wait = 0
+			else:
+				_ff_begin_hold(_ff_rail_dir())
+				_ff_wait = 0
 		3:
 			# A on the stop: the entry itself.
 			if _ff_press_t < 0 and _ff_presses == 0:
@@ -15816,48 +15926,69 @@ func _drive_focusfix_smoke() -> void:
 				_ff_phase = 4
 				_ff_wait = 0
 		4:
+			# Entry judged. The harness enters COLD (no
+			# cached boards), so the wall standing is the
+			# fetch notice and no card exists to seat yet -
+			# the seat completes when the boards land
+			# (phase 5). What entry itself must show: the
+			# room, and TOURNAMENT wearing its presence
+			# colour (a dress read, not focus).
 			if _ff_wait >= 10:
+				print("FOCUSFIX DIAG entry: focus=", _ff_focus_words(), " centre=", _room.centre_index(), " panels=", _room._panels.size())
 				_ff_expect(_room.tournament_active(), "entry: the Tournament Room stands")
-				var f4: ClickableQuad = _room.focused_quad()
-				var idx4: int = _room._panels.find(f4) if f4 != null else -1
-				var kind4: String = ""
-				if idx4 >= 0 and idx4 < _room.tournament_rows().size():
-					kind4 = str((_room.tournament_rows()[idx4] as Dictionary).get("kind", ""))
-				_ff_expect(idx4 >= 0 and kind4 == "challenge", "entry: focus seats on a tournie card")
-				_ff_identity("entry: drawn focus is the real focus")
-				if idx4 >= 0:
-					_ff_expect(_room.pop_target() == f4, "entry: the popped card is the focused card")
 				var la: Array = _room._rail_label_accent("tournament")
 				_ff_expect(bool(la[1]), "entry: TOURNAMENT keeps its presence colour")
+				_ff_deadline = Time.get_ticks_msec() + 60000
 				_ff_phase = 5
 				_ff_wait = 0
 		5:
+			# The boards land: the entry's seat completes.
+			# THIS is the leg the NC hangs by name - under
+			# the old seating the focus is still standing
+			# on the strip with the first card popped.
+			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _tournament_boards_all_real():
+				print("FOCUSFIX DIAG boards: focus=", _ff_focus_words(), " centre=", _room.centre_index())
+				var f5: ClickableQuad = _room.focused_quad()
+				var idx5: int = _room._panels.find(f5) if f5 != null else -1
+				var kind5: String = ""
+				if idx5 >= 0 and idx5 < _room.tournament_rows().size():
+					kind5 = str((_room.tournament_rows()[idx5] as Dictionary).get("kind", ""))
+				_ff_expect(idx5 >= 0 and kind5 == "challenge", "entry: focus seats on a tournie card")
+				_ff_identity("entry: drawn focus is the real focus")
+				if idx5 >= 0:
+					_ff_expect(_room.pop_target() == f5, "entry: the popped card is the focused card")
+				_ff_from_panel = f5
+				_ff_presses = 0
+				_ff_phase = 6
+				_ff_wait = 0
+			elif Time.get_ticks_msec() > _ff_deadline:
+				_ff_expect(false, "entry: the boards never went live against the stub")
+				_ff_finish_smoke()
+		6:
 			# The lift is a spring: give it its fall, then
 			# judge the stop at rest and take the grab.
 			if _ff_wait >= 110:
 				_ff_expect(not bool(_room._rail_tex_lifted.get("tournament", false)), "entry: the focus lift has left the TOURNAMENT stop")
 				_ff_expect(str(_room._rail_applied_key.get("tournament", "")).ends_with("r"), "entry: the TOURNAMENT stop wears its rest face")
 				_grad_save_grab("focusfix_entry.png")
-				_ff_deadline = Time.get_ticks_msec() + 60000
-				_ff_phase = 6
-				_ff_wait = 0
-		6:
-			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _tournament_boards_all_real():
-				var f6: ClickableQuad = _room.focused_quad()
-				_ff_expect(f6 != null and _room._panels.has(f6), "entry: the seat survives the boards landing")
-				_ff_identity("entry: drawn focus survives the boards landing")
-				_ff_from_panel = f6
-				_ff_presses = 0
 				_ff_phase = 7
 				_ff_wait = 0
-			elif Time.get_ticks_msec() > _ff_deadline:
-				_ff_expect(false, "entry: the boards never went live against the stub")
-				_ff_finish_smoke()
 		7:
-			# Sideways travel on the tournie wall.
-			if _ff_press_t < 0 and _ff_from_panel != null and _room.focused_quad() == _ff_from_panel and _ff_presses == 0:
-				_ff_begin_press(JOY_BUTTON_DPAD_RIGHT)
-			elif _ff_press_settled():
+			# Sideways travel on the tournie wall: hold right
+			# until the focus leaves the card it stood on
+			# (one column step), release, settle, judge.
+			if _ff_holding:
+				if _room.focused_quad() != _ff_from_panel:
+					_ff_end_hold()
+					_ff_wait = 0
+				elif _ff_wait > 240:
+					_ff_end_hold()
+					_ff_expect(false, "tournie: travel never moved the focus")
+					_ff_finish_smoke()
+			elif _ff_from_panel != null and _room.focused_quad() == _ff_from_panel and _ff_wait < 200:
+				_ff_begin_hold(Vector2(1.0, 0.0))
+				_ff_wait = 0
+			elif _ff_wait >= 30:
 				var f7: ClickableQuad = _room.focused_quad()
 				_ff_expect(f7 != null and _room._panels.has(f7) and f7 != _ff_from_panel, "tournie: travel moves focus card to card")
 				_ff_identity("tournie: drawn focus is the real focus after travel")
@@ -15937,16 +16068,16 @@ func _drive_focusfix_smoke() -> void:
 				_ff_finish_smoke()
 
 
-## The rail walk's next press toward the TOURNAMENT stop,
+## The rail walk's next step toward the TOURNAMENT stop,
 ## along the rail's own focus order.
-func _ff_rail_dir() -> JoyButton:
+func _ff_rail_dir() -> Vector2:
 	var order: Array = RoomView.RAIL_FOCUS_ORDER
 	var fq: ClickableQuad = _room.focused_quad()
 	var cur: int = order.find(fq.payload) if fq != null else -1
 	var want: int = order.find("tournament")
 	if cur < 0 or cur < want:
-		return JOY_BUTTON_DPAD_RIGHT
-	return JOY_BUTTON_DPAD_LEFT
+		return Vector2(1.0, 0.0)
+	return Vector2(-1.0, 0.0)
 
 
 func _ff_finish_smoke() -> void:

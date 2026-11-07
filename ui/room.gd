@@ -2152,6 +2152,15 @@ func set_wovp_data(d: Dictionary) -> void:
 				if _rail_quads[k] == _focused:
 					place_stop = str(k)
 					break
+		# FOCUSFIX: was a real challenge standing before
+		# this rebuild? A cold entry (no cached boards) can
+		# only stand its notice panel, so its seat waits for
+		# the boards themselves - read BEFORE the recompute.
+		var had_challenge: bool = false
+		for row0: Variant in _tournament_rows:
+			if str((row0 as Dictionary).get("kind", "")) == "challenge":
+				had_challenge = true
+				break
 		_recompute_visible()
 		_rebuild_wall()
 		if place_id != "":
@@ -2163,6 +2172,21 @@ func set_wovp_data(d: Dictionary) -> void:
 					break
 		elif place_stop != "":
 			_land_on_rail_stop(place_stop)
+		# FOCUSFIX: the boards just landed under a cold
+		# entry - the notice wall is replaced by real
+		# challenges while the preserved place is the
+		# TOURNAMENT stop the entry landed on. The entry's
+		# seat completes now: focus moves up to the centred
+		# challenge card (the addendum's refresh-rebuild
+		# clause - real and drawn focus agree after the
+		# rebuild too). Any other preserved place (a card,
+		# another stop, a wall that already held challenges)
+		# keeps the place law's landing exactly; the NC seam
+		# holds the old landing throughout.
+		if not had_challenge and place_stop == "tournament" and debug_focus_nc != "tournland" \
+				and _centre_index >= 0 and _centre_index < _tournament_rows.size() \
+				and str((_tournament_rows[_centre_index] as Dictionary).get("kind", "")) == "challenge":
+			_land_on_wall_card()
 	else:
 		# Fresh boards can give the flipped card a back it
 		# did not have (or change the one it has): the back's
