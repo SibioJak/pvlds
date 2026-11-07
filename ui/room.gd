@@ -2465,11 +2465,37 @@ func tourney_border_state(game_id: String) -> Dictionary:
 	}
 
 
+## FOCUSFIX: the transition seat - focus takes the wall's
+## centred card, the element the pop already names. The pop
+## follows the CENTRE (DOME5's law), never the focus, so a
+## landing that seats focus on the bar while the centre
+## stands at the wall's first card draws one element as
+## focused (the popped card) while input acts on another
+## (the bar) - Chris's two reports, 2026-11-06: entering the
+## Tournament Room left the TOURNAMENT stop lifted with the
+## tables standing above it, and B's return to Table Select
+## left focus on the bar under a popped top-left table. The
+## seat is RETURN's restore seat reused (centre snap, then
+## the centred panel focused), so every arrival at a wall -
+## entry, return, restore - lands the same way. False when
+## no card stands to take it (the caller keeps its fallback).
+func _land_on_wall_card() -> bool:
+	if _centre_index < 0 or _centre_index >= _panels.size():
+		return false
+	_set_centre(_centre_index, true)
+	_set_focused(_panels[_centre_index])
+	return true
+
+
 ## Enter the Tournament Room: the wall becomes the boards
 ## (whatever data already stands - the cache at boot), and
 ## a fetch is requested so what stands becomes live. Focus
-## lands on the TOURNAMENT stop (the rail law: a press lands
-## on the stop that was pressed).
+## lands on the wall's first challenge card (FOCUSFIX: the
+## TOURNAMENT stop keeps its presence accent - the strip
+## colours law - but the focus lift leaves it; a press that
+## changes the VIEW lands on what the player came to see).
+## A state-only wall (no key, fetching, no live challenges)
+## has no card to seat: the rail landing stands there.
 func _enter_tournament() -> void:
 	_failed_game_id = ""
 	_status_note = ""
@@ -2480,7 +2506,13 @@ func _enter_tournament() -> void:
 	_recompute_visible()
 	_rebuild_wall()
 	_persist_view()
-	_land_on_rail_stop("tournament")
+	var seated: bool = false
+	if debug_focus_nc != "tournland" and _centre_index >= 0 and _centre_index < _tournament_rows.size():
+		var row: Dictionary = _tournament_rows[_centre_index] as Dictionary
+		if str(row.get("kind", "")) == "challenge":
+			seated = _land_on_wall_card()
+	if not seated:
+		_land_on_rail_stop("tournament")
 	tournament_refresh_requested.emit()
 
 
@@ -2499,10 +2531,13 @@ func _exit_tournament() -> void:
 ## served only the detail view's escape and the SETUP
 ## panel's close - so this claims no other mapping. The
 ## exit mirrors the rail exits exactly (fresh centre, the
-## library wall rebuilt, the view persisted) and lands the
-## focus on the bar's tournament stop, where his hand
-## already is - the rail law (an activation keeps focus on
-## the bar) applied to a departure.
+## library wall rebuilt, the view persisted). Its landing
+## originally took the bar's tournament stop; FOCUSFIX
+## (2026-11-06) supersedes the landing: focus takes the
+## library wall's centred card, the table the pop already
+## names - the player's report was that he arrived back at
+## Table Select with his presses acting on the bar while
+## the top-left table stood drawn as the focused one.
 func _b_exit_tournament() -> void:
 	_exit_tournament()
 	_page = 0
@@ -2510,7 +2545,8 @@ func _b_exit_tournament() -> void:
 	_recompute_visible()
 	_rebuild_wall()
 	_persist_view()
-	_land_on_rail_stop("tournament")
+	if debug_focus_nc == "tournland" or not _land_on_wall_card():
+		_land_on_rail_stop("tournament")
 
 
 ## RETURN round: a session that launched from the Tournament
@@ -7711,9 +7747,13 @@ func _handle_rail(key: String, after_swap: Callable = Callable()) -> void:
 	elif key == "tournament":
 		if _tournament:
 			# Already standing in it: the press is a refresh
-			# (the same ask REFRESH makes), focus unmoved.
+			# (the same ask REFRESH makes), focus unmoved -
+			# FOCUSFIX makes the code keep the comment's word:
+			# it used to land on the stop, yanking a card
+			# focus to the bar. The NC restores the yank.
 			tournament_refresh_requested.emit()
-			_land_on_rail_stop(key)
+			if debug_focus_nc == "tournland":
+				_land_on_rail_stop(key)
 		else:
 			_enter_tournament()
 	elif key == "wovp_refresh":
