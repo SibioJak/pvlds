@@ -10138,7 +10138,7 @@ func _power_subject_cached(game: GameEntry) -> Texture2D:
 	var arr: Array = ent as Array
 	if arr.size() >= 3 and bool(arr[1]) != _power_fav_key(game):
 		return null
-	# SCOREMARK: the medallion rides the power faces on the
+	# SCOREMARK (glyph MARKWORD): the wordmark badge rides the power faces on the
 	# favourite's exact discipline (the GRADFIX12 item 2 law
 	# above) - an entry composed under the other mark state
 	# is stale the same way.
@@ -10160,7 +10160,7 @@ func _power_on_cached(game: GameEntry) -> Texture2D:
 	var arr: Array = ent as Array
 	if arr.size() >= 3 and bool(arr[1]) != _power_fav_key(game):
 		return null
-	# SCOREMARK: the medallion rides the power faces on the
+	# SCOREMARK (glyph MARKWORD): the wordmark badge rides the power faces on the
 	# favourite's exact discipline (the GRADFIX12 item 2 law
 	# above) - an entry composed under the other mark state
 	# is stale the same way.

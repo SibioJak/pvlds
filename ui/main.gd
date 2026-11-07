@@ -326,7 +326,7 @@ var _pm1_phase: int = 0
 var _pm1_wait: int = 0
 var _pm1_failures: int = 0
 var _pm1_done: bool = false
-var _smoke_scoremark: bool = false ## --pvlds-smoke-scoremark: SCOREMARK round - boots the 5-game PINemHi fixture library through the normal path and judges the FRONT marks on the rendered faces: standing panel faces (PINEMHI BEST chip pixels), factory-rendered art faces (the medallion's pixels, wall + detail sizes), the detail view's inheritance, and a heal leg (a rows push raises a standing card's mark, another drops one); under PVLDS_SCOREMARK_NC=bestkey the Best-only game gains a mark and the semantic leg fails by name; under =ghostmark every game is marked and the scoreless legs fail by name
+var _smoke_scoremark: bool = false ## --pvlds-smoke-scoremark: SCOREMARK round (glyph MARKWORD) - boots the 5-game PINemHi fixture library through the normal path and judges the FRONT marks on the rendered faces: standing panel faces (PINemHi chip pixels), factory-rendered art faces (the wordmark badge's pixels + its label's exact text, wall + detail sizes), the detail view's inheritance, and a heal leg (a rows push raises a standing card's mark, another drops one); under PVLDS_SCOREMARK_NC=bestkey the Best-only game gains a mark and the semantic leg fails by name; under =ghostmark every game is marked and the scoreless legs fail by name; under PVLDS_MARKWORD_NC=hash1 the retired "#1" glyph stands again and the wordmark legs fail by name
 var _sm_phase: int = 0
 var _sm_wait: int = 0
 var _sm_failures: int = 0
@@ -865,6 +865,11 @@ func _ready() -> void:
 	# rows / stands for every game - the scoremark smoke's
 	# semantic legs fail by name. Same seam shape.
 	RoomSpecs.scoremark_nc = OS.get_environment("PVLDS_SCOREMARK_NC")
+	# MARKWORD's negative-control seam (PVLDS_MARKWORD_NC=
+	# hash1): the retired "#1" glyph stands again - the art
+	# face's disc and the panel chip's "PINEMHI BEST" - so
+	# the wordmark legs fail by name. Same seam shape.
+	RoomSpecs.markword_nc = OS.get_environment("PVLDS_MARKWORD_NC")
 	# GRADFIX8's tournie-border negative-control seam
 	# (PVLDS_GRADFIX8_NC=noborder): borders are never
 	# applied, so the census's tourney-border legs fail
@@ -16791,19 +16796,26 @@ func _finish_cardback_smoke() -> void:
 ## Jones neither; the runner's sixth table file stands as
 ## an unmatched local game and is not a target). The
 ## faces are panel kind on this harness (no downloadable
-## art), so the mark's standing citizen is the PINEMHI
-## BEST chip - judged by its band-colour pixels on the
-## bound texture; the art citizen (the medallion) is
-## judged on faces rendered through the room's own
-## factory from the room's own flag, at wall size and at
-## the detail size; the detail view's inheritance is
-## judged on its standing big face; and a heal leg pushes
-## new rows at the standing room - a first score for Indy
-## raises its mark, Apollo's rows leaving drops its mark,
-## no rescan anywhere. Under PVLDS_SCOREMARK_NC=bestkey
-## the flag keys on the Best rows, so Johnny gains a mark
-## and the semantic legs fail by name; under =ghostmark
-## every game is marked and the scoreless legs fail.
+## art), so the mark's standing citizen is the PINemHi
+## chip - judged by its band-colour pixels on the
+## bound texture; the art citizen (the wordmark badge,
+## MARKWORD - it replaced the "#1" medallion, which
+## misread as a ranking) is judged on faces rendered
+## through the room's own factory from the room's own
+## flag, at wall size and at the detail size, by its
+## ground + word pixels AND by the badge label's own
+## state in the render path (the word reads "PINemHi",
+## exact capitalization - no OCR); the detail view's
+## inheritance is judged on its standing big face; and a
+## heal leg pushes new rows at the standing room - a
+## first score for Indy raises its mark, Apollo's rows
+## leaving drops its mark, no rescan anywhere. Under
+## PVLDS_SCOREMARK_NC=bestkey the flag keys on the Best
+## rows, so Johnny gains a mark and the semantic legs
+## fail by name; under =ghostmark every game is marked
+## and the scoreless legs fail; under
+## PVLDS_MARKWORD_NC=hash1 the "#1" glyph stands again
+## and the wordmark legs fail by name.
 const SM_TARGETS: Dictionary = {
 	"dhgyex0l": true, # Apollo 13 - Personal (the real file) + Best
 	"0-GeiE03": true, # Congo - Personal + Best, PuP
@@ -16887,22 +16899,24 @@ func _sm_judge_standing(game_id: String, marked: bool) -> void:
 	if img == null or img.is_empty():
 		return
 	# The chips band (below the maker band, above the
-	# file line): the PINEMHI BEST chip's ground is the
+	# file line): the PINemHi chip's ground is the
 	# game's band colour - one flat run when it stands.
 	var run: int = _sm_max_run(img, 95, 430, RoomSpecs.manufacturer_color(game.manufacturer), 0.03)
 	if marked:
-		_sm_expect(run >= 40, "%s: the PINEMHI BEST chip stands on the rendered standing face (band-colour run %d px)" % [game.title, run])
+		_sm_expect(run >= 40, "%s: the PINemHi chip stands on the rendered standing face (band-colour run %d px)" % [game.title, run])
 	else:
-		_sm_expect(run < 40, "%s: NO PINEMHI chip on the rendered standing face (band-colour run %d px)" % [game.title, run])
+		_sm_expect(run < 40, "%s: NO PINemHi chip on the rendered standing face (band-colour run %d px)" % [game.title, run])
 
 
 ## The art citizen: each fixture game's front rendered
 ## through the room's factory from the room's own flag
 ## (Room._has_pinemhi_score - the production data path),
 ## at the wall size (strip suppressed) and at the detail
-## size (strip standing). The medallion's disc + glyph
-## pixels judge it; the renders land in the grabs dir as
-## the close faces.
+## size (strip standing). The wordmark badge's ground +
+## word pixels judge its standing, and the badge label's
+## own state on the factory's face judges the word
+## itself; the renders land in the grabs dir as the
+## close faces.
 func _sm_judge_art() -> void:
 	var art_img: Image = Image.create(496, 864, false, Image.FORMAT_RGBA8)
 	art_img.fill(Color(0.32, 0.30, 0.27))
@@ -16925,14 +16939,28 @@ func _sm_judge_art() -> void:
 		_sm_expect(tex != null, "art face: %s renders at wall size" % game.title)
 		if tex != null:
 			var img: Image = tex.get_image()
-			var disc: int = _sm_count_in(img, Rect2i(4, 786, 74, 72), col, 0.03)
-			var glyph: int = _sm_count_in(img, Rect2i(18, 802, 40, 40), Color(0.98, 0.98, 1.0), 0.06)
+			# The badge's seat (bottom-left, 14 px insets):
+			# its band-colour ground in the corner rect,
+			# the white word inside the badge's own rect.
+			var ground: int = _sm_count_in(img, Rect2i(10, 798, 164, 56), col, 0.03)
+			var word: int = _sm_count_in(img, Rect2i(24, 810, 136, 34), Color(0.98, 0.98, 1.0), 0.06)
 			if marked:
-				_sm_expect(disc >= 1000 and glyph >= 60,
-					"art face: %s carries the medallion in its band colour (%d disc px, %d glyph px)" % [game.title, disc, glyph])
+				_sm_expect(ground >= 2500 and word >= 400,
+					"art face: %s carries the PINemHi wordmark badge in its band colour (%d ground px, %d word px)" % [game.title, ground, word])
 			else:
-				_sm_expect(disc < 40 and glyph == 0,
-					"art face: %s carries NO medallion (%d disc px, %d glyph px)" % [game.title, disc, glyph])
+				_sm_expect(ground < 40 and word == 0,
+					"art face: %s carries NO wordmark badge (%d ground px, %d word px)" % [game.title, ground, word])
+			# The word itself, from the label's state on
+			# the factory's face - the render path's own
+			# witness, exact capitalization, no OCR. Under
+			# PVLDS_MARKWORD_NC=hash1 the label reads "#1"
+			# and this leg fails by name.
+			var face: CardFace = _room._factory._face as CardFace
+			_sm_expect(face != null and face._art_score.visible == marked \
+					and face._art_score_label.text == "PINemHi",
+				"wordmark: the art badge's label on %s's rendered face reads 'PINemHi' exactly and the badge stands %s (label '%s')" % [
+					game.title, str(marked),
+					face._art_score_label.text if face != null else "<no face>"])
 			if grab_dir != "":
 				img.save_png(grab_dir.path_join("face_" + gid + ".png"))
 		var dspec: Dictionary = RoomSpecs.art_spec(game, art_tex, _room._store, true, flag)
@@ -16940,11 +16968,11 @@ func _sm_judge_art() -> void:
 		_sm_expect(dtex != null, "detail-size art face: %s renders" % game.title)
 		if dtex != null:
 			var dimg: Image = dtex.get_image()
-			var ddisc: int = _sm_count_in(dimg, Rect2i(4, 722, 74, 72), col, 0.03)
+			var dground: int = _sm_count_in(dimg, Rect2i(10, 734, 164, 56), col, 0.03)
 			if marked:
-				_sm_expect(ddisc >= 1000, "detail-size art face: %s carries the medallion (%d disc px)" % [game.title, ddisc])
+				_sm_expect(dground >= 2500, "detail-size art face: %s carries the wordmark badge (%d ground px)" % [game.title, dground])
 			else:
-				_sm_expect(ddisc < 40, "detail-size art face: %s carries NO medallion (%d disc px)" % [game.title, ddisc])
+				_sm_expect(dground < 40, "detail-size art face: %s carries NO wordmark badge (%d ground px)" % [game.title, dground])
 	_sm_judged = true
 
 
@@ -16984,13 +17012,13 @@ func _sm_judge_detail() -> void:
 			var img: Image = (settled if settled != null else big).get_image()
 			var col: Color = RoomSpecs.manufacturer_color(game.manufacturer)
 			var run: int = _sm_max_run(img, 95, 430, col, 0.03)
-			var disc: int = _sm_count_in(img, Rect2i(4, 722, 74, 72), col, 0.03)
+			var badge: int = _sm_count_in(img, Rect2i(10, 734, 164, 56), col, 0.03)
 			if marked:
-				_sm_expect(run >= 40 or disc >= 1000,
-					"detail: the detail view's front for %s carries the mark (chip run %d px, disc %d px)" % [game.title, run, disc])
+				_sm_expect(run >= 40 or badge >= 2500,
+					"detail: the detail view's front for %s carries the mark (chip run %d px, badge %d px)" % [game.title, run, badge])
 			else:
-				_sm_expect(run < 40 and disc < 40,
-					"detail: the detail view's front for %s carries NO mark (chip run %d px, disc %d px)" % [game.title, run, disc])
+				_sm_expect(run < 40 and badge < 40,
+					"detail: the detail view's front for %s carries NO mark (chip run %d px, badge %d px)" % [game.title, run, badge])
 			var grab_dir: String = OS.get_environment("PVLDS_SCOREMARK_GRABS")
 			if grab_dir != "":
 				img.save_png(grab_dir.path_join("detail_" + game_id + ".png"))
@@ -22595,6 +22623,7 @@ func _run_core_test() -> void:
 	RoomSpecs.backfine_nc = OS.get_environment("PVLDS_BACKFINE_NC")
 	RoomSpecs.oneten_nc = OS.get_environment("PVLDS_ONETEN_NC")
 	RoomSpecs.scoremark_nc = OS.get_environment("PVLDS_SCOREMARK_NC")
+	RoomSpecs.markword_nc = OS.get_environment("PVLDS_MARKWORD_NC")
 	_expect(IpdbFacts.ipdb_id_from_url("https://www.ipdb.org/machine.cgi?id=1267") == 1267,
 		"cardback: the IPDB id parses out of the db's ipdbUrl", failures)
 	_expect(IpdbFacts.ipdb_id_from_url("") == 0 and IpdbFacts.ipdb_id_from_url("https://example.com/x") == 0,
@@ -22885,17 +22914,17 @@ func _run_core_test() -> void:
 	var sm_chip_color_ok: bool = false
 	for cv: Variant in (sm_panel.get("chips", []) as Array):
 		var cd: Dictionary = cv as Dictionary
-		if str(cd.get("text", "")) == "PINEMHI BEST":
+		if str(cd.get("text", "")) == "PINemHi":
 			sm_chip_found = true
 			sm_chip_color_ok = (cd.get("color", Color()) as Color) == RoomSpecs.manufacturer_color(bf_game.manufacturer)
 	_expect(sm_chip_found and sm_chip_color_ok,
-		"scoremark: the panel spec carries the PINEMHI BEST chip in the band colour", failures)
+		"scoremark: the panel spec carries the PINemHi chip in the band colour", failures)
 	var sm_chip_default: bool = false
 	for cv2: Variant in (RoomSpecs.panel_spec(bf_game, null).get("chips", []) as Array):
-		if str((cv2 as Dictionary).get("text", "")) == "PINEMHI BEST":
+		if str((cv2 as Dictionary).get("text", "")) == "PINemHi":
 			sm_chip_default = true
 	_expect(not sm_chip_default,
-		"scoremark: the panel spec's default carries no PINEMHI BEST chip", failures)
+		"scoremark: the panel spec's default carries no PINemHi chip", failures)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")

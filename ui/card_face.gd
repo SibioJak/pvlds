@@ -133,7 +133,7 @@ var _art_fav: PanelContainer
 var _art_fav_label: Label
 var _art_pup: PanelContainer ## art kind (GRADFIX6): the PuP badge, top-left (the star's opposite corner)
 var _art_pup_label: Label
-var _art_score: PanelContainer ## art kind (SCOREMARK): the PINemHi medallion, bottom-left (the free corner: star top-right, PuP top-left, the nameplate's plate rides the lower-middle band). A disc in the game's OWN back-band colour (RoomSpecs.manufacturer_color - the colour the flipped back's PINEMHI band wears) with a white "#1" cut in it: the band in miniature. Stands only when the game holds the player's own PINemHi Personal rows.
+var _art_score: PanelContainer ## art kind (SCOREMARK, glyph MARKWORD): the PINemHi wordmark badge, bottom-left (the free corner: star top-right, PuP top-left, the nameplate's plate rides the lower-middle band). A badge in the PuP badge's discipline - ground in the game's OWN back-band colour (RoomSpecs.manufacturer_color - the colour the flipped back's PINEMHI band wears), white text reading "PINemHi" in the service's own capitalization (MARKWORD: the retired "#1" medallion misread as a ranking; the word cannot). Stands only when the game holds the player's own PINemHi Personal rows.
 var _art_score_label: Label
 var _label_stock: Array = [] ## [label, autowrap, max_lines, overrun] per text label, for per-spec restore
 
@@ -242,15 +242,15 @@ func _init() -> void:
 	_art_score = PanelContainer.new()
 	_art_score.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	_art_score.offset_left = 14.0
-	_art_score.offset_top = -68.0
-	_art_score.offset_right = 68.0
+	_art_score.offset_top = -62.0
+	_art_score.offset_right = 170.0
 	_art_score.offset_bottom = -14.0
 	_art_score.add_theme_stylebox_override("panel", _score_box(Color(0.30, 0.34, 0.60)))
 	_art_score_label = Label.new()
-	_art_score_label.text = "#1"
+	_art_score_label.text = "PINemHi"
 	_art_score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_art_score_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_art_score_label.add_theme_font_size_override("font_size", 25)
+	_art_score_label.add_theme_font_size_override("font_size", 30)
 	_art_score_label.add_theme_color_override("font_color", Color(0.98, 0.98, 1.0))
 	_art_score.add_child(_art_score_label)
 	_art_score.visible = false
@@ -334,12 +334,33 @@ func _box(color: Color, radius: int) -> StyleBoxFlat:
 	return sb
 
 
-## The SCOREMARK medallion's style: a full disc (corner
-## radius = half the 54 px seat) in the game's back-band
-## colour, no content margins - the "#1" glyph centres on
-## the plaque. Rebuilt per spec in apply_spec, like the
-## band's box: one CardFace serves every render.
+## The SCOREMARK badge's style (MARKWORD): the PuP
+## badge's box - corner radius 10, the stock content
+## margins - in the game's back-band colour, the white
+## wordmark centred on it. Rebuilt per spec in
+## apply_spec, like the band's box: one CardFace serves
+## every render. The word at 30 px measures 128 px, so
+## the 156 px seat (14 px insets, like the PuP badge)
+## holds it with the PuP badge's own breathing room.
 func _score_box(color: Color) -> StyleBoxFlat:
+	var sb: StyleBoxFlat = StyleBoxFlat.new()
+	sb.bg_color = color
+	sb.corner_radius_top_left = 10
+	sb.corner_radius_top_right = 10
+	sb.corner_radius_bottom_left = 10
+	sb.corner_radius_bottom_right = 10
+	sb.content_margin_left = 14
+	sb.content_margin_right = 14
+	sb.content_margin_top = 6
+	sb.content_margin_bottom = 6
+	return sb
+
+
+## The retired medallion's style, kept ONLY behind the
+## MARKWORD NC seam (PVLDS_MARKWORD_NC=hash1): a full
+## disc (corner radius = half the 54 px seat), no
+## content margins, the "#1" glyph centred on the plaque.
+func _score_disc_box(color: Color) -> StyleBoxFlat:
 	var sb: StyleBoxFlat = StyleBoxFlat.new()
 	sb.bg_color = color
 	sb.corner_radius_top_left = 27
@@ -487,13 +508,30 @@ func apply_spec(spec: Dictionary) -> void:
 	_art_strip.visible = kind == "art" and bool(spec.get("strip", true))
 	_art_fav.visible = kind == "art" and bool(spec.get("favorite", false))
 	_art_pup.visible = kind == "art" and bool(spec.get("pup", false))
-	# SCOREMARK: the medallion stands on the same discipline
-	# (spec flag, art kind only), wearing the spec's band
-	# colour - rebuilt here because the colour is per-game.
+	# SCOREMARK (glyph MARKWORD): the wordmark badge stands
+	# on the same discipline (spec flag, art kind only),
+	# wearing the spec's band colour - rebuilt here because
+	# the colour is per-game. Under the MARKWORD NC seam
+	# (hash1) the retired "#1" medallion stands in the
+	# badge's corner instead, so the wordmark legs fail by
+	# name; the seat, offsets and glyph are re-asserted on
+	# every marked spec, so the seam can never leak into a
+	# later face.
 	_art_score.visible = kind == "art" and bool(spec.get("scoremark", false))
 	if _art_score.visible:
-		_art_score.add_theme_stylebox_override("panel",
-			_score_box(_color_of(spec, "scoremark_color", Color(0.30, 0.34, 0.60))))
+		var score_col: Color = _color_of(spec, "scoremark_color", Color(0.30, 0.34, 0.60))
+		if RoomSpecs.markword_nc == "hash1":
+			_art_score.offset_top = -68.0
+			_art_score.offset_right = 68.0
+			_art_score.add_theme_stylebox_override("panel", _score_disc_box(score_col))
+			_art_score_label.text = "#1"
+			_art_score_label.add_theme_font_size_override("font_size", 25)
+		else:
+			_art_score.offset_top = -62.0
+			_art_score.offset_right = 170.0
+			_art_score.add_theme_stylebox_override("panel", _score_box(score_col))
+			_art_score_label.text = "PINemHi"
+			_art_score_label.add_theme_font_size_override("font_size", 30)
 	_margin.visible = kind != "art"
 	if kind == "art":
 		var tex: Variant = spec.get("art_texture", null)

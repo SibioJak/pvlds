@@ -177,11 +177,14 @@ static func panel_spec(game: GameEntry, store: StateStore, scoremark: bool = fal
 	if store != null and store.is_favorite(game.game_id):
 		chips.append({"text": "FAVORITE", "accent": true})
 	# SCOREMARK: the panel face's citizen of the front mark
-	# (the art face carries the medallion - see art_spec).
-	# The chip wears the game's back-band colour as its
-	# ground, so front and back speak one language.
+	# (the art face carries the wordmark badge - see
+	# art_spec). The chip wears the game's back-band colour
+	# as its ground, so front and back speak one language.
+	# MARKWORD: the chip's word is the wordmark itself -
+	# "PINemHi", the service's own capitalization (the
+	# MARKWORD NC seam restores "PINEMHI BEST").
 	if scoremark:
-		chips.append({"text": "PINEMHI BEST", "accent": false, "color": manufacturer_color(game.manufacturer)})
+		chips.append({"text": "PINEMHI BEST" if markword_nc == "hash1" else "PINemHi", "accent": false, "color": manufacturer_color(game.manufacturer)})
 	# The build/file line: the exact file Play would launch (the
 	# player's default build), as ONE ellipsized line - the wall is a
 	# browsing surface, and the full string lives in the detail view.
@@ -234,10 +237,10 @@ static func art_spec(game: GameEntry, art_texture: Texture2D, store: StateStore,
 		"pup": game.is_pup_tagged(),
 		# The SCOREMARK (front mark): the game holds the
 		# player's own PINemHi Personal rows (pinemhi_marked);
-		# CardFace draws it as a medallion in the bottom-left
-		# corner wearing this colour - the game's own
-		# back-band colour, so the front mark and the flipped
-		# back's PINEMHI band are one colour.
+		# CardFace draws it as a "PINemHi" wordmark badge in
+		# the bottom-left corner wearing this colour - the
+		# game's own back-band colour, so the front mark and
+		# the flipped back's PINEMHI band are one colour.
 		"scoremark": scoremark,
 		"scoremark_color": manufacturer_color(game.manufacturer),
 	}
@@ -547,6 +550,7 @@ static var pinemhi1_nc: String = "" ## Main sets this from PVLDS_PINEMHI1_NC bef
 static var backfine_nc: String = "" ## Main sets this from PVLDS_BACKFINE_NC before any room exists (BACKFINE seams: dateback = the card back's personal rows carry the date again, so the no-date legs fail by name; ghostbest = the room seats a Best section for a game whose install holds no Best file, so the no-file-no-section legs fail by name)
 static var oneten_nc: String = "" ## Main sets this from PVLDS_ONETEN_NC before any room exists (ONETEN seams: allpersonal = the back's personal block renders every file row again, so the one-Kubrick legs fail by name; best1only = the Best section renders divider + #1 alone again, so the full-ten legs fail by name)
 static var scoremark_nc: String = "" ## Main sets this from PVLDS_SCOREMARK_NC before any room exists (SCOREMARK seams: bestkey = the front mark keys on the ONLINE Best rows instead of the player's own Personal rows, so the Best-only-no-mark leg fails by name; ghostmark = the mark stands for every game, so the scoreless-no-mark legs fail by name)
+static var markword_nc: String = "" ## Main sets this from PVLDS_MARKWORD_NC before any room exists (MARKWORD seams: hash1 = the retired "#1" glyph stands again - the art face's disc + "#1" and the panel chip's "PINEMHI BEST" - so the wordmark legs fail by name)
 
 
 ## SCOREMARK: the front mark's one truth - the game holds
