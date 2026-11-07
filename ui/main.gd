@@ -318,8 +318,15 @@ var _cb_wait: int = 0
 var _cb_failures: int = 0
 var _cb_target: int = 0 ## index into the driver's target game list
 var _cb_judged: bool = false
+var _cb_grabbed: bool = false ## PINEMHI1: the rendered grab for the current cardback target already saved
 var _cb_seat_tries: int = 0 ## focus seats attempted for the standing target (a target that never centres fails instead of looping)
 var _smoke_backtrim: bool = false ## --pvlds-smoke-backtrim: BACKTRIM round - stages the IPDBFIX field bug end to end: the room is reset to its virgin pre-push state (no facts, stamp 0), Indy is flipped (an empty-facts back renders under the ipdb0 key), then the NORMAL push sequence runs and Indy is flipped again - the healed back must stand with its IPDB rows because the stamp bumped on the changed facts, and repeat pushes must not churn it
+var _smoke_pinemhi1: bool = false ## --pvlds-smoke-pinemhi1: PINEMHI1 round - launches the env-named target (PVLDS_PINEMHI1_TARGET) through the real launch door against the stub VPX and judges the standing marquee: headline, the fact lines, and the settled scale holding CONSTANT (the pulse is gone); under PVLDS_PINEMHI1_NC=pulse the scale breathes and the pulse leg fails by name
+var _pm1_phase: int = 0
+var _pm1_wait: int = 0
+var _pm1_failures: int = 0
+var _pm1_done: bool = false
+var _pm1_samples: Array = []
 var _smoke_submit: bool = false ## --pvlds-smoke-submit (SUBMIT round): the desk-stay submission smoke - scans the letter library, fetches the stub's boards, drives the desk's REAL submit section (picker, warning, photo attach, submit press) and reads the stub's request log as the wire's witness. Modes in PVLDS_SUBMIT_SMOKE_MODE: happy | noscore | badphoto | nothigher | shortkey | recorded | junk (SUBMIT2: the record field filled / filled with junk; PVLDS_SUBMIT_SCORE_TEXT carries the text, PVLDS_SUBMIT2_NC=wireleak must fail the wire-law leg by name)
 var _submit_mode: String = ""
 var _submit_phase: int = 0
@@ -709,6 +716,8 @@ func _ready() -> void:
 		_smoke_cardback = true
 	if user_args.has("--pvlds-smoke-backtrim"):
 		_smoke_backtrim = true
+	if user_args.has("--pvlds-smoke-pinemhi1"):
+		_smoke_pinemhi1 = true
 	if user_args.has("--pvlds-smoke-submit"):
 		_smoke_submit = true
 		_submit_mode = OS.get_environment("PVLDS_SUBMIT_SMOKE_MODE")
@@ -946,7 +955,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return or _smoke_focusfix) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return or _smoke_focusfix or _smoke_pinemhi1) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1143,6 +1152,8 @@ func _process(_delta: float) -> void:
 		_drive_cardback_smoke()
 	if _smoke_backtrim:
 		_drive_backtrim_smoke()
+	if _smoke_pinemhi1:
+		_drive_pinemhi1_smoke()
 	if _smoke_submit:
 		_drive_submit_smoke()
 	if _smoke_roomsubmit:
@@ -14817,17 +14828,26 @@ func _finish_bootfocus_smoke() -> void:
 
 
 ## CARDBACK smoke: the fixture library's three games, in
-## judging order - Indiana Jones (both wells, the designer
-## disagreement), Beetlejuice (db-only: no ipdbUrl in its
-## record, nothing seeded), The Addams Family (a seeded
-## disagreement of the same shape as Indy's).
-const CB_TARGETS: Array[String] = ["lkSumsrF", "1vJ_ZQYe", "aT_GONvw"]
+## CARDBACK smoke (PINEMHI1 rewrite; the round that keeps
+## the --pvlds-smoke-cardback flag): the IPDB cache still
+## seeds at boot and reaches the room (phase 1), but the
+## card back's tenant is the PINemHi Personal row list
+## now. Judging order - Apollo 13 (the real apollo13.txt
+## joined by title: all 8 rows, in file order, #1 =
+## 1,638,803,870), Congo (a PuP build with a small scores
+## file: its rows, then the PuP note as the last line),
+## Johnny Mnemonic (a PuP build with NO file: the honest
+## empty state, then the PuP note), Beetlejuice (no file,
+## no PuP: the empty state alone). Under the PINEMHI1
+## oldgrid NC the backs render the retired Spec Sheet
+## grid instead, and every PINEMHI1 leg fails by name.
+const CB_TARGETS: Array[String] = ["dhgyex0l", "0-GeiE03", "-SbeVjPA", "1vJ_ZQYe"]
 
 
 func _drive_cardback_smoke() -> void:
 	match _cb_phase:
 		0:
-			if _room != null and _room.visible and _room.wall_ready and _room._visible_games.size() >= 3:
+			if _room != null and _room.visible and _room.wall_ready and _room._visible_games.size() >= CB_TARGETS.size():
 				_cb_phase = 1
 				_cb_wait = 0
 			else:
@@ -14912,7 +14932,17 @@ func _drive_cardback_smoke() -> void:
 		4:
 			_cb_wait += 1
 			if _cb_judged:
-				_cb_advance()
+				# PINEMHI1: the rendered grabs (back with
+				# scores / back empty) land once the flip
+				# has physically settled.
+				var grab_dir: String = OS.get_environment("PVLDS_CARDBACK_GRABS")
+				if grab_dir != "" and not _cb_grabbed and _cb_wait > 45:
+					_cb_grabbed = true
+					var img: Image = get_viewport().get_texture().get_image()
+					img.save_png(grab_dir.path_join("back_" + CB_TARGETS[_cb_target] + ".png"))
+					print("  ok - cardback smoke: grab saved for ", CB_TARGETS[_cb_target])
+				if _cb_wait > 45:
+					_cb_advance()
 			elif _cb_wait > 1800:
 				_cb_fail("the back render for %s never landed" % CB_TARGETS[_cb_target])
 				_cb_advance()
@@ -14931,6 +14961,7 @@ func _cb_advance() -> void:
 	_cb_target += 1
 	_cb_wait = 0
 	_cb_seat_tries = 0
+	_cb_grabbed = false
 	_cb_phase = 2 if _cb_target < CB_TARGETS.size() else 5
 
 
@@ -14949,39 +14980,53 @@ func _cb_judge(idx: int) -> void:
 	var tex: Texture2D = await _room._factory.render_texture(spec, RoomSpecs.BACK_FACE_PX)
 	_cb_expect(tex != null and tex.get_width() > 16, "the back of %s renders at full size" % game.game_id)
 	var metrics: Dictionary = _room._factory.face_board_metrics()
-	var kv: Dictionary = {}
-	var ipdb_rows: int = 0
-	var empty_rows: int = 0
-	var undotted: int = 0
-	for rv: Variant in (metrics.get("rows", []) as Array):
+	# The back's rows, from the spec itself (content, order,
+	# kinds) and the rendered face (the score column as drawn).
+	var spec_rows: Array = spec.get("rows", []) as Array
+	var kinds: Array = []
+	var score_texts: Array = []
+	var names: Array = []
+	var notes: Array = []
+	for rv: Variant in spec_rows:
 		var rd: Dictionary = rv as Dictionary
-		if str(rd.get("kind", "")) != "kv":
-			continue
-		kv[str(rd.get("kv_key", ""))] = {"v": str(rd.get("kv_value", "")), "src": str(rd.get("kv_src", ""))}
-		if str(rd.get("kv_src", "")) == "ipdb":
-			ipdb_rows += 1
-		if str(rd.get("kv_src", "")) == "":
-			undotted += 1
-		if str(rd.get("kv_value", "")) == "":
-			empty_rows += 1
+		var k: String = str(rd.get("kind", ""))
+		kinds.append(k)
+		if k == "score":
+			score_texts.append(str(rd.get("score_text", "")))
+			names.append(str(rd.get("name_text", "")))
+		elif k == "note":
+			notes.append(str(rd.get("text", "")))
+	var drawn_scores: Array = []
+	for rv2: Variant in (metrics.get("rows", []) as Array):
+		var md: Dictionary = rv2 as Dictionary
+		if str(md.get("kind", "")) == "score":
+			drawn_scores.append(str(md.get("score_text", "")))
 	match game.game_id:
-		"lkSumsrF":
-			_cb_expect(str((kv.get("Designer", {}) as Dictionary).get("v", "")) == "Mark Ritchie" and str((kv.get("Designer", {}) as Dictionary).get("src", "")) == "db",
-				"Indy: the db designer row stands with its db dot (got '%s' / '%s')" % [str((kv.get("Designer", {}) as Dictionary).get("v", "<none>")), str((kv.get("Designer", {}) as Dictionary).get("src", "<none>"))])
-			_cb_expect(str((kv.get("Design", {}) as Dictionary).get("v", "")) == "Mark Ritchie, Doug Watson" and str((kv.get("Design", {}) as Dictionary).get("src", "")) == "ipdb",
-				"Indy: the IPDB design row stands beside it with its ipdb dot - the disagreement shown, never merged (got '%s')" % str((kv.get("Design", {}) as Dictionary).get("v", "<none>")))
-			_cb_expect(str((kv.get("Units produced", {}) as Dictionary).get("v", "")) == "12,716" and not kv.has("Fun rating") and not kv.has("Features") and not kv.has("IPDB entry"),
-				"Indy: the IPDB production row stands (units '%s') and the BACKTRIM cut holds - no Fun rating, Features or IPDB entry rows past it" % str((kv.get("Units produced", {}) as Dictionary).get("v", "<none>")))
-			_cb_expect(undotted == 0, "Indy: every grid row carries its source dot (%d undotted)" % undotted)
+		"dhgyex0l":
+			var want: Array = ["1,638,803,870", "1,333,372,730", "38,714,470", "36,609,200", "34,559,180", "33,459,180", "27,307,870", "19,950,020"]
+			_cb_expect(score_texts == want,
+				"PINEMHI1 back: Apollo's real file renders all 8 rows in file order, board-formatted, #1 = 1,638,803,870 (got %s)" % str(score_texts))
+			_cb_expect(drawn_scores == want,
+				"PINEMHI1 back: Apollo's rendered score column matches the file (got %s)" % str(drawn_scores))
+			_cb_expect(names.size() == 8 and str(names[0]).begins_with("Kubrick") and str(names[0]).contains("2026-07-06"),
+				"PINEMHI1 back: Apollo's rows carry the player and the date (first: '%s')" % (str(names[0]) if names.size() > 0 else "<none>"))
+			_cb_expect(not kinds.has("kv"),
+				"PINEMHI1 back: no Spec Sheet grid stands on Apollo's back (kinds: %s)" % str(kinds))
+		"0-GeiE03":
+			_cb_expect(score_texts == ["512,340,220", "128,004,900"],
+				"PINEMHI1 back: Congo's file renders its 2 rows (got %s)" % str(score_texts))
+			_cb_expect(notes.size() == 1 and str(notes[0]) == RoomSpecs.PUP_NOTE and kinds[kinds.size() - 1] == "note",
+				"PINEMHI1 back: Congo's PuP note stands as the back's last line under its scores (notes: %s)" % str(notes))
+		"-SbeVjPA":
+			_cb_expect(score_texts.is_empty() and notes.size() == 2 and str(notes[0]).contains("No PINemHi scores"),
+				"PINEMHI1 back: Johnny Mnemonic has no file - the honest empty state stands, no invented rows (notes: %s)" % str(notes))
+			_cb_expect(str(notes[notes.size() - 1]) == RoomSpecs.PUP_NOTE,
+				"PINEMHI1 back: the empty state still carries the PuP scale note under it")
 		"1vJ_ZQYe":
-			_cb_expect(kv.size() >= 3, "Beetlejuice: the db-only back still stands a grid (%d rows)" % kv.size())
-			_cb_expect(ipdb_rows == 0, "Beetlejuice: a game with no IPDB data shows NO ipdb rows (degrades honestly)")
-		"aT_GONvw":
-			_cb_expect(str((kv.get("Designer", {}) as Dictionary).get("v", "")) == "Pat Lawlor" and str((kv.get("Design", {}) as Dictionary).get("v", "")) == "Larry DeMar, Pat Lawlor",
-				"Addams: both designer rows stand - db '%s', ipdb '%s'" % [str((kv.get("Designer", {}) as Dictionary).get("v", "<none>")), str((kv.get("Design", {}) as Dictionary).get("v", "<none>"))])
-			_cb_expect(str((kv.get("Units produced", {}) as Dictionary).get("v", "")) == "20,270" and str((kv.get("Units produced", {}) as Dictionary).get("src", "")) == "ipdb",
-				"Addams: the IPDB production row stands with its ipdb dot (units '%s')" % str((kv.get("Units produced", {}) as Dictionary).get("v", "<none>")))
-	_cb_expect(empty_rows == 0, "%s: the grid carries no empty rows" % game.game_id)
+			_cb_expect(score_texts.is_empty() and notes.size() == 1 and str(notes[0]).contains("No PINemHi scores"),
+				"PINEMHI1 back: Beetlejuice shows the empty state alone (notes: %s)" % str(notes))
+	_cb_expect(str(spec.get("band_text", "")) == "PINEMHI",
+		"PINEMHI1 back: %s wears the PINEMHI band (got '%s')" % [game.game_id, str(spec.get("band_text", "<none>"))])
 	_cb_judged = true
 
 
@@ -14992,18 +15037,136 @@ func _cb_expect(cond: bool, label: String) -> void:
 		_cb_fail(label)
 
 
-## BACKTRIM smoke: the staged IPDBFIX field bug, judged
-## on the standing back itself. Phase map: 0 the room
-## comes up on the real boot path; 1 the room is reset to
-## its virgin pre-push state (empty facts, stamp 0 - the
-## state a first flip met in the boot window before the
-## first push landed); 2/8 Indy is seated and flipped;
-## 3 the pre-push back is judged (real texture, NO ipdb
-## rows, standing key ends ipdb0) and LEFT STANDING OPEN;
-## 4 the NORMAL push sequence runs (_push_wovp_data, the
-## boot push's own shape); 5 the standing back must heal
-## (its texture re-rendered under a NEW key, and the spec
-## stands Units produced); 6 repeat pushes move nothing.
+## PINEMHI1 smoke (--pvlds-smoke-pinemhi1): the loading
+## marquee, judged standing. The env-named target
+## (PVLDS_PINEMHI1_TARGET, default Indy) launches through
+## the real launch door against the harness stub VPX;
+## once the marquee has flown in and settled (its clock
+## past 2 s, deep inside the stub's 10 s load), the driver
+## samples the settled scale for 45 frames and judges:
+## the headline pair, the fact lines standing under it
+## (RoomSpecs.marquee_fact_lines' contract made visible),
+## and the scale holding at exactly 1.0 - the pulse is
+## GONE. Under PVLDS_PINEMHI1_NC=pulse the scale breathes
+## and the pulse leg fails by name. A grab lands at
+## PVLDS_PINEMHI1_GRAB when set.
+func _drive_pinemhi1_smoke() -> void:
+	if _pm1_done:
+		return
+	var target: String = OS.get_environment("PVLDS_PINEMHI1_TARGET")
+	if target == "":
+		target = "lkSumsrF"
+	match _pm1_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and _cb_visible_idx(target) >= 0:
+				var game: GameEntry = _scanner.game_by_id(target) if _scanner != null else null
+				if game == null:
+					_pm1_fail("the scanner holds no game %s" % target)
+					_finish_pinemhi1_smoke()
+					return
+				_on_launch_requested(game, game.resolve_default_build(_state))
+				_pm1_phase = 1
+				_pm1_wait = 0
+			else:
+				_pm1_wait += 1
+				if _pm1_wait > 7200:
+					_pm1_fail("the room never came up on the real boot path")
+					_finish_pinemhi1_smoke()
+		1:
+			_pm1_wait += 1
+			if _room != null and _room._marquee_up and _room._marquee != null and _room._marquee_t > 2.0:
+				_pm1_samples.append(_room._marquee.scale.x)
+				if _pm1_samples.size() >= 45:
+					_pm1_judge(target)
+					_finish_pinemhi1_smoke()
+			elif _pm1_wait > 1800:
+				_pm1_fail("the marquee for %s never stood settled (up=%s)" % [target, str(_room != null and _room._marquee_up)])
+				_finish_pinemhi1_smoke()
+
+
+func _pm1_judge(target: String) -> void:
+	var want: Dictionary = {}
+	match target:
+		"lkSumsrF":
+			want = {"top": "1993", "bottom": "Mark Ritchie", "facts": [
+				"Designer: Mark Ritchie, Doug Watson", "Art: Doug Watson",
+				"Music: Chris Granner", "Software: Brian Eddy", "Units produced: 12,716"]}
+		"1vJ_ZQYe":
+			want = {"top": "2021", "bottom": "Dan Langlois", "facts": ["Designer: Dan Langlois"]}
+	if want.is_empty():
+		_pm1_fail("no expectations stand for target %s" % target)
+		return
+	var lines: Array[String] = _room.marquee_text()
+	_pm1_expect(lines.size() == 2 and lines[0] == str(want["top"]) and lines[1] == str(want["bottom"]),
+		"PINEMHI1 marquee: %s's headline stands ('%s' / '%s')" % [target, lines[0] if lines.size() > 0 else "<none>", lines[1] if lines.size() > 1 else "<none>"])
+	var got_facts: Array[String] = _room.marquee_fact_text()
+	var want_facts: Array = want["facts"] as Array
+	var facts_ok: bool = got_facts.size() == want_facts.size()
+	if facts_ok:
+		for i: int in range(want_facts.size()):
+			if got_facts[i] != str(want_facts[i]):
+				facts_ok = false
+	_pm1_expect(facts_ok,
+		"PINEMHI1 marquee: %s's fact lines stand under the headline - IPDB values first, db fallback, empties skipped, cap 5 (got %s)" % [target, str(got_facts)])
+	var lo: float = 1e9
+	var hi: float = -1e9
+	for sv: Variant in _pm1_samples:
+		var s: float = float(sv)
+		lo = minf(lo, s)
+		hi = maxf(hi, s)
+	_pm1_expect(hi - lo < 0.0001 and absf(hi - 1.0) < 0.0001,
+		"PINEMHI1 marquee: the settled scale holds CONSTANT at 1.0 across %d frames - the font pulse is gone (min %.4f, max %.4f)" % [_pm1_samples.size(), lo, hi])
+	var grab: String = OS.get_environment("PVLDS_PINEMHI1_GRAB")
+	if grab != "":
+		var img: Image = get_viewport().get_texture().get_image()
+		img.save_png(grab)
+		print("  ok - pinemhi1 smoke: marquee grab saved to ", grab)
+
+
+func _pm1_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - pinemhi1 smoke: ", label)
+	else:
+		_pm1_fail(label)
+
+
+func _pm1_fail(label: String) -> void:
+	_pm1_failures += 1
+	printerr("  FAIL - pinemhi1 smoke: ", label)
+
+
+func _finish_pinemhi1_smoke() -> void:
+	_pm1_done = true
+	if _launch_service != null:
+		_launch_service.disarm("pinemhi1 smoke")
+	if _pm1_failures == 0:
+		print("PVLDS PINEMHI1 SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS PINEMHI1 SMOKE: FAIL (%d)" % _pm1_failures)
+		get_tree().quit(1)
+
+
+## BACKTRIM smoke (PINEMHI1 rewrite; keeps the
+## --pvlds-smoke-backtrim flag): the staged heal, judged
+## on the standing back itself - now for the back's new
+## tenant, the PINemHi row lists. Phase map: 0 the room
+## comes up on the real boot path; 1 the room's rows are
+## reset to virgin (empty map, stamp 0 - the state a
+## first flip meets before any push lands); 2/8
+## Beetlejuice is seated and flipped; 3 the pre-push back
+## is judged (the honest empty state, standing key ends
+## pmh0) and LEFT STANDING OPEN; 4 the normal push runs
+## (_push_wovp_data - the facts land, the plumbing's
+## proof) and a fabricated Beetlejuice row list is pushed
+## through the room's own door; 5 the standing back must
+## heal (re-rendered under a NEW key, pmh1, standing the
+## fabricated score row); 6 a repeat push of the same
+## rows moves nothing. Under PVLDS_BACKTRIM_NC=nostamp
+## the rows push never bumps, the heal never runs, and
+## phase 5 fails by name. (The CARDBACK-era NOTRIM
+## variant is retired: its surface - the trimmed grid -
+## no longer exists.)
 ## ------------------------------------------------------------
 ## Submit smoke (--pvlds-smoke-submit; the SUBMIT round).
 ## A desk-stay boot: scan the letter library, fetch the
@@ -16329,58 +16492,59 @@ func _drive_backtrim_smoke() -> void:
 					_bt_fail("the room never came up on the real boot path")
 					_finish_backtrim_smoke()
 		1:
-			_room.set_ipdb_facts({}, 0)
+			_room.set_pinemhi_rows({})
 			get_viewport().warp_mouse(Vector2(8.0, 592.0))
 			_bt_phase = 2
 			_bt_wait = 0
 			_bt_seat_tries = 0
 		2:
-			if _bt_seat_or_flip("lkSumsrF"):
+			if _bt_seat_or_flip("1vJ_ZQYe"):
 				_bt_phase = 3
 				_bt_wait = 0
 		3:
 			_bt_wait += 1
-			var idx3: int = _cb_visible_idx("lkSumsrF")
+			var idx3: int = _cb_visible_idx("1vJ_ZQYe")
 			if idx3 >= 0 and _room._flip_idx == idx3 and _room._flip_tex_real:
-				var kv3: Dictionary = _bt_spec_kv(idx3)
-				_bt_expect(int(kv3.get("__ipdb_rows", 0)) == 0 and not kv3.has("Units produced"),
-					"pre-push: Indy's first back stands with NO ipdb rows (the empty-facts render the field met)")
+				var rows3: Array = _bt_spec_rows(idx3)
+				_bt_expect(rows3.size() == 1 and str((rows3[0] as Dictionary).get("kind", "")) == "note" and str((rows3[0] as Dictionary).get("text", "")).contains("No PINemHi scores"),
+					"pre-push: Beetlejuice's first back stands the honest empty state (the no-rows render the boot window meets)")
 				_bt_tex_key = _room._flip_tex_key
-				_bt_expect(_bt_tex_key.ends_with("|ipdb0"),
-					"pre-push: the back rendered under the virgin stamp key ('%s')" % _bt_tex_key)
+				_bt_expect(_bt_tex_key.ends_with("|pmh0"),
+					"pre-push: the back rendered under the virgin rows-stamp key ('%s')" % _bt_tex_key)
 				_bt_phase = 4
 				_bt_wait = 0
 			elif _bt_wait > 1800:
-				_bt_fail("the pre-push flip of Indy never rendered a real back (flip_idx=%d, tex_key='%s')" % [_room._flip_idx, _room._flip_tex_key])
+				_bt_fail("the pre-push flip of Beetlejuice never rendered a real back (flip_idx=%d, tex_key='%s')" % [_room._flip_idx, _room._flip_tex_key])
 				_finish_backtrim_smoke()
 		4:
 			_push_wovp_data()
-			_bt_stamp = _ipdb_stamp
 			_bt_expect((_room._ipdb_facts as Dictionary).has("lkSumsrF"),
-				"the normal push landed: the room holds the seeded facts (Indy among them)")
+				"the normal push landed: the room still holds the seeded IPDB facts (the facts plumbing stands intact for the marquee)")
+			_bt_stamp = _room._pinemhi_stamp
+			_room.set_pinemhi_rows(_bt_fixture_rows())
 			_bt_phase = 5
 			_bt_wait = 0
 		5:
 			_bt_wait += 1
-			var idx5: int = _cb_visible_idx("lkSumsrF")
+			var idx5: int = _cb_visible_idx("1vJ_ZQYe")
 			if idx5 >= 0 and _room._flip_idx == idx5 and _room._flip_tex_real and _room._flip_tex_key != _bt_tex_key:
 				_bt_expect(true, "post-push: the standing back re-rendered under a new key ('%s' -> '%s')" % [_bt_tex_key, _room._flip_tex_key])
-				var kv5: Dictionary = _bt_spec_kv(idx5)
-				_bt_expect(str((kv5.get("Units produced", {}) as Dictionary).get("v", "")) == "12,716" and str((kv5.get("Units produced", {}) as Dictionary).get("src", "")) == "ipdb",
-					"post-push: Indy's healed back stands its IPDB production row (units '%s')" % str((kv5.get("Units produced", {}) as Dictionary).get("v", "<none>")))
-				_bt_expect(not kv5.has("Fun rating") and not kv5.has("Features") and not kv5.has("IPDB entry"),
-					"post-push: the trimmed rows stay cut (no Fun rating, Features or IPDB entry past Units produced)")
+				_bt_expect(_room._flip_tex_key.ends_with("|pmh1"),
+					"post-push: the healed key carries the bumped rows stamp (pmh%d -> pmh%d)" % [_bt_stamp, _room._pinemhi_stamp])
+				var rows5: Array = _bt_spec_rows(idx5)
+				_bt_expect(rows5.size() == 1 and str((rows5[0] as Dictionary).get("kind", "")) == "score" and str((rows5[0] as Dictionary).get("score_text", "")) == "42,424,240",
+					"post-push: Beetlejuice's healed back stands the pushed score row (got %s)" % str(rows5))
 				_bt_phase = 6
 				_bt_wait = 0
 			elif _bt_wait > 1800:
-				_bt_fail("the standing back never re-rendered after the facts push (stale key '%s' still stands, tex_key '%s') - the pre-push back is served forever" % [_bt_tex_key, _room._flip_tex_key])
+				_bt_fail("the standing back never re-rendered after the rows push (stale key '%s' still stands, tex_key '%s') - the pre-push back is served forever" % [_bt_tex_key, _room._flip_tex_key])
 				_finish_backtrim_smoke()
 		6:
 			var key6: String = _room._flip_tex_key
-			_push_wovp_data()
-			_push_wovp_data()
-			_bt_expect(_ipdb_stamp == _bt_stamp and _room._flip_tex_key == key6,
-				"no churn: repeat pushes of the unchanged facts move neither the stamp (%d -> %d) nor the standing back" % [_bt_stamp, _ipdb_stamp])
+			_room.set_pinemhi_rows(_bt_fixture_rows())
+			_room.set_pinemhi_rows(_bt_fixture_rows())
+			_bt_expect(_room._pinemhi_stamp == 1 and _room._flip_tex_key == key6,
+				"no churn: repeat pushes of the unchanged rows move neither the stamp (%d) nor the standing back" % _room._pinemhi_stamp)
 			_finish_backtrim_smoke()
 		8:
 			_bt_wait += 1
@@ -16421,23 +16585,21 @@ func _bt_seat_or_flip(game_id: String) -> bool:
 	return true
 
 
-## The spec the room draws for idx, as {row key: {v, src}}
-## + "__ipdb_rows" (the count of ipdb-dotted kv rows) -
-## judged off _card_back_spec, the exact spec
-## _render_card_back draws from.
-func _bt_spec_kv(idx: int) -> Dictionary:
+## The fabricated Beetlejuice row list the heal legs push
+## through the room's own door (the parsed-file shape
+## PinemhiScores.parse_file_rows produces).
+func _bt_fixture_rows() -> Dictionary:
+	return {"beetlejuice": {"title": "Beetlejuice", "rows": [
+		{"rank": 1, "score_text": "42.424.240", "score": 42424240, "player": "Kubrick", "when": "2026-09-01 20:00:00"},
+	]}}
+
+
+## The rows the room's back spec draws for idx - judged
+## off _card_back_spec, the exact spec _render_card_back
+## draws from.
+func _bt_spec_rows(idx: int) -> Array:
 	var spec: Dictionary = _room._card_back_spec(idx)
-	var kv: Dictionary = {}
-	var ipdb_rows: int = 0
-	for rv: Variant in (spec.get("rows", []) as Array):
-		var rd: Dictionary = rv as Dictionary
-		if str(rd.get("kind", "")) != "kv":
-			continue
-		kv[str(rd.get("k", ""))] = {"v": str(rd.get("v", "")), "src": str(rd.get("src", ""))}
-		if str(rd.get("src", "")) == "ipdb":
-			ipdb_rows += 1
-	kv["__ipdb_rows"] = ipdb_rows
-	return kv
+	return spec.get("rows", []) as Array
 
 
 func _bt_expect(cond: bool, label: String) -> void:
