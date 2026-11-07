@@ -10130,19 +10130,22 @@ func _nav_leg_bumpers_async() -> void:
 ## room's wall mode before this round (it served only the
 ## detail escape and the SETUP panel's close); the leg
 ## enters the Tournament view on the rail stop, feeds a real
-## B press through the pad poll, and judges the landing: the
-## library wall stands again and focus rests on the bar's
-## tournament stop, where his hand already is. A second B in
-## the library must do nothing. Under PVLDS_B_NC=nobexit
-## the press does nothing and the leg fails by name.
+## B press through the pad poll, and judges the landing.
+## FOCUSFIX rewrote the landing: focus seats on the library
+## wall's centred card (it used to rest on the bar's
+## tournament stop while the top-left card stood popped -
+## the drawn/real divergence Chris reported, 2026-11-06).
+## A second B in the library must do nothing. Under
+## PVLDS_B_NC=nobexit the press does nothing and the leg
+## fails by name.
 func _nav_leg_b_exit_async() -> void:
 	_room._handle_rail("tournament")
 	_nav_expect(_room.tournament_active(), "B exit: the TOURNAMENT stop raises the Tournament view")
 	await _nav_feed_button(JOY_BUTTON_B)
 	_nav_expect(not _room.tournament_active(),
 		"B exit: B in the Tournament view returns to Table Select")
-	_nav_expect(_nav_key_of(_room.focused_quad()) == "tournament",
-		"B exit: focus lands on the bar's tournament stop")
+	_nav_expect(_room.focused_quad() != null and _room.focused_quad() == _room._panels[_room.centre_index()],
+		"B exit: focus lands on the library wall's centred card")
 	await _nav_feed_button(JOY_BUTTON_B)
 	_nav_expect(not _room.tournament_active() and _room._mode == "wall",
 		"B exit: B in Table Select does nothing")
