@@ -290,6 +290,7 @@ var _bs_started: bool = false ## the backstep legs run async (real pad events + 
 var _bs_done: bool = false
 var _bs_exit_fired: bool = false ## the exit probe's witness for the whole backstep run (the quit handler is swapped out)
 var _bs_probe: Callable = Callable() ## the probe standing on exit_requested for the backstep run
+var _bs_held_leg: bool = false ## --pvlds-smoke-backstep-held: B is pinned pressed from _ready, before the room's first poll (the phantom shape)
 var _input_refresh_fired: bool = false ## the GRADFIX16 REFRESH probe's witness (tournament_refresh_requested caught by a test lambda)
 var _smoke_nav: bool = false ## --pvlds-smoke-nav: the focus graph + seated wall clearance contract
 var _nav_smoke_phase: int = 0
@@ -753,6 +754,9 @@ func _ready() -> void:
 		_smoke_focusfix = true
 	if user_args.has("--pvlds-smoke-backstep"):
 		_smoke_backstep = true
+	if user_args.has("--pvlds-smoke-backstep-held"):
+		_smoke_backstep = true
+		_bs_held_leg = true
 	if user_args.has("--pvlds-smoke-motion"):
 		_smoke_motion = true
 	if user_args.has("--pvlds-smoke-swingprobe"):
@@ -989,6 +993,18 @@ func _ready() -> void:
 		pin.pressed = true
 		Input.parse_input_event(pin)
 		print("  info - dpadexit smoke: held leg - D-pad Right pinned from boot")
+	if _bs_held_leg:
+		# BACKSTEP held leg: pin B pressed NOW, in _ready -
+		# the same phantom shape as the dpadexit pin above,
+		# for B's mirrored arming: the button reads held from
+		# the room instance's birth, so no exit may come of
+		# it until a release is witnessed.
+		var bpin: InputEventJoypadButton = InputEventJoypadButton.new()
+		bpin.device = 0
+		bpin.button_index = JOY_BUTTON_B
+		bpin.pressed = true
+		Input.parse_input_event(bpin)
+		print("  info - backstep smoke: held leg - B pinned from boot")
 	# NOTE: no XR here. Desk work never touches OpenXR - initializing
 	# it at boot is what popped the "OpenXR was requested but failed
 	# to start" alert on flat launches with no runtime up (M2 papercut
@@ -19553,10 +19569,12 @@ func _drive_dpadexit_held() -> void:
 ##     survives its own proof);
 ##   - SORT is not a view: BACK from a sorted ALL wall
 ##     exits, it does not step;
-##   - B carries the baseline-release arming law: a press
-##     edge that arrives before this room instance has
-##     witnessed a release fires nothing; after a witnessed
-##     release the same press from ALL exits.
+##   - B carries the baseline-release arming law, judged
+##     by the held variant (--pvlds-smoke-backstep-held):
+##     B pinned pressed from _ready, before the room
+##     instance's first poll, fires nothing across the
+##     pinned stretch; after a witnessed release the same
+##     press from ALL exits (the dpadexit held pattern).
 ## The walk arranges its own state through the room's store
 ## (two favorites, two recents) and the rail's own handlers,
 ## in a fresh user-data home where every fixture file is
@@ -19586,7 +19604,10 @@ func _drive_backstep_smoke() -> void:
 				_bs_finish_smoke()
 			elif not _bs_started and _room != null and _room.wall_ready and _bs_wait >= 4:
 				_bs_started = true
-				_bs_legs_async()
+				if _bs_held_leg:
+					_bs_held_legs_async()
+				else:
+					_bs_legs_async()
 
 
 func _bs_expect(cond: bool, label: String) -> void:
@@ -19727,21 +19748,38 @@ func _bs_legs_async() -> void:
 	_bs_exit_fired = false
 	await _bs_feed_button(JOY_BUTTON_B)
 	_bs_expect(_bs_exit_fired, "all b: BACK from ALL exits")
-	# ---- B's arming: an edge before any witnessed release
-	# fires nothing; after a release, the press counts. ----
-	_room._joy_b_armed = false
-	_room._joy_prev_b = false
+	# ---- B's arming is NOT judged here: it is the held
+	# variant's whole boot (--pvlds-smoke-backstep-held,
+	# B pinned from _ready - the dpadexit pattern). An
+	# in-boot state surgery cannot reproduce the phantom:
+	# a released poll re-arms B before any injected press
+	# lands, which the first run of this leg proved by
+	# failing. ----
+	_bs_done = true
+
+
+## The held variant's legs: B has read pressed since
+## before this room instance existed (pinned in _ready).
+## The probe stands before anything can fire - while the
+## button sits pinned and unarmed, nothing CAN fire - and
+## the driver surviving the pinned stretch with the probe
+## silent IS the assertion. Then the release is witnessed
+## and a fresh press from the ALL wall must exit.
+func _bs_held_legs_async() -> void:
+	_bs_probe = func() -> void: _bs_exit_fired = true
+	_room.exit_requested.disconnect(Callable(self, "_on_exit_requested"))
+	_room.exit_requested.connect(_bs_probe)
+	_room._handle_rail("filter:all")
 	_bs_exit_fired = false
-	_bs_inject(JOY_BUTTON_B, true)
-	await _bs_wait_frames(12)
-	_bs_expect(not _bs_exit_fired,
-		"arming b: a B pressed before any witnessed release fires no exit")
+	await _bs_wait_frames(90)
+	_bs_expect(not _bs_exit_fired and _bs_standing("all"),
+		"arming b held: a B pinned from before the room's first poll fires no exit")
 	_bs_inject(JOY_BUTTON_B, false)
-	await _bs_wait_frames(6)
+	await _bs_wait_frames(10)
 	_bs_exit_fired = false
 	await _bs_feed_button(JOY_BUTTON_B)
 	_bs_expect(_bs_exit_fired,
-		"arming b: after a witnessed release, B from ALL exits")
+		"arming b held: after a witnessed release, B from ALL exits")
 	_bs_done = true
 
 
