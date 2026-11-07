@@ -2088,6 +2088,17 @@ func _collect_visible() -> void:
 ## bests it read from the player's own install (the room
 ## never touches the disk for this). A changed map re-seats
 ## the standing boards - their content keys carry the best.
+## SCOREMARK: the front mark's truth for one game - it
+## holds at least one of the player's own PINemHi Personal
+## rows in the map Main pushed (RoomSpecs.pinemhi_marked
+## carries the semantics + the NC seams). The front face
+## key's pmh segment and every front spec read this, so a
+## rows push re-names and re-renders exactly the fronts
+## whose mark state moved.
+func _has_pinemhi_score(game: GameEntry) -> bool:
+	return RoomSpecs.pinemhi_marked(game, _pinemhi_rows, _pinemhi_best_rows)
+
+
 func set_pinemhi_bests(bests: Dictionary) -> void:
 	if bests == _pinemhi_bests:
 		return
@@ -2121,6 +2132,15 @@ func set_pinemhi_rows(rows_map: Dictionary) -> void:
 	if _flip_idx >= 0:
 		_flip_key = _card_back_key(_flip_idx)
 		_refresh_card_back()
+	# SCOREMARK: the same push moves the FRONT marks - a
+	# game that gained its first Personal row (or lost its
+	# last) re-names its front through the key's pmh
+	# segment, so re-ask the standing faces; the fill's own
+	# key check leaves unchanged faces unrendered, exactly
+	# the backs' no-churn discipline, and its state-row
+	# guard keeps tournie boards out of it.
+	for idx: int in range(_panels.size()):
+		_fill_one_face(idx, _gen)
 
 
 ## BACKFINE: Main's push of the PINemHi TOP10_Best full row
@@ -4966,7 +4986,7 @@ func _face_key_for(idx: int) -> String:
 	var art_file: String = _face_path_for(game)
 	var fav: bool = _store != null and _store.is_favorite(game.game_id)
 	var pup: bool = game.is_pup_tagged()
-	return game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+	return game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "") + ("|pmh" if _has_pinemhi_score(game) else "")
 
 
 ## Whether a panel's standing face is honestly the face its
@@ -4990,7 +5010,7 @@ func _face_key_for_memo(idx: int) -> String:
 	var art_file: String = _face_path_memoized(game)
 	var fav: bool = _store != null and _store.is_favorite(game.game_id)
 	var pup: bool = game.is_pup_tagged()
-	return game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+	return game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "") + ("|pmh" if _has_pinemhi_score(game) else "")
 
 
 func _face_path_memoized(game: GameEntry) -> String:
@@ -5464,7 +5484,7 @@ func _compose_ahead_one(idx: int, gen: int, centre_col0: int) -> int:
 	_face_path_memo[game.game_id] = art_file # a fresh probe, like every fill writes
 	var fav: bool = _store != null and _store.is_favorite(game.game_id)
 	var pup: bool = game.is_pup_tagged()
-	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "") + ("|pmh" if _has_pinemhi_score(game) else "")
 	var existing: Array = _face_cache_get(fkey)
 	if not existing.is_empty() and _face_cache_serves(existing, art_file):
 		return 0 # already composed under this key, provenance honest
@@ -5502,7 +5522,7 @@ func _compose_ahead_one(idx: int, gen: int, centre_col0: int) -> int:
 			return 0
 		art_aspect = float(art_tex.get_width()) / float(art_tex.get_height())
 		var tel_render_t0: int = Time.get_ticks_usec()
-		tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store, false), _panel_face_px)
+		tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store, false, _has_pinemhi_score(game)), _panel_face_px)
 		render_ms = float(Time.get_ticks_usec() - tel_render_t0) / 1000.0
 		if gen != _gen:
 			return 1 # a render was spent; its result belongs to a dead generation
@@ -5515,7 +5535,7 @@ func _compose_ahead_one(idx: int, gen: int, centre_col0: int) -> int:
 	else:
 		branch = "styled"
 		var tel_styled_t0: int = Time.get_ticks_usec()
-		tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), _panel_face_px)
+		tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store, _has_pinemhi_score(game)), _panel_face_px)
 		render_ms = float(Time.get_ticks_usec() - tel_styled_t0) / 1000.0
 		if gen != _gen:
 			return 1
@@ -5560,7 +5580,7 @@ func compose_ahead_stats() -> Dictionary:
 		var art_file: String = _face_path_memoized(game)
 		var fav: bool = _store != null and _store.is_favorite(game.game_id)
 		var pup: bool = game.is_pup_tagged()
-		var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+		var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "") + ("|pmh" if _has_pinemhi_score(game) else "")
 		var ent: Array = _face_cache_get(fkey)
 		if not ent.is_empty() and _face_cache_serves(ent, art_file):
 			ready += 1
@@ -5685,7 +5705,7 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 	_face_path_memo[game.game_id] = art_file # every fill refreshes the pipeline filter's memo from its own fresh probe
 	var fav: bool = _store != null and _store.is_favorite(game.game_id)
 	var pup: bool = game.is_pup_tagged()
-	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "") + ("|pmh" if _has_pinemhi_score(game) else "")
 	if str(_panel_face_key.get(game.game_id, "")) == fkey:
 		# PHANTOMFIX Layer 1: the stamp alone no longer
 		# vouches for the face - a styled fallback cached
@@ -5762,7 +5782,7 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 			if art_tex != null:
 				art_aspect = float(art_tex.get_width()) / float(art_tex.get_height())
 				var tel_render_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry
-				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store, false), _panel_face_px)
+				tex = await _factory.render_texture(RoomSpecs.art_spec(game, art_tex, _store, false, _has_pinemhi_score(game)), _panel_face_px)
 				_art_apply_render_ms = float(Time.get_ticks_usec() - tel_render_t0) / 1000.0 ## GRADFIX17 telemetry
 				from_art = tex != null
 				if from_art and _blackface_nc(game):
@@ -5787,7 +5807,7 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 		if tex == null:
 			_art_apply_branch = "styled" if _art_apply_branch == "" else _art_apply_branch + "+styled" ## GRADFIX17 telemetry
 			var tel_styled_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry
-			tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store), _panel_face_px)
+			tex = await _factory.render_texture(RoomSpecs.panel_spec(game, _store, _has_pinemhi_score(game)), _panel_face_px)
 			_art_apply_render_ms += float(Time.get_ticks_usec() - tel_styled_t0) / 1000.0 ## GRADFIX17 telemetry
 			from_art = false
 		if gen != _gen:
@@ -5959,7 +5979,7 @@ func _heal_panel_faces() -> void:
 		var art_file: String = _face_path_for(game)
 		var fav: bool = _store != null and _store.is_favorite(game.game_id)
 		var pup: bool = game.is_pup_tagged()
-		var want_key: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+		var want_key: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "") + ("|pmh" if _has_pinemhi_score(game) else "")
 		if stamped != want_key:
 			# GRADFIX17 (item 1): correct the pipeline
 			# filter's memo from this fresh probe before
@@ -6077,7 +6097,7 @@ func _guarantee_audit() -> void:
 		var art_file: String = _face_path_for(game)
 		var fav: bool = _store != null and _store.is_favorite(game.game_id)
 		var pup: bool = game.is_pup_tagged()
-		var want_key: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "")
+		var want_key: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "") + ("|pmh" if _has_pinemhi_score(game) else "")
 		if stamped != want_key:
 			missing += 1
 			actionable = true
@@ -8466,6 +8486,7 @@ func _open_detail(game: GameEntry) -> void:
 		var sq: ClickableQuad = _strip_quads[skey] as ClickableQuad
 		if sq != null:
 			sq.pick_enabled = false
+	_detail.set_scoremark(_has_pinemhi_score(game))
 	_detail.show_game(game)
 	_set_focused(null)
 	_refresh_focusables()
@@ -10117,6 +10138,12 @@ func _power_subject_cached(game: GameEntry) -> Texture2D:
 	var arr: Array = ent as Array
 	if arr.size() >= 3 and bool(arr[1]) != _power_fav_key(game):
 		return null
+	# SCOREMARK: the medallion rides the power faces on the
+	# favourite's exact discipline (the GRADFIX12 item 2 law
+	# above) - an entry composed under the other mark state
+	# is stale the same way.
+	if arr.size() < 4 or bool(arr[3]) != _has_pinemhi_score(game):
+		return null
 	return arr[arr.size() - 1] as Texture2D
 
 
@@ -10132,6 +10159,12 @@ func _power_on_cached(game: GameEntry) -> Texture2D:
 		return null
 	var arr: Array = ent as Array
 	if arr.size() >= 3 and bool(arr[1]) != _power_fav_key(game):
+		return null
+	# SCOREMARK: the medallion rides the power faces on the
+	# favourite's exact discipline (the GRADFIX12 item 2 law
+	# above) - an entry composed under the other mark state
+	# is stale the same way.
+	if arr.size() < 4 or bool(arr[3]) != _has_pinemhi_score(game):
 		return null
 	return arr[arr.size() - 1] as Texture2D
 
@@ -10149,13 +10182,14 @@ func _prepare_power_on(panel: ClickableQuad, game: GameEntry) -> void:
 	_power_on_inflight[game.game_id] = true
 	var gen: int = _gen
 	var fav: bool = _power_fav_key(game)
+	var pmh: bool = _has_pinemhi_score(game)
 	var tex: Texture2D = null
 	var src: Texture2D = TextureFactory.load_art_texture(on_path)
 	if src != null:
-		tex = await _factory.render_texture(RoomSpecs.art_spec(game, src, _store, false), _panel_face_px)
+		tex = await _factory.render_texture(RoomSpecs.art_spec(game, src, _store, false, pmh), _panel_face_px)
 	_power_on_inflight.erase(game.game_id)
-	if tex != null and _power_fav_key(game) == fav:
-		_power_on_cache[game.game_id] = [on_path, fav, tex]
+	if tex != null and _power_fav_key(game) == fav and _has_pinemhi_score(game) == pmh:
+		_power_on_cache[game.game_id] = [on_path, fav, tex, pmh]
 	if gen != _gen:
 		return
 	if tex != null and _power_panel == null and _power_candidate == panel and panel != _power_missed:
@@ -10188,17 +10222,18 @@ func _prepare_power_subject(panel: ClickableQuad, game: GameEntry) -> void:
 	if path != "":
 		_power_prefetch_asked.erase(game.game_id)
 	var fav: bool = _power_fav_key(game)
+	var pmh: bool = _has_pinemhi_score(game)
 	var tex: Texture2D = null
 	if path != "":
 		var src: Texture2D = TextureFactory.load_art_texture(path)
 		if src != null:
-			tex = await _factory.render_texture(RoomSpecs.art_spec(game, src, _store, false), _panel_face_px)
+			tex = await _factory.render_texture(RoomSpecs.art_spec(game, src, _store, false, pmh), _panel_face_px)
 	_power_subject_inflight.erase(game.game_id)
-	if tex != null and _power_fav_key(game) == fav:
+	if tex != null and _power_fav_key(game) == fav and _has_pinemhi_score(game) == pmh:
 		# GRADFIX12 item 2: the cache entry carries the
 		# favourite state it was composed under (a toggle
 		# mid-render must not let a stale badge state land).
-		_power_subject_cache[game.game_id] = [path, fav, tex]
+		_power_subject_cache[game.game_id] = [path, fav, tex, pmh]
 	if gen != _gen:
 		return
 	if tex != null and _power_panel == null and _power_candidate == panel and panel != _power_missed:

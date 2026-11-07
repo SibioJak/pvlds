@@ -133,6 +133,8 @@ var _art_fav: PanelContainer
 var _art_fav_label: Label
 var _art_pup: PanelContainer ## art kind (GRADFIX6): the PuP badge, top-left (the star's opposite corner)
 var _art_pup_label: Label
+var _art_score: PanelContainer ## art kind (SCOREMARK): the PINemHi medallion, bottom-left (the free corner: star top-right, PuP top-left, the nameplate's plate rides the lower-middle band). A disc in the game's OWN back-band colour (RoomSpecs.manufacturer_color - the colour the flipped back's PINEMHI band wears) with a white "#1" cut in it: the band in miniature. Stands only when the game holds the player's own PINemHi Personal rows.
+var _art_score_label: Label
 var _label_stock: Array = [] ## [label, autowrap, max_lines, overrun] per text label, for per-spec restore
 
 
@@ -237,6 +239,23 @@ func _init() -> void:
 	_art_pup.visible = false
 	add_child(_art_pup)
 
+	_art_score = PanelContainer.new()
+	_art_score.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_art_score.offset_left = 14.0
+	_art_score.offset_top = -68.0
+	_art_score.offset_right = 68.0
+	_art_score.offset_bottom = -14.0
+	_art_score.add_theme_stylebox_override("panel", _score_box(Color(0.30, 0.34, 0.60)))
+	_art_score_label = Label.new()
+	_art_score_label.text = "#1"
+	_art_score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_art_score_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_art_score_label.add_theme_font_size_override("font_size", 25)
+	_art_score_label.add_theme_color_override("font_color", Color(0.98, 0.98, 1.0))
+	_art_score.add_child(_art_score_label)
+	_art_score.visible = false
+	add_child(_art_score)
+
 	_margin = MarginContainer.new()
 	_margin.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_margin.add_theme_constant_override("margin_left", 26)
@@ -312,6 +331,25 @@ func _box(color: Color, radius: int) -> StyleBoxFlat:
 	sb.content_margin_right = 14
 	sb.content_margin_top = 6
 	sb.content_margin_bottom = 6
+	return sb
+
+
+## The SCOREMARK medallion's style: a full disc (corner
+## radius = half the 54 px seat) in the game's back-band
+## colour, no content margins - the "#1" glyph centres on
+## the plaque. Rebuilt per spec in apply_spec, like the
+## band's box: one CardFace serves every render.
+func _score_box(color: Color) -> StyleBoxFlat:
+	var sb: StyleBoxFlat = StyleBoxFlat.new()
+	sb.bg_color = color
+	sb.corner_radius_top_left = 27
+	sb.corner_radius_top_right = 27
+	sb.corner_radius_bottom_left = 27
+	sb.corner_radius_bottom_right = 27
+	sb.content_margin_left = 0
+	sb.content_margin_right = 0
+	sb.content_margin_top = 0
+	sb.content_margin_bottom = 0
 	return sb
 
 
@@ -449,6 +487,13 @@ func apply_spec(spec: Dictionary) -> void:
 	_art_strip.visible = kind == "art" and bool(spec.get("strip", true))
 	_art_fav.visible = kind == "art" and bool(spec.get("favorite", false))
 	_art_pup.visible = kind == "art" and bool(spec.get("pup", false))
+	# SCOREMARK: the medallion stands on the same discipline
+	# (spec flag, art kind only), wearing the spec's band
+	# colour - rebuilt here because the colour is per-game.
+	_art_score.visible = kind == "art" and bool(spec.get("scoremark", false))
+	if _art_score.visible:
+		_art_score.add_theme_stylebox_override("panel",
+			_score_box(_color_of(spec, "scoremark_color", Color(0.30, 0.34, 0.60))))
 	_margin.visible = kind != "art"
 	if kind == "art":
 		var tex: Variant = spec.get("art_texture", null)
@@ -581,7 +626,13 @@ func apply_spec(spec: Dictionary) -> void:
 		for item: Variant in arr:
 			if item is Dictionary:
 				var cd: Dictionary = item
-				_chips_row.add_child(_make_chip(str(cd.get("text", "")), bool(cd.get("accent", false))))
+				# A chip may carry its own ground colour
+				# ("color": the SCOREMARK chip wears the
+				# game's back-band colour, white ink) -
+				# absent, the accent/plain grounds stand.
+				var chip_col: Variant = cd.get("color", null)
+				_chips_row.add_child(_make_chip(str(cd.get("text", "")), bool(cd.get("accent", false)),
+					chip_col if chip_col is Color else null))
 
 	# The board kind's rows: rebuilt per spec like the chips
 	# (one CardFace serves every render, so nothing may leak
@@ -1118,14 +1169,18 @@ func _discipline_label(l: Label, max_lines: int) -> void:
 		l.autowrap_mode = TextServer.AUTOWRAP_OFF
 
 
-func _make_chip(text: String, accent: bool) -> PanelContainer:
+func _make_chip(text: String, accent: bool, ground: Variant = null) -> PanelContainer:
 	var pc: PanelContainer = PanelContainer.new()
 	var col: Color = Color(0.55, 0.38, 0.08) if accent else Color(0.16, 0.16, 0.24)
+	var ink: Color = Color(0.97, 0.95, 0.9) if accent else Color(0.82, 0.84, 0.92)
+	if ground is Color:
+		col = ground
+		ink = Color(0.98, 0.98, 1.0)
 	pc.add_theme_stylebox_override("panel", _box(col, 8))
 	var l: Label = Label.new()
 	l.text = text
 	l.add_theme_font_size_override("font_size", 28)
-	l.add_theme_color_override("font_color", Color(0.97, 0.95, 0.9) if accent else Color(0.82, 0.84, 0.92))
+	l.add_theme_color_override("font_color", ink)
 	pc.add_child(l)
 	return pc
 

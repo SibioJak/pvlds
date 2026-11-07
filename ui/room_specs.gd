@@ -166,7 +166,7 @@ static func manufacturer_color(manufacturer: String) -> Color:
 const PUP_NOTE: String = "PuP pack — set PC display scale to 100%"
 
 
-static func panel_spec(game: GameEntry, store: StateStore) -> Dictionary:
+static func panel_spec(game: GameEntry, store: StateStore, scoremark: bool = false) -> Dictionary:
 	var chips: Array = []
 	if game.is_vr_tagged():
 		chips.append({"text": "VR", "accent": true})
@@ -176,6 +176,12 @@ static func panel_spec(game: GameEntry, store: StateStore) -> Dictionary:
 		chips.append({"text": "%d BUILDS" % game.build_count(), "accent": false})
 	if store != null and store.is_favorite(game.game_id):
 		chips.append({"text": "FAVORITE", "accent": true})
+	# SCOREMARK: the panel face's citizen of the front mark
+	# (the art face carries the medallion - see art_spec).
+	# The chip wears the game's back-band colour as its
+	# ground, so front and back speak one language.
+	if scoremark:
+		chips.append({"text": "PINEMHI BEST", "accent": false, "color": manufacturer_color(game.manufacturer)})
 	# The build/file line: the exact file Play would launch (the
 	# player's default build), as ONE ellipsized line - the wall is a
 	# browsing surface, and the full string lives in the detail view.
@@ -206,7 +212,7 @@ static func panel_spec(game: GameEntry, store: StateStore) -> Dictionary:
 	}
 
 
-static func art_spec(game: GameEntry, art_texture: Texture2D, store: StateStore, strip: bool = true) -> Dictionary:
+static func art_spec(game: GameEntry, art_texture: Texture2D, store: StateStore, strip: bool = true, scoremark: bool = false) -> Dictionary:
 	return {
 		"kind": "art",
 		"art_texture": art_texture,
@@ -226,6 +232,14 @@ static func art_spec(game: GameEntry, art_texture: Texture2D, store: StateStore,
 		# star (CardFace draws it), from the same one truth -
 		# the game's CURRENT build (GameEntry.is_pup_tagged).
 		"pup": game.is_pup_tagged(),
+		# The SCOREMARK (front mark): the game holds the
+		# player's own PINemHi Personal rows (pinemhi_marked);
+		# CardFace draws it as a medallion in the bottom-left
+		# corner wearing this colour - the game's own
+		# back-band colour, so the front mark and the flipped
+		# back's PINEMHI band are one colour.
+		"scoremark": scoremark,
+		"scoremark_color": manufacturer_color(game.manufacturer),
 	}
 
 
@@ -532,6 +546,23 @@ static var backtrim_nc: String = "" ## Main sets this from PVLDS_BACKTRIM_NC bef
 static var pinemhi1_nc: String = "" ## Main sets this from PVLDS_PINEMHI1_NC before any room exists (PINEMHI1 seams: oldgrid = the card back renders the retired Spec Sheet wing again, so the back legs fail by name; pulse = the loading marquee's font pulse returns, so the pulse leg fails by name)
 static var backfine_nc: String = "" ## Main sets this from PVLDS_BACKFINE_NC before any room exists (BACKFINE seams: dateback = the card back's personal rows carry the date again, so the no-date legs fail by name; ghostbest = the room seats a Best section for a game whose install holds no Best file, so the no-file-no-section legs fail by name)
 static var oneten_nc: String = "" ## Main sets this from PVLDS_ONETEN_NC before any room exists (ONETEN seams: allpersonal = the back's personal block renders every file row again, so the one-Kubrick legs fail by name; best1only = the Best section renders divider + #1 alone again, so the full-ten legs fail by name)
+static var scoremark_nc: String = "" ## Main sets this from PVLDS_SCOREMARK_NC before any room exists (SCOREMARK seams: bestkey = the front mark keys on the ONLINE Best rows instead of the player's own Personal rows, so the Best-only-no-mark leg fails by name; ghostmark = the mark stands for every game, so the scoreless-no-mark legs fail by name)
+
+
+## SCOREMARK: the front mark's one truth - the game holds
+## at least one of the PLAYER'S OWN PINemHi Personal rows
+## (the same records map the card back reads, joined by the
+## same challenge_key). An ONLINE Best file alone earns NO
+## mark: that table still needs a scoring, which is the
+## mark's whole point. The records' "rows" ride pre-shaped
+## from PinemhiScores; an absent record or an empty row
+## list is no score.
+static func pinemhi_marked(game: GameEntry, personal: Dictionary, best: Dictionary) -> bool:
+	if scoremark_nc == "ghostmark":
+		return true
+	var map: Dictionary = best if scoremark_nc == "bestkey" else personal
+	var rec: Dictionary = map.get(PinemhiScores.challenge_key(game.title), {}) as Dictionary
+	return not (rec.get("rows", []) as Array).is_empty()
 
 static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}, submit_hint: bool = false) -> Dictionary:
 	var rows: Array = []

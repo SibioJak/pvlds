@@ -22,6 +22,7 @@ const MAX_ROWS: int = 6
 var _factory: TextureFactory
 var _store: StateStore
 var _game: GameEntry = null
+var _scoremark: bool = false ## SCOREMARK: the front mark's state for the opened game (set via set_scoremark before show_game)
 var _selected_path: String = ""
 var _once_path: String = ""
 var _gen: int = 0
@@ -40,6 +41,15 @@ func setup(factory: TextureFactory, store: StateStore) -> void:
 	_factory = factory
 	_store = store
 	visible = false
+
+
+## SCOREMARK: the room hands the front mark's state for
+## the game being opened (Room._has_pinemhi_score) before
+## show_game renders - the detail front inherits the
+## wall's marks exactly as it inherits the star and the
+## PuP badge (the spec builders carry all three).
+func set_scoremark(on: bool) -> void:
+	_scoremark = on
 
 
 func is_open() -> bool:
@@ -221,7 +231,7 @@ func _fill_textures(gen: int, game: GameEntry) -> void:
 		var art_tex: Texture2D = TextureFactory.load_art_texture(art_file)
 		if art_tex != null:
 			var full_tex: Texture2D = await _factory.render_texture(
-				RoomSpecs.art_spec(game, art_tex, _store), Vector2i(640, 800))
+				RoomSpecs.art_spec(game, art_tex, _store, true, _scoremark), Vector2i(640, 800))
 			# The WART content gate can return null here (the
 			# capture never painted): that is "not a face", so
 			# fall through to the title card below instead of
@@ -231,7 +241,7 @@ func _fill_textures(gen: int, game: GameEntry) -> void:
 				art_done = true
 	if not art_done:
 		var card_tex: Texture2D = await _factory.render_texture(
-			RoomSpecs.panel_spec(game, _store), Vector2i(640, 800))
+			RoomSpecs.panel_spec(game, _store, _scoremark), Vector2i(640, 800))
 		if gen == _gen and _big_quad != null:
 			_big_quad.set_texture(card_tex)
 	if gen != _gen:

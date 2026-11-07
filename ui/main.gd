@@ -326,6 +326,12 @@ var _pm1_phase: int = 0
 var _pm1_wait: int = 0
 var _pm1_failures: int = 0
 var _pm1_done: bool = false
+var _smoke_scoremark: bool = false ## --pvlds-smoke-scoremark: SCOREMARK round - boots the 6-game PINemHi fixture library through the normal path and judges the FRONT marks on the rendered faces: standing panel faces (PINEMHI BEST chip pixels), factory-rendered art faces (the medallion's pixels, wall + detail sizes), the detail view's inheritance, and a heal leg (a rows push raises a standing card's mark, another drops one); under PVLDS_SCOREMARK_NC=bestkey the Best-only game gains a mark and the semantic leg fails by name; under =ghostmark every game is marked and the scoreless legs fail by name
+var _sm_phase: int = 0
+var _sm_wait: int = 0
+var _sm_failures: int = 0
+var _sm_done: bool = false
+var _sm_judged: bool = false ## a judge coroutine is in flight (its legs land in _sm_failures when it sets this back)
 var _pm1_samples: Array = []
 var _smoke_submit: bool = false ## --pvlds-smoke-submit (SUBMIT round): the desk-stay submission smoke - scans the letter library, fetches the stub's boards, drives the desk's REAL submit section (picker, warning, photo attach, submit press) and reads the stub's request log as the wire's witness. Modes in PVLDS_SUBMIT_SMOKE_MODE: happy | noscore | badphoto | nothigher | shortkey | recorded | junk (SUBMIT2: the record field filled / filled with junk; PVLDS_SUBMIT_SCORE_TEXT carries the text, PVLDS_SUBMIT2_NC=wireleak must fail the wire-law leg by name)
 var _submit_mode: String = ""
@@ -718,6 +724,8 @@ func _ready() -> void:
 		_smoke_backtrim = true
 	if user_args.has("--pvlds-smoke-pinemhi1"):
 		_smoke_pinemhi1 = true
+	if user_args.has("--pvlds-smoke-scoremark"):
+		_smoke_scoremark = true
 	if user_args.has("--pvlds-smoke-submit"):
 		_smoke_submit = true
 		_submit_mode = OS.get_environment("PVLDS_SUBMIT_SMOKE_MODE")
@@ -851,6 +859,12 @@ func _ready() -> void:
 	# Same seam shape; replaces BESTLINE's fulllist seam,
 	# whose behaviour is the product now.
 	RoomSpecs.oneten_nc = OS.get_environment("PVLDS_ONETEN_NC")
+	# SCOREMARK's negative-control seams (PVLDS_SCOREMARK_NC=
+	# bestkey / ghostmark): the front mark keys on the
+	# online Best rows instead of the player's own Personal
+	# rows / stands for every game - the scoremark smoke's
+	# semantic legs fail by name. Same seam shape.
+	RoomSpecs.scoremark_nc = OS.get_environment("PVLDS_SCOREMARK_NC")
 	# GRADFIX8's tournie-border negative-control seam
 	# (PVLDS_GRADFIX8_NC=noborder): borders are never
 	# applied, so the census's tourney-border legs fail
@@ -968,7 +982,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return or _smoke_focusfix or _smoke_pinemhi1) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return or _smoke_focusfix or _smoke_pinemhi1 or _smoke_scoremark) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1167,6 +1181,8 @@ func _process(_delta: float) -> void:
 		_drive_backtrim_smoke()
 	if _smoke_pinemhi1:
 		_drive_pinemhi1_smoke()
+	if _smoke_scoremark:
+		_drive_scoremark_smoke()
 	if _smoke_submit:
 		_drive_submit_smoke()
 	if _smoke_roomsubmit:
@@ -16767,6 +16783,312 @@ func _finish_cardback_smoke() -> void:
 		get_tree().quit(1)
 
 
+## SCOREMARK smoke (--pvlds-smoke-scoremark): the front
+## marks, judged on the RENDERED faces of the 6-game
+## PINemHi fixture library (the ONETEN install: Apollo 13
+## Personal+Best, Congo Personal+Best+PuP, Beetlejuice
+## Personal+Best, Johnny Mnemonic Best ONLY, Indiana
+## Jones and Addams Family neither). The standing wall
+## faces are panel kind on this harness (no downloadable
+## art), so the mark's standing citizen is the PINEMHI
+## BEST chip - judged by its band-colour pixels on the
+## bound texture; the art citizen (the medallion) is
+## judged on faces rendered through the room's own
+## factory from the room's own flag, at wall size and at
+## the detail size; the detail view's inheritance is
+## judged on its standing big face; and a heal leg pushes
+## new rows at the standing room - a first score for Indy
+## raises its mark, Apollo's rows leaving drops its mark,
+## no rescan anywhere. Under PVLDS_SCOREMARK_NC=bestkey
+## the flag keys on the Best rows, so Johnny gains a mark
+## and the semantic legs fail by name; under =ghostmark
+## every game is marked and the scoreless legs fail.
+const SM_TARGETS: Dictionary = {
+	"dhgyex0l": true, # Apollo 13 - Personal (the real file) + Best
+	"0-GeiE03": true, # Congo - Personal + Best, PuP
+	"1vJ_ZQYe": true, # Beetlejuice - Personal (a full 10) + Best
+	"-SbeVjPA": false, # Johnny Mnemonic - a Best file ONLY: NO mark (the semantic leg)
+	"lkSumsrF": false, # Indiana Jones - no PINemHi files at all
+	"aT_GONvw": false, # The Addams Family - no PINemHi files at all
+}
+
+
+func _sm_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - scoremark smoke: ", label)
+	else:
+		_sm_failures += 1
+		printerr("FAIL - scoremark smoke: ", label)
+
+
+func _sm_game(game_id: String) -> GameEntry:
+	if _room == null:
+		return null
+	for gv: Variant in _room._visible_games:
+		var ge: GameEntry = gv as GameEntry
+		if ge != null and ge.game_id == game_id:
+			return ge
+	return null
+
+
+func _sm_visible_idx(game_id: String) -> int:
+	if _room == null:
+		return -1
+	for i: int in range(_room._visible_games.size()):
+		if (_room._visible_games[i] as GameEntry).game_id == game_id:
+			return i
+	return -1
+
+
+func _sm_near(c: Color, target: Color, tol: float) -> bool:
+	return absf(c.r - target.r) <= tol and absf(c.g - target.g) <= tol \
+		and absf(c.b - target.b) <= tol and c.a >= 0.9
+
+
+## The longest horizontal run of near-target pixels in a
+## row band of the image - a chip's ground is one flat run.
+func _sm_max_run(img: Image, y0: int, y1: int, target: Color, tol: float) -> int:
+	var best: int = 0
+	var w: int = img.get_width()
+	for y: int in range(y0, mini(y1, img.get_height())):
+		var run: int = 0
+		for x: int in range(w):
+			if _sm_near(img.get_pixel(x, y), target, tol):
+				run += 1
+				best = maxi(best, run)
+			else:
+				run = 0
+	return best
+
+
+func _sm_count_in(img: Image, rect: Rect2i, target: Color, tol: float) -> int:
+	var n: int = 0
+	for y: int in range(rect.position.y, mini(rect.end.y, img.get_height())):
+		for x: int in range(rect.position.x, mini(rect.end.x, img.get_width())):
+			if _sm_near(img.get_pixel(x, y), target, tol):
+				n += 1
+	return n
+
+
+## One standing wall face: its face key's pmh segment and
+## its rendered chip, judged against the fixture truth.
+func _sm_judge_standing(game_id: String, marked: bool) -> void:
+	var game: GameEntry = _sm_game(game_id)
+	var idx: int = _sm_visible_idx(game_id)
+	if game == null or idx < 0:
+		_sm_expect(false, "fixture game %s never stood on the wall" % game_id)
+		return
+	var key: String = str(_room._panel_face_key.get(game_id, ""))
+	_sm_expect(key.ends_with("|pmh") == marked,
+		"the standing face key of %s %s the pmh segment (key '%s')" % [game.title, "carries" if marked else "carries NO", key])
+	var tex: Texture2D = (_room._panels[idx] as ClickableQuad).current_texture()
+	var img: Image = tex.get_image() if tex != null else null
+	_sm_expect(img != null and not img.is_empty(), "the standing face of %s reads as an image" % game.title)
+	if img == null or img.is_empty():
+		return
+	# The chips band (below the maker band, above the
+	# file line): the PINEMHI BEST chip's ground is the
+	# game's band colour - one flat run when it stands.
+	var run: int = _sm_max_run(img, 95, 430, RoomSpecs.manufacturer_color(game.manufacturer), 0.03)
+	if marked:
+		_sm_expect(run >= 40, "%s: the PINEMHI BEST chip stands on the rendered standing face (band-colour run %d px)" % [game.title, run])
+	else:
+		_sm_expect(run < 40, "%s: NO PINEMHI chip on the rendered standing face (band-colour run %d px)" % [game.title, run])
+
+
+## The art citizen: each fixture game's front rendered
+## through the room's factory from the room's own flag
+## (Room._has_pinemhi_score - the production data path),
+## at the wall size (strip suppressed) and at the detail
+## size (strip standing). The medallion's disc + glyph
+## pixels judge it; the renders land in the grabs dir as
+## the close faces.
+func _sm_judge_art() -> void:
+	var art_img: Image = Image.create(496, 864, false, Image.FORMAT_RGBA8)
+	art_img.fill(Color(0.32, 0.30, 0.27))
+	art_img.fill_rect(Rect2i(0, 0, 496, 300), Color(0.45, 0.42, 0.38))
+	art_img.fill_rect(Rect2i(0, 560, 496, 304), Color(0.22, 0.20, 0.24))
+	var art_tex: Texture2D = ImageTexture.create_from_image(art_img)
+	var grab_dir: String = OS.get_environment("PVLDS_SCOREMARK_GRABS")
+	for game_id: Variant in SM_TARGETS.keys():
+		var gid: String = str(game_id)
+		var game: GameEntry = _sm_game(gid)
+		if game == null:
+			_sm_expect(false, "art face: fixture game %s never stood on the wall" % gid)
+			continue
+		var marked: bool = bool(SM_TARGETS[gid])
+		var col: Color = RoomSpecs.manufacturer_color(game.manufacturer)
+		var flag: bool = _room._has_pinemhi_score(game)
+		_sm_expect(flag == marked, "art face: the room's mark flag for %s reads %s" % [game.title, str(marked)])
+		var spec: Dictionary = RoomSpecs.art_spec(game, art_tex, _room._store, false, flag)
+		var tex: Texture2D = await _room._factory.render_texture(spec, Vector2i(496, 864))
+		_sm_expect(tex != null, "art face: %s renders at wall size" % game.title)
+		if tex != null:
+			var img: Image = tex.get_image()
+			var disc: int = _sm_count_in(img, Rect2i(4, 786, 74, 72), col, 0.03)
+			var glyph: int = _sm_count_in(img, Rect2i(18, 802, 40, 40), Color(0.98, 0.98, 1.0), 0.06)
+			if marked:
+				_sm_expect(disc >= 1000 and glyph >= 60,
+					"art face: %s carries the medallion in its band colour (%d disc px, %d glyph px)" % [game.title, disc, glyph])
+			else:
+				_sm_expect(disc < 40 and glyph == 0,
+					"art face: %s carries NO medallion (%d disc px, %d glyph px)" % [game.title, disc, glyph])
+			if grab_dir != "":
+				img.save_png(grab_dir.path_join("face_" + gid + ".png"))
+		var dspec: Dictionary = RoomSpecs.art_spec(game, art_tex, _room._store, true, flag)
+		var dtex: Texture2D = await _room._factory.render_texture(dspec, Vector2i(640, 800))
+		_sm_expect(dtex != null, "detail-size art face: %s renders" % game.title)
+		if dtex != null:
+			var dimg: Image = dtex.get_image()
+			var ddisc: int = _sm_count_in(dimg, Rect2i(4, 722, 74, 72), col, 0.03)
+			if marked:
+				_sm_expect(ddisc >= 1000, "detail-size art face: %s carries the medallion (%d disc px)" % [game.title, ddisc])
+			else:
+				_sm_expect(ddisc < 40, "detail-size art face: %s carries NO medallion (%d disc px)" % [game.title, ddisc])
+	_sm_judged = true
+
+
+## The detail view's inheritance: open two games through
+## the room's own door and judge the standing big face
+## (either citizen counts - the flag's wiring is asserted
+## beside the pixels).
+func _sm_judge_detail() -> void:
+	for game_id: String in ["dhgyex0l", "-SbeVjPA"]:
+		var game: GameEntry = _sm_game(game_id)
+		if game == null:
+			_sm_expect(false, "detail: fixture game %s never stood on the wall" % game_id)
+			continue
+		var marked: bool = bool(SM_TARGETS[game_id])
+		_room._open_detail(game)
+		_sm_expect(_room._detail._scoremark == marked,
+			"detail: the room handed the detail view the mark state %s for %s" % [str(marked), game.title])
+		var first_tex: Texture2D = null
+		var big: Texture2D = null
+		for i: int in range(1200):
+			await get_tree().process_frame
+			var q: ClickableQuad = _room._detail._big_quad as ClickableQuad
+			if q == null:
+				continue
+			var t: Texture2D = q.current_texture()
+			if first_tex == null:
+				first_tex = t
+			elif t != null and t != first_tex and t.get_width() == 640:
+				big = t
+				break
+		_sm_expect(big != null, "detail: the big face for %s rendered" % game.title)
+		if big != null:
+			# Let the render settle past the swap frame.
+			for j: int in range(30):
+				await get_tree().process_frame
+			var settled: Texture2D = (_room._detail._big_quad as ClickableQuad).current_texture()
+			var img: Image = (settled if settled != null else big).get_image()
+			var col: Color = RoomSpecs.manufacturer_color(game.manufacturer)
+			var run: int = _sm_max_run(img, 95, 430, col, 0.03)
+			var disc: int = _sm_count_in(img, Rect2i(4, 722, 74, 72), col, 0.03)
+			if marked:
+				_sm_expect(run >= 40 or disc >= 1000,
+					"detail: the detail view's front for %s carries the mark (chip run %d px, disc %d px)" % [game.title, run, disc])
+			else:
+				_sm_expect(run < 40 and disc < 40,
+					"detail: the detail view's front for %s carries NO mark (chip run %d px, disc %d px)" % [game.title, run, disc])
+			var grab_dir: String = OS.get_environment("PVLDS_SCOREMARK_GRABS")
+			if grab_dir != "":
+				img.save_png(grab_dir.path_join("detail_" + game_id + ".png"))
+	_room._detail.handle_escape()
+	_sm_judged = true
+
+
+func _drive_scoremark_smoke() -> void:
+	match _sm_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and _room._visible_games.size() >= SM_TARGETS.size():
+				# Park the harness pointer off the wall (the
+				# cardback driver's seat discipline).
+				get_viewport().warp_mouse(Vector2(8.0, 592.0))
+				_sm_phase = 1
+				_sm_wait = 0
+			else:
+				_sm_wait += 1
+				if _sm_wait > 7200:
+					_sm_expect(false, "the room never came up on the real boot path")
+					_finish_scoremark_smoke()
+		1:
+			for game_id: Variant in SM_TARGETS.keys():
+				_sm_judge_standing(str(game_id), bool(SM_TARGETS[game_id]))
+			_sm_judged = false
+			_sm_judge_art()
+			_sm_phase = 2
+			_sm_wait = 0
+		2:
+			_sm_wait += 1
+			if _sm_judged:
+				var grab_dir: String = OS.get_environment("PVLDS_SCOREMARK_GRABS")
+				if grab_dir != "":
+					var wimg: Image = get_viewport().get_texture().get_image()
+					wimg.save_png(grab_dir.path_join("wall.png"))
+				_sm_judged = false
+				_sm_judge_detail()
+				_sm_phase = 3
+				_sm_wait = 0
+			elif _sm_wait > 3600:
+				_sm_expect(false, "the art-face judging never landed")
+				_finish_scoremark_smoke()
+		3:
+			_sm_wait += 1
+			if _sm_judged:
+				# The heal, first push: Indy's first score.
+				var indy: GameEntry = _sm_game("lkSumsrF")
+				var ikey: String = PinemhiScores.challenge_key(indy.title)
+				var pushed: Dictionary = _room._pinemhi_rows.duplicate()
+				pushed[ikey] = {"title": indy.title, "key": ikey, "rows": [
+					{"rank": 1, "score": 424242, "score_text": "424,242", "player": "Kubrick", "when": "2026-11-07 10:00:00"}]}
+				_room.set_pinemhi_rows(pushed)
+				_sm_phase = 4
+				_sm_wait = 0
+			elif _sm_wait > 3600:
+				_sm_expect(false, "the detail judging never landed")
+				_finish_scoremark_smoke()
+		4:
+			_sm_wait += 1
+			var ikey_now: String = str(_room._panel_face_key.get("lkSumsrF", ""))
+			if ikey_now.ends_with("|pmh"):
+				_sm_judge_standing("lkSumsrF", true)
+				_sm_expect(true, "heal: a rows push adding Indiana Jones's first score raised its standing mark without a rescan")
+				# The second push: Apollo's rows leave.
+				var apollo: GameEntry = _sm_game("dhgyex0l")
+				var akey: String = PinemhiScores.challenge_key(apollo.title)
+				var pushed2: Dictionary = _room._pinemhi_rows.duplicate()
+				pushed2.erase(akey)
+				_room.set_pinemhi_rows(pushed2)
+				_sm_phase = 5
+				_sm_wait = 0
+			elif _sm_wait > 1800:
+				_sm_expect(false, "heal: Indy's standing mark never rose after the rows push (key '%s')" % ikey_now)
+				_finish_scoremark_smoke()
+		5:
+			_sm_wait += 1
+			var akey_now: String = str(_room._panel_face_key.get("dhgyex0l", ""))
+			if not akey_now.ends_with("|pmh"):
+				_sm_judge_standing("dhgyex0l", false)
+				_sm_expect(true, "heal: a rows push removing Apollo 13's rows dropped its standing mark without a rescan")
+				_finish_scoremark_smoke()
+			elif _sm_wait > 1800:
+				_sm_expect(false, "heal: Apollo's standing mark never dropped after the rows push (key '%s')" % akey_now)
+				_finish_scoremark_smoke()
+
+
+func _finish_scoremark_smoke() -> void:
+	if _sm_done:
+		return
+	_sm_done = true
+	if _sm_failures == 0:
+		print("PVLDS SCOREMARK SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS SCOREMARK SMOKE: FAIL (%d)" % _sm_failures)
+		get_tree().quit(1)
+
+
 func _bootfocus_leg(panel: ClickableQuad) -> void:
 	_bootfocus_expect(_room.focused_quad() == panel,
 		"boot focus: the last-played card holds the boot focus (no input given)")
@@ -22272,6 +22594,7 @@ func _run_core_test() -> void:
 	RoomSpecs.pinemhi1_nc = OS.get_environment("PVLDS_PINEMHI1_NC")
 	RoomSpecs.backfine_nc = OS.get_environment("PVLDS_BACKFINE_NC")
 	RoomSpecs.oneten_nc = OS.get_environment("PVLDS_ONETEN_NC")
+	RoomSpecs.scoremark_nc = OS.get_environment("PVLDS_SCOREMARK_NC")
 	_expect(IpdbFacts.ipdb_id_from_url("https://www.ipdb.org/machine.cgi?id=1267") == 1267,
 		"cardback: the IPDB id parses out of the db's ipdbUrl", failures)
 	_expect(IpdbFacts.ipdb_id_from_url("") == 0 and IpdbFacts.ipdb_id_from_url("https://example.com/x") == 0,
@@ -22528,6 +22851,51 @@ func _run_core_test() -> void:
 		"backfine: the Personal shelf loads its own file beside the Best shelf", failures)
 	_expect(int(((bf_pers_rec.get("rows", []) as Array)[0] as Dictionary).get("score", 0)) == 1638803870,
 		"backfine: the shelves never leak - the Personal read holds the Personal score, not the Best one", failures)
+
+	# SCOREMARK: the front mark's semantics + spec shape.
+	# The mark keys on the player's OWN Personal rows
+	# alone (under PVLDS_SCOREMARK_NC=bestkey the Best
+	# rows key it instead and the semantic leg fails by
+	# name; under =ghostmark every game is marked and the
+	# scoreless legs fail by name). The maps key by
+	# challenge_key(title), the backs' own join.
+	var sm_key: String = PinemhiScores.challenge_key(bf_game.title)
+	var sm_pers: Dictionary = {sm_key: bf_rec.call(2, "Kubrick", 1638803870)}
+	var sm_best: Dictionary = {sm_key: bf_rec.call(10, "Online", 2000000000)}
+	_expect(RoomSpecs.pinemhi_marked(bf_game, sm_pers, {}),
+		"scoremark: a game holding the player's own Personal rows is marked", failures)
+	_expect(not RoomSpecs.pinemhi_marked(bf_game, {}, sm_best),
+		"scoremark: a Best file but NO personal rows earns NO mark - that table still needs a scoring", failures)
+	_expect(not RoomSpecs.pinemhi_marked(bf_game, {}, {}),
+		"scoremark: a game with no PINemHi files at all is unmarked", failures)
+	_expect(not RoomSpecs.pinemhi_marked(bf_game, {sm_key: {"title": bf_game.title, "rows": []}}, {}),
+		"scoremark: a Personal record with an empty row list is no score - unmarked", failures)
+	_expect(RoomSpecs.pinemhi_marked(bf_game, sm_pers, sm_best),
+		"scoremark: personal rows mark even when a Best file also stands", failures)
+	# The specs carry the flag + the band colour; the
+	# defaults carry neither (every existing caller is
+	# untouched).
+	var sm_art: Dictionary = RoomSpecs.art_spec(bf_game, null, null, true, true)
+	_expect(bool(sm_art.get("scoremark", false)) and (sm_art.get("scoremark_color", Color()) as Color) == RoomSpecs.manufacturer_color(bf_game.manufacturer),
+		"scoremark: the art spec carries the mark in the game's own back-band colour", failures)
+	_expect(not bool(RoomSpecs.art_spec(bf_game, null, null).get("scoremark", true)),
+		"scoremark: the art spec's default carries no mark", failures)
+	var sm_panel: Dictionary = RoomSpecs.panel_spec(bf_game, null, true)
+	var sm_chip_found: bool = false
+	var sm_chip_color_ok: bool = false
+	for cv: Variant in (sm_panel.get("chips", []) as Array):
+		var cd: Dictionary = cv as Dictionary
+		if str(cd.get("text", "")) == "PINEMHI BEST":
+			sm_chip_found = true
+			sm_chip_color_ok = (cd.get("color", Color()) as Color) == RoomSpecs.manufacturer_color(bf_game.manufacturer)
+	_expect(sm_chip_found and sm_chip_color_ok,
+		"scoremark: the panel spec carries the PINEMHI BEST chip in the band colour", failures)
+	var sm_chip_default: bool = false
+	for cv2: Variant in (RoomSpecs.panel_spec(bf_game, null).get("chips", []) as Array):
+		if str((cv2 as Dictionary).get("text", "")) == "PINEMHI BEST":
+			sm_chip_default = true
+	_expect(not sm_chip_default,
+		"scoremark: the panel spec's default carries no PINEMHI BEST chip", failures)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")
