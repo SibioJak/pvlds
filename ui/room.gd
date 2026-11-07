@@ -816,6 +816,13 @@ static var debug_b_nc: String = ""
 ## backstep smoke's matching legs fail by name. Empty in
 ## every real run.
 static var debug_backstep_nc: String = ""
+## Negative-control seam for the ORIGINVIEW round (the
+## harness env PVLDS_ORIGINVIEW_NC, set by Main before any
+## room exists): "nofilter" makes launch_origin_for write
+## the pre-ORIGINVIEW record - no filter in it - so the
+## originview smoke's per-filter return legs fail by name.
+## Empty in every real run.
+static var debug_originview_nc: String = ""
 ## Negative-control seam for the blank-board heal (the
 ## harness env PVLDS_GRADFIX4_NC, set by Main before any room
 ## exists): "solidboard" makes every board render land
@@ -2286,8 +2293,12 @@ func tournament_rows() -> Array:
 
 
 ## RETURN round: where a launch of this game comes from, in
-## the store's record shape ({surface, challenge_id}). The
-## classification keys on (this view, the launched game), not
+## the store's record shape ({surface, challenge_id}).
+## ORIGINVIEW adds the library half's facts: the standing
+## filter ("filter") and the launched game itself
+## ("game_id"), so a return can re-enter the view the launch
+## left and seat the game in it. The classification keys on
+## (this view, the launched game), not
 ## on the input path, so the A-press, the pointer's Launch,
 ## and the detail view's Play all classify alike: in the
 ## Tournament Room, the launched game's own challenge row
@@ -2297,8 +2308,14 @@ func tournament_rows() -> Array:
 ## to the room's default landing. Everywhere else the origin
 ## is the library.
 func launch_origin_for(game: GameEntry) -> Dictionary:
+	## ORIGINVIEW NC (PVLDS_ORIGINVIEW_NC=nofilter): the
+	## record drops the filter - the pre-ORIGINVIEW shape -
+	## so the originview smoke's legs fail by name.
+	var filter: String = "" if debug_originview_nc == "nofilter" else _filter
+	var game_id: String = game.game_id if game != null else ""
 	if game == null or not _tournament:
-		return {"surface": "library", "challenge_id": ""}
+		return {"surface": "library", "challenge_id": "",
+			"filter": filter, "game_id": game_id}
 	for row: Variant in _tournament_rows:
 		var r: Dictionary = row as Dictionary
 		if str(r.get("kind", "")) != "challenge":
@@ -2307,8 +2324,10 @@ func launch_origin_for(game: GameEntry) -> Dictionary:
 		if row_game != null and row_game.game_id == game.game_id:
 			var ch: WovpChallenge = r.get("challenge") as WovpChallenge
 			return {"surface": "tournament",
-				"challenge_id": ch.challenge_id if ch != null else ""}
-	return {"surface": "tournament", "challenge_id": ""}
+				"challenge_id": ch.challenge_id if ch != null else "",
+				"filter": filter, "game_id": game_id}
+	return {"surface": "tournament", "challenge_id": "",
+		"filter": filter, "game_id": game_id}
 
 
 ## The row index of one challenge in the standing tournament
@@ -2681,6 +2700,47 @@ func restore_tournament_return(challenge_id: String) -> void:
 		_land_on_rail_stop("tournament")
 		print("ROOM RETURN: back to the Tournament Room - challenge '%s' no longer standing, default landing" % challenge_id)
 	tournament_refresh_requested.emit()
+
+
+## ORIGINVIEW: a session that launched from a library FILTER
+## VIEW returns to that view. Called by Main at room entry
+## when a consumed return-origin record names the library and
+## carries a non-ALL filter. The view is re-entered through
+## the rail's own filter press (_handle_rail), so the landing
+## - wall contents, strip dress, the view's presence colour,
+## the persisted view - is exactly a manual press's landing;
+## then the launched game is seated in it, centred and
+## focused (the RETURN tournament law's library twin), so the
+## element drawn focused is the element input acts on
+## (FOCUSFIX) and the strip keeps the presence colour WITHOUT
+## the focus lift. Fallbacks, in the open: a filter the rail
+## does not carry (a stale or corrupt record) restores
+## nothing - the entry's own landing stands; the launched
+## game no longer standing in the view (its membership
+## changed across the session) lands the view at its default
+## place - its centred card focused, the _enter_tournament
+## seating - and an empty view keeps the rail landing the
+## press itself made. No path seats focus on a strip stop as
+## a side effect of the game being gone.
+func restore_library_return(filter: String, game_id: String) -> void:
+	if not FILTERS.has(filter) or filter == "all":
+		return
+	_failed_game_id = ""
+	_status_note = ""
+	_handle_rail("filter:" + filter)
+	var idx: int = -1
+	for i: int in range(_visible_games.size()):
+		if _visible_games[i].game_id == game_id:
+			idx = i
+			break
+	if idx >= 0 and idx < _panels.size():
+		_set_centre(idx, true)
+		_set_focused(_panels[idx])
+		print("ROOM RETURN: back to the library's %s view - '%s' standing, centred and focused" % [filter, _visible_games[idx].title])
+	elif _land_on_wall_card():
+		print("ROOM RETURN: back to the library's %s view - the launched game no longer stands in it, the view's default landing" % filter)
+	else:
+		print("ROOM RETURN: back to the library's %s view - no card stands in it, the rail landing stands" % filter)
 
 
 func page_count() -> int:

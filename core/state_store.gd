@@ -94,6 +94,11 @@ func load_from_disk() -> void:
 			return_origin = {
 				"surface": str(rd.get("surface", "")),
 				"challenge_id": str(rd.get("challenge_id", "")),
+				## ORIGINVIEW: the library half's facts ride
+				## the same tolerant parse - a record written
+				## before them simply carries neither.
+				"filter": str(rd.get("filter", "")),
+				"game_id": str(rd.get("game_id", "")),
 				"stamp": int(rd.get("stamp", 0)),
 			}
 	# GRADFIX11: the file-age tracker round-trips with the

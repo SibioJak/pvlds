@@ -366,6 +366,8 @@ var _ret_failures: int = 0
 var _ret_done: bool = false
 var _ret_deadline: int = 0
 var _ret_idx: int = -1 ## the target's row/panel index (the Twilight Zone challenge, or its library card)
+var _ret_filter: String = "" ## ORIGINVIEW: PVLDS_RETURN_SMOKE_FILTER - the filter view the launch_filter boot launches from / the verify_filter boot judges
+var _ret_game: String = "" ## ORIGINVIEW: PVLDS_RETURN_SMOKE_GAME - the launched game's id the verify_filter boots judge (the script reads it off boot 1's log + the origin record)
 var _ret_seen_pending: bool = false ## the load wait was seen running (a settle back to not-pending with the process alive is a FAILED load, not a return)
 var _ret_grace: int = 0 ## frames the settled-but-still-standing state gets to exit before it is called a failed settle (a successful settle's quit lands at the frame's end; the driver can see the settled state first)
 var _bt_phase: int = 0
@@ -748,6 +750,8 @@ func _ready() -> void:
 	if user_args.has("--pvlds-smoke-return"):
 		_smoke_return = true
 		_ret_mode = OS.get_environment("PVLDS_RETURN_SMOKE_MODE")
+		_ret_filter = OS.get_environment("PVLDS_RETURN_SMOKE_FILTER")
+		_ret_game = OS.get_environment("PVLDS_RETURN_SMOKE_GAME")
 		if _ret_mode == "":
 			_ret_mode = "verify_tourn"
 	if user_args.has("--pvlds-smoke-focusfix"):
@@ -829,6 +833,11 @@ func _ready() -> void:
 	# leaves B unbound in the library wall - each so the
 	# backstep smoke's matching legs fail by name.
 	RoomView.debug_backstep_nc = OS.get_environment("PVLDS_BACKSTEP_NC")
+	# ORIGINVIEW's negative-control seam (PVLDS_ORIGINVIEW_NC=
+	# nofilter): the launch-origin record drops its filter -
+	# the pre-ORIGINVIEW shape - so the originview smoke's
+	# per-filter return legs fail by name.
+	RoomView.debug_originview_nc = OS.get_environment("PVLDS_ORIGINVIEW_NC")
 	# GRADFIX10's input negative-control seam (PVLDS_INPUT_NC=
 	# dpadmove | notrig): restores the pre-nuke D-pad movement
 	# or the unread triggers, so the input smoke's matching
@@ -2212,15 +2221,21 @@ func _enter_room() -> void:
 ## launch, on disk because this process did not exist while
 ## the table played) is CONSUMED here whatever it says - read
 ## once, cleared, saved - so a later entry or a manual boot
-## never replays it. A library record changes nothing: the
-## room's own setup restore (selection / last-played seating)
-## is the library landing, exactly as before this round. A
-## tournament record hands the room its challenge ID; the
-## room seats it if it still stands and lands at its default
-## when it has gone. No record: today's behaviour stands.
-## NC seam: PVLDS_RETURN_NC=oldway consumes the record but
+## never replays it. A tournament record hands the room its
+## challenge ID; the room seats it if it still stands and
+## lands at its default when it has gone. A library record
+## carrying a filter (ORIGINVIEW) hands the room that view
+## and the launched game; the room re-enters the view and
+## seats the game in it. A library record with no filter (or
+## ALL) changes nothing: the room's own setup restore
+## (selection / last-played seating) is the library landing,
+## exactly as before this round. No record: today's
+## behaviour stands.
+## NC seams: PVLDS_RETURN_NC=oldway consumes the record but
 ## ignores it - the pre-RETURN always-library landing - so
-## the return smoke's tournie legs fail against it by name.
+## the return smoke's tournie legs fail against it by name;
+## PVLDS_ORIGINVIEW_NC=nofilter starves the record itself of
+## its filter at write time (see launch_origin_for).
 func _apply_return_origin() -> void:
 	if _state == null or _room == null:
 		return
@@ -2229,12 +2244,19 @@ func _apply_return_origin() -> void:
 		return
 	_state.clear_return_origin()
 	_state.save_to_disk()
-	if str(origin.get("surface", "")) != "tournament":
-		return
-	if OS.get_environment("PVLDS_RETURN_NC") == "oldway":
-		print("PVLDS RETURN: a tournament origin stands but is ignored (NC oldway) - the pre-RETURN landing")
-		return
-	_room.restore_tournament_return(str(origin.get("challenge_id", "")))
+	var oldway: bool = OS.get_environment("PVLDS_RETURN_NC") == "oldway"
+	var surface: String = str(origin.get("surface", ""))
+	if surface == "tournament":
+		if oldway:
+			print("PVLDS RETURN: a tournament origin stands but is ignored (NC oldway) - the pre-RETURN landing")
+			return
+		_room.restore_tournament_return(str(origin.get("challenge_id", "")))
+	elif surface == "library":
+		if oldway:
+			return ## pre-RETURN, a library record changed nothing
+		var filter: String = str(origin.get("filter", ""))
+		if filter != "" and filter != "all":
+			_room.restore_library_return(filter, str(origin.get("game_id", "")))
 
 
 # ------------------------------------------------------- the hand-off
@@ -16520,6 +16542,31 @@ func _ret_tz_game_id() -> String:
 	return ""
 
 
+## ORIGINVIEW launch_filter: seed the named view's membership
+## where the staged library does not carry it ambiently -
+## favorites and recents are store facts, so the driver writes
+## them through the store's own doors (five games, the store
+## saved on the spot, exactly as a player's own history would
+## stand). NEW (fresh staged files) and VR (the fixture db's
+## tags) are ambient and seed nothing.
+func _ret_seed_filter_view() -> void:
+	if _ret_filter != "favorites" and _ret_filter != "recents":
+		return
+	if _scanner == null or _state == null:
+		return
+	var seeded: int = 0
+	for g: GameEntry in _scanner.games:
+		if g == null or seeded >= 5:
+			continue
+		if _ret_filter == "favorites":
+			_state.set_favorite(g.game_id, true)
+		else:
+			_state.touch_recent(g.game_id)
+		seeded += 1
+	_state.save_to_disk()
+	print("PVLDS RETURN SMOKE: seeded %d games into the %s view" % [seeded, _ret_filter])
+
+
 func _drive_return_smoke() -> void:
 	if _ret_done:
 		return
@@ -16537,6 +16584,14 @@ func _drive_return_smoke() -> void:
 					# the library leg plays from the full shelf.
 					_room._handle_rail("filter:all")
 					_ret_phase = 5
+				elif _ret_mode == "launch_filter":
+					# ORIGINVIEW: stand in the named filter
+					# view (seeding its membership first where
+					# the staged library does not carry it
+					# ambiently), then play from inside it.
+					_ret_seed_filter_view()
+					_room._handle_rail("filter:" + _ret_filter)
+					_ret_phase = 6
 				else:
 					_ret_phase = 7 ## verify modes judge the landing as it stands
 				_ret_wait = 0
@@ -16579,6 +16634,35 @@ func _drive_return_smoke() -> void:
 			_ret_deadline = Time.get_ticks_msec() + 20000
 			_ret_phase = 2
 			_ret_wait = 0
+		6:
+			# launch_filter (ORIGINVIEW): the view stands;
+			# pick the target - Twilight Zone when it stands
+			# in the view, else a card past the first (index
+			# >= 1, so no default landing can fake the seat) -
+			# name it for the script, and seat it for the A
+			# press the shared phases fire.
+			if _ret_wait >= 3 and _room._visible_games.size() >= 2 and not _room.page_slide_active():
+				_ret_idx = -1
+				var tzid: String = _ret_tz_game_id()
+				if tzid != "":
+					for i: int in range(_room._visible_games.size()):
+						if _room._visible_games[i].game_id == tzid:
+							_ret_idx = i
+							break
+				if _ret_idx < 1:
+					_ret_idx = mini(2, _room._visible_games.size() - 1)
+				var target: GameEntry = _room._visible_games[_ret_idx]
+				print("PVLDS RETURN SMOKE: target game '%s' index %d filter %s" % [target.game_id, _ret_idx, _ret_filter])
+				_ret_expect(_ret_idx >= 1, "launch: the %s view holds a target past its first card" % _ret_filter)
+				get_viewport().warp_mouse(Vector2(512, 764))
+				_room._set_centre(_ret_idx, false)
+				_room._set_focused(_room._panels[_ret_idx])
+				_ret_deadline = Time.get_ticks_msec() + 20000
+				_ret_phase = 2
+				_ret_wait = 0
+			elif Time.get_ticks_msec() > _ret_deadline:
+				_ret_expect(false, "launch: the %s view never held a launchable target" % _ret_filter)
+				_ret_finish_smoke()
 		2:
 			# Both launch modes: centred on the target, then A.
 			if _room.centre_index() == _ret_idx and not _room.page_slide_active() and _ret_wait >= 6:
@@ -16621,7 +16705,7 @@ func _drive_return_smoke() -> void:
 			# Verify modes: the landing was decided at room
 			# entry; let the entry's boards fetch settle, then
 			# judge where the player stands.
-			if _ret_mode == "verify_lib":
+			if _ret_mode == "verify_lib" or _ret_mode == "verify_filter" or _ret_mode == "verify_filter_vanish":
 				if _ret_wait >= 30:
 					_ret_verify_legs()
 					_ret_finish_smoke()
@@ -16670,6 +16754,51 @@ func _ret_verify_legs() -> void:
 				fgame = _room._visible_games[fidx].game_id
 			_ret_expect(gid != "" and fgame == gid,
 				"lib: the just-played table stands seated as before (focused game '%s')" % fgame)
+		"verify_filter":
+			# ORIGINVIEW: the return re-entered the launching
+			# filter view and seated the launched game in it.
+			var f: String = _ret_filter
+			_ret_expect(not _room.tournament_active(), "originview: returns to the library, not the tournament room")
+			_ret_expect(_room._filter == f, "originview: returns to the %s view" % f)
+			var vidx: int = -1
+			for i: int in range(_room._visible_games.size()):
+				if _room._visible_games[i].game_id == _ret_game:
+					vidx = i
+					break
+			_ret_expect(vidx >= 0, "originview: the launched game stands in the %s view" % f)
+			_ret_expect(vidx >= 0 and _room.centre_index() == vidx,
+				"originview: the launched game stands centred in the %s view" % f)
+			_ret_expect(vidx >= 0 and vidx < _room._panels.size() and _room.focused_quad() == _room._panels[vidx],
+				"originview: the launched game stands focused in the %s view" % f)
+			_ret_expect(_room.pop_target() != null and _room.pop_target() == _room.focused_quad(),
+				"originview: the popped card is the focused card in the %s view (drawn focus is the real focus)" % f)
+			var la: Array = _room._rail_label_accent("filter:" + f)
+			_ret_expect(la.size() > 1 and bool(la[1]),
+				"originview: the strip wears the %s stop's presence colour" % f)
+			_ret_expect(not bool(_room._rail_tex_lifted.get("filter:" + f, false)),
+				"originview: the %s stop carries no focus lift" % f)
+			_grad_save_grab("return_filter_%s.png" % f)
+		"verify_filter_vanish":
+			# ORIGINVIEW fallback: the launched game left the
+			# view across the session (the script struck it
+			# from the store's favorites between boots) - the
+			# return still lands IN the view, at its default
+			# place, focus on a card.
+			var f2: String = _ret_filter
+			_ret_expect(not _room.tournament_active(), "originview vanish: returns to the library, not the tournament room")
+			_ret_expect(_room._filter == f2, "originview vanish: returns to the %s view" % f2)
+			var gone: bool = true
+			for g: GameEntry in _room._visible_games:
+				if g.game_id == _ret_game:
+					gone = false
+					break
+			_ret_expect(gone, "originview vanish: the launched game no longer stands in the %s view" % f2)
+			var fq: ClickableQuad = _room.focused_quad()
+			_ret_expect(fq != null and _room._panels.has(fq),
+				"originview vanish: focus lands on a card of the view, not the strip")
+			_ret_expect(fq != null and _room._panels.find(fq) == _room.centre_index(),
+				"originview vanish: focus seats on the view's centred card (drawn focus is the real focus)")
+			_grad_save_grab("return_filter_vanish.png")
 
 
 func _ret_finish_smoke() -> void:
