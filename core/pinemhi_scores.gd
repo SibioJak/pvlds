@@ -205,6 +205,39 @@ static func load_for_config(cfg: PvldsConfig) -> Dictionary:
 	return load_folder(resolve_folder(cfg))
 
 
+## PINEMHI2: the player's own PINemHi name, derived from
+## his TOP10_Personal files: each file's #1 row is a best
+## row (load_folder's records ARE the files' best rows),
+## and its player is the name he registered with - the
+## most frequent player among the files' best rows is
+## that name ("Kubrick" in his install). "" when there
+## are no files to read. Ties resolve to the first name
+## met in title-key order, so the answer is stable.
+static func player_name_for_config(cfg: PvldsConfig) -> String:
+	var records: Dictionary = load_for_config(cfg)
+	if records.is_empty():
+		return ""
+	var counts: Dictionary = {}
+	var keys: Array = records.keys()
+	keys.sort()
+	for k: Variant in keys:
+		var rec: Dictionary = records[k] as Dictionary
+		var player: String = str(rec.get("player", "")).strip_edges()
+		if player == "":
+			continue
+		counts[player] = int(counts.get(player, 0)) + 1
+	var best_name: String = ""
+	var best_count: int = 0
+	var names: Array = counts.keys()
+	names.sort()
+	for n: Variant in names:
+		var c: int = int(counts[n])
+		if c > best_count:
+			best_count = c
+			best_name = str(n)
+	return best_name
+
+
 ## PINEMHI1: every Personal file's FULL row list under a
 ## PINemHi folder, keyed by title_key: {key: {title,
 ## rows}}. The card back's read. Empty under the same

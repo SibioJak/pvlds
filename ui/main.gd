@@ -204,6 +204,26 @@ var _wovp_challenges: Array = [] ## the standing boards (Array of WovpChallenge)
 var _wovp_fetched_at: int = 0 ## when the standing boards landed (0 = never this device)
 var _wovp_boards_live: bool = false ## the standing boards came from a fetch this session
 var _wovp_fetch_error: String = "" ## the last fetch's failure in words, while it stands
+# PINemHi weekly boards (PINEMHI2, Part A): Main owns the
+# weekly client and the standing contests the room's
+# weekly panels render - the same ownership shape as the
+# WoVP state above. The pages are public; no key exists.
+var _pinemhi_client: PinemhiWeeklyClient = null
+var _pinemhi2_contests: Array = [] ## the standing weekly contests (Array of contest Dictionaries): live, or the disk cache's at boot
+var _pinemhi2_fetched_at: int = 0 ## when the standing weekly boards landed (0 = never)
+var _pinemhi2_live: bool = false ## the standing weekly boards came from a fetch this session
+var _pinemhi2_fetch_error: String = "" ## the last weekly fetch's failure in words, while it stands
+var _pinemhi2_player_name: String = "" ## his PINemHi name, derived at push time from his TOP10_Personal files (PinemhiScores.player_name_for_config)
+var _pinemhi2_probe: bool = false ## --pvlds-pinemhi2-probe: the fetch gate - one real fetch through the app's HTTP path, the per-contest census printed, then quit
+var _smoke_pinemhi2: bool = false ## --pvlds-smoke-pinemhi2: drive the PINEMHI2 contract (env PVLDS_PINEMHI2_MODE: parse|stub|cache|room)
+var _pinemhi2_smoke_phase: int = 0
+var _pinemhi2_smoke_wait: int = 0
+var _pinemhi2_smoke_failures: int = 0
+var _pinemhi2_smoke_deadline_msec: int = 0
+var _pinemhi2_smoke_boot_boards: Array = [] ## room mode: the standing board keys/specs from the no-weekly-data boot (the WoVP-unaffected leg's baseline)
+var _pinemhi2_smoke_baseline_done: bool = false
+var _pinemhi2_smoke_baseline_reset: bool = false ## room mode: the clean no-weekly-data state has been re-pushed AFTER the boot fetch settled (its failure push otherwise re-seeds the room's failure row mid-baseline)
+var _pinemhi2_launch_seen: bool = false ## room mode: a launch_requested arrived while a weekly panel was centred (must never happen)
 var _wovp_validating_for: String = "" ## who a running validation answers to: "fetch" | "room" | "desk"
 var _wovp_validating_key_hash: int = 0 ## the hash of the key a running validation is about (a desk test may name a key that is not the saved one)
 var _smoke_tournament: bool = false ## --pvlds-smoke-tournament: drive the Tournament Room contract once the room is up
@@ -735,6 +755,8 @@ func _ready() -> void:
 		_smoke_backtrim = true
 	if user_args.has("--pvlds-smoke-pinemhi1"):
 		_smoke_pinemhi1 = true
+	if user_args.has("--pvlds-smoke-pinemhi2"):
+		_smoke_pinemhi2 = true
 	if user_args.has("--pvlds-smoke-scoremark"):
 		_smoke_scoremark = true
 	if user_args.has("--pvlds-smoke-submit"):
@@ -869,6 +891,12 @@ func _ready() -> void:
 	# personal-best line even when a best was handed in -
 	# the tournament smoke's PINemHi legs fail by name.
 	RoomSpecs.pinemhi_nc = OS.get_environment("PVLDS_PINEMHI_NC")
+	# The PINEMHI2 negative-control seam (PVLDS_PINEMHI2_NC):
+	# "golfscore" - the weekly parser reads golf distances
+	# as scores; "stale" - Main's weekly push claims a
+	# cache-served board is live. Either way the pinemhi2
+	# smoke's named leg fails.
+	PinemhiWeeklyClient.debug_nc = OS.get_environment("PVLDS_PINEMHI2_NC")
 	RoomSpecs.cardback_nc = OS.get_environment("PVLDS_CARDBACK_NC")
 	# BACKTRIM's negative-control seam (PVLDS_BACKTRIM_NC=
 	# notrim): the grid regains the rows the trim cut, and
@@ -1028,7 +1056,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_scoremark) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_scoremark or _smoke_pinemhi2) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1095,6 +1123,26 @@ func _ready() -> void:
 			_wovp_user_name = str(wovp_cache.get("user_name", ""))
 			_wovp_identity_key_hash = _wovp_key_hash()
 			_wovp_identity_state = "ok"
+	# PINEMHI2 (Part A): the weekly-boards client, beside the
+	# WoVP one. The disk cache loads now (its boards stand
+	# from the boot push, marked saved); the live fetch goes
+	# out below and its answer re-pushes. The probe flag is
+	# the fetch gate: one real fetch through this HTTP path,
+	# the census printed by the finished handler, then quit
+	# before any room or scan work exists.
+	_pinemhi_client = PinemhiWeeklyClient.new()
+	add_child(_pinemhi_client)
+	_pinemhi_client.weekly_finished.connect(_on_pinemhi_weekly_finished)
+	var pinemhi_cache: Dictionary = PinemhiWeeklyClient.load_cache()
+	if bool(pinemhi_cache.get("ok", false)):
+		var pc: Variant = pinemhi_cache.get("contests", [])
+		if pc is Array:
+			_pinemhi2_contests = pc
+		_pinemhi2_fetched_at = int(pinemhi_cache.get("fetched_at", 0))
+	_pinemhi2_probe = user_args.has("--pvlds-pinemhi2-probe")
+	_pinemhi_client.fetch_weekly()
+	if _pinemhi2_probe:
+		return
 	if configured and _config.is_configured() and not user_args.has("--setup") and not _smoke_desk and not _smoke_submit:
 		# Configured boot: present the desk as a live shell immediately
 		# (first frame, progress ticking) and enter the room only when
@@ -1227,6 +1275,8 @@ func _process(_delta: float) -> void:
 		_drive_backtrim_smoke()
 	if _smoke_pinemhi1:
 		_drive_pinemhi1_smoke()
+	if _smoke_pinemhi2:
+		_drive_pinemhi2_smoke()
 	if _smoke_scoremark:
 		_drive_scoremark_smoke()
 	if _smoke_submit:
@@ -1641,6 +1691,11 @@ func _push_wovp_data() -> void:
 	# law - a repeat ride of unchanged facts never bumps,
 	# and the boot seed's changed facts always do.
 	_push_ipdb_data()
+	# PINEMHI2 (Part A): the weekly boards ride the same
+	# boot/refresh push - the standing contests (cache at
+	# boot, live once the fetch answers through
+	# _on_pinemhi_weekly_finished's own push).
+	_push_pinemhi2_data()
 	_resolve_unowned_shots()
 	# GRADFIX6 (item 3): pre-warm the challenge set's art at
 	# push time - boot/cache-load, long before anyone enters
@@ -1725,6 +1780,74 @@ func _wovp_fetch_boards() -> void:
 		_wovp_client.validate_key(_config.wovp_api_key)
 	else:
 		_wovp_client.fetch_challenges(_config.wovp_api_key)
+
+
+## PINEMHI2 (Part A): the weekly boards' single push door -
+## every change of the standing weekly state hands the room
+## the whole state (mirroring _push_wovp_data). His PINemHi
+## name is derived fresh at each push from his own
+## TOP10_Personal files.
+## The stale negative control (PVLDS_PINEMHI2_NC=stale)
+## bites HERE, in this push: every push claims live, so a
+## cache-served board reads as fresh and the pinemhi2
+## smoke's stale leg (a cache push has live=false and its
+## board carries the saved-standings note) fails by name.
+func _push_pinemhi2_data() -> void:
+	_pinemhi2_player_name = PinemhiScores.player_name_for_config(_config)
+	var live: bool = _pinemhi2_live
+	if PinemhiWeeklyClient.debug_nc == "stale":
+		live = true
+	if _room != null and _room.has_method("set_pinemhi_weekly"):
+		_room.set_pinemhi_weekly({
+			"contests": _pinemhi2_contests,
+			"fetched_at": _pinemhi2_fetched_at,
+			"live": live,
+			"fetch_error": _pinemhi2_fetch_error,
+			"player_name": _pinemhi2_player_name,
+		})
+
+
+## PINEMHI2: fetch the weekly boards now (boot, and the
+## Tournament Room's REFRESH - the refresh re-pulls these
+## too). A fetch already running is left to answer.
+func _pinemhi_fetch_weekly() -> void:
+	if _pinemhi_client == null or _pinemhi_client.is_busy():
+		return
+	_pinemhi_client.fetch_weekly()
+
+
+func _on_pinemhi_weekly_finished(ok: bool, message: String, contests: Array, raw_pages: Dictionary) -> void:
+	if _pinemhi2_probe:
+		# The fetch gate's census: per contest, its table,
+		# its window, its row count and its first row -
+		# printed from the app's own fetch, then quit.
+		print("PVLDS PINEMHI2 PROBE: ok=", ok, " message=", message)
+		for cv: Variant in contests:
+			var c: Dictionary = cv as Dictionary
+			var rows: Array = c.get("rows", []) as Array
+			var first: String = "(no rows)"
+			if not rows.is_empty():
+				var r0: Dictionary = rows[0] as Dictionary
+				first = "#%d %s %s" % [int(r0.get("pos", 0)), str(r0.get("name", "")), str(r0.get("value_text", ""))]
+			print("PVLDS PINEMHI2 PROBE: contest=", str(c.get("id", "")), " table=", str(c.get("table", "")),
+				" window=", str(c.get("window_start", "")), " --- ", str(c.get("window_end", "")),
+				" pin=", str(c.get("pin", "")), " rows=", rows.size(), " first=", first)
+		print("PVLDS PINEMHI2 PROBE RESULT: ", "PASS" if ok else "FAIL")
+		get_tree().quit(0 if ok else 1)
+		return
+	if ok:
+		_pinemhi2_contests = contests
+		_pinemhi2_fetched_at = int(Time.get_unix_time_from_system())
+		_pinemhi2_live = true
+		_pinemhi2_fetch_error = ""
+		PinemhiWeeklyClient.save_cache(raw_pages, _pinemhi2_fetched_at)
+	else:
+		# The standing boards (the cache's, when there are
+		# any) keep standing; the failure is recorded and
+		# the push carries it - with no cache the room's
+		# failure row says it in plain words.
+		_pinemhi2_fetch_error = message
+	_push_pinemhi2_data()
 
 
 func _on_wovp_validation_finished(ok: bool, message: String, user_id: String, display_name: String) -> void:
@@ -2179,6 +2302,7 @@ func _enter_room() -> void:
 		_room.setup_panel_scan_requested.connect(_on_setup_panel_scan_requested)
 		_room.setup_panel_ipdb_requested.connect(func() -> void: _apply_ipdb_snapshot())
 		_room.tournament_refresh_requested.connect(_wovp_fetch_boards)
+		_room.tournament_refresh_requested.connect(_pinemhi_fetch_weekly) ## PINEMHI2: REFRESH re-pulls the weekly boards too
 		_room.wovp_key_pasted.connect(_on_room_wovp_key_pasted)
 		_room.wovp_submit_requested.connect(_on_room_wovp_submit_requested)
 		_room.wovp_key_test_requested.connect(_on_room_wovp_key_test)
@@ -17394,6 +17518,436 @@ func _bootfocus_region_stdev(img: Image, rect: Rect2i) -> float:
 ##               deadplank restores the dead footer band and
 ##               the launch + frame-centred legs must fail
 ##               by name.
+## PINEMHI2 smoke (--pvlds-smoke-pinemhi2, harness env
+## PVLDS_PINEMHI2_MODE): parse - the weekly parser against
+## the real captured fixtures, plus the hole-in-one shape
+## and the his-name derivation; stub - the client against
+## the harness's local stub (the PVLDS_PINEMHI_BASE_URL
+## seam), the cache write, and the cache read back;
+## cache - a boot whose fetch cannot land (a dead seam):
+## the cache's boards stand, marked saved, with the
+## failure recorded; room - the Tournament Room with
+## fixture-backed weekly data pushed through Main's own
+## door: three weekly board panels behind the WoVP rows,
+## his-row accents, the WoVP boards untouched.
+## Negative controls (PVLDS_PINEMHI2_NC): stale - Main's
+## push claims the cache-served boards are live, so the
+## stale leg fails by name; golfscore - the parser reads
+## golf distances as scores, so the golf-shape legs fail
+## by name.
+func _drive_pinemhi2_smoke() -> void:
+	if _pinemhi2_smoke_phase == 0:
+		_pinemhi2_smoke_deadline_msec = Time.get_ticks_msec() + 240000
+		var mode: String = OS.get_environment("PVLDS_PINEMHI2_MODE")
+		if mode == "":
+			mode = "parse"
+		if mode == "parse":
+			_pinemhi2_run_parse_legs()
+			_finish_pinemhi2_smoke()
+			return
+		_pinemhi2_smoke_phase = 1
+	_pinemhi2_smoke_wait += 1
+	if Time.get_ticks_msec() > _pinemhi2_smoke_deadline_msec:
+		_pinemhi2_expect(false, "pinemhi2 smoke: deadline exceeded (mode %s)" % OS.get_environment("PVLDS_PINEMHI2_MODE"))
+		_finish_pinemhi2_smoke()
+		return
+	match OS.get_environment("PVLDS_PINEMHI2_MODE"):
+		"stub":
+			if _pinemhi2_live:
+				_pinemhi2_expect(true, "stub: the boot fetch through the base-url seam landed live")
+				_pinemhi2_check_contests(_pinemhi2_contests, "stub")
+				_pinemhi2_expect(FileAccess.file_exists(PinemhiWeeklyClient.cache_path()), "stub: the fetch wrote the weekly cache")
+				var loaded: Dictionary = PinemhiWeeklyClient.load_cache()
+				_pinemhi2_expect(bool(loaded.get("ok", false)), "stub: the written cache reads back")
+				if bool(loaded.get("ok", false)):
+					var lc: Variant = loaded.get("contests", [])
+					if lc is Array:
+						_pinemhi2_check_contests(lc, "stub-cache")
+				_finish_pinemhi2_smoke()
+		"cache":
+			if _pinemhi2_fetch_error != "":
+				_pinemhi2_expect(_pinemhi2_contests.size() == 3, "cache: the saved contests stand when the fetch cannot land (got %d)" % _pinemhi2_contests.size())
+				_pinemhi2_expect(not _pinemhi2_live, "cache: the standing boards are the cache's, not live")
+				_pinemhi2_expect(_pinemhi2_fetched_at > 0, "cache: the standing boards carry their saved stamp")
+				_pinemhi2_check_contests(_pinemhi2_contests, "cache")
+				_finish_pinemhi2_smoke()
+		"room":
+			_drive_pinemhi2_room()
+
+
+func _pinemhi2_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("PVLDS PINEMHI2 LEG PASS: ", label)
+	else:
+		_pinemhi2_smoke_failures += 1
+		print("PVLDS PINEMHI2 LEG FAIL: ", label)
+
+
+func _finish_pinemhi2_smoke() -> void:
+	print("PVLDS PINEMHI2 SMOKE RESULT: ", "PASS" if _pinemhi2_smoke_failures == 0 else "FAIL (%d)" % _pinemhi2_smoke_failures)
+	get_tree().quit(0 if _pinemhi2_smoke_failures == 0 else 1)
+
+
+## The fixture directory the parse and room legs read
+## (harness env, default the dossier's real captures).
+func _pinemhi2_fixture_dir() -> String:
+	var d: String = OS.get_environment("PVLDS_PINEMHI2_FIXTURE_DIR")
+	if d == "":
+		d = ProjectSettings.globalize_path("res://").path_join("../pvlds-pinemhi2/fixtures")
+	return d
+
+
+func _pinemhi2_fixture_contests() -> Array:
+	var dir: String = _pinemhi2_fixture_dir()
+	var out: Array = []
+	var files: Dictionary = {"main": "week_challenge.html", "five": "week_challenge_5min.html", "golf": "week_challenge_golf.html"}
+	for cid: String in ["main", "five", "golf"]:
+		var path: String = dir.path_join(str(files[cid]))
+		if not FileAccess.file_exists(path):
+			_pinemhi2_expect(false, "fixtures: %s exists" % path)
+			continue
+		var parsed: Dictionary = PinemhiWeeklyClient.parse_page(FileAccess.get_file_as_string(path), cid)
+		_pinemhi2_expect(bool(parsed.get("ok", false)), "fixtures: the %s page parses (%s)" % [cid, str(parsed.get("error", ""))])
+		if bool(parsed.get("ok", false)):
+			out.append(parsed["contest"])
+	return out
+
+
+## The contest census every mode judges by - the real
+## captures' known contents (2026-11-07): the parser legs,
+## the stub legs and the cache legs all read the same
+## numbers. Under the golfscore negative control the golf
+## legs here fail by name, as designed.
+func _pinemhi2_check_contests(contests: Array, tag: String) -> void:
+	var by_id: Dictionary = {}
+	for cv: Variant in contests:
+		var c: Dictionary = cv as Dictionary
+		by_id[str(c.get("id", ""))] = c
+	_pinemhi2_expect(by_id.size() == 3, "%s: three contests stand (got %d)" % [tag, by_id.size()])
+	if by_id.has("main"):
+		var m: Dictionary = by_id["main"]
+		var mrows: Array = m.get("rows", []) as Array
+		_pinemhi2_expect(str(m.get("table", "")) == "Rolling Stones", "%s main: table is Rolling Stones" % tag)
+		_pinemhi2_expect(str(m.get("window_start", "")).begins_with("2026-11-01") and str(m.get("window_end", "")).begins_with("2026-11-08"), "%s main: window Nov 1 - Nov 8" % tag)
+		_pinemhi2_expect(mrows.size() == 6, "%s main: 6 interim rows (got %d)" % [tag, mrows.size()])
+		if not mrows.is_empty():
+			var r0: Dictionary = mrows[0] as Dictionary
+			_pinemhi2_expect(str(r0.get("name", "")) == "RetroGeek" and int(r0.get("value", 0)) == 8014130 and str(r0.get("value_text", "")) == "8.014.130", "%s main: row 1 is RetroGeek 8.014.130" % tag)
+	if by_id.has("five"):
+		var f: Dictionary = by_id["five"]
+		var frows: Array = f.get("rows", []) as Array
+		_pinemhi2_expect(str(f.get("table", "")) == "Bad Cats", "%s five: table is Bad Cats" % tag)
+		_pinemhi2_expect(frows.size() == 4, "%s five: 4 interim rows (got %d)" % [tag, frows.size()])
+		if not frows.is_empty():
+			var fr0: Dictionary = frows[0] as Dictionary
+			_pinemhi2_expect(str(fr0.get("name", "")) == "JB1980" and int(fr0.get("value", 0)) == 10725280, "%s five: row 1 is JB1980 10725280" % tag)
+	if by_id.has("golf"):
+		var g: Dictionary = by_id["golf"]
+		var grows: Array = g.get("rows", []) as Array
+		_pinemhi2_expect(str(g.get("table", "")) == "Rolling Stones", "%s golf: table is Rolling Stones" % tag)
+		_pinemhi2_expect(str(g.get("pin", "")) == "43.900", "%s golf: the pin reads 43.900 (got '%s')" % [tag, str(g.get("pin", ""))])
+		_pinemhi2_expect(grows.size() == 2, "%s golf: 2 interim rows (got %d)" % [tag, grows.size()])
+		if grows.size() == 2:
+			var g0: Dictionary = grows[0] as Dictionary
+			var g1: Dictionary = grows[1] as Dictionary
+			_pinemhi2_expect(str(g0.get("name", "")) == "Tucidides" and int(g0.get("value", 0)) == -620 and str(g0.get("value_text", "")) == "-620", "%s golf-shape: row 1 is Tucidides at -620, distance verbatim" % tag)
+			_pinemhi2_expect(str(g1.get("name", "")) == "JB1980" and int(g1.get("value", 0)) == -1450 and str(g1.get("value_text", "")) == "-1.450", "%s golf-shape: row 2 is JB1980 at -1.450, page order preserved" % tag)
+
+
+func _pinemhi2_run_parse_legs() -> void:
+	var contests: Array = _pinemhi2_fixture_contests()
+	_pinemhi2_check_contests(contests, "parse")
+	# The hole-in-one shape: the golf capture with its
+	# first distance cell swapped for the words - the row
+	# must read as an ace (value 0, flagged), never a score.
+	var golf_path: String = _pinemhi2_fixture_dir().path_join("week_challenge_golf.html")
+	if FileAccess.file_exists(golf_path):
+		var html: String = FileAccess.get_file_as_string(golf_path)
+		var at: int = html.find("-620")
+		_pinemhi2_expect(at >= 0, "hole-in-one: the golf fixture carries its -620 cell to swap")
+		if at >= 0:
+			var swapped: String = html.substr(0, at) + "Hole in One" + html.substr(at + "-620".length())
+			var parsed: Dictionary = PinemhiWeeklyClient.parse_page(swapped, "golf")
+			_pinemhi2_expect(bool(parsed.get("ok", false)), "hole-in-one: the swapped page still parses")
+			if bool(parsed.get("ok", false)):
+				var rows: Array = (parsed["contest"] as Dictionary).get("rows", []) as Array
+				if not rows.is_empty():
+					var r0: Dictionary = rows[0] as Dictionary
+					_pinemhi2_expect(str(r0.get("value_text", "")) == "Hole in One" and int(r0.get("value", -1)) == 0 and bool(r0.get("hole_in_one", false)), "hole-in-one: the ace row reads value 0, flagged, words verbatim")
+	# His name: three JB1980 bests and one Kubrick best in
+	# a fabricated Personal shelf - the majority name is
+	# his; an empty shelf answers "".
+	var root: String = ProjectSettings.globalize_path("user://pinemhi2_name_test")
+	var shelf: String = root.path_join("PINemHi LeaderBoard").path_join("TOP10_Personal")
+	DirAccess.make_dir_recursive_absolute(shelf)
+	var titles: Array = ["Rolling Stones", "Bad Cats", "Doctor Who", "Fish Tales"]
+	var players: Array = ["JB1980", "JB1980", "JB1980", "Kubrick"]
+	for i: int in range(titles.size()):
+		var f: FileAccess = FileAccess.open(shelf.path_join("TOP10_Personal_%d.txt" % i), FileAccess.WRITE)
+		if f != null:
+			f.store_string("<<<%s>>>\n1   8.014.130      %s  2026-11-07 21:50:07\n2   475.500      Someone Else  2026-11-07 20:00:00\n" % [str(titles[i]), str(players[i])])
+			f.close()
+	var cfg: PvldsConfig = PvldsConfig.new()
+	cfg.pinemhi_folder = root
+	cfg.pinemhi_enabled = true
+	_pinemhi2_expect(PinemhiScores.player_name_for_config(cfg) == "JB1980", "his-name: the majority best-row player is his name (got '%s')" % PinemhiScores.player_name_for_config(cfg))
+	var cfg_empty: PvldsConfig = PvldsConfig.new()
+	cfg_empty.pinemhi_folder = root.path_join("no_such_folder")
+	_pinemhi2_expect(PinemhiScores.player_name_for_config(cfg_empty) == "", "his-name: no files, no name")
+
+
+## The room variant's phases ride _pinemhi2_smoke_phase:
+## 1 room up + tournie entered, 2 baseline recorded (no
+## weekly data), 3 fixture data pushed, 4 legs + grab.
+func _drive_pinemhi2_room() -> void:
+	match _pinemhi2_smoke_phase:
+		1:
+			if _room != null and _room.visible and _room.wall_ready:
+				# WoVP boards from fabricated challenges (the
+				# tournament fixture's own shape), so the room
+				# legs judge the weekly boards against real
+				# standing WoVP boards.
+				_wovp_challenges = [
+					_pinemhi_fab_challenge("pinemhi2-alpha", "Apollo 13"),
+					_pinemhi_fab_challenge("pinemhi2-beta", "Medieval Madness"),
+					_pinemhi_fab_challenge("pinemhi2-gamma", "Twilight Zone"),
+				]
+				_wovp_user_id = "smoke-user"
+				_wovp_boards_live = true
+				_wovp_fetched_at = int(Time.get_unix_time_from_system())
+				_pinemhi2_contests = []
+				_pinemhi2_fetched_at = 0
+				_pinemhi2_live = false
+				_pinemhi2_fetch_error = ""
+				_push_wovp_data()
+				_room._handle_rail("tournament")
+				_pinemhi2_expect(_room.tournament_active(), "room: the TOURNAMENT stop raises the Tournament Room")
+				_pinemhi2_smoke_phase = 2
+				_pinemhi2_smoke_wait = 0
+		2:
+			# The boot fetch settles first: its failure push
+			# (dead seam, no cache) re-seeds the room's
+			# failure row whenever it lands, so the baseline's
+			# clean state is re-pushed only after the client
+			# is idle - from then on nothing re-pushes until
+			# the driver itself lands the fixture data.
+			if _pinemhi_client != null and _pinemhi_client.is_busy():
+				return
+			if not _pinemhi2_smoke_baseline_reset:
+				_pinemhi2_contests = []
+				_pinemhi2_fetched_at = 0
+				_pinemhi2_live = false
+				_pinemhi2_fetch_error = ""
+				_push_pinemhi2_data()
+				_pinemhi2_smoke_baseline_reset = true
+				_pinemhi2_smoke_wait = 0
+				return
+			# Baseline: the WoVP boards standing, no weekly
+			# data - their keys and seats are the record the
+			# unaffected leg compares against.
+			var ready: bool = _room != null and _room.wall_ready
+			if ready:
+				for e: Variant in _room.board_state():
+					var entry: Dictionary = e as Dictionary
+					if str(entry.get("challenge_id", "")) != "":
+						ready = ready and bool(entry.get("texture_real", false))
+			if ready and _pinemhi2_smoke_wait > 30:
+				_pinemhi2_smoke_boot_boards = []
+				for e2: Variant in _room.board_state():
+					var entry2: Dictionary = e2 as Dictionary
+					if str(entry2.get("challenge_id", "")) != "":
+						_pinemhi2_smoke_boot_boards.append({
+							"challenge_id": entry2.get("challenge_id"),
+							"card_coord": entry2.get("card_coord"),
+							"board_coord": entry2.get("board_coord"),
+							"standing_key": entry2.get("standing_key"),
+						})
+				_pinemhi2_expect(_pinemhi2_smoke_boot_boards.size() == 3, "room baseline: three WoVP boards stand (got %d)" % _pinemhi2_smoke_boot_boards.size())
+				var pinemhi_rows: int = 0
+				for rv: Variant in _room.tournament_rows():
+					if str((rv as Dictionary).get("kind", "")) == "pinemhi":
+						pinemhi_rows += 1
+				_pinemhi2_expect(pinemhi_rows == 0, "room baseline: no weekly rows before data lands")
+				_pinemhi2_smoke_baseline_done = true
+				# The fixture data lands through Main's own
+				# door, as a cache push would: saved stamp,
+				# not live. His name comes from the harness's
+				# Personal shelf (JB1980 bests) via the push.
+				_pinemhi2_contests = _pinemhi2_fixture_contests()
+				_pinemhi2_fetched_at = int(Time.get_unix_time_from_system()) - 3600
+				_pinemhi2_live = false
+				_pinemhi2_fetch_error = ""
+				_push_pinemhi2_data()
+				_pinemhi2_smoke_phase = 3
+				_pinemhi2_smoke_wait = 0
+		3:
+			# The three weekly panels wear real board faces.
+			var rows: Array = _room.tournament_rows()
+			var all_real: bool = true
+			var seen: int = 0
+			for i: int in range(rows.size()):
+				if str((rows[i] as Dictionary).get("kind", "")) != "pinemhi":
+					continue
+				seen += 1
+				if i >= _room._panels.size():
+					all_real = false
+					continue
+				var tex: Texture2D = _room._panels[i].current_texture()
+				if tex == null or tex.get_size() != Vector2(RoomSpecs.board_face_px()):
+					all_real = false
+			if seen == 3 and all_real:
+				_pinemhi2_room_legs()
+				_pinemhi2_smoke_phase = 4
+				_pinemhi2_smoke_wait = 0
+		4:
+			# Grabs: the room as the legs left it (the flat
+			# camera does not follow the drum, so the wall
+			# stands wide), plus each weekly panel's own
+			# rendered board face - the pixels the panel
+			# shows - for the legibility eyeball.
+			if _pinemhi2_smoke_wait > 25:
+				var grab: String = OS.get_environment("PVLDS_PINEMHI2_GRAB")
+				if grab != "":
+					var img: Image = get_viewport().get_texture().get_image()
+					var err: Error = img.save_png(grab)
+					print("PVLDS PINEMHI2 GRAB: ", grab, " err=", err, " size=", img.get_size())
+					var rows4: Array = _room.tournament_rows()
+					for i4: int in range(rows4.size()):
+						if str((rows4[i4] as Dictionary).get("kind", "")) != "pinemhi":
+							continue
+						if i4 >= _room._panels.size():
+							continue
+						var ftex: Texture2D = _room._panels[i4].current_texture()
+						if ftex == null:
+							continue
+						var cid4: String = str((_room._visible_games[i4] as GameEntry).game_id).trim_prefix("pinemhi:")
+						var fpath: String = grab.replace(".png", "-" + cid4 + ".png")
+						var ferr: Error = ftex.get_image().save_png(fpath)
+						print("PVLDS PINEMHI2 GRAB: ", fpath, " err=", ferr, " size=", ftex.get_size())
+				_finish_pinemhi2_smoke()
+
+
+func _pinemhi2_room_legs() -> void:
+	var rows: Array = _room.tournament_rows()
+	var pinemhi_idx: Array = []
+	var challenge_idx: Array = []
+	for i: int in range(rows.size()):
+		var kind: String = str((rows[i] as Dictionary).get("kind", ""))
+		if kind == "pinemhi":
+			pinemhi_idx.append(i)
+		elif kind == "challenge":
+			challenge_idx.append(i)
+	_pinemhi2_expect(pinemhi_idx.size() == 3, "room: three weekly rows stand (got %d)" % pinemhi_idx.size())
+	_pinemhi2_expect(challenge_idx.size() == 3 and (pinemhi_idx.is_empty() or int(pinemhi_idx[0]) > int(challenge_idx[challenge_idx.size() - 1])), "room: the weekly rows stand after the WoVP rows")
+	var ids: Array = []
+	for i2: Variant in pinemhi_idx:
+		ids.append(str((_room._visible_games[int(i2)] as GameEntry).game_id))
+	_pinemhi2_expect(ids == ["pinemhi:main", "pinemhi:five", "pinemhi:golf"], "room: weekly panels are main, five, golf in order (got %s)" % str(ids))
+	# His name rode the push (the harness shelf's JB1980 bests).
+	var state: Dictionary = _room.pinemhi_weekly_state()
+	_pinemhi2_expect(str(state.get("player_name", "")) == "JB1980", "room: his name derived at push time is JB1980 (got '%s')" % str(state.get("player_name", "")))
+	# The stale leg: this push was a cache push - not live -
+	# and every weekly board carries the saved line. Under
+	# PVLDS_PINEMHI2_NC=stale the push claims live and both
+	# halves fail by name.
+	_pinemhi2_expect(not bool(state.get("live", true)), "stale: the cache push reads not-live")
+	if pinemhi_idx.size() == 3:
+		var specs: Dictionary = {}
+		for i3: Variant in pinemhi_idx:
+			var sp: Dictionary = _room.pinemhi_board_spec_for(int(i3))
+			specs[str(sp.get("band_text", ""))] = sp
+		var main_spec: Dictionary = specs.get("PINEMHI - WEEKLY COMPETITION", {}) as Dictionary
+		_pinemhi2_expect(not main_spec.is_empty(), "room: the main board spec stands")
+		if not main_spec.is_empty():
+			_pinemhi2_expect(str(main_spec.get("title", "")) == "Rolling Stones", "room main: title is the contest's table")
+			_pinemhi2_expect(str(main_spec.get("sub", "")) == "Nov 1 - Nov 8", "room main: sub is the shortened window (got '%s')" % str(main_spec.get("sub", "")))
+			var srows: Array = _pinemhi2_spec_score_rows(main_spec)
+			_pinemhi2_expect(srows.size() == 6, "room main: 6 score rows (got %d)" % srows.size())
+			if not srows.is_empty():
+				var s0: Dictionary = srows[0] as Dictionary
+				_pinemhi2_expect(str(s0.get("name_text", "")) == "RetroGeek" and str(s0.get("score_text", "")) == "8,014,130", "room main: row 1 RetroGeek 8,014,130")
+			var his: Dictionary = _pinemhi2_spec_row_named(main_spec, "JB1980")
+			_pinemhi2_expect(bool(his.get("accent", false)) and int(his.get("size", 0)) == 42, "room main: his row (JB1980) takes the accent")
+			_pinemhi2_expect(_pinemhi2_spec_has_note(main_spec, "Saved standings - not yet refreshed"), "stale: the main board carries the saved-standings note")
+		var five_spec: Dictionary = specs.get("PINEMHI - WEEKLY 5-MINUTE", {}) as Dictionary
+		if not five_spec.is_empty():
+			_pinemhi2_expect(str(five_spec.get("title", "")) == "Bad Cats", "room five: title is Bad Cats")
+			var fhis: Dictionary = _pinemhi2_spec_row_named(five_spec, "JB1980")
+			_pinemhi2_expect(str(fhis.get("score_text", "")) == "10,725,280" and bool(fhis.get("accent", false)), "room five: his row leads at 10,725,280, accented")
+		# The golf-shape leg: distances ride VERBATIM - the
+		# pin note first, then "-620" and "-1.450", never
+		# comma-formatted scores. PVLDS_PINEMHI2_NC=golfscore
+		# breaks exactly this leg by name.
+		var golf_spec: Dictionary = specs.get("PINEMHI - WEEKLY GOLF", {}) as Dictionary
+		_pinemhi2_expect(not golf_spec.is_empty(), "golf-shape: the golf board spec stands")
+		if not golf_spec.is_empty():
+			var grows2: Array = golf_spec.get("rows", []) as Array
+			_pinemhi2_expect(not grows2.is_empty() and str((grows2[0] as Dictionary).get("kind", "")) == "note" and str((grows2[0] as Dictionary).get("text", "")) == "Pin is set at 43,900 - closest to the pin wins", "golf-shape: the pin note stands first")
+			var gsrows: Array = _pinemhi2_spec_score_rows(golf_spec)
+			_pinemhi2_expect(gsrows.size() == 2, "golf-shape: 2 distance rows (got %d)" % gsrows.size())
+			if gsrows.size() == 2:
+				_pinemhi2_expect(str((gsrows[0] as Dictionary).get("score_text", "")) == "-620", "golf-shape: row 1 distance is -620 verbatim (got '%s')" % str((gsrows[0] as Dictionary).get("score_text", "")))
+				_pinemhi2_expect(str((gsrows[1] as Dictionary).get("score_text", "")) == "-1.450", "golf-shape: row 2 distance is -1.450 verbatim (got '%s')" % str((gsrows[1] as Dictionary).get("score_text", "")))
+			var ghis: Dictionary = _pinemhi2_spec_row_named(golf_spec, "JB1980")
+			_pinemhi2_expect(bool(ghis.get("accent", false)), "golf-shape: his distance row takes the accent")
+	# The WoVP-unaffected leg: the standing WoVP boards'
+	# keys and seats are the baseline's, unchanged by the
+	# weekly rows standing behind them.
+	var now_boards: Array = []
+	for e: Variant in _room.board_state():
+		var entry: Dictionary = e as Dictionary
+		if str(entry.get("challenge_id", "")) != "":
+			now_boards.append({
+				"challenge_id": entry.get("challenge_id"),
+				"card_coord": entry.get("card_coord"),
+				"board_coord": entry.get("board_coord"),
+				"standing_key": entry.get("standing_key"),
+			})
+	_pinemhi2_expect(now_boards == _pinemhi2_smoke_boot_boards, "room: WoVP boards' keys and seats unchanged with weekly data standing")
+	# The weekly rows carry no companion board.
+	var companions_clear: bool = true
+	for e2: Variant in _room.board_state():
+		var entry2: Dictionary = e2 as Dictionary
+		var ridx: int = int(entry2.get("idx", -1))
+		if ridx >= 0 and ridx < rows.size() and str((rows[ridx] as Dictionary).get("kind", "")) == "pinemhi":
+			if bool(entry2.get("board_visible", true)) or str(entry2.get("standing_key", "x")) != "":
+				companions_clear = false
+	_pinemhi2_expect(companions_clear, "room: weekly rows stand with no companion board quad")
+	# A-press on a centred weekly panel launches nothing:
+	# its game has no builds and the tournament launch law
+	# seats challenges only.
+	if not pinemhi_idx.is_empty():
+		_room.launch_requested.connect(func(_g: GameEntry) -> void: _pinemhi2_launch_seen = true)
+		_room._set_centre(int(pinemhi_idx[0]), true)
+		_room._a_press()
+		_pinemhi2_expect(not _pinemhi2_launch_seen, "room: A-press on a weekly panel is inert (no launch)")
+
+
+func _pinemhi2_spec_score_rows(spec: Dictionary) -> Array:
+	var out: Array = []
+	for rv: Variant in (spec.get("rows", []) as Array):
+		var r: Dictionary = rv as Dictionary
+		if str(r.get("kind", "")) == "score":
+			out.append(r)
+	return out
+
+
+func _pinemhi2_spec_row_named(spec: Dictionary, player: String) -> Dictionary:
+	for rv: Variant in (spec.get("rows", []) as Array):
+		var r: Dictionary = rv as Dictionary
+		if str(r.get("kind", "")) == "score" and str(r.get("name_text", "")) == player:
+			return r
+	return {}
+
+
+func _pinemhi2_spec_has_note(spec: Dictionary, text: String) -> bool:
+	for rv: Variant in (spec.get("rows", []) as Array):
+		var r: Dictionary = rv as Dictionary
+		if str(r.get("kind", "")) == "note" and str(r.get("text", "")) == text:
+			return true
+	return false
+
+
 ## The honesty and his-row legs double as the negative
 ## controls' targets: PVLDS_WOVP_NC=clientid makes the
 ## client send Studio's id (the honesty leg fails by name);

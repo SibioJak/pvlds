@@ -707,6 +707,117 @@ static func tournament_state_spec(lines: Array) -> Dictionary:
 	}
 
 
+## PINEMHI2 (Part A): one PINemHi weekly board face - a
+## contest's interim standings from pinemhi.com, dressed
+## in the Tournament Room's own language (band, title,
+## window line, score rows). The band is a fixed PINemHi
+## teal for all three contests; the contest lives in the
+## band's words. His row - the name from his own PINemHi
+## files (PinemhiScores.player_name_for_config), matched
+## exactly - takes the accent ground and the larger size,
+## the WoVP boards' own his-row treatment. Golf's rows
+## are DISTANCES, never scores: their text rides the
+## site's own cell verbatim ("-1.450", "Hole in One"),
+## and the pin note stands first in the site's words.
+## A board served from the cache says so in its last
+## line, in the banner's own words.
+static func pinemhi_weekly_board_spec(contest: Dictionary, player_name: String, fetched_at: int, live: bool) -> Dictionary:
+	var cid: String = str(contest.get("id", ""))
+	var band_text: String = "PINEMHI - WEEKLY COMPETITION"
+	match cid:
+		"five":
+			band_text = "PINEMHI - WEEKLY 5-MINUTE"
+		"golf":
+			band_text = "PINEMHI - WEEKLY GOLF"
+	var rows: Array = []
+	var pin: String = str(contest.get("pin", ""))
+	if cid == "golf" and pin != "":
+		var pin_digits: String = pin.replace(".", "")
+		var pin_text: String = WovpChallenge.format_score(float(pin_digits.to_int())) if pin_digits.is_valid_int() else pin
+		rows.append({"kind": "note", "text": "Pin is set at %s - closest to the pin wins" % pin_text, "size": 30})
+	var contest_rows: Array = contest.get("rows", []) as Array
+	for rv: Variant in contest_rows.slice(0, 10):
+		var r: Dictionary = rv as Dictionary
+		var name: String = str(r.get("name", ""))
+		var accent: bool = player_name != "" and name == player_name
+		var score_text: String = ""
+		if cid == "golf":
+			score_text = str(r.get("value_text", ""))
+		else:
+			score_text = WovpChallenge.format_score(float(int(r.get("value", 0))))
+		rows.append({
+			"kind": "score",
+			"text": "#%d  %s  %s" % [int(r.get("pos", 0)), name, score_text],
+			"pos_text": "#%d" % int(r.get("pos", 0)),
+			"name_text": name,
+			"score_text": score_text,
+			"pending": false,
+			"accent": accent,
+			"size": 42 if accent else 40,
+		})
+	if not live and fetched_at > 0:
+		rows.append({"kind": "note", "text": "Saved standings - not yet refreshed", "size": 30})
+	return {
+		"kind": "board",
+		"bg": CARD_BG,
+		"band": Color(0.14, 0.45, 0.36), ## PALETTE's teal green - the PINemHi band on every weekly board
+		"band_text": band_text,
+		"band_size": 28,
+		"title": str(contest.get("table", "")),
+		"title_size": 46,
+		"title_max_lines": 1,
+		"sub": _pinemhi_window_sub(str(contest.get("window_start", "")), str(contest.get("window_end", ""))),
+		"sub_size": 26,
+		"sub_max_lines": 1,
+		"chips": [],
+		"rows": rows,
+		"footer_px": 0,
+		"ink_centre": true,
+		"spine_side": "left",
+	}
+
+
+## The weekly window in short dates: the site's own
+## "2026-11-01 22:00:04" strings become "Nov 1 - Nov 8".
+## A string that does not read as that shape rides raw.
+static func _pinemhi_window_sub(window_start: String, window_end: String) -> String:
+	var months: Array[String] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+	var a: String = _pinemhi_short_date(window_start, months)
+	var b: String = _pinemhi_short_date(window_end, months)
+	if a != "" and b != "":
+		return a + " - " + b
+	if window_start != "" and window_end != "":
+		return window_start + " --- " + window_end
+	return window_start + window_end
+
+
+static func _pinemhi_short_date(s: String, months: Array[String]) -> String:
+	if s.length() < 10 or s[4] != "-" or s[7] != "-":
+		return ""
+	var m_text: String = s.substr(5, 2)
+	var d_text: String = s.substr(8, 2)
+	if not m_text.is_valid_int() or not d_text.is_valid_int():
+		return ""
+	var m: int = m_text.to_int()
+	var d: int = d_text.to_int()
+	if m < 1 or m > 12 or d < 1 or d > 31:
+		return ""
+	return "%s %d" % [months[m - 1], d]
+
+
+## PINEMHI2: the weekly boards' failure face - the
+## tournament state face's shape wearing a PINemHi band,
+## so a fetch that failed with nothing saved says so in
+## plain words where the boards would stand. (The state
+## spec's own callers are untouched.)
+static func pinemhi_state_spec(lines: Array) -> Dictionary:
+	var spec: Dictionary = tournament_state_spec(lines)
+	spec["band"] = Color(0.14, 0.45, 0.36)
+	spec["band_text"] = "PINEMHI - WEEKLY"
+	spec["title"] = "PINemHi Weekly"
+	return spec
+
+
 ## The focused card's wing face (the graduation's Stage B):
 ## for a tournament table, the TR3 board itself (composed by
 ## tournament_board_spec - his row, the leader, the cut line,

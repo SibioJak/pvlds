@@ -1171,6 +1171,11 @@ var _wovp_shots_folder: String = "" ## ROOMSUBMIT: the config's screenshots fold
 var _wovp_fetched_at: int = 0 ## unix time the standing boards landed (0 = never)
 var _wovp_live: bool = false ## the standing boards came from a fetch this session (false = the disk cache's)
 var _wovp_fetch_error: String = "" ## the last fetch's failure, in words, when it failed - the wall says so rather than dressing stale boards as live
+var _pinemhi2_contests: Array = [] ## PINEMHI2 (Part A): the PINemHi weekly contests (Array of contest Dictionaries from PinemhiWeeklyClient), live or from the disk cache - pushed by Main (set_pinemhi_weekly)
+var _pinemhi2_fetched_at: int = 0 ## unix time the standing weekly boards landed (0 = never)
+var _pinemhi2_live: bool = false ## the standing weekly boards came from a fetch this session (false = the disk cache's)
+var _pinemhi2_fetch_error: String = "" ## the last weekly fetch's failure, in words, when it failed
+var _pinemhi2_player_name: String = "" ## his PINemHi registration name (from his own TOP10_Personal files, via Main) - the weekly boards accent his row by exact match
 var _centre_index: int = 0 ## the shelf index the drum is centred on: the popped card's index in _visible_games (the pop target and the power-on follow it; it is NOT the pad focus - focus may sit on the rail or the strip while the drum stays centred where browsing left it, and a letter pick swings the drum without moving the focus: the focus law)
 var _columns: int = 1 ## the standing view's column count: ceil(visible / 3 bands)
 var _swing_to: float = 0.0 ## drum yaw the live swing is heading to (the centred column's angle)
@@ -2281,6 +2286,91 @@ func set_wovp_data(d: Dictionary) -> void:
 	_apply_tourney_borders()
 
 
+## PINEMHI2 (Part A): Main's delivery of the PINemHi
+## weekly state - the three contests (live or the disk
+## cache's), when they landed, whether they are live, the
+## last fetch's failure, and his PINemHi name for the
+## his-row accent. Mirrors set_wovp_data's discipline,
+## place preservation included: a push that lands while
+## the Tournament Room stands rebuilds the wall under the
+## player's standing place.
+func set_pinemhi_weekly(d: Dictionary) -> void:
+	_pinemhi2_contests = []
+	var arr: Variant = d.get("contests", [])
+	if arr is Array:
+		var a: Array = arr
+		for c: Variant in a:
+			if c is Dictionary:
+				_pinemhi2_contests.append(c)
+	_pinemhi2_fetched_at = int(d.get("fetched_at", 0))
+	_pinemhi2_live = bool(d.get("live", false))
+	_pinemhi2_fetch_error = str(d.get("fetch_error", ""))
+	_pinemhi2_player_name = str(d.get("player_name", ""))
+	if _tournament:
+		# The place law, carried from set_wovp_data: the
+		# focused card's game (or the rail stop) is read
+		# before the recompute and re-seated after, when it
+		# still stands; a cold entry whose seat waited for
+		# real boards completes on the centred challenge.
+		var place_id: String = ""
+		var place_stop: String = ""
+		if _focused != null and _panels.has(_focused):
+			place_id = _focused.payload
+		elif _focused != null:
+			for k: Variant in _rail_quads.keys():
+				if _rail_quads[k] == _focused:
+					place_stop = str(k)
+					break
+		var had_challenge: bool = false
+		for row0: Variant in _tournament_rows:
+			if str((row0 as Dictionary).get("kind", "")) == "challenge":
+				had_challenge = true
+				break
+		_recompute_visible()
+		_rebuild_wall()
+		if place_id != "":
+			for i: int in range(_visible_games.size()):
+				if _visible_games[i].game_id == place_id:
+					_set_centre(i, true)
+					if i < _panels.size():
+						_set_focused(_panels[i])
+					break
+		elif place_stop != "":
+			_land_on_rail_stop(place_stop)
+		if not had_challenge and place_stop == "tournament" and debug_focus_nc != "tournland" \
+				and _centre_index >= 0 and _centre_index < _tournament_rows.size() \
+				and str((_tournament_rows[_centre_index] as Dictionary).get("kind", "")) == "challenge":
+			_land_on_wall_card()
+
+
+## PINEMHI2: the board spec a weekly row renders - its
+## contest's weekly board, or the PINemHi failure face
+## when the row carries no contest. {} for any other row.
+## The fill path and the smoke legs read the same spec.
+func pinemhi_board_spec_for(idx: int) -> Dictionary:
+	if idx < 0 or idx >= _tournament_rows.size():
+		return {}
+	var row: Dictionary = _tournament_rows[idx] as Dictionary
+	if str(row.get("kind", "")) != "pinemhi":
+		return {}
+	var contest: Dictionary = row.get("contest", {}) as Dictionary
+	if contest.is_empty():
+		return RoomSpecs.pinemhi_state_spec(row.get("lines", []))
+	return RoomSpecs.pinemhi_weekly_board_spec(contest, _pinemhi2_player_name, _pinemhi2_fetched_at, _pinemhi2_live)
+
+
+## PINEMHI2 smoke support: the standing weekly push, as
+## Main delivered it (the room's own truth for the legs).
+func pinemhi_weekly_state() -> Dictionary:
+	return {
+		"contests": _pinemhi2_contests.size(),
+		"fetched_at": _pinemhi2_fetched_at,
+		"live": _pinemhi2_live,
+		"fetch_error": _pinemhi2_fetch_error,
+		"player_name": _pinemhi2_player_name,
+	}
+
+
 func tournament_active() -> bool:
 	return _tournament
 
@@ -2402,8 +2492,7 @@ func _build_tournament_rows() -> Array:
 			"Add your key in SETUP - PASTE KEY there (copy it first), or paste it on the desktop desk.",
 			"The key lives only on this PC.",
 		]))
-		return rows
-	if _wovp_challenges.is_empty():
+	elif _wovp_challenges.is_empty():
 		if _wovp_fetch_error != "" and _wovp_fetched_at == 0:
 			rows.append(_tournament_state_row([
 				"Could not reach WoVP.",
@@ -2419,15 +2508,53 @@ func _build_tournament_rows() -> Array:
 				"No live challenges right now.",
 				"Last checked " + WovpTime.format_stamp(_wovp_fetched_at) + ".",
 			]))
-		return rows
-	for ch: WovpChallenge in _wovp_challenges:
-		var game: GameEntry = _match_challenge(ch)
-		var owned: bool = game != null
-		if not owned:
-			game = _tournament_unowned_game(ch)
-		rows.append({"kind": "challenge", "challenge": ch, "game": game, "owned": owned,
-			"build_owned": owned and _challenge_build_owned(game, ch), "lines": []})
+	else:
+		for ch: WovpChallenge in _wovp_challenges:
+			var game: GameEntry = _match_challenge(ch)
+			var owned: bool = game != null
+			if not owned:
+				game = _tournament_unowned_game(ch)
+			rows.append({"kind": "challenge", "challenge": ch, "game": game, "owned": owned,
+				"build_owned": owned and _challenge_build_owned(game, ch), "lines": []})
+	# PINEMHI2 (Part A): the weekly boards append in EVERY
+	# case above - behind the WoVP rows (or their state
+	# row), never displacing them.
+	rows.append_array(_build_pinemhi_rows())
 	return rows
+
+
+## PINEMHI2 (Part A): the weekly rows from the standing
+## push. One row per contest, in the client's order, its
+## panel a board-mode panel (like the state row's) whose
+## game is a synthetic stand-in named for the contest's
+## table - a fact on a board, not a launch path: the game
+## has no builds, matches nothing in the library, and the
+## tournament launch law (challenge rows he owns, only)
+## leaves its A-press inert. No contests and a failed
+## first fetch stand ONE failure row in plain words; no
+## contests and no failure (never fetched - the boot
+## fetch makes it transient) stand nothing.
+func _build_pinemhi_rows() -> Array:
+	var out: Array = []
+	if not _pinemhi2_contests.is_empty():
+		for cv: Variant in _pinemhi2_contests:
+			var c: Dictionary = cv as Dictionary
+			var game: GameEntry = GameEntry.new()
+			game.game_id = "pinemhi:" + str(c.get("id", ""))
+			game.title = str(c.get("table", ""))
+			out.append({"kind": "pinemhi", "contest": c, "game": game, "owned": false,
+				"build_owned": false, "lines": []})
+	elif _pinemhi2_fetch_error != "" and _pinemhi2_fetched_at == 0:
+		var fgame: GameEntry = GameEntry.new()
+		fgame.game_id = "pinemhi:state"
+		fgame.title = "PINemHi Weekly"
+		out.append({"kind": "pinemhi", "contest": {}, "game": fgame, "owned": false,
+			"build_owned": false, "lines": [
+				"PINemHi weekly boards could not be fetched.",
+				_pinemhi2_fetch_error,
+				"Press REFRESH on the rail to try again.",
+			]})
+	return out
 
 
 func _tournament_state_row(lines: Array) -> Dictionary:
@@ -2889,10 +3016,51 @@ func _tourn_state_idx(idx: int) -> bool:
 		and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state"
 
 
+## PINEMHI2: the rows whose panel IS a board - the lone
+## state row and the weekly rows. Every card-face path
+## (fill, swap, compose-ahead, heal, audit, eviction,
+## landing census) skips them: their faces are rendered
+## by _fill_tournament_state_faces onto the board panel,
+## never through the card-face pipeline.
+func _tourn_board_panel_idx(idx: int) -> bool:
+	return _tournament and idx >= 0 and idx < _tournament_rows.size() \
+		and str((_tournament_rows[idx] as Dictionary).get("kind", "")) in ["state", "pinemhi"]
+
+
+## PINEMHI2: how many of the standing tournament rows
+## are WoVP challenges - the pair block's own census.
+## The weekly rows append behind them and never join the
+## pairing, so the block's geometry (its group count, and
+## with it every board's side) is computed from the
+## challenges alone: WoVP seats are identical whether or
+## not weekly data stands behind them.
+func _tourn_challenge_count() -> int:
+	var n: int = 0
+	for rv: Variant in _tournament_rows:
+		if str((rv as Dictionary).get("kind", "")) == "challenge":
+			n += 1
+	return n
+
+
+## PINEMHI2: a weekly row's seat - the weekly panels are
+## board panels (no pair, no companion), standing in a
+## run of their own on the middle band in the columns
+## right after the WoVP pair block (after the lone state
+## row's column when no challenges stand).
+func _pinemhi_coord(idx: int) -> Vector2i:
+	var ordinal: int = 0
+	for i: int in range(idx):
+		if i < _tournament_rows.size() and str((_tournament_rows[i] as Dictionary).get("kind", "")) == "pinemhi":
+			ordinal += 1
+	var groups: int = maxi(1, int(ceil(float(maxi(1, _tourn_challenge_count())) / 2.0)))
+	var start_col: int = TOURN_BLOCK_COL0 + 2 * groups
+	return Vector2i(start_col + ordinal, TOURN_BAND0)
+
+
 func _tourn_pair_coords(idx: int) -> Dictionary:
 	var g: int = idx / 2
 	var band: int = TOURN_BAND0 + idx % TOURN_BAND_COUNT
-	var groups: int = maxi(1, int(ceil(float(maxi(1, _visible_games.size())) / 2.0)))
+	var groups: int = maxi(1, int(ceil(float(maxi(1, _tourn_challenge_count())) / 2.0)))
 	var gc: float = float(groups - 1) / 2.0
 	var board_left: bool = float(g) < gc
 	var left_col: int = TOURN_BLOCK_COL0 + 2 * g
@@ -2907,8 +3075,10 @@ func _tourn_pair_coords(idx: int) -> Dictionary:
 
 
 func _board_coord(idx: int) -> Vector2i:
-	if not _tournament or _tourn_state_idx(idx):
+	if not _tournament or idx < 0 or idx >= _tournament_rows.size():
 		return Vector2i(-1, -1)
+	if str((_tournament_rows[idx] as Dictionary).get("kind", "")) != "challenge":
+		return Vector2i(-1, -1) ## only a challenge row carries a companion board; state and weekly rows ARE boards
 	return (_tourn_pair_coords(idx)["board"] as Vector2i)
 
 
@@ -2918,6 +3088,9 @@ func _grid_coord(index: int) -> Vector2i:
 	if _tournament:
 		if _tourn_state_idx(index):
 			return Vector2i(TOURN_BLOCK_COL0, TOURN_BAND0)
+		if index >= 0 and index < _tournament_rows.size() \
+				and str((_tournament_rows[index] as Dictionary).get("kind", "")) == "pinemhi":
+			return _pinemhi_coord(index)
 		return (_tourn_pair_coords(index)["card"] as Vector2i)
 	return Vector2i(index / BAND_COUNT, index % BAND_COUNT)
 
@@ -3184,7 +3357,9 @@ func _pool_card(game: GameEntry) -> Dictionary:
 	# Since the Tournament redesign, challenge panels are
 	# CARDS (the board stands beside the centred one as
 	# furniture); only the state row still wears a board face.
-	var mode: String = "board" if (_tournament and game.game_id == "wovp:state") else "card"
+	# PINEMHI2: the weekly rows wear board faces too - their
+	# panels ARE their boards (no card, no companion).
+	var mode: String = "board" if (_tournament and (game.game_id == "wovp:state" or game.game_id.begins_with("pinemhi:"))) else "card"
 	var nodes: Dictionary = _panel_pool.get(game.game_id, {}) as Dictionary
 	if not nodes.is_empty() and str(nodes.get("mode", "")) != mode:
 		var old_root: ClickableQuad = nodes.get("root") as ClickableQuad
@@ -3739,6 +3914,16 @@ func _rebuild_wall() -> void:
 		# The block's own extent: pad columns + the two-band
 		# block (GRADFIX4 item 3 - see TOURN_BLOCK_COL0).
 		_columns = TOURN_BLOCK_COL0 + 2 * maxi(1, int(ceil(float(maxi(1, _visible_games.size())) / float(TOURN_BAND_COUNT))))
+		# PINEMHI2: the weekly run seats past the pair block
+		# (see _pinemhi_coord) - the drum's extent covers its
+		# last column too.
+		var pinemhi_n: int = 0
+		for rv2: Variant in _tournament_rows:
+			if str((rv2 as Dictionary).get("kind", "")) == "pinemhi":
+				pinemhi_n += 1
+		if pinemhi_n > 0:
+			var groups2: int = maxi(1, int(ceil(float(maxi(1, _tourn_challenge_count())) / 2.0)))
+			_columns = maxi(_columns, TOURN_BLOCK_COL0 + 2 * groups2 + pinemhi_n)
 	else:
 		_columns = maxi(1, int(ceil(float(maxi(1, _visible_games.size())) / 3.0)))
 	if _status_label == null:
@@ -4759,8 +4944,7 @@ func _nb_apply_swap(idx: int, fkey: String, hit: Array) -> void:
 func _nb_try_enqueue_swap(idx: int) -> bool:
 	if idx < 0 or idx >= _visible_games.size() or idx >= _panels.size():
 		return false
-	if _tournament and idx < _tournament_rows.size() \
-			and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+	if _tourn_board_panel_idx(idx):
 		return false
 	var game: GameEntry = _visible_games[idx]
 	if _blackface_nc(game):
@@ -5568,8 +5752,7 @@ func _art_ahead_pass() -> void:
 func _compose_ahead_one(idx: int, gen: int, centre_col0: int) -> int:
 	if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
 		return 0
-	if _tournament and idx < _tournament_rows.size() \
-			and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+	if _tourn_board_panel_idx(idx):
 		return 0
 	var game: GameEntry = _visible_games[idx]
 	var art_file: String = _face_path_for(game)
@@ -5788,8 +5971,7 @@ func _fill_one_face(idx: int, gen: int) -> void:
 func _fill_one_face_sync(idx: int, gen: int) -> void:
 	if idx < 0 or idx >= _panels.size() or idx >= _visible_games.size():
 		return
-	if _tournament and idx < _tournament_rows.size() \
-			and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+	if _tourn_board_panel_idx(idx):
 		return # the state panel wears its board face (see _fill_tournament_state_faces), never a card face
 	var game: GameEntry = _visible_games[idx]
 	var quad: ClickableQuad = _panels[idx]
@@ -6061,8 +6243,7 @@ func _heal_panel_faces() -> void:
 		var cc: int = _grid_coord(idx).x
 		if cc < _panel_window_lo or cc > _panel_window_hi:
 			continue
-		if _tournament and idx < _tournament_rows.size() \
-				and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+		if _tourn_board_panel_idx(idx):
 			continue # state panels wear board faces, not card faces
 		var game: GameEntry = _visible_games[idx]
 		var quad: ClickableQuad = _panels[idx]
@@ -6179,8 +6360,7 @@ func _guarantee_audit() -> void:
 		var cc: int = _grid_coord(idx).x
 		if cc < _panel_window_lo or cc > _panel_window_hi:
 			continue
-		if _tournament and idx < _tournament_rows.size() \
-				and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+		if _tourn_board_panel_idx(idx):
 			continue # state panels wear board faces, not card faces
 		var game: GameEntry = _visible_games[idx]
 		var quad: ClickableQuad = _panels[idx]
@@ -6292,8 +6472,7 @@ func _evict_after_settle() -> void:
 			var cc: int = _grid_coord(idx).x
 			if cc < _panel_window_lo or cc > _panel_window_hi:
 				continue
-			if _tournament and idx < _tournament_rows.size() \
-					and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+			if _tourn_board_panel_idx(idx):
 				continue # state panels wear board faces, not card faces
 			var game: GameEntry = _visible_games[idx]
 			var stamped: String = str(_panel_face_key.get(game.game_id, ""))
@@ -6374,8 +6553,7 @@ func landing_census() -> Dictionary:
 		var cc: int = _grid_coord(idx).x
 		if cc < _panel_window_lo or cc > _panel_window_hi:
 			continue
-		if _tournament and idx < _tournament_rows.size() \
-				and str((_tournament_rows[idx] as Dictionary).get("kind", "")) == "state":
+		if _tourn_board_panel_idx(idx):
 			continue # state panels wear board faces, not card faces
 		total += 1
 		var game: GameEntry = _visible_games[idx]
@@ -6403,10 +6581,18 @@ func landing_census() -> Dictionary:
 func _fill_tournament_state_faces(gen: int) -> void:
 	for i: int in range(_panels.size()):
 		var row: Dictionary = _tournament_rows[i]
-		if str(row.get("kind", "")) != "state":
+		var kind: String = str(row.get("kind", ""))
+		if kind != "state" and kind != "pinemhi":
 			continue
 		var quad: ClickableQuad = _panels[i]
-		var spec: Dictionary = RoomSpecs.tournament_state_spec(row.get("lines", []))
+		# PINEMHI2: a weekly row renders its contest's board
+		# face (or the PINemHi failure face when its contest
+		# is empty); the state row's face is unchanged.
+		var spec: Dictionary = {}
+		if kind == "pinemhi":
+			spec = pinemhi_board_spec_for(i)
+		else:
+			spec = RoomSpecs.tournament_state_spec(row.get("lines", []))
 		var tex: Texture2D = await _factory.render_texture(spec, RoomSpecs.board_face_px())
 		if gen != _gen:
 			return
@@ -6501,8 +6687,8 @@ func _tournament_board_key(idx: int) -> String:
 ## placeholder until its texture lands asynchronously.
 func _seat_tournament_boards() -> void:
 	for idx: int in range(_visible_games.size()):
-		if _tourn_state_idx(idx):
-			_board_nodes.append(null)
+		if _tourn_board_panel_idx(idx):
+			_board_nodes.append(null) # state and PINemHi weekly rows wear the board on their own panel - no companion quad
 			_board_base_pos.append(Vector3.ZERO)
 			_board_pop_dir.append(Vector3.ZERO)
 			continue
@@ -6605,8 +6791,8 @@ func _run_tournament_board_fill() -> void:
 func _render_tournament_board(idx: int) -> void:
 	if not _tournament or idx < 0 or idx >= _tournament_rows.size() or idx >= _board_nodes.size():
 		return
-	if _tourn_state_idx(idx):
-		return
+	if _tourn_board_panel_idx(idx):
+		return # state and PINemHi weekly rows carry no companion board - their faces live on their own panels
 	var row: Dictionary = _tournament_rows[idx] as Dictionary
 	var ch: WovpChallenge = row["challenge"] as WovpChallenge
 	if ch == null:
@@ -6690,7 +6876,7 @@ func _heal_tournament_boards() -> void:
 	_board_heal_msec = now
 	var needs_pass: bool = false
 	for idx: int in range(_board_nodes.size()):
-		if idx >= _tournament_rows.size() or _tourn_state_idx(idx):
+		if idx >= _tournament_rows.size() or _tourn_board_panel_idx(idx):
 			continue
 		var row: Dictionary = _tournament_rows[idx] as Dictionary
 		var ch: WovpChallenge = row["challenge"] as WovpChallenge
@@ -6741,7 +6927,7 @@ func board_state() -> Array:
 	var out: Array = []
 	for idx: int in range(_visible_games.size()):
 		var cc: Vector2i = _grid_coord(idx)
-		if not _tournament or _tourn_state_idx(idx):
+		if not _tournament or _tourn_board_panel_idx(idx):
 			out.append({
 				"idx": idx, "challenge_id": "", "card_coord": cc,
 				"board_coord": Vector2i(-1, -1), "side": "",
