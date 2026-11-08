@@ -3548,6 +3548,21 @@ func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 	# state face) starts on the CLEAR texture, like a standing
 	# board - no face yet reads as no fill, never a dark slab.
 	q.setup("panel", game.game_id, clear_tex() if mode == "board" else _placeholder_tex, size)
+	if mode == "board" and debug_fieldpass_nc != "slab":
+		# FIELDPASS (item 2): a board-mode panel's face is
+		# FRAMELESS (CardFace hides a board's ground - the
+		# text block stands on transparency), so the quad's
+		# filled highlight frame - a solid quad behind the
+		# face - shows THROUGH it whole when the panel takes
+		# focus: the bright-cyan slab Chris convicted in the
+		# field ("focus background is fugly"). The board
+		# panel carries no filled frame; its focus reads off
+		# the standing signals - the pop toward the viewer
+		# and its band - the machined strip's own precedent
+		# (its sections suppress the frame for the lift).
+		# The NC seam (PVLDS_FIELDPASS_NC=slab) restores the
+		# frame so the pinemhi2 focus-frame legs fail by name.
+		q.suppress_frame = true
 	# The quad's own highlight frame is sized off the face
 	# (x1.055): on a dome card that ring would outgrow the
 	# prototype's frame geometry the clearance proof measured,

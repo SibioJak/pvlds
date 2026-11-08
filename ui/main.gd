@@ -18409,11 +18409,34 @@ func _drive_pinemhi2_room() -> void:
 				_pinemhi2_smoke_phase = 4
 				_pinemhi2_smoke_wait = 0
 		4:
-			# Grabs: the room as the legs left it (the flat
-			# camera does not follow the drum, so the wall
-			# stands wide), plus each weekly panel's own
-			# rendered board face - the pixels the panel
-			# shows - for the legibility eyeball.
+			# FIELDPASS grab, first of the pair: the room as
+			# the legs left it - focus standing on a WoVP
+			# challenge card, its frame up, its board beside
+			# it frameless (the flat camera does not follow
+			# the drum, so the wall stands wide). Then focus
+			# takes the Weekly 5-Minute panel, centred, for
+			# the pair's second shot.
+			if _pinemhi2_smoke_wait > 25:
+				var grab4: String = OS.get_environment("PVLDS_PINEMHI2_GRAB")
+				if grab4 != "":
+					var img4: Image = get_viewport().get_texture().get_image()
+					var wpath: String = grab4.replace(".png", "-wovp-focused.png")
+					var werr: Error = img4.save_png(wpath)
+					print("PVLDS PINEMHI2 GRAB: ", wpath, " err=", werr, " size=", img4.get_size())
+				var rows4c: Array = _room.tournament_rows()
+				for i4c: int in range(rows4c.size()):
+					if str((rows4c[i4c] as Dictionary).get("kind", "")) == "pinemhi" \
+							and str((_room._visible_games[i4c] as GameEntry).game_id) == "pinemhi:five":
+						_room._set_centre(i4c, true)
+						_room._set_focused(_room._panels[i4c])
+						break
+				_pinemhi2_smoke_phase = 5
+				_pinemhi2_smoke_wait = 0
+		5:
+			# Grabs: the focused weekly panel's room shot,
+			# plus each weekly panel's own rendered board
+			# face - the pixels the panel shows - for the
+			# legibility eyeball.
 			if _pinemhi2_smoke_wait > 25:
 				var grab: String = OS.get_environment("PVLDS_PINEMHI2_GRAB")
 				if grab != "":
@@ -18611,6 +18634,26 @@ func _pinemhi2_room_legs() -> void:
 			if bool(entry2.get("board_visible", true)) or str(entry2.get("standing_key", "x")) != "":
 				companions_clear = false
 	_pinemhi2_expect(companions_clear, "room: weekly rows stand with no companion board quad")
+	# FIELDPASS (item 2): the focus dress of a weekly
+	# panel. Its face is frameless, so a filled focus
+	# frame behind it stands through the whole panel as
+	# a solid slab (the field's cyan board). The weekly
+	# panel carries NO highlight frame - its focus reads
+	# off its pop and band - while a WoVP challenge CARD
+	# keeps its frame exactly as before. Under
+	# PVLDS_FIELDPASS_NC=slab the frame returns and the
+	# weekly half fails by name. The legs leave focus on
+	# the challenge card; the grab phases below take the
+	# focused-WoVP shot first, then the focused-weekly one.
+	if not pinemhi_idx.is_empty() and not challenge_idx.is_empty():
+		var wpanel: ClickableQuad = _room._panels[int(pinemhi_idx[1])]
+		_room._set_focused(wpanel)
+		_pinemhi2_expect(not wpanel.highlight_visible(),
+			"focus frame: a focused weekly panel shows no filled focus frame - frameless like a focused WoVP board")
+		var cpanel: ClickableQuad = _room._panels[int(challenge_idx[0])]
+		_room._set_focused(cpanel)
+		_pinemhi2_expect(cpanel.highlight_visible(),
+			"focus frame: a focused WoVP card still shows its highlight frame")
 	# A-press on a centred weekly panel launches nothing:
 	# its game has no builds and the tournament launch law
 	# seats challenges only.
