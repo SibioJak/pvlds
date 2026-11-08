@@ -148,7 +148,19 @@ func closeProcessWindows(pid int) bool {
 // startDetached starts the process in its own group, detached from
 // any console, and returns its pid without waiting on it.
 func startDetached(path string, args []string) (int, error) {
+	return startDetachedInDir(path, args, "")
+}
+
+// startDetachedInDir is startDetached with the child's working
+// directory set ("" keeps the inherited one). WATCHERFIX: the
+// PINemHi watcher resolves pinemhi.ini relative to its working
+// directory, so its start must name its own folder; the launcher
+// relaunch keeps startDetached (inherited dir) exactly as before.
+func startDetachedInDir(path string, args []string, dir string) (int, error) {
 	cmd := exec.Command(path, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: detachedProcess | createNewProcessGroup,
 		HideWindow:    false,

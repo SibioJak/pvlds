@@ -65,6 +65,42 @@ func pinemhiDecide(manage bool, state string, running bool) pinemhiAction {
 	return pinemhiStart
 }
 
+// pinemhiStartLatch is the failed-start latch (WATCHERFIX). Field
+// evidence (2026-11-08): an unstartable watcher (its exe demanded
+// elevation) was retried on every 400 ms tick for six minutes -
+// hundreds of identical "could not start" log lines. The law now:
+// a failed start logs ONCE per spell and latches; no further start
+// is attempted until the spell ends. The spell is keyed on the
+// contract's manage/folder values: sync() re-arms the latch when
+// either changes (a settings toggle or a folder edit is a new
+// spell), and a new watchdog process starts with a fresh latch by
+// construction. Adoption checks are NOT latched - the duty may
+// keep noticing a watcher that appears by other means; only the
+// failed START is silenced.
+type pinemhiStartLatch struct {
+	manage bool   // the spell's key: the manage value it belongs to
+	folder string // the spell's key: the folder value it belongs to
+	failed bool   // a start has failed inside this spell
+}
+
+// sync aligns the latch with the contract's current manage/folder
+// values. Any change ends the spell: the failure is forgotten and
+// the next start decision may attempt (and log) once more.
+func (l *pinemhiStartLatch) sync(manage bool, folder string) {
+	if l.manage != manage || l.folder != folder {
+		l.manage = manage
+		l.folder = folder
+		l.failed = false
+	}
+}
+
+// mayStart reports whether a start attempt is allowed in this
+// spell (false once a start has failed and latched).
+func (l *pinemhiStartLatch) mayStart() bool { return !l.failed }
+
+// recordFailure latches the spell after a failed start.
+func (l *pinemhiStartLatch) recordFailure() { l.failed = true }
+
 // pinemhiShouldClose is the exit decision: PVLDS closes only a
 // watcher it started, and only when management is on. The NC
 // seam (PVLDS_PINEMHI_NC=closeadopted) deliberately breaks the

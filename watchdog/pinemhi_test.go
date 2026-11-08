@@ -69,3 +69,43 @@ func TestPinemhiShouldCloseNCSeam(t *testing.T) {
 		t.Error("NC closeadopted: management off must still never close")
 	}
 }
+
+// WATCHERFIX: the failed-start latch. A failed start logs once per
+// spell; the spell is keyed on manage/folder, so a settings toggle
+// or a folder change re-arms it, and steady values never do.
+func TestPinemhiStartLatch(t *testing.T) {
+	var l pinemhiStartLatch
+	l.sync(true, `D:\vPinball\Pinemhi`)
+	if !l.mayStart() {
+		t.Fatal("fresh spell: mayStart = false, want true")
+	}
+	l.recordFailure()
+	if l.mayStart() {
+		t.Fatal("after a failed start: mayStart = true, want false (latched)")
+	}
+	// Steady ticks with the same values: the spell holds.
+	for i := 0; i < 10; i++ {
+		l.sync(true, `D:\vPinball\Pinemhi`)
+	}
+	if l.mayStart() {
+		t.Fatal("same manage/folder across ticks: latch released, want held")
+	}
+	// A folder change is a new spell.
+	l.sync(true, `E:\elsewhere\Pinemhi`)
+	if !l.mayStart() {
+		t.Fatal("folder change: mayStart = false, want true (new spell)")
+	}
+	l.recordFailure()
+	// Toggling manage off and back on is a new spell.
+	l.sync(false, `E:\elsewhere\Pinemhi`)
+	l.sync(true, `E:\elsewhere\Pinemhi`)
+	if !l.mayStart() {
+		t.Fatal("manage off->on: mayStart = false, want true (new spell)")
+	}
+	// And a failure in the new spell latches again.
+	l.recordFailure()
+	l.sync(true, `E:\elsewhere\Pinemhi`)
+	if l.mayStart() {
+		t.Fatal("second spell failure: mayStart = true, want false (latched again)")
+	}
+}

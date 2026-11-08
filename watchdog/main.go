@@ -287,9 +287,10 @@ func main() {
 		focusPushSession  int  // the session the one-shot focus handoff belongs to
 		focusPushed       bool // the handoff has been attempted for focusPushSession
 		sessionActivator  activator
-		actRuntimeSession int   // the session actRuntimeMs belongs to
-		actRuntimeMs      int64 // first tick the session's runtime stamp was observed (the activation deadline's anchor)
-		pinemhiMissingLog bool  // the manage-on-but-no-exe line has been logged this duty spell (no retry spam)
+		actRuntimeSession int               // the session actRuntimeMs belongs to
+		actRuntimeMs      int64             // first tick the session's runtime stamp was observed (the activation deadline's anchor)
+		pinemhiMissingLog bool              // the manage-on-but-no-exe line has been logged this duty spell (no retry spam)
+		pinemhiLatch      pinemhiStartLatch // WATCHERFIX: a failed watcher start logs once per spell, then latches
 	)
 
 	relaunch := func(c *Contract, why string) {
@@ -605,6 +606,9 @@ func main() {
 		// hours, not inside a table session, so hand-offs - which
 		// change session state under a living watchdog - never
 		// touch it. Off means this block does nothing at all.
+		// WATCHERFIX: the failed-start latch follows the contract's
+		// manage/folder values - a change to either is a new spell.
+		pinemhiLatch.sync(c.PinemhiManage, c.PinemhiFolder)
 		if c.PinemhiManage && c.PinemhiWatcherState == "" {
 			exe := pinemhiExePath(c.PinemhiFolder)
 			if !pinemhiFileExists(exe) {
@@ -631,8 +635,16 @@ func main() {
 						}
 					})
 				case pinemhiStart:
-					pid, serr := startDetached(exe, nil)
-					if serr != nil {
+					// WATCHERFIX: the watcher starts INSIDE its own
+					// folder (it resolves pinemhi.ini relative to its
+					// working directory), and a failed start latches
+					// for the spell - logged once, never retried per
+					// tick. A latched spell stays quiet here; the
+					// adopt check above still runs every tick.
+					if !pinemhiLatch.mayStart() {
+						// latched: a start already failed this spell
+					} else if pid, serr := startDetachedInDir(exe, nil, c.PinemhiFolder); serr != nil {
+						pinemhiLatch.recordFailure()
 						logf("watchdog: pinemhi: could not start the watcher at %s: %v", exe, serr)
 					} else {
 						logf("watchdog: pinemhi: started the watcher (pid %d); PVLDS will close it at exit", pid)
