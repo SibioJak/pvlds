@@ -561,6 +561,71 @@ void fragment() {
 """
 const BG_STAR_NEAR_RADIUS: float = 12.0 ## the near star shell's distance (the far shell rides BG_STAR_RADIUS, 30)
 
+## The STARFIELD round: LAYERED is no longer the two shells.
+## Chris's words: "more depth, as far out to infinity as you
+## can get... more like a snow globe than a starfield" - the
+## two shells were two findable surfaces. LAYERED now stands
+## a continuous VOLUME of real star positions: bands of
+## stars on log-spaced radii from just outside the wall
+## (3.60 m) out to hundreds of metres, each band a MultiMesh
+## of small quads facing the eye, placed once at build and
+## never touched per frame. Apparent size and brightness
+## attenuate along the same log scale, so the far field
+## dissolves into black below perception - infinity is the
+## ABSENCE of a far wall, not a farther one. Each band
+## drifts about +Y at its own rate, log-interpolated
+## between the standing drift endpoints (near BG_DRIFT_
+## NEAR_DEG, far BG_DRIFT_FAR_DEG): drift depth-scaled by
+## construction, one rotation increment per band per frame,
+## zero per-frame allocation (the interface-speed gate).
+## FLAT keeps the two shells' code exactly as it stood -
+## the far shell alone, static; OFF stands nothing. Behind
+## the volume a backdrop sphere carries ONLY the far
+## shell's deep colour and milky band (no stars of its
+## own), so the room's dark enclosure survives with no
+## star-bearing surface in it. The legacy seams: PVLDS_BG_
+## NC=shells stands the two old shells in layered instead
+## of the volume (the starfield smoke's NC); =uv keeps its
+## GRADFIX4 meaning on that same legacy set.
+const BG_VOLUME_RADII: Array[float] = [4.6, 7.5, 12.1, 19.6, 31.8, 51.5, 83.5, 135.0, 219.0, 350.0] ## the volume's band radii in metres, near to far (log-spaced, ratio ~1.62)
+const BG_VOLUME_COUNT_BASE: float = 300.0 ## stars on the innermost band; a band's count grows as radius^BG_VOLUME_COUNT_GROWTH
+const BG_VOLUME_COUNT_GROWTH: float = 0.38
+const BG_VOLUME_STAR_DEG: float = 0.30 ## a near star's angular diameter in degrees; shrinks mildly with depth (BG_VOLUME_FAR_SHRINK at the far edge)
+const BG_VOLUME_FAR_SHRINK: float = 0.55 ## the far edge's angular-size factor (brightness falls to BG_VOLUME_FAR_DIM on the same scale)
+const BG_VOLUME_FAR_DIM: float = 0.38 ## the far edge's brightness factor
+const BG_VOLUME_TINT: Color = Color(0.90, 0.93, 1.0) ## the shells' star tint, carried into the volume's instance colours
+const BG_BACKDROP_RADIUS: float = 500.0 ## the starless backdrop's distance - beyond the far band, inside the cameras' far plane
+## The backdrop's shader: the far shell's sky WITHOUT its
+## stars - the same deep colour, the same milky band
+## circling the equator, nothing a head turn can find an
+## edge on.
+const BG_BACKDROP_SHADER: String = """
+shader_type spatial;
+render_mode unshaded, cull_front, depth_draw_opaque;
+uniform vec4 deep_color : source_color = vec4(0.006, 0.008, 0.018, 1.0);
+varying vec3 local_pos;
+void vertex() {
+	local_pos = VERTEX;
+}
+void fragment() {
+	vec3 dir = normalize(local_pos);
+	float band = exp(-pow(dir.y * 3.2, 2.0));
+	vec3 col = deep_color.rgb + vec3(0.016, 0.021, 0.038) * band;
+	ALBEDO = col;
+}
+"""
+## A volume star's shader: the instance colour IS the star
+## (the MultiMesh writes tint x brightness per star); the
+## quad faces the eye by its instance basis (see
+## _build_star_volume), so no billboarding runs per frame.
+const BG_VOLUME_STAR_SHADER: String = """
+shader_type spatial;
+render_mode unshaded, cull_disabled, depth_draw_opaque;
+void fragment() {
+	ALBEDO = COLOR.rgb;
+}
+"""
+
 ## The Launch button's seat on a card: the dome face carries
 ## NO name strip inside it (the nameplate rides on the card),
 ## so the button sits in the card's lower third, below the
@@ -977,6 +1042,8 @@ var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared mat
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
 var _bg_starfield: MeshInstance3D = null
 var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD FIX round's depth layer)
+var _bg_backdrop: MeshInstance3D = null ## STARFIELD: the starless deep-colour backdrop behind the volume (LAYERED only)
+var _bg_volume_bands: Array[MultiMeshInstance3D] = [] ## STARFIELD: the volume's band nodes, near to far, each centred on EYE and drifting at its own depth-scaled rate
 var _starfield_mode: String = "layered" ## the SETUP dial: "layered" | "flat" | "off" (see set_starfield_mode)
 var _wall_motion_mode: String = "stepped" ## OPTIMIZE: STEPPED is the only gait - the field stands for the SETUP panel's label, and set_wall_motion_mode coerces every value to "stepped"
 var _bg_ring: MeshInstance3D = null ## always null since GRADFIX4 removed the orbit ring (item 5e); background_layers() skips it
@@ -1618,7 +1685,7 @@ func _build_environment() -> void:
 ## graduation smoke's world-lock leg can fail by name).
 ## The starfield dial (the SETUP panel's STARS button rides
 ## it), with the GRADFIX4 sky-pass semantics: "layered"
-## shows both star shells AND drifts them (each on its own
+## showed both star shells AND drifted them (each on its own
 ## slow world-space rotation about the viewer - the floating
 ## parallax the user specced), "flat" shows the far shell
 ## alone, static, "off" no stars. The dial touches nothing
@@ -1626,6 +1693,12 @@ func _build_environment() -> void:
 ## stack. Every layer stays parented to the room
 ## (world space, centred on the eye): the drift is a
 ## rotation about the viewer, never a slide with the view.
+## STARFIELD (this round): "layered" now stands the star
+## VOLUME and its backdrop instead of the two shells (see
+## the BG_VOLUME_* constants); "flat" and "off" keep the
+## meanings above exactly. The comfort law is unchanged -
+## the volume hangs on the room, world-locked, and its
+## drift is rotation about the viewer.
 func set_starfield_mode(mode: String) -> void:
 	_starfield_mode = mode if ["layered", "flat", "off"].has(mode) else "layered"
 	_apply_starfield_mode()
@@ -1863,11 +1936,42 @@ func _step_landed() -> void:
 	_step_to_col = -1
 
 
+## STARFIELD: the legacy sky (the two shells standing in
+## layered) is what the NC seams PVLDS_BG_NC=shells and =uv
+## stand - the shipped sky is the volume.
+func _bg_legacy_sky() -> bool:
+	return debug_bg_nc == "shells" or debug_bg_nc == "uv"
+
+
+## A radius's place on the volume's log scale: 0 at the
+## near edge (BG_VOLUME_RADII[0]), 1 at the far edge. Drift
+## rate, size shrink and dimming all read this one scale.
+func _volume_log_t(radius: float) -> float:
+	var r_min: float = BG_VOLUME_RADII[0]
+	var r_max: float = BG_VOLUME_RADII[BG_VOLUME_RADII.size() - 1]
+	return clampf(log(radius / r_min) / log(r_max / r_min), 0.0, 1.0)
+
+
+## A band's drift rate: the standing endpoints (near
+## BG_DRIFT_NEAR_DEG, far BG_DRIFT_FAR_DEG) interpolated on
+## the log scale - nearer bands turn faster, by depth.
+func _volume_rate(radius: float) -> float:
+	return lerpf(BG_DRIFT_NEAR_DEG, BG_DRIFT_FAR_DEG, _volume_log_t(radius))
+
+
 func _apply_starfield_mode() -> void:
+	var legacy: bool = _bg_legacy_sky()
 	if _bg_starfield != null:
-		_bg_starfield.visible = _starfield_mode != "off"
+		# The far shell stands in FLAT (its shipped seat) and
+		# under a legacy seam in layered; the volume's layered
+		# sky replaces it otherwise.
+		_bg_starfield.visible = _starfield_mode == "flat" or (legacy and _starfield_mode == "layered")
 	if _bg_starfield_near != null:
-		_bg_starfield_near.visible = _starfield_mode == "layered"
+		_bg_starfield_near.visible = legacy and _starfield_mode == "layered"
+	if _bg_backdrop != null:
+		_bg_backdrop.visible = not legacy and _starfield_mode == "layered"
+	for band: MultiMeshInstance3D in _bg_volume_bands:
+		band.visible = not legacy and _starfield_mode == "layered"
 
 
 ## The drift, one frame's worth (GRADFIX4 item 5d): in
@@ -1876,25 +1980,101 @@ func _apply_starfield_mode() -> void:
 ## a head turn sweeps both layers across the view opposite
 ## the turn, the near layer faster, with the drift adding
 ## on top. FLAT and OFF stand still. Called from _process;
-## never gated on input state.
+## never gated on input state. STARFIELD: the shipped
+## layered sky is the volume - each BAND turns at its own
+## depth-scaled rate between the same endpoints (see
+## _volume_rate); the shell path below survives only for
+## the legacy NC seams.
 func _update_background(delta: float) -> void:
 	if _starfield_mode != "layered":
 		return
-	if _bg_starfield != null:
-		_bg_starfield.rotation.y += deg_to_rad(BG_DRIFT_FAR_DEG) * delta
-	if _bg_starfield_near != null:
-		_bg_starfield_near.rotation.y += deg_to_rad(BG_DRIFT_NEAR_DEG) * delta
+	if _bg_legacy_sky():
+		if _bg_starfield != null:
+			_bg_starfield.rotation.y += deg_to_rad(BG_DRIFT_FAR_DEG) * delta
+		if _bg_starfield_near != null:
+			_bg_starfield_near.rotation.y += deg_to_rad(BG_DRIFT_NEAR_DEG) * delta
+		return
+	# STARFIELD: each volume band turns at its own
+	# depth-scaled rate - one rotation increment per band,
+	# nothing allocated, nothing else touched.
+	for i: int in range(_bg_volume_bands.size()):
+		var band: MultiMeshInstance3D = _bg_volume_bands[i]
+		band.rotation.y += deg_to_rad(_volume_rate(BG_VOLUME_RADII[i])) * delta
+
+
+## The standing sky's measurable pair, far first: the two
+## shells under a legacy seam, the volume's outermost and
+## innermost bands in the shipped layered sky. The sky
+## proofs isolate and read these two.
+func starfield_sky_pair() -> Array:
+	if _bg_legacy_sky():
+		return [_bg_starfield, _bg_starfield_near]
+	if _bg_volume_bands.is_empty():
+		return [_bg_starfield, _bg_starfield_near]
+	return [_bg_volume_bands[_bg_volume_bands.size() - 1], _bg_volume_bands[0]]
+
+
+## STARFIELD: the volume's band nodes, near to far (the
+## proofs read them; empty before the background builds).
+func starfield_volume_bands() -> Array:
+	var out: Array = []
+	for band: MultiMeshInstance3D in _bg_volume_bands:
+		out.append(band)
+	return out
+
+
+## STARFIELD: the starless backdrop node (LAYERED only).
+func starfield_backdrop_node() -> MeshInstance3D:
+	return _bg_backdrop
+
+
+## STARFIELD: whether the volume is the standing sky right
+## now (layered dialled, no legacy seam, bands built).
+func starfield_volume_standing() -> bool:
+	return not _bg_legacy_sky() and _starfield_mode == "layered" and not _bg_volume_bands.is_empty()
+
+
+## STARFIELD: one star's standing local position in a
+## volume band (band 0 = innermost), read off the band's
+## own instance data - the parallax proofs project these.
+func starfield_volume_star(band_idx: int, star_idx: int) -> Vector3:
+	if band_idx < 0 or band_idx >= _bg_volume_bands.size():
+		return Vector3.ZERO
+	var mm: MultiMesh = _bg_volume_bands[band_idx].multimesh
+	if mm == null or star_idx < 0 or star_idx >= mm.instance_count:
+		return Vector3.ZERO
+	return mm.get_instance_transform(star_idx).origin
 
 
 ## The drift's standing state (the sky-pass proofs read it):
-## each shell's accumulated world-space yaw about the viewer.
+## the standing pair's accumulated world-space yaws about
+## the viewer, plus the volume's own census when it stands.
 func starfield_drift_state() -> Dictionary:
+	var pair: Array = starfield_sky_pair()
+	var far_node: Node3D = pair[0] as Node3D
+	var near_node: Node3D = pair[1] as Node3D
+	var volume_standing: bool = not _bg_legacy_sky() and _starfield_mode == "layered" and not _bg_volume_bands.is_empty()
+	var band_yaws: Array = []
+	var band_rates: Array = []
+	var star_count: int = 0
+	for i: int in range(_bg_volume_bands.size()):
+		band_yaws.append(rad_to_deg(_bg_volume_bands[i].rotation.y))
+		band_rates.append(_volume_rate(BG_VOLUME_RADII[i]))
+		if _bg_volume_bands[i].multimesh != null:
+			star_count += _bg_volume_bands[i].multimesh.instance_count
 	return {
 		"mode": _starfield_mode,
-		"far_yaw_deg": rad_to_deg(_bg_starfield.rotation.y) if _bg_starfield != null else 0.0,
-		"near_yaw_deg": rad_to_deg(_bg_starfield_near.rotation.y) if _bg_starfield_near != null else 0.0,
+		"far_yaw_deg": rad_to_deg(far_node.rotation.y) if far_node != null else 0.0,
+		"near_yaw_deg": rad_to_deg(near_node.rotation.y) if near_node != null else 0.0,
 		"far_speed_deg_s": BG_DRIFT_FAR_DEG,
 		"near_speed_deg_s": BG_DRIFT_NEAR_DEG,
+		"volume": volume_standing,
+		"band_count": _bg_volume_bands.size(),
+		"band_radii": BG_VOLUME_RADII.duplicate(),
+		"band_yaws_deg": band_yaws,
+		"band_rates_deg_s": band_rates,
+		"star_count": star_count,
+		"backdrop_visible": _bg_backdrop != null and _bg_backdrop.visible,
 	}
 
 
@@ -1972,7 +2152,78 @@ func _build_background() -> void:
 	# remove it. The drifting pinpoint layers are the sky
 	# now; _bg_ring stays null and background_layers() omits
 	# it.
+	_build_star_volume()
 	_apply_starfield_mode()
+
+
+## STARFIELD: the volume itself (see the BG_VOLUME_*
+## constants): a starless backdrop sphere, then the bands
+## of real star positions. Every instance is written ONCE
+## here - transforms face the eye (each quad's basis aims
+## its face at the centre the bands hang on), colours carry
+## tint x depth-dim x per-star shade. Nothing in the
+## volume is touched per frame except the bands' own
+## rotations (see _update_background).
+func _build_star_volume() -> void:
+	var backdrop: MeshInstance3D = MeshInstance3D.new()
+	backdrop.name = "StarfieldBackdrop"
+	var bsphere: SphereMesh = SphereMesh.new()
+	bsphere.radius = BG_BACKDROP_RADIUS
+	bsphere.height = BG_BACKDROP_RADIUS * 2.0
+	bsphere.radial_segments = 48
+	bsphere.rings = 24
+	backdrop.mesh = bsphere
+	var bsm: ShaderMaterial = ShaderMaterial.new()
+	var bsh: Shader = Shader.new()
+	bsh.code = BG_BACKDROP_SHADER
+	bsm.shader = bsh
+	backdrop.material_override = bsm
+	backdrop.position = EYE
+	_bg_root.add_child(backdrop)
+	_bg_backdrop = backdrop
+	# One shared quad and shader for every star in the field.
+	var quad: QuadMesh = QuadMesh.new()
+	quad.size = Vector2.ONE
+	var qsm: ShaderMaterial = ShaderMaterial.new()
+	var qsh: Shader = Shader.new()
+	qsh.code = BG_VOLUME_STAR_SHADER
+	qsm.shader = qsh
+	quad.material = qsm
+	var r_min: float = BG_VOLUME_RADII[0]
+	for band_idx: int in range(BG_VOLUME_RADII.size()):
+		var radius: float = BG_VOLUME_RADII[band_idx]
+		var count: int = int(round(BG_VOLUME_COUNT_BASE * pow(radius / r_min, BG_VOLUME_COUNT_GROWTH)))
+		var mm: MultiMesh = MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_colors = true
+		mm.mesh = quad
+		mm.instance_count = count
+		# One fixed seed per band: the field is the same
+		# field on every boot and every machine.
+		var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+		rng.seed = 7919 + band_idx * 104729
+		var log_t: float = _volume_log_t(radius)
+		var angular: float = BG_VOLUME_STAR_DEG * lerpf(1.0, BG_VOLUME_FAR_SHRINK, log_t)
+		var base_size: float = radius * tan(deg_to_rad(angular))
+		var bright: float = lerpf(1.0, BG_VOLUME_FAR_DIM, log_t)
+		for s: int in range(count):
+			var z: float = rng.randf_range(-1.0, 1.0)
+			var theta: float = rng.randf() * TAU
+			var ring_r: float = sqrt(maxf(0.0, 1.0 - z * z))
+			var dir: Vector3 = Vector3(ring_r * cos(theta), z, ring_r * sin(theta))
+			var pos: Vector3 = dir * radius
+			var up: Vector3 = Vector3.UP if absf(dir.y) < 0.99 else Vector3.RIGHT
+			var basis: Basis = Basis.looking_at(dir, up).scaled(Vector3.ONE * base_size * rng.randf_range(0.7, 1.4))
+			mm.set_instance_transform(s, Transform3D(basis, pos))
+			var shade: float = bright * rng.randf_range(0.55, 1.0)
+			mm.set_instance_color(s, Color(BG_VOLUME_TINT.r * shade, BG_VOLUME_TINT.g * shade, BG_VOLUME_TINT.b * shade))
+		var node: MultiMeshInstance3D = MultiMeshInstance3D.new()
+		node.name = "StarfieldVolumeBand%d" % band_idx
+		node.multimesh = mm
+		node.custom_aabb = AABB(Vector3.ONE * -(radius + 2.0), Vector3.ONE * (radius + 2.0) * 2.0)
+		node.position = EYE
+		_bg_root.add_child(node)
+		_bg_volume_bands.append(node)
 
 
 ## The haze a card wears by its column's distance from the

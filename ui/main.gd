@@ -216,6 +216,19 @@ var _pinemhi2_fetch_error: String = "" ## the last weekly fetch's failure in wor
 var _pinemhi2_player_name: String = "" ## his PINemHi name, derived at push time from his TOP10_Personal files (PinemhiScores.player_name_for_config)
 var _pinemhi2_probe: bool = false ## --pvlds-pinemhi2-probe: the fetch gate - one real fetch through the app's HTTP path, the per-contest census printed, then quit
 var _smoke_pinemhi2: bool = false ## --pvlds-smoke-pinemhi2: drive the PINEMHI2 contract (env PVLDS_PINEMHI2_MODE: parse|stub|cache|room)
+var _smoke_starfield: bool = false ## --pvlds-smoke-starfield: drive the STARFIELD contract (env PVLDS_STARFIELD_MODE: field|gate)
+var _starfield_smoke_phase: int = 0
+var _starfield_smoke_wait: int = 0
+var _starfield_smoke_failures: int = 0
+var _starfield_smoke_deadline_msec: int = 0
+var _starfield_drift_t0: int = 0 ## field mode: the drift sampling window's open stamp
+var _starfield_drift_yaws0: Array = [] ## field mode: band yaws at the window's open
+var _starfield_gate: Dictionary = {} ## gate mode: mode -> {frames, msec} over the measured travel runs
+var _starfield_gate_frames: Array[int] = [] ## gate mode: per-frame msec stamps inside the standing run
+var _starfield_pick: Dictionary = {} ## field mode: {"near": [band, star], "far": [band, star]} chosen in-frame at rig A
+var _starfield_pos_a: Dictionary = {} ## field mode: {"near": Vector2, "far": Vector2} projections at rig A
+var _starfield_yaws_a: Array = [] ## field mode: band yaws at rig A (restored at rig B so the pair measures parallax, not drift)
+var _starfield_sky_img: Image = null ## field mode: the sky-only grab the quiet leg reads
 var _pinemhi2_smoke_phase: int = 0
 var _pinemhi2_smoke_wait: int = 0
 var _pinemhi2_smoke_failures: int = 0
@@ -758,6 +771,8 @@ func _ready() -> void:
 		_smoke_pinemhi1 = true
 	if user_args.has("--pvlds-smoke-pinemhi2"):
 		_smoke_pinemhi2 = true
+	if user_args.has("--pvlds-smoke-starfield"):
+		_smoke_starfield = true
 	if user_args.has("--pvlds-smoke-scoremark"):
 		_smoke_scoremark = true
 	if user_args.has("--pvlds-smoke-submit"):
@@ -1057,7 +1072,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_scoremark or _smoke_pinemhi2) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_scoremark or _smoke_pinemhi2 or _smoke_starfield) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1278,6 +1293,8 @@ func _process(_delta: float) -> void:
 		_drive_pinemhi1_smoke()
 	if _smoke_pinemhi2:
 		_drive_pinemhi2_smoke()
+	if _smoke_starfield:
+		_drive_starfield_smoke()
 	if _smoke_scoremark:
 		_drive_scoremark_smoke()
 	if _smoke_submit:
@@ -6661,21 +6678,32 @@ func _grad_leg_background_static() -> void:
 			"background world-lock: a layer is not the drum's child")
 		if node != null:
 			_grad_bg_before.append(node.global_transform)
-	# The starfield dial (the GRAD FIX round): layered stands
-	# both shells, flat the far one alone, off neither - and
-	# the drum's parentage never moves under any setting.
+	# The starfield dial: STARFIELD contract - flat stands
+	# the far shell alone, off stands nothing, layered
+	# stands the star VOLUME and its backdrop with both
+	# shells down (the GRAD FIX round's "layered stands
+	# both shells" is retired with the shells' layered
+	# seat). The volume and the backdrop are world-locked
+	# like every layer: never the drum's children.
+	for band_v: Variant in _room.starfield_volume_bands():
+		var band_n: Node3D = band_v as Node3D
+		_grad_expect(band_n != null and drum != null and not drum.is_ancestor_of(band_n),
+			"background world-lock: a volume band is not the drum's child")
+	var backdrop_n: Node3D = _room.starfield_backdrop_node()
+	_grad_expect(backdrop_n != null and drum != null and not drum.is_ancestor_of(backdrop_n),
+		"background world-lock: the backdrop is not the drum's child")
 	if layers.size() == 2:
 		var far_shell: Node3D = layers[0] as Node3D
 		var near_shell: Node3D = layers[1] as Node3D
 		_room.set_starfield_mode("flat")
-		_grad_expect(far_shell.visible and not near_shell.visible,
+		_grad_expect(far_shell.visible and not near_shell.visible and not _room.starfield_volume_standing(),
 			"starfield dial: flat stands the far shell alone")
 		_room.set_starfield_mode("off")
-		_grad_expect(not far_shell.visible and not near_shell.visible,
+		_grad_expect(not far_shell.visible and not near_shell.visible and not _room.starfield_volume_standing(),
 			"starfield dial: off stands no stars")
 		_room.set_starfield_mode("layered")
-		_grad_expect(far_shell.visible and near_shell.visible,
-			"starfield dial: layered stands both shells (the shipped default)")
+		_grad_expect(not far_shell.visible and not near_shell.visible and _room.starfield_volume_standing(),
+			"starfield dial: layered stands the star volume, not the shells (STARFIELD)")
 		_grad_expect(_room.starfield_mode() == "layered",
 			"starfield dial: the room reports the standing mode")
 
@@ -6933,9 +6961,29 @@ func _grad_sky_line_ratio(img: Image) -> float:
 ## two grabs, and the ring was removed on their evidence).
 ## Under PVLDS_BG_NC=uv the pre-fix UV field stands
 ## and the zenith + pinpoint legs fail by name.
+## STARFIELD: stand ONE sky node and hide every other sky
+## surface (both shells, the backdrop, every volume band) -
+## the sky pass's per-layer isolation, whichever sky stands.
+func _grad_sky_isolate(only: Node3D) -> void:
+	for layer_v: Variant in _room.background_layers():
+		var layer_n: Node3D = layer_v as Node3D
+		if layer_n != null:
+			layer_n.visible = layer_n == only
+	var backdrop_n: Node3D = _room.starfield_backdrop_node()
+	if backdrop_n != null:
+		backdrop_n.visible = backdrop_n == only
+	for band_v: Variant in _room.starfield_volume_bands():
+		var band_n: Node3D = band_v as Node3D
+		if band_n != null:
+			band_n.visible = band_n == only
+
+
 func _grad_sky_step() -> void:
-	var layers: Array = _room.background_layers()
-	if layers.size() != 2:
+	# STARFIELD: the measurable pair is the room's standing
+	# pair - the volume's outermost and innermost bands in
+	# the shipped sky, the two shells under a legacy seam.
+	var layers: Array = _room.starfield_sky_pair()
+	if layers.size() != 2 or layers[0] == null or layers[1] == null:
 		_grad_fail("sky: the background stack is missing")
 		_grad_phase = 3
 		_grad_wait = 0
@@ -6948,16 +6996,14 @@ func _grad_sky_step() -> void:
 		0:
 			_room.drum_node().visible = false
 			_room.set_starfield_mode("layered")
-			far_shell.visible = false
-			near_shell.visible = true
+			_grad_sky_isolate(near_shell)
 			_grad_sky_stage = 1
 			_grad_wait = 0
 		1:
 			if _grad_wait > 6:
 				_grad_sky_img["near0"] = get_viewport().get_texture().get_image()
 				_grad_sky_near_yaw0 = float(_room.starfield_drift_state().get("near_yaw_deg", 0.0))
-				far_shell.visible = true
-				near_shell.visible = false
+				_grad_sky_isolate(far_shell)
 				_grad_sky_stage = 2
 				_grad_wait = 0
 		2:
@@ -6971,8 +7017,7 @@ func _grad_sky_step() -> void:
 			if Time.get_ticks_msec() - _grad_sky_since > 9000:
 				_grad_sky_img["far1"] = get_viewport().get_texture().get_image()
 				_grad_sky_img["far_yaw1"] = float(_room.starfield_drift_state().get("far_yaw_deg", 0.0))
-				far_shell.visible = false
-				near_shell.visible = true
+				_grad_sky_isolate(near_shell)
 				_grad_sky_stage = 4
 				_grad_wait = 0
 		4:
@@ -7030,9 +7075,7 @@ func _grad_sky_step() -> void:
 				_grad_expect(yctrl.z < ywarp.z * 0.5,
 					"sky yaw: the opposite warp lands nowhere tight - the field is world-fixed, not view-fixed (control %.0f%% tight against %.0f%%)" % [yctrl.z * 100.0, ywarp.z * 100.0])
 				_room._desk_rig.rotation.y = 0.0
-				_room.set_starfield_mode("layered")
-				far_shell.visible = true
-				near_shell.visible = true
+				_room.set_starfield_mode("layered") ## the mode's own apply stands the full sky again
 				_grad_sky_stage = 7
 				_grad_wait = 0
 		7:
@@ -17626,6 +17669,390 @@ func _pinemhi2_expect(cond: bool, label: String) -> void:
 func _finish_pinemhi2_smoke() -> void:
 	print("PVLDS PINEMHI2 SMOKE RESULT: ", "PASS" if _pinemhi2_smoke_failures == 0 else "FAIL (%d)" % _pinemhi2_smoke_failures)
 	get_tree().quit(0 if _pinemhi2_smoke_failures == 0 else 1)
+
+
+## STARFIELD smoke (--pvlds-smoke-starfield, harness env
+## PVLDS_STARFIELD_MODE): field - the volume's census, the
+## dial's standing sets, the drift sampled over real time,
+## the parallax read off projected stars at two rig
+## offsets, the quiet read off the sky-only grab, and the
+## grabs themselves (PVLDS_STARFIELD_GRAB_DIR, default the
+## dossier's grabs dir); gate - the same stepped travel run
+## measured under off, flat and layered, frame costs
+## printed side by side (the interface-speed gate's delta;
+## under PVLDS_BG_NC=shells the layered run measures the
+## OLD two-shell field, the base the gate compares to).
+## Negative control (PVLDS_BG_NC=shells in field mode):
+## layered stands the two old shells, so the
+## "starfield volume:" legs fail by name.
+func _drive_starfield_smoke() -> void:
+	if _starfield_smoke_phase == 0:
+		_starfield_smoke_deadline_msec = Time.get_ticks_msec() + 300000
+		_starfield_smoke_phase = 1
+		_starfield_smoke_wait = 0
+		return
+	if Time.get_ticks_msec() > _starfield_smoke_deadline_msec:
+		_starfield_expect(false, "starfield smoke: deadline exceeded (phase %d)" % _starfield_smoke_phase)
+		_finish_starfield_smoke()
+		return
+	if OS.get_environment("PVLDS_STARFIELD_MODE") == "gate":
+		_drive_starfield_gate()
+	else:
+		_drive_starfield_field()
+
+
+func _starfield_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("PVLDS STARFIELD LEG PASS: ", label)
+	else:
+		_starfield_smoke_failures += 1
+		print("PVLDS STARFIELD LEG FAIL: ", label)
+
+
+func _finish_starfield_smoke() -> void:
+	print("PVLDS STARFIELD SMOKE RESULT: ", "PASS" if _starfield_smoke_failures == 0 else "FAIL (%d)" % _starfield_smoke_failures)
+	get_tree().quit(0 if _starfield_smoke_failures == 0 else 1)
+
+
+func _starfield_room_ready() -> bool:
+	return _room != null and _room.visible and _room.wall_ready and _room._visible_games.size() >= 8
+
+
+func _starfield_grab(name: String) -> Image:
+	var img: Image = get_viewport().get_texture().get_image()
+	var dir: String = OS.get_environment("PVLDS_STARFIELD_GRAB_DIR")
+	if dir == "":
+		dir = ProjectSettings.globalize_path("res://").path_join("../pvlds-starfield/grabs")
+	DirAccess.make_dir_recursive_absolute(dir)
+	img.save_png(dir.path_join(name))
+	print("PVLDS STARFIELD GRAB: ", dir.path_join(name))
+	return img
+
+
+func _drive_starfield_field() -> void:
+	match _starfield_smoke_phase:
+		1:
+			if _starfield_room_ready():
+				get_viewport().warp_mouse(Vector2(8.0, 592.0))
+				_room.set_starfield_mode("layered")
+				_starfield_smoke_phase = 2
+				_starfield_smoke_wait = 0
+			else:
+				_starfield_smoke_wait += 1
+				if _starfield_smoke_wait > 7200:
+					_starfield_expect(false, "starfield field: the room never came up on the real boot path")
+					_finish_starfield_smoke()
+		2:
+			_starfield_smoke_wait += 1
+			if _starfield_smoke_wait > 10:
+				_starfield_field_census()
+				var st: Dictionary = _room.starfield_drift_state()
+				_starfield_drift_yaws0 = (st.get("band_yaws_deg", []) as Array).duplicate()
+				_starfield_drift_t0 = Time.get_ticks_msec()
+				_starfield_smoke_phase = 3
+		3:
+			if Time.get_ticks_msec() - _starfield_drift_t0 >= 4000:
+				_starfield_field_drift_legs()
+				_room.drum_node().visible = false
+				_room._desk_rig.position = RoomView.EYE
+				_starfield_smoke_phase = 4
+				_starfield_smoke_wait = 0
+		4:
+			_starfield_smoke_wait += 1
+			if _starfield_smoke_wait > 8:
+				var cam: Camera3D = _room._active_camera()
+				var bands: Array = _room.starfield_volume_bands()
+				_starfield_yaws_a = (_room.starfield_drift_state().get("band_yaws_deg", []) as Array).duplicate()
+				_starfield_pick["near"] = _starfield_find_star(cam, 0)
+				_starfield_pick["far"] = _starfield_find_star(cam, bands.size() - 1)
+				for key: String in ["near", "far"]:
+					var pick: Array = _starfield_pick.get(key, [])
+					if pick.size() == 2:
+						_starfield_pos_a[key] = cam.unproject_position(_starfield_star_world(int(pick[0]), int(pick[1])))
+				_starfield_sky_img = _starfield_grab("starfield_sky_a.png")
+				_room._desk_rig.position = RoomView.EYE + Vector3(0.35, 0.0, 0.0)
+				# Restore the rig-A band yaws in the same
+				# frame, before any rig-B frame renders, so
+				# the pair measures parallax, not drift.
+				var bands2: Array = _room.starfield_volume_bands()
+				for i: int in range(mini(bands2.size(), _starfield_yaws_a.size())):
+					(bands2[i] as Node3D).rotation.y = deg_to_rad(float(_starfield_yaws_a[i]))
+				_starfield_smoke_phase = 5
+				_starfield_smoke_wait = 0
+		5:
+			_starfield_smoke_wait += 1
+			if _starfield_smoke_wait > 8:
+				_starfield_grab("starfield_sky_b.png")
+				_starfield_field_parallax_legs()
+				_starfield_quiet_leg(_starfield_sky_img)
+				_room._desk_rig.position = RoomView.EYE
+				_room.drum_node().visible = true
+				_starfield_smoke_phase = 6
+				_starfield_smoke_wait = 0
+		6:
+			_starfield_smoke_wait += 1
+			if _starfield_smoke_wait > 10:
+				_starfield_grab("starfield_room.png")
+				_room.set_starfield_mode("flat")
+				_starfield_smoke_phase = 7
+				_starfield_smoke_wait = 0
+		7:
+			_starfield_smoke_wait += 1
+			if _starfield_smoke_wait > 10:
+				_starfield_grab("starfield_flat.png")
+				_room.set_starfield_mode("layered")
+				_starfield_smoke_phase = 8
+				_starfield_smoke_wait = 0
+		8:
+			_starfield_smoke_wait += 1
+			if _starfield_smoke_wait > 10:
+				_input_feed_stick_x(1.0)
+				_starfield_smoke_phase = 9
+				_starfield_smoke_wait = 0
+		9:
+			_starfield_smoke_wait += 1
+			if _room.swing_active():
+				_starfield_grab("starfield_travel.png")
+				_input_feed_stick_x(0.0)
+				_starfield_smoke_phase = 10
+				_starfield_smoke_wait = 0
+			elif _starfield_smoke_wait > 1200:
+				_starfield_expect(false, "starfield field: the travel grab's swing never started")
+				_input_feed_stick_x(0.0)
+				_finish_starfield_smoke()
+		10:
+			_starfield_smoke_wait += 1
+			if not _room.swing_active() or _starfield_smoke_wait > 1200:
+				_finish_starfield_smoke()
+
+
+func _starfield_field_census() -> void:
+	var st: Dictionary = _room.starfield_drift_state()
+	_starfield_expect(bool(st.get("volume", false)),
+		"starfield volume: the volume stands in layered")
+	_starfield_expect(int(st.get("band_count", 0)) == RoomView.BG_VOLUME_RADII.size(),
+		"starfield volume: %d bands stand (got %d)" % [RoomView.BG_VOLUME_RADII.size(), int(st.get("band_count", 0))])
+	var radii: Array = st.get("band_radii", [])
+	if radii.size() >= 2:
+		var mono: bool = true
+		for i: int in range(radii.size() - 1):
+			if float(radii[i + 1]) <= float(radii[i]):
+				mono = false
+		_starfield_expect(mono and float(radii[0]) > RoomView.WALL_RADIUS and float(radii[radii.size() - 1]) >= 300.0,
+			"starfield volume: the field spans just outside the wall (%.1f m) out to hundreds of metres (%.0f m), radii rising" % [float(radii[0]), float(radii[radii.size() - 1])])
+	else:
+		_starfield_expect(false, "starfield volume: band radii unreadable (%d)" % radii.size())
+	_starfield_expect(int(st.get("star_count", 0)) >= 5000,
+		"starfield volume: a deep field stands (%d stars)" % int(st.get("star_count", 0)))
+	var rates: Array = st.get("band_rates_deg_s", [])
+	if rates.size() >= 2:
+		var dec: bool = true
+		for i: int in range(rates.size() - 1):
+			if float(rates[i + 1]) >= float(rates[i]):
+				dec = false
+		_starfield_expect(dec and absf(float(rates[0]) - RoomView.BG_DRIFT_NEAR_DEG) < 0.001 and absf(float(rates[rates.size() - 1]) - RoomView.BG_DRIFT_FAR_DEG) < 0.001,
+			"starfield volume: drift rates fall with depth between the standing endpoints (near %.2f, far %.2f deg/s)" % [float(rates[0]), float(rates[rates.size() - 1])])
+	else:
+		_starfield_expect(false, "starfield volume: band rates unreadable (%d)" % rates.size())
+	_starfield_expect(bool(st.get("backdrop_visible", false)),
+		"starfield volume: the starless backdrop stands behind the field")
+	var shells: Array = _room.background_layers()
+	if shells.size() == 2:
+		_room.set_starfield_mode("flat")
+		_starfield_expect(not _room.starfield_volume_standing() and (shells[0] as Node3D).visible and not (shells[1] as Node3D).visible,
+			"starfield dial: flat stands the far shell alone, volume down")
+		_room.set_starfield_mode("off")
+		_starfield_expect(not (shells[0] as Node3D).visible and not (shells[1] as Node3D).visible and not _room.starfield_volume_standing(),
+			"starfield dial: off stands no stars")
+		_room.set_starfield_mode("layered")
+		_starfield_expect(_room.starfield_volume_standing() and not (shells[0] as Node3D).visible and not (shells[1] as Node3D).visible,
+			"starfield dial: layered stands the volume with both shells down")
+	else:
+		_starfield_expect(false, "starfield dial: the shell pair is missing (%d)" % shells.size())
+
+
+func _starfield_field_drift_legs() -> void:
+	var st: Dictionary = _room.starfield_drift_state()
+	var yaws1: Array = st.get("band_yaws_deg", [])
+	var elapsed: float = float(Time.get_ticks_msec() - _starfield_drift_t0) / 1000.0
+	if yaws1.size() >= 2 and _starfield_drift_yaws0.size() == yaws1.size():
+		var near_adv: float = float(yaws1[0]) - float(_starfield_drift_yaws0[0])
+		var far_adv: float = float(yaws1[yaws1.size() - 1]) - float(_starfield_drift_yaws0[_starfield_drift_yaws0.size() - 1])
+		_starfield_expect(near_adv > 0.45 * elapsed * 0.5 and far_adv > 0.05,
+			"starfield drift: both depth bands drift in world space (near +%.2f deg, far +%.2f deg over %.1f s)" % [near_adv, far_adv, elapsed])
+		_starfield_expect(near_adv > far_adv * 1.5,
+			"starfield drift: the near band drifts faster than the far band - the drift is depth-scaled (near +%.2f, far +%.2f)" % [near_adv, far_adv])
+	else:
+		_starfield_expect(false, "starfield drift: band yaws unreadable (%d vs %d)" % [yaws1.size(), _starfield_drift_yaws0.size()])
+
+
+## One volume star's world position, off the band's own
+## transform and the room's instance read.
+func _starfield_star_world(band_idx: int, star_idx: int) -> Vector3:
+	var bands: Array = _room.starfield_volume_bands()
+	if band_idx < 0 or band_idx >= bands.size():
+		return Vector3.ZERO
+	return (bands[band_idx] as Node3D).global_transform * _room.starfield_volume_star(band_idx, star_idx)
+
+
+func _starfield_in_frame(cam: Camera3D, world: Vector3) -> bool:
+	var cs: Vector3 = cam.global_transform.affine_inverse() * world
+	if cs.z > -0.1:
+		return false
+	var p: Vector2 = cam.unproject_position(world)
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	return p.x > 60.0 and p.x < vp.x - 60.0 and p.y > 60.0 and p.y < vp.y - 60.0
+
+
+## The most eccentric in-frame star among the band's first
+## eighty - parallax reads largest away from the view axis.
+func _starfield_find_star(cam: Camera3D, band_idx: int) -> Array:
+	var bands: Array = _room.starfield_volume_bands()
+	if band_idx < 0 or band_idx >= bands.size():
+		return []
+	var mm: MultiMesh = (bands[band_idx] as MultiMeshInstance3D).multimesh
+	if mm == null:
+		return []
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var best: Array = []
+	var best_ecc: float = -1.0
+	for s: int in range(mini(mm.instance_count, 80)):
+		var world: Vector3 = _starfield_star_world(band_idx, s)
+		if not _starfield_in_frame(cam, world):
+			continue
+		var p: Vector2 = cam.unproject_position(world)
+		var ecc: float = absf(p.x - vp.x * 0.5) / (vp.x * 0.5)
+		if ecc > best_ecc:
+			best_ecc = ecc
+			best = [band_idx, s]
+	return best
+
+
+func _starfield_field_parallax_legs() -> void:
+	var cam: Camera3D = _room._active_camera()
+	var shifts: Dictionary = {}
+	for key: String in ["near", "far"]:
+		var pick: Array = _starfield_pick.get(key, [])
+		if pick.size() == 2 and _starfield_pos_a.has(key):
+			var pb: Vector2 = cam.unproject_position(_starfield_star_world(int(pick[0]), int(pick[1])))
+			shifts[key] = (_starfield_pos_a[key] as Vector2).distance_to(pb)
+	_starfield_expect(shifts.has("near") and shifts.has("far"),
+		"starfield parallax: a near star and a far star both stood in frame at both rig positions (picks %s)" % str(_starfield_pick))
+	if shifts.has("near") and shifts.has("far"):
+		var near_shift: float = float(shifts["near"])
+		var far_shift: float = float(shifts["far"])
+		_starfield_expect(near_shift > 5.0 and near_shift > far_shift * 1.5,
+			"starfield parallax: a 0.35 m head move shifts the near star far more than the far star (near %.1f px, far %.1f px) - real positions, real depth" % [near_shift, far_shift])
+
+
+## The quiet read: over the sky-only grab's top band, star
+## pixels (luminance over the pinpoint threshold the sky
+## proofs use) must be sparse, and their brightness must
+## VARY - the instance colours carrying depth.
+func _starfield_quiet_leg(img: Image) -> void:
+	if img == null:
+		_starfield_expect(false, "starfield quiet: no sky grab to read")
+		return
+	var star_px: int = 0
+	var tot: int = 0
+	var lums: Array[float] = []
+	var y_max: int = int(float(img.get_height()) * 0.40)
+	for y: int in range(0, y_max, 2):
+		for x: int in range(0, img.get_width(), 2):
+			tot += 1
+			var lum: float = img.get_pixel(x, y).get_luminance()
+			if lum > 0.30:
+				star_px += 1
+				lums.append(lum)
+	var frac: float = float(star_px) / float(maxi(tot, 1))
+	_starfield_expect(frac > 0.0005 and frac < 0.02,
+		"starfield quiet: the field is sparse pinpoints over dark sky, not a wash (bright fraction %.4f)" % frac)
+	lums.sort()
+	if lums.size() >= 20:
+		var med: float = lums[lums.size() / 2]
+		var hi: float = lums[lums.size() - 1]
+		_starfield_expect(hi > 0.55 and med < hi * 0.75,
+			"starfield quiet: star brightness varies with depth - instance colours live (median %.2f, brightest %.2f)" % [med, hi])
+	else:
+		_starfield_expect(false, "starfield quiet: too few stars in frame to judge brightness (%d)" % lums.size())
+
+
+## GATE mode: one stepped travel run per dial stop, frame
+## stamps collected through the run; the mean frame cost
+## per stop is printed at the end, layered judged against
+## flat (today's shipped field) with a noise allowance.
+func _drive_starfield_gate() -> void:
+	match _starfield_smoke_phase:
+		1:
+			if _starfield_room_ready():
+				get_viewport().warp_mouse(Vector2(8.0, 592.0))
+				_starfield_gate = {"order": ["off", "flat", "layered"], "idx": 0, "rest": 0}
+				_starfield_smoke_phase = 2
+				_starfield_smoke_wait = 0
+			else:
+				_starfield_smoke_wait += 1
+				if _starfield_smoke_wait > 7200:
+					_starfield_expect(false, "starfield gate: the room never came up on the real boot path")
+					_finish_starfield_smoke()
+		2:
+			var order: Array = _starfield_gate.get("order", [])
+			var idx: int = int(_starfield_gate.get("idx", 0))
+			if idx >= order.size():
+				_starfield_gate_verdict()
+				_finish_starfield_smoke()
+				return
+			_room.set_starfield_mode(str(order[idx]))
+			_motion_snap_to_travel_start()
+			_starfield_smoke_phase = 3
+			_starfield_smoke_wait = 0
+		3:
+			_starfield_smoke_wait += 1
+			if _starfield_smoke_wait > 40:
+				_starfield_gate["start_col"] = _room._grid_coord(_room.centre_index()).x
+				_starfield_gate["run_t0"] = Time.get_ticks_msec()
+				_starfield_gate_frames.clear()
+				_input_feed_stick_x(1.0)
+				_starfield_smoke_phase = 4
+				_starfield_smoke_wait = 0
+		4:
+			_starfield_gate_frames.append(Time.get_ticks_usec())
+			var col: int = _room._grid_coord(_room.centre_index()).x
+			if absi(col - int(_starfield_gate.get("start_col", 0))) >= 5 or Time.get_ticks_msec() - int(_starfield_gate.get("run_t0", 0)) >= 9000:
+				_input_feed_stick_x(0.0)
+				_starfield_gate["rest"] = 0
+				_starfield_smoke_phase = 5
+				_starfield_smoke_wait = 0
+		5:
+			_starfield_gate_frames.append(Time.get_ticks_usec())
+			if not _room.swing_active():
+				_starfield_gate["rest"] = int(_starfield_gate.get("rest", 0)) + 1
+			else:
+				_starfield_gate["rest"] = 0
+			if int(_starfield_gate.get("rest", 0)) >= 4 or _starfield_smoke_wait > 2400:
+				var order2: Array = _starfield_gate.get("order", [])
+				var idx2: int = int(_starfield_gate.get("idx", 0))
+				var mode_name: String = str(order2[idx2])
+				var n: int = _starfield_gate_frames.size()
+				var span_ms: float = float(_starfield_gate_frames[n - 1] - _starfield_gate_frames[0]) / 1000.0 if n >= 2 else 0.0
+				var mean_ms: float = span_ms / float(maxi(n - 1, 1))
+				_starfield_gate[mode_name] = {"frames": n, "mean_ms": mean_ms}
+				print("PVLDS STARFIELD GATE: %s - %d frames over %.0f ms, mean %.2f ms/frame" % [mode_name, n, span_ms, mean_ms])
+				_starfield_gate["idx"] = idx2 + 1
+				_starfield_smoke_phase = 2
+				_starfield_smoke_wait = 0
+			_starfield_smoke_wait += 1
+
+
+func _starfield_gate_verdict() -> void:
+	var lv: Dictionary = _starfield_gate.get("layered", {})
+	var fl: Dictionary = _starfield_gate.get("flat", {})
+	var off: Dictionary = _starfield_gate.get("off", {})
+	print("PVLDS STARFIELD GATE SUMMARY: off %s | flat %s | layered %s" % [str(off), str(fl), str(lv)])
+	if not lv.is_empty() and not fl.is_empty():
+		_starfield_expect(float(lv.get("mean_ms", 0.0)) <= float(fl.get("mean_ms", 0.0)) * 1.25 + 1.0,
+			"starfield gate: the volume's travel frame cost matches the flat field's (layered %.2f ms vs flat %.2f ms mean)" % [float(lv.get("mean_ms", 0.0)), float(fl.get("mean_ms", 0.0))])
+	else:
+		_starfield_expect(false, "starfield gate: a measured run is missing (layered %s, flat %s)" % [str(lv), str(fl)])
 
 
 ## The fixture directory the parse and room legs read
