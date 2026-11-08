@@ -28,6 +28,7 @@ signal wovp_key_pasted(api_key: String) ## the SETUP panel's PASTE KEY read a ke
 signal wovp_key_test_requested ## the SETUP panel's TEST KEY: Main validates the saved key and reports whose it is
 signal wovp_submit_requested(challenge_id: String, photo_path: String) ## ROOMSUBMIT: the submit panel's SEND: Main runs the same two-step WoVP submission the desk runs (its refusals, its log, its boards refresh) and answers through set_wovp_submit_result
 signal display_settings_changed ## a SETUP display dial turned (the starfield): Main persists the room's standing values to the config
+signal pinemhi_watcher_toggled(on: bool) ## PINEMHI2 (Part B): the SETUP panel's PINEMHI WATCHER dial flipped: Main flips + saves the config's watcher-management toggle (the room never holds config)
 
 const PAGE_COLS: int = 4
 const PAGE_ROWS: int = 3
@@ -1095,6 +1096,8 @@ var _setup_panel_stars_btn: ClickableQuad = null ## STARS: LAYERED/FLAT/OFF - th
 var _setup_panel_wall_btn: ClickableQuad = null ## WALL MOTION: STEPPED - the panel's gait label (OPTIMIZE: the dial is gone, STEPPED is the only gait)
 var _setup_panel_back_btn: ClickableQuad = null
 var _setup_panel_ipdb_btn: ClickableQuad = null ## CARDBACK/IPDBFIX: RE-APPLY IPDB DATA - Main re-applies the bundled snapshot, the panel's mirror of the desk's button
+var _setup_panel_watcher_btn: ClickableQuad = null ## PINEMHI2 (Part B): PINEMHI WATCHER: ON/OFF - the watcher-management dial, a full-width row under BACK's row (the panel's PINemHi presence is its face line; the dial stands beside it in the button stack)
+var _pinemhi_manage_watcher: bool = false ## the dial's standing value, pushed by Main from the config (set_pinemhi_manage_watcher); a press flips it here and reports via pinemhi_watcher_toggled - Main owns the save
 var _setup_panel_up: bool = false
 var _setup_panel_gen: int = 0
 ## ROOMSUBMIT: the submit panel - the SETUP panel's sibling
@@ -7001,6 +7004,8 @@ func _refresh_focusables() -> void:
 			_focusables.append(_setup_panel_wall_btn)
 		if _setup_panel_ipdb_btn != null:
 			_focusables.append(_setup_panel_ipdb_btn)
+		if _setup_panel_watcher_btn != null:
+			_focusables.append(_setup_panel_watcher_btn)
 		if _setup_panel_back_btn != null:
 			_focusables.append(_setup_panel_back_btn)
 	elif _submit_panel_up:
@@ -7108,6 +7113,8 @@ func _refresh_quad_states() -> void:
 		all.append(_setup_panel_wall_btn)
 	if _setup_panel_ipdb_btn != null:
 		all.append(_setup_panel_ipdb_btn)
+	if _setup_panel_watcher_btn != null:
+		all.append(_setup_panel_watcher_btn)
 	if _setup_panel_back_btn != null:
 		all.append(_setup_panel_back_btn)
 	# ROOMSUBMIT: the submit panel's stops take visual
@@ -7945,6 +7952,12 @@ func _activate(quad: ClickableQuad) -> void:
 				quad.pulse()
 				set_wall_motion_mode("stepped") ## OPTIMIZE: STEPPED is the only gait - the button stands as the panel's label, its press re-affirms the one mode
 				display_settings_changed.emit()
+				_request_setup_panel_render(true)
+			"setup_setting_pinemhi_watcher":
+				quad.pulse()
+				_pinemhi_manage_watcher = not _pinemhi_manage_watcher
+				set_setup_panel_message("PINemHi watcher: PVLDS will run the watcher while PVLDS is open - saving..." if _pinemhi_manage_watcher else "PINemHi watcher: PVLDS will not run the watcher - saving...")
+				pinemhi_watcher_toggled.emit(_pinemhi_manage_watcher)
 				_request_setup_panel_render(true)
 		return
 	if _submit_panel_up:
@@ -9075,6 +9088,7 @@ func clear_setup_panel() -> void:
 		_setup_panel_wovp_paste_btn = null
 		_setup_panel_wovp_test_btn = null
 		_setup_panel_ipdb_btn = null
+		_setup_panel_watcher_btn = null
 		_setup_panel_back_btn = null
 	_restore_room_pick_states()
 	_set_focused(null)
@@ -9129,6 +9143,26 @@ func setup_panel_stars_quad() -> ClickableQuad:
 
 func setup_panel_wall_quad() -> ClickableQuad:
 	return _setup_panel_wall_btn
+
+
+func setup_panel_watcher_quad() -> ClickableQuad:
+	return _setup_panel_watcher_btn
+
+
+## PINEMHI2 (Part B): the watcher dial's standing value -
+## Main pushes the config's toggle in at room entry (the
+## room never holds config), a press on the dial flips the
+## local value and reports it (pinemhi_watcher_toggled),
+## and Main calls back here if its save failed, so the
+## dial never shows a state the config does not hold.
+func set_pinemhi_manage_watcher(on: bool) -> void:
+	_pinemhi_manage_watcher = on
+	if _setup_panel_up:
+		_request_setup_panel_render(true)
+
+
+func pinemhi_manage_watcher() -> bool:
+	return _pinemhi_manage_watcher
 
 
 ## PASTE KEY: the room's paste field. VR has no keyboard,
@@ -9282,6 +9316,18 @@ func _build_setup_panel() -> void:
 	_setup_panel_back_btn.setup("setup_panel_back", "", placeholder, Vector2(0.66, 0.16))
 	_setup_panel_back_btn.position = Vector3(0.375, -1.02, 0.0)
 	_setup_panel.add_child(_setup_panel_back_btn)
+	# The watcher row (PINEMHI2 Part B): one full-width dial
+	# under the BACK row - PINEMHI WATCHER: ON/OFF, the STARS
+	# dial's terms (the label states the standing value; a
+	# press flips it in the room at once and Main persists
+	# it via pinemhi_watcher_toggled). The panel's PINemHi
+	# presence above is the face's PINemHi line; this dial
+	# is that line's one control, standing in the button
+	# stack directly beneath it.
+	_setup_panel_watcher_btn = ClickableQuad.new()
+	_setup_panel_watcher_btn.setup("setup_setting_pinemhi_watcher", "", placeholder, Vector2(1.41, 0.16))
+	_setup_panel_watcher_btn.position = Vector3(0.0, -1.28, 0.0)
+	_setup_panel.add_child(_setup_panel_watcher_btn)
 	if _setup_downloader == null:
 		_setup_downloader = VpsDownloader.new()
 		add_child(_setup_downloader)
@@ -9377,6 +9423,12 @@ func _fill_setup_panel_textures(gen: int) -> void:
 		_after_setup_render()
 		return
 	_setup_panel_back_btn.set_texture(back_tex)
+	var watcher_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.button_spec("PINEMHI WATCHER: " + ("ON" if _pinemhi_manage_watcher else "OFF"), false), Vector2i(1024, 124))
+	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_watcher_btn == null:
+		_after_setup_render()
+		return
+	_setup_panel_watcher_btn.set_texture(watcher_tex)
 	_after_setup_render()
 
 

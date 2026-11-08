@@ -1917,6 +1917,30 @@ func _on_display_settings_changed() -> void:
 	_config.save_to_disk()
 
 
+## The room SETUP panel's PINEMHI WATCHER dial (PINEMHI2
+## Part B): the room flipped its local value and reports
+## the new one; Main's half is the config - flip + save,
+## on the desk's live-settings discipline. A failed save
+## restores the config AND the dial, and says so on the
+## panel: a toggle that did not save must not look - or
+## act - flipped. The watchdog learns the new value at
+## the next contract mirror (checkin / launch), the same
+## road focus_herding travels.
+func _on_room_pinemhi_watcher_toggled(on: bool) -> void:
+	if _config == null:
+		return
+	_config.pinemhi_manage_watcher = on
+	if _config.save_to_disk():
+		if _room != null:
+			_room.set_setup_panel_message("PINemHi watcher: PVLDS will run the watcher while PVLDS is open." if on else "PINemHi watcher: PVLDS will not run the watcher.")
+		_refresh_setup_panel_health()
+		return
+	_config.pinemhi_manage_watcher = not on
+	if _room != null:
+		_room.set_pinemhi_manage_watcher(not on)
+		_room.set_setup_panel_message("That watcher setting could NOT be saved - the config file is not writable, so the switch has been put back as it was.")
+
+
 func _on_room_wovp_key_pasted(api_key: String) -> void:
 	if _config == null:
 		return
@@ -2304,10 +2328,12 @@ func _enter_room() -> void:
 		_room.tournament_refresh_requested.connect(_wovp_fetch_boards)
 		_room.tournament_refresh_requested.connect(_pinemhi_fetch_weekly) ## PINEMHI2: REFRESH re-pulls the weekly boards too
 		_room.wovp_key_pasted.connect(_on_room_wovp_key_pasted)
+		_room.pinemhi_watcher_toggled.connect(_on_room_pinemhi_watcher_toggled)
 		_room.wovp_submit_requested.connect(_on_room_wovp_submit_requested)
 		_room.wovp_key_test_requested.connect(_on_room_wovp_key_test)
 		_room.display_settings_changed.connect(_on_display_settings_changed)
 		_room.set_starfield_mode(_config.starfield_mode)
+		_room.set_pinemhi_manage_watcher(_config.pinemhi_manage_watcher) ## PINEMHI2 (Part B): the SETUP dial's standing value
 		_room.set_wall_motion_mode(_config.wall_motion_mode)
 		_room.launch_requested.connect(_on_launch_requested)
 		_room.exit_requested.connect(_on_exit_requested)
@@ -21325,6 +21351,29 @@ func _run_core_test() -> void:
 	_expect(_write_text_file(contract_file, "{\"session_state\": \"launching\"}"), "legacy contract rewritten", failures)
 	_expect(WatchdogContract.load_from_disk().session_state == "loading",
 		"legacy 'launching' loads as 'loading'", failures)
+	# PINEMHI2 (Part B): the watcher-management fields - the
+	# launcher-mirrored pair (manage + folder) and the
+	# watchdog-owned pair (pid + state) - round-trip through
+	# the contract file, and a contract written before they
+	# existed loads them at their off defaults.
+	contract.pinemhi_manage = true
+	contract.pinemhi_folder = "D:/vPinball/Pinemhi"
+	contract.pinemhi_watcher_pid = 777
+	contract.pinemhi_watcher_state = "started"
+	_expect(contract.save_to_disk(), "pinemhi2b: contract carrying the watcher fields saves", failures)
+	var contract3: WatchdogContract = WatchdogContract.load_from_disk()
+	_expect(contract3.pinemhi_manage and contract3.pinemhi_folder == "D:/vPinball/Pinemhi"
+		and contract3.pinemhi_watcher_pid == 777 and contract3.pinemhi_watcher_state == "started",
+		"pinemhi2b: the contract's watcher fields round-trip (mirrored pair + watchdog-owned pair)", failures)
+	var written3: Dictionary = contract3.to_dictionary()
+	_expect(bool(written3.get("pinemhi_manage", false)) and str(written3.get("pinemhi_watcher_state", "")) == "started",
+		"pinemhi2b: the written contract carries the watcher keys", failures)
+	_expect(_write_text_file(contract_file, "{\"session_state\": \"live\"}"),
+		"pinemhi2b: pre-field contract written", failures)
+	var contract4: WatchdogContract = WatchdogContract.load_from_disk()
+	_expect(not contract4.pinemhi_manage and contract4.pinemhi_folder == ""
+		and contract4.pinemhi_watcher_pid == 0 and contract4.pinemhi_watcher_state == "",
+		"pinemhi2b: a contract without the watcher keys loads them off/empty", failures)
 	if contract_backup != "":
 		var cf: FileAccess = FileAccess.open(contract_file, FileAccess.WRITE)
 		if cf != null:
@@ -21450,6 +21499,29 @@ func _run_core_test() -> void:
 	# The wipe cannot see the dotfile fixture (DirAccess
 	# hides dotfiles), so it is removed by name first -
 	# otherwise the folder survives, honestly EMPTY.
+	# PINEMHI2 (Part B): the watcher-management toggle
+	# round-trips through the config file - set on the desk
+	# or the in-room dial, mirrored into the contract by the
+	# launch service. A config written before the key
+	# existed loads it OFF (the default: PVLDS never touches
+	# the watcher process).
+	_expect(_write_text_file(config_file, JSON.stringify({"pinemhi_manage_watcher": true})),
+		"pinemhi2b: config carrying the watcher toggle written", failures)
+	var watch_cfg: PvldsConfig = PvldsConfig.new()
+	_expect(watch_cfg.load_from_disk() and watch_cfg.pinemhi_manage_watcher,
+		"pinemhi2b: the watcher toggle loads from the config file", failures)
+	_expect(watch_cfg.save_to_disk(), "pinemhi2b: config with the watcher toggle saves", failures)
+	var watch_raw: String = FileAccess.get_file_as_string(config_file)
+	_expect(watch_raw.contains("\"pinemhi_manage_watcher\""),
+		"pinemhi2b: the saved config carries the pinemhi_manage_watcher key", failures)
+	var watch_cfg2: PvldsConfig = PvldsConfig.new()
+	_expect(watch_cfg2.load_from_disk() and watch_cfg2.pinemhi_manage_watcher,
+		"pinemhi2b: the watcher toggle round-trips through save", failures)
+	_expect(_write_text_file(config_file, JSON.stringify({"pinemhi_enabled": true})),
+		"pinemhi2b: pre-key config written", failures)
+	var watch_cfg3: PvldsConfig = PvldsConfig.new()
+	_expect(watch_cfg3.load_from_disk() and not watch_cfg3.pinemhi_manage_watcher,
+		"pinemhi2b: a config with no watcher key loads the toggle OFF", failures)
 	DirAccess.remove_absolute(shots_abs.path_join(".hidden.png"))
 	_wipe_tree(shots_abs)
 	_expect(ShotsFolder.panel_line(shots_abs).begins_with("That screenshots folder is not there"),

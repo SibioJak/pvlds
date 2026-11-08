@@ -90,6 +90,22 @@ type Contract struct {
 	// existed: the empty string falls back to the legacy generic.
 	DisarmReason string `json:"disarm_reason"`
 	FocusHerding bool   `json:"focus_herding"`
+	// PINemHi watcher management (PINEMHI2 Part B; pinemhi.go
+	// carries the law). PinemhiManage + PinemhiFolder are
+	// mirrored by the launcher from its config on every
+	// check-in / launch write, like FocusHerding above.
+	// PinemhiWatcherPID + PinemhiWatcherState are owned by
+	// THIS process: "" = un-owned, "started" = PVLDS started
+	// the watcher (and closes it at true exit), "adopted" = a
+	// watcher was already running (used, never closed). All
+	// four ride every merged write so neither side's writes
+	// ever drop the other's facts. Absent in contracts written
+	// before the fields existed: manage=false, state="" -
+	// today's behaviour exactly.
+	PinemhiManage       bool   `json:"pinemhi_manage"`
+	PinemhiFolder       string `json:"pinemhi_folder"`
+	PinemhiWatcherPID   int    `json:"pinemhi_watcher_pid"`
+	PinemhiWatcherState string `json:"pinemhi_watcher_state"`
 	// No close-duty or hold keys: the exit model was simplified
 	// (2026-10-22) - the close duty is unconditional and there is
 	// no hold gesture. Contracts written by older builds may
@@ -250,6 +266,13 @@ func main() {
 	}
 	os.WriteFile(lockPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
 	defer os.Remove(lockPath)
+	// PINemHi exit close (pinemhi.go): registered once the lock
+	// is held - i.e. this process IS the session's watchdog -
+	// and deferred past every return below, so disarm, contract
+	// gone, stale watch and the loop cap all count as TRUE exit
+	// and close a watcher PVLDS started. (The twin-instance
+	// return above never reaches here: a twin owns nothing.)
+	defer closePinemhiWatcher()
 	logf("watchdog: on duty (pid %d), contract %s", os.Getpid(), contractPath)
 
 	var (
@@ -266,6 +289,7 @@ func main() {
 		sessionActivator  activator
 		actRuntimeSession int   // the session actRuntimeMs belongs to
 		actRuntimeMs      int64 // first tick the session's runtime stamp was observed (the activation deadline's anchor)
+		pinemhiMissingLog bool  // the manage-on-but-no-exe line has been logged this duty spell (no retry spam)
 	)
 
 	relaunch := func(c *Contract, why string) {
@@ -573,6 +597,68 @@ func main() {
 			}
 		} else {
 			sawGameAlive = false
+		}
+
+		// ---- PINemHi watcher duty (pinemhi.go) ------------------
+		// Runs on every tick, in every session state (and with no
+		// session at all): the watcher lives inside PVLDS's open
+		// hours, not inside a table session, so hand-offs - which
+		// change session state under a living watchdog - never
+		// touch it. Off means this block does nothing at all.
+		if c.PinemhiManage && c.PinemhiWatcherState == "" {
+			exe := pinemhiExePath(c.PinemhiFolder)
+			if !pinemhiFileExists(exe) {
+				if !pinemhiMissingLog {
+					pinemhiMissingLog = true
+					if exe == "" {
+						logf("watchdog: pinemhi: management is on but no PINemHi folder is in the contract; leaving the watcher alone")
+					} else {
+						logf("watchdog: pinemhi: management is on but %s is not there; leaving the watcher alone", exe)
+					}
+				}
+			} else {
+				pinemhiMissingLog = false
+				pids := findPIDsByExe(exe)
+				running := len(pids) > 0
+				switch pinemhiDecide(c.PinemhiManage, c.PinemhiWatcherState, running) {
+				case pinemhiAdopt:
+					pid := pids[0]
+					logf("watchdog: pinemhi: watcher already running (pid %d); adopted - PVLDS will not close it", pid)
+					writeContractMerged(func(mc *Contract) {
+						if mc.PinemhiWatcherState == "" {
+							mc.PinemhiWatcherState = "adopted"
+							mc.PinemhiWatcherPID = pid
+						}
+					})
+				case pinemhiStart:
+					pid, serr := startDetached(exe, nil)
+					if serr != nil {
+						logf("watchdog: pinemhi: could not start the watcher at %s: %v", exe, serr)
+					} else {
+						logf("watchdog: pinemhi: started the watcher (pid %d); PVLDS will close it at exit", pid)
+						writeContractMerged(func(mc *Contract) {
+							if mc.PinemhiWatcherState == "" {
+								mc.PinemhiWatcherState = "started"
+								mc.PinemhiWatcherPID = pid
+							}
+						})
+					}
+				}
+			}
+		}
+		// A watcher PVLDS started that died on its own: clear the
+		// ownership so the duty above re-decides next tick (it
+		// will start a fresh one - the session is still inside
+		// PVLDS's open hours). An adopted watcher's death is not
+		// ours to repair or report beyond this same clear.
+		if c.PinemhiWatcherState == "started" && c.PinemhiWatcherPID > 0 && !processAlive(c.PinemhiWatcherPID) {
+			logf("watchdog: pinemhi: the watcher PVLDS started (pid %d) is gone; clearing ownership", c.PinemhiWatcherPID)
+			writeContractMerged(func(mc *Contract) {
+				if mc.PinemhiWatcherState == "started" {
+					mc.PinemhiWatcherState = ""
+					mc.PinemhiWatcherPID = 0
+				}
+			})
 		}
 
 		// ---- stale watch ----------------------------------------

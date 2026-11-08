@@ -10,10 +10,12 @@ import (
 var (
 	kernel32                  = syscall.NewLazyDLL("kernel32.dll")
 	procQueryFullProcessImage = kernel32.NewProc("QueryFullProcessImageNameW")
+	procTerminateProcess      = kernel32.NewProc("TerminateProcess")
 )
 
 const (
 	processQueryLimitedInformation = 0x1000
+	processTerminate               = 0x0001
 	detachedProcess                = 0x00000008
 	createNewProcessGroup          = 0x00000200
 )
@@ -108,6 +110,39 @@ func findPIDsByExe(exePath string) []int {
 		return full
 	}
 	return base
+}
+
+// terminateProcess is the hard stop behind the PINemHi exit
+// close's grace (pinemhi.go): TerminateProcess on the pid, used
+// only after the graceful window close was asked and ignored.
+func terminateProcess(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	h, err := syscall.OpenProcess(processTerminate, false, uint32(pid))
+	if err != nil {
+		return false
+	}
+	defer syscall.CloseHandle(h)
+	r, _, _ := procTerminateProcess.Call(uintptr(h), 0)
+	return r != 0
+}
+
+// closeProcessWindows asks every top-level window of the process
+// to close (WM_CLOSE, posted - never blocking on the other
+// process), the graceful first step of the PINemHi exit close.
+// Returns true when at least one close was posted.
+func closeProcessWindows(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	posted := false
+	for _, hwnd := range allTopWindows(pid) {
+		if r, _, _ := procPostMessageW.Call(hwnd, wmCloseMsg, 0, 0); r != 0 {
+			posted = true
+		}
+	}
+	return posted
 }
 
 // startDetached starts the process in its own group, detached from

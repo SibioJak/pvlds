@@ -47,6 +47,21 @@ func findPIDsByExe(exePath string) []int {
 	return out
 }
 
+// terminateProcess is the hard stop behind the PINemHi exit
+// close's grace (pinemhi.go): SIGTERM, which a well-behaved
+// watcher (and the smoke's stub) traps as its stop signal.
+func terminateProcess(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	return syscall.Kill(pid, syscall.SIGTERM) == nil
+}
+
+// closeProcessWindows has no window messaging to send on Linux:
+// the graceful step reports false and the exit close proceeds
+// to its grace + terminate, which is what the stub traps.
+func closeProcessWindows(_ int) bool { return false }
+
 // startDetached starts the process in its own session so it
 // survives the watchdog, and returns its pid without waiting.
 func startDetached(path string, args []string) (int, error) {

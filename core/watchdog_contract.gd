@@ -22,6 +22,20 @@ extends RefCounted
 ##                    Cleared whenever a session (re)arms. Schema
 ##                    stays v2.
 ##   focus_herding    the config kill-switch, mirrored for the watchdog
+##   pinemhi_manage   PINEMHI2 (Part B): the config's watcher-
+##                    management toggle, mirrored for the watchdog
+##                    exactly like focus_herding (checkin/launch)
+##   pinemhi_folder   the resolved PINemHi folder, mirrored the
+##                    same way - the watchdog finds the watcher
+##                    exe (pinemhi_rom_monitor.exe) inside it
+##   pinemhi_watcher_pid / pinemhi_watcher_state
+##                    WATCHDOG-owned: the watcher process PVLDS
+##                    is responsible for and how it came to be
+##                    running ("" | "started" | "adopted"). The
+##                    launcher never writes these; they ride
+##                    through its load-then-save untouched
+##                    because load/save carry them verbatim.
+##                    Schema stays v2.
 ##   (No close-duty or hold keys: the exit model was simplified
 ##   by the player's ruling, 2026-10-22 - the watchdog's
 ##   session-close duty is unconditional and there is no hold
@@ -74,6 +88,10 @@ const SCHEMA_VERSION: int = 2
 var armed: bool = false
 var disarm_reason: String = ""
 var focus_herding: bool = true
+var pinemhi_manage: bool = false
+var pinemhi_folder: String = ""
+var pinemhi_watcher_pid: int = 0
+var pinemhi_watcher_state: String = ""
 var session_id: int = 0
 var session_state: String = "idle"
 var game_exe_path: String = ""
@@ -123,6 +141,10 @@ static func load_from_disk() -> WatchdogContract:
 	c.armed = bool(d.get("armed", false))
 	c.disarm_reason = str(d.get("disarm_reason", ""))
 	c.focus_herding = bool(d.get("focus_herding", true))
+	c.pinemhi_manage = bool(d.get("pinemhi_manage", false))
+	c.pinemhi_folder = str(d.get("pinemhi_folder", ""))
+	c.pinemhi_watcher_pid = int(d.get("pinemhi_watcher_pid", 0))
+	c.pinemhi_watcher_state = str(d.get("pinemhi_watcher_state", ""))
 	c.session_id = int(d.get("session_id", 0))
 	c.session_state = str(d.get("session_state", "idle"))
 	c.session_state = WatchdogContract.normalize_state(c.session_state)
@@ -149,6 +171,10 @@ func to_dictionary() -> Dictionary:
 	d["armed"] = armed
 	d["disarm_reason"] = disarm_reason
 	d["focus_herding"] = focus_herding
+	d["pinemhi_manage"] = pinemhi_manage
+	d["pinemhi_folder"] = pinemhi_folder
+	d["pinemhi_watcher_pid"] = pinemhi_watcher_pid
+	d["pinemhi_watcher_state"] = pinemhi_watcher_state
 	d["session_id"] = session_id
 	d["session_state"] = session_state
 	d["game_exe_path"] = game_exe_path

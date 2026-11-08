@@ -56,6 +56,7 @@ var _submit_photo_path: String = "" ## the chosen score photo (filesystem path);
 var _submit_has_key: bool = false
 var _pinemhi_edit: LineEdit
 var _pinemhi_check: CheckBox
+var _pinemhi_manage_check: CheckBox ## PINEMHI2 (Part B): the watcher-management toggle - saved with the PINemHi section's Save, read by the watchdog via the contract mirror
 var _pinemhi_label: Label
 var _shots_edit: LineEdit
 var _shots_label: Label
@@ -301,22 +302,29 @@ func _build_ui() -> void:
 
 	# The PINemHi section (NEXTROUND item 4): the folder
 	# PVLDS READS TOP10_Personal files from, plus the
-	# toggle. PVLDS never runs PINemHi - it reads the
-	# leaderboard files an existing install leaves behind
-	# and shows your own #1 under the league scores on a
-	# tournament board. Like the key, these are live
+	# toggle. Reading is the whole story by default - PVLDS
+	# reads the leaderboard files an existing install
+	# leaves behind and shows your own #1 under the league
+	# scores on a tournament board. PINEMHI2 (Part B) adds
+	# ONE opt-in on top of that: the watcher checkbox below
+	# lets PVLDS run PINemHi's watcher while PVLDS is open
+	# (see its label). Like the key, these are live
 	# settings: Save writes the config on the spot.
 	var pinemhi_title: Label = Label.new()
 	pinemhi_title.text = "PINemHi - your personal bests on the tournament boards"
 	pinemhi_title.add_theme_font_size_override("font_size", 20)
 	vbox.add_child(pinemhi_title)
 	var pinemhi_intro: Label = Label.new()
-	pinemhi_intro.text = "If you use PINemHi, PVLDS can read its TOP10_Personal leaderboard files and show your own best beneath the league scores on a tournament board. PVLDS only reads the files - it never runs PINemHi or any watcher. Leave the folder empty to auto-detect the usual install places (D:\\vPinball\\Pinemhi and friends)."
+	pinemhi_intro.text = "If you use PINemHi, PVLDS can read its TOP10_Personal leaderboard files and show your own best beneath the league scores on a tournament board. Reading the files is all PVLDS does by default - it does not run PINemHi or its watcher unless you opt in with the watcher checkbox below. Leave the folder empty to auto-detect the usual install places (D:\\vPinball\\Pinemhi and friends)."
 	pinemhi_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(pinemhi_intro)
 	_pinemhi_check = CheckBox.new()
 	_pinemhi_check.text = "Show my PINemHi personal bests on tournament boards"
 	vbox.add_child(_pinemhi_check)
+	_pinemhi_manage_check = CheckBox.new()
+	_pinemhi_manage_check.text = "Let PVLDS run the PINemHi watcher while PVLDS is open"
+	_pinemhi_manage_check.tooltip_text = "Off (the default): PVLDS never touches the watcher process. On: the watchdog starts pinemhi_rom_monitor.exe when PVLDS opens if it is not already running, and closes it when PVLDS exits. A watcher that was already running before PVLDS opened is left running - PVLDS only ever closes one it started itself."
+	vbox.add_child(_pinemhi_manage_check)
 	_pinemhi_edit = LineEdit.new()
 	_pinemhi_edit.placeholder_text = "PINemHi folder - empty = auto-detect"
 	vbox.add_child(_pinemhi_edit)
@@ -537,6 +545,7 @@ func _fill_from_config() -> void:
 	_wovp_label.text = "A key is saved on this PC." if _config.wovp_api_key != "" else "No key saved yet."
 	_pinemhi_edit.text = _config.pinemhi_folder
 	_pinemhi_check.button_pressed = _config.pinemhi_enabled
+	_pinemhi_manage_check.button_pressed = _config.pinemhi_manage_watcher
 	_pinemhi_label.text = PinemhiScores.status_line(_config)
 	_shots_edit.text = _config.screenshots_folder
 	_shots_label.text = ShotsFolder.status_line(_config)
@@ -572,6 +581,7 @@ func _collect_into_config() -> void:
 	_config.wovp_api_key = _wovp_edit.text.strip_edges()
 	_config.pinemhi_folder = _pinemhi_edit.text.strip_edges()
 	_config.pinemhi_enabled = _pinemhi_check.button_pressed
+	_config.pinemhi_manage_watcher = _pinemhi_manage_check.button_pressed
 	_config.screenshots_folder = _shots_edit.text.strip_edges()
 	_config.launch_args_template = _args_edit.text.strip_edges()
 	if _config.launch_args_template == "":
@@ -826,16 +836,20 @@ func _on_pinemhi_save_pressed() -> void:
 		return
 	var prev_folder: String = _config.pinemhi_folder
 	var prev_enabled: bool = _config.pinemhi_enabled
+	var prev_manage: bool = _config.pinemhi_manage_watcher
 	_config.pinemhi_folder = _pinemhi_edit.text.strip_edges()
 	_config.pinemhi_enabled = _pinemhi_check.button_pressed
+	_config.pinemhi_manage_watcher = _pinemhi_manage_check.button_pressed
 	if _config.save_to_disk():
 		_pinemhi_label.text = PinemhiScores.status_line(_config)
 		pinemhi_settings_saved.emit()
 		return
 	_config.pinemhi_folder = prev_folder
 	_config.pinemhi_enabled = prev_enabled
+	_config.pinemhi_manage_watcher = prev_manage
 	_pinemhi_edit.text = prev_folder
 	_pinemhi_check.button_pressed = prev_enabled
+	_pinemhi_manage_check.button_pressed = prev_manage
 	_pinemhi_label.text = "Those PINemHi settings could NOT be saved - the config file is not writable, so nothing changed. Fix the config file, then save again."
 
 

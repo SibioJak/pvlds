@@ -49,6 +49,15 @@ var starfield_mode: String = "layered" ## "layered" | "flat" | "off"
 ## appears (and the folder is never read).
 var pinemhi_folder: String = ""
 var pinemhi_enabled: bool = true
+## PINEMHI2 (Part B): the watcher-management toggle.
+## pinemhi_manage_watcher: when true, PVLDS runs the
+## PINemHi watcher (pinemhi_rom_monitor.exe, in the folder
+## above) strictly inside PVLDS's own open hours - the
+## watchdog process starts it if it is not running, leaves
+## a pre-running one adopted and untouched, and closes
+## only a watcher PVLDS itself started, at true exit.
+## Default OFF: PVLDS never touches the watcher process.
+var pinemhi_manage_watcher: bool = false
 ## ROOMSUBMIT: the screenshots folder the in-room WoVP
 ## score submission reads score photos from - the folder
 ## his headset screenshots land in on this PC. "" = not
@@ -129,6 +138,7 @@ func load_from_disk() -> bool:
 		starfield_mode = "layered"
 	pinemhi_folder = str(d.get("pinemhi_folder", ""))
 	pinemhi_enabled = bool(d.get("pinemhi_enabled", true))
+	pinemhi_manage_watcher = bool(d.get("pinemhi_manage_watcher", false))
 	screenshots_folder = str(d.get("screenshots_folder", ""))
 	# OPTIMIZE: any stored gait coerces to the one gait -
 	# a config written by a shipped build may carry "smooth"
@@ -155,6 +165,7 @@ func save_to_disk() -> bool:
 	d["starfield_mode"] = starfield_mode
 	d["pinemhi_folder"] = pinemhi_folder
 	d["pinemhi_enabled"] = pinemhi_enabled
+	d["pinemhi_manage_watcher"] = pinemhi_manage_watcher
 	d["screenshots_folder"] = screenshots_folder
 	wall_motion_mode = "stepped" ## OPTIMIZE: saves write the one gait, whatever a caller left standing in the var
 	d["wall_motion_mode"] = wall_motion_mode

@@ -127,6 +127,12 @@ func checkin(config: PvldsConfig) -> WatchdogContract:
 	c.armed = true
 	c.disarm_reason = "" ## a fresh arm buries the last dismissal's reason
 	c.focus_herding = config.focus_herding if config != null else true
+	# PINEMHI2 (Part B): mirror the watcher-management toggle +
+	# the resolved folder for the watchdog. The watchdog-owned
+	# pid/state are NOT touched here - they loaded from disk
+	# with the contract and save back out as they were.
+	c.pinemhi_manage = config.pinemhi_manage_watcher if config != null else false
+	c.pinemhi_folder = PinemhiScores.resolve_folder(config) if config != null else ""
 	c.launcher_path = LaunchService.launcher_path()
 	c.launcher_args = LaunchService.launcher_args()
 	c.launcher_pid = OS.get_process_id()
@@ -161,6 +167,10 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	c.armed = true
 	c.disarm_reason = ""
 	c.focus_herding = config.focus_herding
+	# PINEMHI2 (Part B): the same mirror as checkin (the
+	# watchdog-owned pid/state ride through untouched).
+	c.pinemhi_manage = config.pinemhi_manage_watcher
+	c.pinemhi_folder = PinemhiScores.resolve_folder(config)
 	c.session_id += 1
 	c.session_state = "loading"
 	c.game_exe_path = plan.exe_path
