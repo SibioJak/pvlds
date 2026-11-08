@@ -594,6 +594,22 @@ const BG_VOLUME_STAR_DEG: float = 0.21 ## a near star's angular diameter in degr
 const BG_VOLUME_FAR_SHRINK: float = 0.55 ## the far edge's angular-size factor (brightness falls to BG_VOLUME_FAR_DIM on the same scale)
 const BG_VOLUME_FAR_DIM: float = 0.38 ## the far edge's brightness factor
 const BG_VOLUME_TINT: Color = Color(0.90, 0.93, 1.0) ## the shells' star tint, carried into the volume's instance colours
+## FIELDPASS (item 1): a star is a POINT, not a tile. Chris's
+## verdict on the shipped volume: "extra depth is nice, but
+## stars are to square" - each star was a flat filled quad.
+## The star shader now draws a radial falloff inside the
+## quad (bright core, edge dissolving to transparent), and
+## the quad spreads wider than the old tile (BG_VOLUME_
+## POINT_SPREAD) so the falloff's lit core keeps the old
+## pinpoint's apparent size. Per-star tints join the shade:
+## overwhelmingly near-neutral white, a faint warm and a
+## faint blue minority - his reference photo's own mix
+## (ngc503_LRGB_large.jpg: round points, wide size spread,
+## soft glow on the bright ones, subtle colour differences).
+const BG_VOLUME_POINT_SPREAD: float = 1.45 ## the star quad's size factor under the falloff (the NC seam "squares" restores 1.0 with the flat shader)
+const BG_VOLUME_TINT_NEUTRAL: Color = Color(1.0, 1.0, 1.0) ## most stars: neutral white (exactly neutral - the tint census classifies by channel difference)
+const BG_VOLUME_TINT_WARM: Color = Color(1.0, 0.87, 0.72) ## a faint warm minority
+const BG_VOLUME_TINT_BLUE: Color = Color(0.80, 0.88, 1.0) ## a faint blue minority
 const BG_BACKDROP_RADIUS: float = 500.0 ## the starless backdrop's distance - beyond the far band, inside the cameras' far plane
 ## The backdrop's shader: the far shell's sky WITHOUT its
 ## stars - the same deep colour, the same milky band
@@ -614,11 +630,34 @@ void fragment() {
 	ALBEDO = col;
 }
 """
-## A volume star's shader: the instance colour IS the star
-## (the MultiMesh writes tint x brightness per star); the
+## A volume star's shader (FIELDPASS item 1): the instance
+## colour IS the star's light (the MultiMesh writes tint x
+## brightness per star); the radial falloff inside the quad
+## makes it a round point - a saturated core, then a soft
+## shoulder dissolving to transparent at the quad's edge,
+## so no square boundary can read at any band's size. The
 ## quad faces the eye by its instance basis (see
 ## _build_star_volume), so no billboarding runs per frame.
+## Alpha blends and writes NO depth: a star's soft edge
+## never occludes the star behind it, and the opaque room
+## (cards, backdrop) still depth-tests it correctly.
 const BG_VOLUME_STAR_SHADER: String = """
+shader_type spatial;
+render_mode unshaded, cull_disabled, blend_mix, depth_draw_never;
+void fragment() {
+	vec2 centred = (UV - vec2(0.5)) * 2.0;
+	float d = length(centred);
+	float shoulder = 1.0 - smoothstep(0.0, 1.0, d);
+	float a = pow(shoulder, 1.6);
+	float core = 1.0 - smoothstep(0.0, 0.38, d);
+	a = clamp(a + core * 0.35, 0.0, 1.0);
+	ALBEDO = COLOR.rgb;
+	ALPHA = a;
+}
+"""
+## The pre-FIELDPASS star shader, kept only behind the
+## PVLDS_FIELDPASS_NC=squares seam: the flat filled square.
+const BG_VOLUME_STAR_SHADER_FLAT: String = """
 shader_type spatial;
 render_mode unshaded, cull_disabled, depth_draw_opaque;
 void fragment() {
@@ -851,6 +890,15 @@ static var debug_bench: bool = false
 ## the world-lock so the graduation smoke's lock leg fails
 ## by name. Empty in every real run.
 static var debug_bg_nc: String = ""
+## Negative-control seam for the FIELDPASS round (the
+## harness env PVLDS_FIELDPASS_NC, set by Main before any
+## room exists): "squares" restores the volume stars' flat
+## filled-square shader and unspread size (the pre-FIELDPASS
+## shape Chris convicted: "stars are to square"), "slab"
+## restores the board-mode panels' filled focus frame (the
+## cyan slab through a frameless board face) - each so the
+## matching smoke legs fail by name. Empty in every real run.
+static var debug_fieldpass_nc: String = ""
 ## Negative-control seam for the boot seating guard (the
 ## harness env PVLDS_BOOT_NC, set by Main before any room
 ## exists): "oldbind" never arms the guard, restoring the
@@ -2046,6 +2094,18 @@ func starfield_volume_star(band_idx: int, star_idx: int) -> Vector3:
 	return mm.get_instance_transform(star_idx).origin
 
 
+## FIELDPASS: one star's standing instance colour in a
+## volume band - the tint census's read (the starfield
+## smoke judges the warm/blue/neutral mix off these).
+func starfield_volume_star_color(band_idx: int, star_idx: int) -> Color:
+	if band_idx < 0 or band_idx >= _bg_volume_bands.size():
+		return Color(0, 0, 0, 0)
+	var mm: MultiMesh = _bg_volume_bands[band_idx].multimesh
+	if mm == null or star_idx < 0 or star_idx >= mm.instance_count:
+		return Color(0, 0, 0, 0)
+	return mm.get_instance_color(star_idx)
+
+
 ## The drift's standing state (the sky-pass proofs read it):
 ## the standing pair's accumulated world-space yaws about
 ## the viewer, plus the volume's own census when it stands.
@@ -2186,7 +2246,9 @@ func _build_star_volume() -> void:
 	quad.size = Vector2.ONE
 	var qsm: ShaderMaterial = ShaderMaterial.new()
 	var qsh: Shader = Shader.new()
-	qsh.code = BG_VOLUME_STAR_SHADER
+	# FIELDPASS (item 1): the falloff shader is the shipped
+	# shape; the NC seam restores the flat square.
+	qsh.code = BG_VOLUME_STAR_SHADER_FLAT if debug_fieldpass_nc == "squares" else BG_VOLUME_STAR_SHADER
 	qsm.shader = qsh
 	quad.material = qsm
 	var r_min: float = BG_VOLUME_RADII[0]
@@ -2213,10 +2275,20 @@ func _build_star_volume() -> void:
 			var dir: Vector3 = Vector3(ring_r * cos(theta), z, ring_r * sin(theta))
 			var pos: Vector3 = dir * radius
 			var up: Vector3 = Vector3.UP if absf(dir.y) < 0.99 else Vector3.RIGHT
-			var basis: Basis = Basis.looking_at(dir, up).scaled(Vector3.ONE * base_size * rng.randf_range(0.75, 1.25))
+			var spread: float = 1.0 if debug_fieldpass_nc == "squares" else BG_VOLUME_POINT_SPREAD
+			var basis: Basis = Basis.looking_at(dir, up).scaled(Vector3.ONE * base_size * spread * rng.randf_range(0.75, 1.25))
 			mm.set_instance_transform(s, Transform3D(basis, pos))
 			var shade: float = bright * rng.randf_range(0.55, 1.0)
-			mm.set_instance_color(s, Color(BG_VOLUME_TINT.r * shade, BG_VOLUME_TINT.g * shade, BG_VOLUME_TINT.b * shade))
+			# FIELDPASS (item 1): the per-star tint - the
+			# reference field's own mix: most stars neutral,
+			# a faint warm and a faint blue minority.
+			var tint_roll: float = rng.randf()
+			var tint: Color = BG_VOLUME_TINT_NEUTRAL
+			if tint_roll > 0.92:
+				tint = BG_VOLUME_TINT_WARM
+			elif tint_roll > 0.84:
+				tint = BG_VOLUME_TINT_BLUE
+			mm.set_instance_color(s, Color(tint.r * shade, tint.g * shade, tint.b * shade))
 		var node: MultiMeshInstance3D = MultiMeshInstance3D.new()
 		node.name = "StarfieldVolumeBand%d" % band_idx
 		node.multimesh = mm

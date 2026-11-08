@@ -851,6 +851,12 @@ func _ready() -> void:
 	# (PVLDS_BG_NC=drum): parents the background stack to the
 	# drum so the graduation smoke's lock leg fails by name.
 	RoomView.debug_bg_nc = OS.get_environment("PVLDS_BG_NC")
+	# The FIELDPASS negative-control seam (PVLDS_FIELDPASS_NC=
+	# squares | slab): "squares" restores the volume stars'
+	# flat filled-square shader, "slab" restores the board
+	# panels' filled focus frame - each so the matching
+	# smoke legs fail against it by name.
+	RoomView.debug_fieldpass_nc = OS.get_environment("PVLDS_FIELDPASS_NC")
 	# The boot seating guard's negative-control seam
 	# (PVLDS_BOOT_NC=oldbind): the guard never arms, so the
 	# resting pointer owns the boot centre again and the
@@ -17803,6 +17809,7 @@ func _drive_starfield_field() -> void:
 				_starfield_grab("starfield_sky_b.png")
 				_starfield_field_parallax_legs()
 				_starfield_quiet_leg(_starfield_sky_img)
+				_starfield_round_leg(_starfield_sky_img)
 				_room._desk_rig.position = RoomView.EYE
 				_room.drum_node().visible = true
 				_starfield_smoke_phase = 6
@@ -17892,6 +17899,32 @@ func _starfield_field_census() -> void:
 			"starfield dial: layered stands the volume with both shells down")
 	else:
 		_starfield_expect(false, "starfield dial: the shell pair is missing (%d)" % shells.size())
+	# FIELDPASS (item 1): the tint census - the instance
+	# colours' own mix, read off the bands' data: most
+	# stars near-neutral, a faint warm and a faint blue
+	# minority standing (his reference field's mix).
+	var tint_total: int = 0
+	var tint_warm: int = 0
+	var tint_blue: int = 0
+	var bands_t: Array = _room.starfield_volume_bands()
+	for bi: int in range(bands_t.size()):
+		var mm_t: MultiMesh = (bands_t[bi] as MultiMeshInstance3D).multimesh
+		if mm_t == null:
+			continue
+		for si: int in range(mm_t.instance_count):
+			var c: Color = _room.starfield_volume_star_color(bi, si)
+			tint_total += 1
+			if c.r - c.b > 0.02:
+				tint_warm += 1
+			elif c.b - c.r > 0.02:
+				tint_blue += 1
+	if tint_total > 0:
+		var warm_frac: float = float(tint_warm) / float(tint_total)
+		var blue_frac: float = float(tint_blue) / float(tint_total)
+		_starfield_expect(warm_frac > 0.02 and warm_frac < 0.20 and blue_frac > 0.02 and blue_frac < 0.20,
+			"starfield tint: a faint warm and a faint blue minority stand in a near-neutral field (warm %.1f%%, blue %.1f%% of %d stars)" % [warm_frac * 100.0, blue_frac * 100.0, tint_total])
+	else:
+		_starfield_expect(false, "starfield tint: no instance colours to census")
 
 
 func _starfield_field_drift_legs() -> void:
@@ -17998,6 +18031,62 @@ func _starfield_quiet_leg(img: Image) -> void:
 			"starfield quiet: star brightness varies with depth - instance colours live (median %.2f, brightest %.2f)" % [med, hi])
 	else:
 		_starfield_expect(false, "starfield quiet: too few stars in frame to judge brightness (%d)" % lums.size())
+
+
+## FIELDPASS (item 1): the round read - off the sky-only
+## grab. For isolated bright stars, sample the luminance
+## one pixel along the axes against one pixel along the
+## diagonals (a longer step from the centre). Measured on
+## this bench's renders, the two shapes separate cleanly:
+## the soft points read a median diagonal/axis falloff of
+## ~0.26-0.31, the flat tiles ~0.50 (their hard edges and
+## plateau peaks smear the ratio up). The leg's bound sits
+## between the two families. Under
+## PVLDS_FIELDPASS_NC=squares the tiles return and this
+## leg fails by name.
+func _starfield_round_leg(img: Image) -> void:
+	if img == null:
+		_starfield_expect(false, "starfield round: no sky grab to read")
+		return
+	var w: int = img.get_width()
+	var h: int = int(float(img.get_height()) * 0.45)
+	var ratios: Array[float] = []
+	for y: int in range(6, h - 6):
+		for x: int in range(6, w - 6):
+			var lum: float = img.get_pixel(x, y).get_luminance()
+			if lum < 0.60:
+				continue
+			var peak: bool = true
+			for dy: int in range(-1, 2):
+				for dx: int in range(-1, 2):
+					if dx == 0 and dy == 0:
+						continue
+					if img.get_pixel(x + dx, y + dy).get_luminance() > lum:
+						peak = false
+			if not peak:
+				continue
+			var iso: bool = true
+			for dy2: int in range(-6, 7):
+				for dx2: int in range(-6, 7):
+					if maxi(absi(dx2), absi(dy2)) < 5:
+						continue
+					if img.get_pixel(x + dx2, y + dy2).get_luminance() > 0.35:
+						iso = false
+			if not iso:
+				continue
+			var axis: float = (img.get_pixel(x + 1, y).get_luminance() + img.get_pixel(x - 1, y).get_luminance()
+				+ img.get_pixel(x, y + 1).get_luminance() + img.get_pixel(x, y - 1).get_luminance()) / 4.0
+			var diag: float = (img.get_pixel(x + 1, y + 1).get_luminance() + img.get_pixel(x - 1, y + 1).get_luminance()
+				+ img.get_pixel(x + 1, y - 1).get_luminance() + img.get_pixel(x - 1, y - 1).get_luminance()) / 4.0
+			if axis > 0.10:
+				ratios.append(diag / axis)
+	ratios.sort()
+	if ratios.size() >= 4:
+		var med: float = ratios[ratios.size() / 2]
+		_starfield_expect(med < 0.40,
+			"starfield round: the stars are round soft points, not square tiles (median diagonal/axis falloff %.2f over %d isolated stars)" % [med, ratios.size()])
+	else:
+		_starfield_expect(false, "starfield round: too few isolated bright stars to judge the shape (%d)" % ratios.size())
 
 
 ## GATE mode: one stepped travel run per dial stop, frame
