@@ -615,6 +615,15 @@ func apply_spec(spec: Dictionary) -> void:
 		_color_of(spec, "title_color", Color(0.96, 0.96, 0.98)))
 	_sub_label.text = str(spec.get("sub", ""))
 	_sub_label.visible = _sub_label.text != ""
+	# LOADING (item 3): the sub's weight, re-asserted on
+	# every spec (one CardFace serves all renders): a
+	# sub_bold spec wears the heavier font; any other
+	# spec gets the plain theme font back.
+	if bool(spec.get("sub_bold", false)):
+		_sub_label.add_theme_font_override("font", _sub_font(spec))
+	elif _sub_label.has_theme_font_override("font"):
+		_sub_label.remove_theme_font_override("font")
+	var sub_font: Font = _sub_font(spec)
 	var sub_px: int = int(spec.get("sub_size", 32))
 	if kind == "board" and size.x > 0.0 and _sub_label.text != "" \
 			and OS.get_environment("PVLDS_GRADFIX_NC") != "oldband":
@@ -628,14 +637,14 @@ func apply_spec(spec: Dictionary) -> void:
 		# outgrows the page, so the font scales down until
 		# the whole line fits, floor 18 like the score law.
 		var s_avail: float = size.x - 52.0
-		var s_need: float = _text_w(_measure_font(), _sub_label.text, sub_px)
+		var s_need: float = _text_w(sub_font, _sub_label.text, sub_px)
 		if s_need > s_avail and s_need > 0.0:
 			sub_px = maxi(18, int(floor(float(sub_px) * s_avail / s_need)))
 			# The proportional step can land a pixel wide
 			# (the renderer's string measure rounds up at
 			# some sizes): walk down until the line truly
 			# fits, never below the 18 px floor.
-			while sub_px > 18 and _text_w(_measure_font(), _sub_label.text, sub_px) > s_avail:
+			while sub_px > 18 and _text_w(sub_font, _sub_label.text, sub_px) > s_avail:
 				sub_px -= 1
 	_sub_label.add_theme_font_size_override("font_size", sub_px)
 	# A spec may warm its own sub line ("sub_color") - the
@@ -835,6 +844,23 @@ func _measure_font() -> Font:
 	if f != null:
 		return f
 	return ThemeDB.fallback_font
+
+
+## LOADING (item 3): the font a spec's sub line renders
+## in - the face's own font, or, when the spec asks for
+## "sub_bold" (the tournie boards' deadline line), a
+## FontVariation of it one weight heavier. The sub's
+## scale-to-fit law measures with THIS font, so the fit
+## judges the ink that actually renders, not the plain
+## face's narrower measure.
+func _sub_font(spec: Dictionary) -> Font:
+	var base: Font = _measure_font()
+	if not bool(spec.get("sub_bold", false)):
+		return base
+	var bold: FontVariation = FontVariation.new()
+	bold.base_font = base
+	bold.variation_embolden = 0.2
+	return bold
 
 
 func _text_w(font: Font, text: String, font_size: int) -> float:

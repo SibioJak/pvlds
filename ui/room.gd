@@ -61,14 +61,34 @@ const MARQUEE_WALL_ALPHA: float = 0.16 ## the wall's alpha while the marquee sta
 const MARQUEE_FLY_IN_SEC: float = 1.4 ## the letters' travel time, wall -> settle
 static var MARQUEE_START_Z: float = -3.60 ## fly-in start depth (at the wall - tracks WALL_RADIUS; a static beside it so the oldwall NC restores both)
 const MARQUEE_SETTLE_POS: Vector3 = Vector3(0.0, 1.42, -2.30) ## reading distance, on the view axis (retuned 2026-10-22: first pass sat too close)
-const MARQUEE_PIXEL_SIZE: float = 0.005 ## Label3D world scale
-const MARQUEE_YEAR_FONT_SIZE: int = 110 ## retuned 2026-10-22: 170 read too big in the headset
-const MARQUEE_NAME_FONT_SIZE: int = 56 ## the designer/title line (Chris's "date and designer"); 84 -> 56 in the same retune
-const MARQUEE_YEAR_Y: float = 0.30 ## year line's offset from the holder's centre
-const MARQUEE_NAME_Y: float = -0.34 ## designer/title line's offset
-const MARQUEE_FACT_FONT_SIZE: int = 30 ## PINEMHI1: the fact lines under the headline (RoomSpecs.marquee_fact_lines)
-const MARQUEE_FACT_Y0: float = -0.66 ## the first fact line's offset (below the name line)
-const MARQUEE_FACT_STEP: float = 0.17 ## fact line spacing
+const MARQUEE_PIXEL_SIZE: float = 0.005 ## Label3D world scale (the fit's ceiling - see _marquee_fit)
+## LOADING (item 1): the restyle - the marquee joins the
+## app's quiet register. The old display sizes (year 110,
+## name 56, facts 30) put a 0.755 m year and a 3.3 m-wide
+## name line in the player's face (Chris's field capture,
+## 2026-11-08: "loading screen is ugly... font in your
+## face, not elegant"), and the stack's fixed single-line
+## seats (name at -0.34, facts from -0.66 stepping 0.17)
+## let autowrap bury lines: a fact wider than the labels'
+## 700 px wrap width wrapped INSIDE its label and its
+## second row landed on the next label's seat (measured on
+## the Deadly Weapon fixture: the Art line at exactly 2x
+## its one-line height, clearances -0.145 m into both
+## neighbours). The new law: NO label ever wraps (autowrap
+## off everywhere), every line is FIT to the width cap by
+## scaling its pixel size down (never up), and the stack
+## is seated from MEASURED line heights with real gaps
+## between the labels' own boxes - collision-proof at any
+## content length by construction, judged off the rendered
+## AABBs by the LOADING smoke.
+const MARQUEE_YEAR_FONT_SIZE: int = 52 ## the year leads, quietly (was 110)
+const MARQUEE_NAME_FONT_SIZE: int = 32 ## the designer/title line (was 56)
+const MARQUEE_FACT_FONT_SIZE: int = 23 ## the fact lines under the headline (was 30)
+const MARQUEE_MAX_LINE_W: float = 2.30 ## the widest a marquee line may stand at the settle seat; a longer line scales down to fit
+const MARQUEE_BLOCK_TOP: float = 0.48 ## the stack's top edge in holder space (the year's seat is constant; the stack hangs from here)
+const MARQUEE_GAP_YEAR_NAME: float = 0.055 ## clear air between the year and name boxes
+const MARQUEE_GAP_NAME_FACTS: float = 0.085 ## clear air between the headline and the first fact box
+const MARQUEE_GAP_FACT: float = 0.042 ## clear air between fact boxes
 ## NEXTROUND (item 2): the marquee's type treatment joins
 ## the frameless graphite house look (the filter strip /
 ## SETUP furniture language) - the year takes the strip's
@@ -1253,6 +1273,13 @@ var _pick_snapshot: Dictionary = {} ## ClickableQuad -> pick_enabled, taken as t
 var _rail_quads: Dictionary = {} ## key -> ClickableQuad
 var _rail_tex_cache: Dictionary = {} ## "label|accent" -> Texture2D: every rail button face ever rendered, so a rebuild re-dresses the rail in its own frame
 var _rail_bar: MeshInstance3D = null ## GRADFIX14 (item 1): the machined strip's ONE continuous backing bar (null in tileboxes NC mode)
+var _rail_defs: Array = [] ## LOADING (item 2): the rail's built defs ([key, raw width] pairs, in seat order) as _build_rail chose them, snapshotted before its strip scaling - _layout_rail re-seats the room's working set from these
+var _rail_gap_v: float = 0.0 ## LOADING (item 2): the built rail's inter-section gap (tile modes; strip mode closes it to zero)
+var _rail_tile_h_v: float = 0.0 ## LOADING (item 2): the built rail's tile height
+var _rail_seat_y: float = 0.225 ## LOADING (item 2): the built rail's seat height
+var _rail_seat_z: float = -1.62 ## LOADING (item 2): the built rail's seat depth
+var _rail_total_full: float = 0.0 ## LOADING (item 2): the built rail's full span (widths + gaps) - the strip scale derives from it
+var _rail_sum_full: float = 0.0 ## LOADING (item 2): the built defs' raw width sum
 var _rail_def_w: Dictionary = {} ## GRADFIX14 (item 1): key -> the section's laid-out width, metres (the strip faces render at each section's own aspect from it)
 var _rail_last_key: String = "" ## GRADFIX14 (item 1): the rightmost section's key (it carries no etched seam)
 var _rail_base_pos: Dictionary = {} ## GRADFIX14 (item 1): key -> the section's flush position (its lift rides from here)
@@ -4336,6 +4363,14 @@ func _rebuild_wall() -> void:
 	var refresh_q: ClickableQuad = _rail_quads.get("wovp_refresh") as ClickableQuad
 	if refresh_q != null:
 		refresh_q.pick_enabled = _refresh_pickable()
+	# LOADING (item 2): the rail re-seats for the room
+	# that stands - the tournie strip shrinks to its
+	# working set, the library strip stands whole. Runs
+	# after the resets above (they restore the standing
+	# defaults; the layout applies the room's set over
+	# them) and before _refresh_focusables, so the
+	# focusable set is computed from the laid-out rail.
+	_layout_rail()
 	# The alphabet strip is furniture on the same terms: built
 	# once beside the rail, and every rebuild re-lays it out
 	# (the "#" slot's existence follows the library), re-reads
@@ -4465,6 +4500,19 @@ func _build_rail(placeholder: Texture2D) -> void:
 	for d: Variant in defs:
 		total += float(d[1]) + gap
 	total -= gap
+	# LOADING (item 2): snapshot the built defs RAW (before
+	# the strip scaling below mutates them) plus the seat
+	# constants, so _layout_rail can re-seat the room's
+	# working set at these same widths on every rebuild.
+	_rail_defs = defs.duplicate(true)
+	_rail_gap_v = gap
+	_rail_tile_h_v = tile_h
+	_rail_seat_y = y
+	_rail_seat_z = z
+	_rail_total_full = total
+	_rail_sum_full = 0.0
+	for d0: Variant in defs:
+		_rail_sum_full += float(d0[1])
 	# GRADFIX14 (item 1): in strip mode the sections sit
 	# CONTIGUOUS - the gaps close to zero and their span is
 	# absorbed into the sections at the shipped proportions,
@@ -4559,6 +4607,94 @@ func _build_rail_bar(total: float, tile_h: float, y: float, z: float) -> void:
 	ClickableQuad.face_point(_rail_bar, EYE)
 	# A hair behind the section faces, along its own normal.
 	_rail_bar.position += (_rail_bar.position - EYE).normalized() * 0.006
+
+
+## LOADING (item 2, Chris's ruling 2026-11-07): the
+## Tournament Room's rail working set - the TOURNAMENT
+## door, REFRESH, SETUP (the "desk" stop), EXIT. Every
+## other section leaves the tournie strip; the library
+## strip stands whole. The order is the built defs'
+## relative order, which is also the focus walk's.
+const TOURNIE_RAIL_KEYS: Array[String] = ["tournament", "wovp_refresh", "desk", "exit"]
+
+
+## The rail sections standing in the current room, in
+## seat order: the library's whole built row, or the
+## tournie working set while the Tournament Room stands.
+func _rail_working_keys() -> Array[String]:
+	if _tournament:
+		return TOURNIE_RAIL_KEYS.duplicate()
+	var out: Array[String] = []
+	for d: Variant in _rail_defs:
+		out.append(str((d as Array)[0]))
+	return out
+
+
+## LOADING (item 2): seat the rail's working set for the
+## room that stands, from the built defs. A working
+## section keeps its STANDING width (in strip mode, its
+## strip-scaled width from the full row's own scale - so
+## its cached face, rendered at that aspect, is exact),
+## the working sections sit contiguous and centred, and
+## the backing bar shrinks to their span. A section
+## outside the set is invisible and unpickable - which is
+## also its admission ticket out of every focus walk,
+## since the walks, the anchors and _refresh_focusables
+## all admit stops live by visibility + pick state.
+## Press behaviour, the strip's lift and BACK are
+## untouched: this is furniture placement only, run from
+## _rebuild_wall's tail on every view change.
+func _layout_rail() -> void:
+	if _rail_quads.is_empty() or _rail_defs.is_empty():
+		return
+	var working: Array[String] = _rail_working_keys()
+	var strip: bool = _strip_mode()
+	var gap: float = 0.0 if strip else _rail_gap_v
+	var scale: float = 1.0
+	if strip and _rail_sum_full > 0.0:
+		scale = _rail_total_full / _rail_sum_full
+	var widths: Dictionary = {}
+	var total: float = 0.0
+	for d: Variant in _rail_defs:
+		var key: String = str((d as Array)[0])
+		if not working.has(key):
+			continue
+		var w: float = float((d as Array)[1]) * scale
+		widths[key] = w
+		total += w + gap
+	total -= gap
+	if _rail_bar != null:
+		(_rail_bar.mesh as QuadMesh).size = Vector2(total, _rail_tile_h_v)
+	var x: float = -total * 0.5
+	for d2: Variant in _rail_defs:
+		var key2: String = str((d2 as Array)[0])
+		var q: ClickableQuad = _rail_quads.get(key2) as ClickableQuad
+		if q == null:
+			continue
+		if not working.has(key2):
+			q.visible = false
+			q.pick_enabled = false
+			continue
+		var w2: float = float(widths[key2])
+		q.visible = true
+		if strip:
+			# One plane (the machined law), in the lift
+			# loop's own terms: the seat IS the base pos,
+			# and the standing pop offset rides on it, so
+			# _update_rail_lift's position writes agree
+			# with the seat from the first frame.
+			_rail_base_pos[key2] = Vector3(x + w2 * 0.5, _rail_seat_y, _rail_seat_z)
+			q.transform = Transform3D(_rail_bar.transform.basis, _rail_base_pos[key2] as Vector3)
+			q.position = (_rail_base_pos[key2] as Vector3) + (_rail_pop_dir[key2] as Vector3) * (RAIL_STRIP_LIFT * float(_rail_pop_applied.get(key2, 0.0)))
+		else:
+			q.position = Vector3(x + w2 * 0.5, _rail_seat_y, _rail_seat_z)
+		q.pick_enabled = key2 != "page_label"
+		x += w2 + gap
+	# REFRESH keeps its standing pick rule (GRADFIX16
+	# item 1) in whichever room stands.
+	var refresh_q: ClickableQuad = _rail_quads.get("wovp_refresh") as ClickableQuad
+	if refresh_q != null and working.has("wovp_refresh"):
+		refresh_q.pick_enabled = _refresh_pickable()
 
 
 ## True while the rail stands as the machined strip
@@ -10287,10 +10423,58 @@ func _raise_marquee(game: GameEntry) -> void:
 		else:
 			fl.text = ""
 			fl.visible = false
+	# LOADING (item 1): seat the stack - every visible
+	# label fitted to the width cap, then hung from the
+	# block's top edge by its MEASURED line height with
+	# the standing gaps between boxes. The year's seat
+	# never moves; a facts-light marquee is a shorter
+	# stack under the same headline.
+	var font: Font = ThemeDB.fallback_font
+	var seq: Array = [[_marquee_year, 0.0]]
+	if bottom != "":
+		seq.append([_marquee_name, MARQUEE_GAP_YEAR_NAME])
+	for i2: int in range(facts.size()):
+		seq.append([_marquee_facts[i2], MARQUEE_GAP_NAME_FACTS if i2 == 0 else MARQUEE_GAP_FACT])
+	var y_top: float = MARQUEE_BLOCK_TOP
+	for entry: Variant in seq:
+		var pair: Array = entry as Array
+		y_top -= float(pair[1])
+		y_top = _marquee_seat(pair[0] as Label3D, y_top, font)
 	_marquee_t = 0.0
 	_marquee_up = true
 	add_child(_marquee)
 	ClickableQuad.face_point(_marquee, EYE)
+
+
+## LOADING (item 1): fit one marquee label to the width
+## cap. The label never wraps (autowrap is off), so a line
+## longer than the cap scales its pixel size DOWN until
+## the whole line stands inside MARQUEE_MAX_LINE_W - the
+## longest line in the library (the census's 77-char
+## Designer line) reads smaller, never broken. Short
+## lines keep the stock pixel size untouched.
+func _marquee_fit(lbl: Label3D, font: Font) -> void:
+	var w: float = font.get_string_size(lbl.text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, lbl.font_size).x
+	w += float(lbl.outline_size) * 2.0 ## the outline's ink rides outside the shaped width on both sides
+	if w <= 0.0:
+		lbl.pixel_size = MARQUEE_PIXEL_SIZE
+		return
+	lbl.pixel_size = minf(MARQUEE_PIXEL_SIZE, MARQUEE_MAX_LINE_W / w)
+
+
+## LOADING (item 1): seat one marquee label with its
+## box's top edge at y_top (holder space) and return the
+## box's bottom edge. The box height is the font's own
+## line height at the label's fitted pixel size - exactly
+## the height the rendered AABB stands (the LOADING
+## smoke's geometry legs measure the same quantity), so
+## stacked boxes clear by the gaps the caller leaves
+## between them, at any content length.
+func _marquee_seat(lbl: Label3D, y_top: float, font: Font) -> float:
+	_marquee_fit(lbl, font)
+	var h: float = font.get_height(lbl.font_size) * lbl.pixel_size
+	lbl.position = Vector3(0.0, y_top - h * 0.5, 0.0)
+	return y_top - h
 
 
 func _build_marquee() -> void:
@@ -10302,7 +10486,6 @@ func _build_marquee() -> void:
 	_marquee_year.font_size = MARQUEE_YEAR_FONT_SIZE
 	_marquee_year.outline_size = MARQUEE_OUTLINE_SIZE
 	_marquee_year.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_marquee_year.position = Vector3(0.0, MARQUEE_YEAR_Y, 0.0)
 	_marquee_year.modulate = Color(MARQUEE_YEAR_COLOR, 0.0)
 	_marquee_year.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, 0.0)
 	_marquee.add_child(_marquee_year)
@@ -10311,15 +10494,16 @@ func _build_marquee() -> void:
 	_marquee_name.font_size = MARQUEE_NAME_FONT_SIZE
 	_marquee_name.outline_size = MARQUEE_OUTLINE_SIZE
 	_marquee_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_marquee_name.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_marquee_name.width = 700.0
-	_marquee_name.position = Vector3(0.0, MARQUEE_NAME_Y, 0.0)
+	# LOADING (item 1): no autowrap, no wrap width - the
+	# name stands on ONE line, fitted to the cap at raise
+	# (the old WORD_SMART + 700 px pair is what buried the
+	# fact lines under a wrapped second row).
 	_marquee_name.modulate = Color(MARQUEE_NAME_COLOR, 0.0)
 	_marquee_name.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, 0.0)
 	_marquee.add_child(_marquee_name)
 	# PINEMHI1: the fact-line labels stack under the name
-	# line at reading size - built hidden, filled (or left
-	# hidden) by _raise_marquee.
+	# line - built hidden, filled (or left hidden) and
+	# seated by _raise_marquee.
 	_marquee_facts.clear()
 	for i: int in range(5):
 		var fl: Label3D = Label3D.new()
@@ -10327,9 +10511,7 @@ func _build_marquee() -> void:
 		fl.font_size = MARQUEE_FACT_FONT_SIZE
 		fl.outline_size = MARQUEE_OUTLINE_SIZE
 		fl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		fl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		fl.width = 700.0
-		fl.position = Vector3(0.0, MARQUEE_FACT_Y0 - MARQUEE_FACT_STEP * float(i), 0.0)
+		# LOADING (item 1): no autowrap - one line, fitted.
 		fl.modulate = Color(MARQUEE_NAME_COLOR, 0.0)
 		fl.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, 0.0)
 		fl.visible = false

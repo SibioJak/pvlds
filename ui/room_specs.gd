@@ -647,7 +647,8 @@ static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: Strin
 		"title_size": 46,
 		"title_max_lines": 1,
 		"sub": sub,
-		"sub_size": 26,
+		"sub_size": 28, ## LOADING (item 3): the deadline line one size up (was 26) ...
+		"sub_bold": true, ## ... and one weight heavier (CardFace renders the embolden; the shimmer fix)
 		"sub_max_lines": 1,
 		"sub_color": sub_color,
 		"chips": chips,
@@ -767,7 +768,8 @@ static func pinemhi_weekly_board_spec(contest: Dictionary, player_name: String, 
 		"title_size": 46,
 		"title_max_lines": 1,
 		"sub": _pinemhi_window_sub(str(contest.get("window_start", "")), str(contest.get("window_end", ""))),
-		"sub_size": 26,
+		"sub_size": 28, ## LOADING (item 3): the window line takes the deadline line's treatment (was 26)
+		"sub_bold": true,
 		"sub_max_lines": 1,
 		"chips": [],
 		"rows": rows,
