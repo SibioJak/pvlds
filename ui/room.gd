@@ -1022,6 +1022,13 @@ static var debug_gf12_nc: String = ""
 ## smoke's vertical-wall-law legs fail by name. Empty in
 ## every real run.
 static var debug_gf13_nc: String = ""
+## Negative-control seam for the SUBMITNAV round (the
+## harness env PVLDS_SUBMITNAV_NC, set by Main before any
+## room exists): "oldwalk" restores the projection walk on
+## the submit panel - the panel's focus graph edges never
+## engage - so the submitnav smoke's "one step to SEND"
+## legs fail by name. Empty in every real run.
+static var debug_submitnav_nc: String = ""
 ## Negative-control seam for GRADFIX14 item 2 (the harness
 ## env PVLDS_GF14_NC, set by Main before any room exists):
 ## "oldadopt" restores the pre-fix adoption behaviour -
@@ -1265,7 +1272,7 @@ var _submit_challenge: WovpChallenge = null ## the challenge the standing panel 
 var _submit_challenge_id: String = ""
 var _submit_owned: bool = false
 var _submit_build_owned: bool = false
-var _submit_shots: Array = [] ## the folder read at open: [{path, name, mtime}], newest first, capped at the strip's five
+var _submit_shots: Array = [] ## the folder read at open: [{path, name, mtime}], newest first, capped at the strip's six (SUBMITNAV: a burst is half a dozen frames; the strip fits six)
 var _submit_shots_line: String = "" ## ShotsFolder.panel_line for the folder read at open
 var _submit_selected_path: String = "" ## the shot SEND would post: the focused thumb's (focus IS the verify step)
 var _submit_status: String = "" ## the face's message line: states and verdicts in words
@@ -9997,7 +10004,7 @@ func show_submit_panel(ch: WovpChallenge, owned: bool, build_owned: bool) -> voi
 	# The folder read happens AT OPEN, every open: his
 	# shots land minutes before he opens this panel, and a
 	# list cached any earlier would lie about the shelf.
-	_submit_shots = ShotsFolder.list_shots(_wovp_shots_folder, 5)
+	_submit_shots = ShotsFolder.list_shots(_wovp_shots_folder, 6)
 	_submit_shots_line = ShotsFolder.panel_line(_wovp_shots_folder)
 	_submit_selected_path = ""
 	if not _submit_shots.is_empty():
@@ -10025,8 +10032,8 @@ func _build_submit_panel() -> void:
 	_submit_panel.name = "SubmitPanel"
 	# SUBMITDIST: the seat is the submit panel's OWN, pushed
 	# back from the SETUP family's -1.72 to -2.30 - at -1.72
-	# the 1024x532 face plus the 1.06x0.76 photo filled the
-	# view ("its in your face", field 2026-11-06). Distance
+	# the 1024x532 face plus the photo filled the view
+	# ("its in your face", field 2026-11-06). Distance
 	# is the only knob: the panel keeps its physical size,
 	# and the SETUP panel keeps its own -1.72 seat.
 	_submit_panel.position = Vector3(0.0, 1.32, -2.30)
@@ -10037,20 +10044,30 @@ func _build_submit_panel() -> void:
 	_submit_panel_face.pick_enabled = false
 	_submit_panel.add_child(_submit_panel_face)
 	_submit_big_quad = ClickableQuad.new()
-	_submit_big_quad.setup("submit_photo", "", placeholder, Vector2(1.06, 0.76))
-	_submit_big_quad.position = Vector3(0.0, -0.24, 0.0)
+	# SUBMITNAV: the big view grows (1.06x0.76 -> 1.30x0.86)
+	# and its texture stops being the art cache's 1024 px
+	# decode (see _submit_show_shot): together they are the
+	# readability fix - this surface's whole job is reading
+	# a score off the shot.
+	_submit_big_quad.setup("submit_photo", "", placeholder, Vector2(1.30, 0.86))
+	_submit_big_quad.position = Vector3(0.0, -0.26, 0.0)
 	_submit_big_quad.pick_enabled = false
 	_submit_panel.add_child(_submit_big_quad)
 	_submit_thumb_quads.clear()
-	var tx: float = -0.58
+	# SUBMITNAV: the strip seats six and centres itself on
+	# the panel (it used to start at a fixed -0.58, so a
+	# short strip stood off-centre); the thumbs shrink a
+	# step (0.27x0.20 -> 0.22x0.17) to fit the six - the
+	# strip is for browsing; the big view is for reading.
+	var tx: float = -0.5 * float(_submit_shots.size() - 1) * 0.245
 	for sv: Variant in _submit_shots:
 		var shot: Dictionary = sv as Dictionary
 		var tq: ClickableQuad = ClickableQuad.new()
-		tq.setup("submit_shot", str(shot.get("path", "")), placeholder, Vector2(0.27, 0.20))
-		tq.position = Vector3(tx, -0.78, 0.0)
+		tq.setup("submit_shot", str(shot.get("path", "")), placeholder, Vector2(0.22, 0.17))
+		tq.position = Vector3(tx, -0.81, 0.0)
 		_submit_panel.add_child(tq)
 		_submit_thumb_quads.append(tq)
-		tx += 0.29
+		tx += 0.245
 	_submit_send_btn = ClickableQuad.new()
 	_submit_send_btn.setup("submit_send", "", placeholder, Vector2(0.52, 0.15))
 	_submit_send_btn.position = Vector3(-0.28, -1.06, 0.0)
@@ -10059,11 +10076,11 @@ func _build_submit_panel() -> void:
 	_submit_back_btn.setup("submit_back", "", placeholder, Vector2(0.52, 0.15))
 	_submit_back_btn.position = Vector3(0.28, -1.06, 0.0)
 	_submit_panel.add_child(_submit_back_btn)
-	# The photos' textures: the house decode path
-	# (TextureFactory.load_art_texture - shared cache,
-	# capped at 1024 wide). A thumb and the big view of the
-	# same shot are ONE cache entry; the big view loads
-	# when its shot is focused (see _submit_show_shot).
+	# The photos' textures: the thumbs ride the house
+	# decode path (TextureFactory.load_art_texture -
+	# shared cache, capped at 1024 wide); the big view
+	# decodes separately at native resolution when its
+	# shot is focused (see _submit_show_shot).
 	for tq2: ClickableQuad in _submit_thumb_quads:
 		var tex: Texture2D = TextureFactory.load_art_texture(tq2.payload)
 		if tex != null:
@@ -10096,12 +10113,16 @@ func _fit_photo_quad(q: ClickableQuad, tex: Texture2D) -> void:
 ## The verify step's other half: stand a shot large. The
 ## one caller door is _set_focused (a thumb taking focus),
 ## plus the panel's open - so the big view can never
-## disagree with the frame the player sees.
+## disagree with the frame the player sees. SUBMITNAV:
+## the decode is the photo loader (native resolution),
+## not the shared art cache - the cache's 1024 px cap is
+## right for card faces and wrong for the one surface
+## whose whole job is reading a score off a photo.
 func _submit_show_shot(path: String) -> void:
 	_submit_selected_path = path
 	if _submit_big_quad == null:
 		return
-	var tex: Texture2D = TextureFactory.load_art_texture(path)
+	var tex: Texture2D = TextureFactory.load_photo_texture(path)
 	if tex != null:
 		_submit_big_quad.set_texture(tex)
 		_fit_photo_quad(_submit_big_quad, tex)
@@ -12222,11 +12243,65 @@ func _tourn_side_step(pidx: int, step: int) -> int:
 	return best
 
 
+## SUBMITNAV: the submit panel's own focus graph. While
+## the panel stands, _move_focus routes here (see its head
+## for the conviction). The panel's whole geography is two
+## rows - the shot strip over the SEND/BACK action row -
+## so the edges are the geography: sideways walks a row
+## (the strip by its order, clamped at its ends; the
+## action row swaps its two stops), DOWN from any shot is
+## the one-step road to SEND, UP from the action row
+## returns to the SELECTED shot's thumb (focus is the
+## selection, so the selected thumb is the one whose shot
+## stands large), and the remaining directions stay put.
+## Drawn focus == real focus holds by construction: every
+## landing goes through _set_focused.
+func _submit_move_focus(dir: Vector2) -> void:
+	var horizontal: bool = absf(dir.x) > 0.5
+	var ti: int = _submit_thumb_quads.find(_focused)
+	if ti >= 0:
+		if horizontal:
+			var nt: int = clampi(ti + (1 if dir.x > 0.0 else -1), 0, _submit_thumb_quads.size() - 1)
+			if nt != ti:
+				_set_focused(_submit_thumb_quads[nt])
+		elif dir.y > 0.5:
+			if _submit_send_btn != null:
+				_set_focused(_submit_send_btn)
+		return
+	if _focused == _submit_send_btn or _focused == _submit_back_btn:
+		if horizontal:
+			var other: ClickableQuad = _submit_back_btn if _focused == _submit_send_btn else _submit_send_btn
+			if other != null:
+				_set_focused(other)
+		elif dir.y < -0.5:
+			for tq: ClickableQuad in _submit_thumb_quads:
+				if tq.payload == _submit_selected_path:
+					_set_focused(tq)
+					return
+			if not _submit_thumb_quads.is_empty():
+				_set_focused(_submit_thumb_quads[0])
+
+
 func _move_focus(dir: Vector2) -> void:
 	if _focusables.is_empty():
 		return
 	if _focused == null or not _focusables.has(_focused):
 		_set_focused(_focusables[0])
+		return
+	# SUBMITNAV: while the submit panel stands, its focus
+	# moves on the graph edges above, never the projection
+	# walk at this function's foot. The walk convicted in
+	# the field (Chris, 2026-11-08): the action row sits
+	# 0.28 m under the shot row while the neighbour shot
+	# sits 0.29 m across, so a DOWN step's projection score
+	# (distance + 2x the sideways offset) prefers the
+	# neighbour - and from the row's middle, the harness
+	# reproduction showed, it prefers BACK, the one stop
+	# that leaves the panel. The NC seam (PVLDS_SUBMITNAV_
+	# NC=oldwalk) skips the edges so the submitnav smoke's
+	# one-step legs fail by name.
+	if _submit_panel_up and debug_submitnav_nc != "oldwalk":
+		_submit_move_focus(dir)
 		return
 	# The drum's own stepping (DOME5's navigation): while a
 	# CARD holds focus, a sideways step moves one COLUMN along

@@ -94,6 +94,6 @@ static func panel_line(folder: String) -> String:
 	var shots: Array = res.get("shots", []) as Array
 	if shots.is_empty():
 		return "No screenshots in that folder yet - take the shot in the headset first; it lands there."
-	if shots.size() > 5:
-		return "The newest 5 of %d screenshots in the folder - the focused one stands large above." % shots.size()
+	if shots.size() > 6:
+		return "The newest 6 of %d screenshots in the folder - the focused one stands large above." % shots.size()
 	return "Newest screenshots in the folder - the focused one stands large above."

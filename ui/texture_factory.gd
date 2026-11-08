@@ -665,6 +665,47 @@ static func load_art_texture(path: String) -> Texture2D:
 	return tex
 
 
+## SUBMITNAV: the submit panel's big-view decode - the
+## player's own screenshot at (near) native resolution.
+## The shared art path above caps every decode at 1024 px
+## wide, which is right for card faces and wrong for the
+## one surface whose whole job is reading a score off a
+## photo: a headset screenshot arrives ~2000 px wide and
+## its digits dissolve at half resolution. This loader
+## keeps the native width (downscaling only past 2048)
+## under its own small LRU - the panel's working set is
+## one burst of shots, revisited as focus walks the
+## strip. Same keying as the art cache (mtime + size).
+const PHOTO_MAX_WIDTH: int = 2048
+const PHOTO_CACHE_LIMIT: int = 8
+static var _photo_decode_cache: Dictionary = {} ## path -> [Texture2D, mtime, size]
+static var _photo_decode_order: Array[String] = []
+
+
+static func load_photo_texture(path: String) -> Texture2D:
+	var mtime: int = FileAccess.get_modified_time(path)
+	var size: int = _file_size(path)
+	var hit: Variant = _photo_decode_cache.get(path)
+	if hit is Array and int(hit[1]) == mtime and int(hit[2]) == size:
+		_photo_decode_order.erase(path)
+		_photo_decode_order.push_back(path)
+		return hit[0] as Texture2D
+	var img: Image = Image.new()
+	if img.load(path) != OK:
+		return null
+	if img.get_width() > PHOTO_MAX_WIDTH:
+		var ratio: float = float(PHOTO_MAX_WIDTH) / float(img.get_width())
+		img.resize(PHOTO_MAX_WIDTH, int(float(img.get_height()) * ratio), Image.INTERPOLATE_LANCZOS)
+	var tex: Texture2D = ImageTexture.create_from_image(img)
+	_photo_decode_cache[path] = [tex, mtime, size]
+	_photo_decode_order.erase(path)
+	_photo_decode_order.push_back(path)
+	while _photo_decode_order.size() > PHOTO_CACHE_LIMIT:
+		_photo_decode_cache.erase(_photo_decode_order[0])
+		_photo_decode_order.remove_at(0)
+	return tex
+
+
 ## GRADFIX18 (stream-ahead): prepare a decoded art Image as a
 ## FACE-ready image on the caller's thread (the art pipeline's
 ## background pump): cover-crop to the face's aspect exactly as
