@@ -376,6 +376,11 @@ var _sm_failures: int = 0
 var _sm_done: bool = false
 var _sm_judged: bool = false ## a judge coroutine is in flight (its legs land in _sm_failures when it sets this back)
 var _pm1_samples: Array = []
+var _smoke_loading: bool = false ## --pvlds-smoke-loading: LOADING round - one boot judges all three items. (3) The tournie boards' deadline line: RoomSpecs' two board specs carry sub_size 28 + sub_bold. (2) The rail's working set: the library strip stands whole (11 sections), the Tournament Room's strip stands at exactly TOURNAMENT / REFRESH / SETUP / EXIT with the focus walk across the four (drawn focus == real focus at every step), and the B-door round trip restores the library strip. (1) The env-named target (PVLDS_LOADING_TARGET) launches through the real launch door and the SETTLED marquee is judged geometrically off the labels' rendered AABBs: contents exact, every label one line tall, consecutive labels' spans disjoint with clearance, no line wider than the marquee's 2.30 m cap. Grabs land in PVLDS_LOADING_GRAB_DIR
+var _ld_phase: int = 0
+var _ld_wait: int = 0
+var _ld_failures: int = 0
+var _ld_done: bool = false
 var _smoke_submit: bool = false ## --pvlds-smoke-submit (SUBMIT round): the desk-stay submission smoke - scans the letter library, fetches the stub's boards, drives the desk's REAL submit section (picker, warning, photo attach, submit press) and reads the stub's request log as the wire's witness. Modes in PVLDS_SUBMIT_SMOKE_MODE: happy | noscore | badphoto | nothigher | shortkey | recorded | junk (SUBMIT2: the record field filled / filled with junk; PVLDS_SUBMIT_SCORE_TEXT carries the text, PVLDS_SUBMIT2_NC=wireleak must fail the wire-law leg by name)
 var _submit_mode: String = ""
 var _submit_phase: int = 0
@@ -769,6 +774,8 @@ func _ready() -> void:
 		_smoke_backtrim = true
 	if user_args.has("--pvlds-smoke-pinemhi1"):
 		_smoke_pinemhi1 = true
+	if user_args.has("--pvlds-smoke-loading"):
+		_smoke_loading = true
 	if user_args.has("--pvlds-smoke-pinemhi2"):
 		_smoke_pinemhi2 = true
 	if user_args.has("--pvlds-smoke-starfield"):
@@ -1078,7 +1085,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_scoremark or _smoke_pinemhi2 or _smoke_starfield) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_loading or _smoke_scoremark or _smoke_pinemhi2 or _smoke_starfield) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1297,6 +1304,8 @@ func _process(_delta: float) -> void:
 		_drive_backtrim_smoke()
 	if _smoke_pinemhi1:
 		_drive_pinemhi1_smoke()
+	if _smoke_loading:
+		_drive_loading_smoke()
 	if _smoke_pinemhi2:
 		_drive_pinemhi2_smoke()
 	if _smoke_starfield:
@@ -15568,6 +15577,275 @@ func _finish_pinemhi1_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS PINEMHI1 SMOKE: FAIL (%d)" % _pm1_failures)
+		get_tree().quit(1)
+
+
+## LOADING smoke (--pvlds-smoke-loading): the round's three
+## items judged in one boot on the real boot path (see
+## _smoke_loading's declaration for the contract). The rail
+## legs read the room's standing quads - visible set in seat
+## order, pick state, the bar's span - and walk focus with
+## the room's own step door; the marquee legs launch the
+## env-named target through the real launch door and measure
+## the settled labels' rendered AABBs in the holder's space
+## (the holder's settled scale is 1.0 - the PINEMHI1 law).
+func _ld_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - loading smoke: ", label)
+	else:
+		_ld_fail(label)
+
+
+func _ld_fail(label: String) -> void:
+	_ld_failures += 1
+	printerr("  FAIL - loading smoke: ", label)
+
+
+func _ld_rail_visible_keys() -> Array[String]:
+	var out: Array[String] = []
+	if _room == null:
+		return out
+	var keyed: Array = []
+	for k: Variant in _room._rail_quads.keys():
+		var q: ClickableQuad = _room._rail_quads[k] as ClickableQuad
+		if q != null and q.visible:
+			keyed.append([q.position.x, str(k)])
+	keyed.sort_custom(func(a: Variant, b: Variant) -> bool: return float((a as Array)[0]) < float((b as Array)[0]))
+	for e: Variant in keyed:
+		out.append(str((e as Array)[1]))
+	return out
+
+
+func _ld_rail_pickable_keys() -> Array[String]:
+	var out: Array[String] = []
+	for key: String in _ld_rail_visible_keys():
+		var q: ClickableQuad = _room._rail_quads[key] as ClickableQuad
+		if q != null and q.pick_enabled:
+			out.append(key)
+	return out
+
+
+func _ld_bar_span() -> float:
+	if _room == null or _room._rail_bar == null:
+		return -1.0
+	var qm: QuadMesh = _room._rail_bar.mesh as QuadMesh
+	return qm.size.x if qm != null else -1.0
+
+
+func _ld_visible_width_sum() -> float:
+	var total: float = 0.0
+	for key: String in _ld_rail_visible_keys():
+		var q: ClickableQuad = _room._rail_quads[key] as ClickableQuad
+		if q != null:
+			total += q.quad_size().x
+	return total
+
+
+func _ld_expect_library_strip(where: String) -> void:
+	var want: Array[String] = ["filter:all", "filter:vr", "filter:favorites", "filter:recents", "filter:new",
+		"sort", "tournament", "page_label", "wovp_refresh", "desk", "exit"]
+	var got: Array[String] = _ld_rail_visible_keys()
+	_ld_expect(got == want, "LOADING strip: %s - the library strip stands whole, all 11 sections in order (got %s)" % [where, str(got)])
+	var want_pick: Array[String] = ["filter:all", "filter:vr", "filter:favorites", "filter:recents", "filter:new",
+		"sort", "tournament", "wovp_refresh", "desk", "exit"]
+	var got_pick: Array[String] = _ld_rail_pickable_keys()
+	_ld_expect(got_pick == want_pick, "LOADING strip: %s - the library strip's stops are the ten pickable sections, the readout never a stop (got %s)" % [where, str(got_pick)])
+	var span: float = _ld_bar_span()
+	if span > 0.0:
+		_ld_expect(absf(span - _ld_visible_width_sum()) < 0.01,
+			"LOADING strip: %s - the bar spans exactly its sections (bar %.3f, sections %.3f)" % [where, span, _ld_visible_width_sum()])
+
+
+func _ld_focused_rail_key() -> String:
+	if _room == null or _room._focused == null:
+		return ""
+	return _room._rail_key_of_quad(_room._focused)
+
+
+func _ld_grab(name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_LOADING_GRAB_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	var err: Error = img.save_png(dir.path_join(name))
+	print("  ok - loading smoke: grab ", name, " err=", err, " size=", img.get_size())
+
+
+func _ld_judge_specs() -> void:
+	var now_unix: int = int(Time.get_unix_time_from_system())
+	var ch: WovpChallenge = WovpChallenge.new()
+	ch.name = "Loading Fixture"
+	ch.table_name = "Fixture Table"
+	ch.type_code = WovpChallenge.TYPE_SEASON
+	ch.end_unix = now_unix + 3 * 24 * 3600
+	var spec: Dictionary = RoomSpecs.tournament_board_spec(ch, true, "", now_unix)
+	_ld_expect(int(spec.get("sub_size", 0)) == 28 and bool(spec.get("sub_bold", false)),
+		"LOADING deadline: the WoVP board's deadline line stands one size up and one weight heavier (sub_size=%s, sub_bold=%s)" % [str(spec.get("sub_size", -1)), str(spec.get("sub_bold", false))])
+	var wspec: Dictionary = RoomSpecs.pinemhi_weekly_board_spec(
+		{"id": "main", "table": "Rolling Stones", "window_start": "2026-11-01 22:00:04", "window_end": "2026-11-08 22:00:04", "rows": []},
+		"", 0, true)
+	_ld_expect(int(wspec.get("sub_size", 0)) == 28 and bool(wspec.get("sub_bold", false)),
+		"LOADING deadline: the weekly board's window line carries the same treatment (sub_size=%s, sub_bold=%s)" % [str(wspec.get("sub_size", -1)), str(wspec.get("sub_bold", false))])
+
+
+func _ld_judge_tournie_strip() -> void:
+	var want: Array[String] = ["tournament", "wovp_refresh", "desk", "exit"]
+	var got: Array[String] = _ld_rail_visible_keys()
+	_ld_expect(got == want, "LOADING strip: the tournie strip stands at exactly its working set (got %s)" % [str(got)])
+	_ld_expect(_ld_rail_pickable_keys() == want, "LOADING strip: the tournie stops are the same four, all pickable (got %s)" % [str(_ld_rail_pickable_keys())])
+	var hidden_q: ClickableQuad = _room._rail_quads.get("sort") as ClickableQuad
+	_ld_expect(hidden_q != null and not hidden_q.visible and not hidden_q.pick_enabled,
+		"LOADING strip: a section that left the tournie strip is invisible and unpickable (sort)")
+	var span: float = _ld_bar_span()
+	if span > 0.0:
+		_ld_expect(absf(span - _ld_visible_width_sum()) < 0.01,
+			"LOADING strip: the tournie bar shrank to its sections (bar %.3f, sections %.3f)" % [span, _ld_visible_width_sum()])
+	# The focus walk across the four, through the room's own
+	# step door: drawn focus == real focus at every step (the
+	# focused key is read off the room's focused quad).
+	_room._land_on_rail_stop("tournament")
+	_ld_expect(_ld_focused_rail_key() == "tournament", "LOADING strip: the walk starts on TOURNAMENT (got '%s')" % _ld_focused_rail_key())
+	_room._move_focus(Vector2(1, 0))
+	_ld_expect(_ld_focused_rail_key() == "wovp_refresh", "LOADING strip: one step right lands on REFRESH (got '%s')" % _ld_focused_rail_key())
+	_room._move_focus(Vector2(1, 0))
+	_ld_expect(_ld_focused_rail_key() == "desk", "LOADING strip: the next step lands on SETUP (got '%s')" % _ld_focused_rail_key())
+	_room._move_focus(Vector2(1, 0))
+	_ld_expect(_ld_focused_rail_key() == "exit", "LOADING strip: the next step lands on EXIT (got '%s')" % _ld_focused_rail_key())
+	_room._move_focus(Vector2(1, 0))
+	_ld_expect(_ld_focused_rail_key() == "exit", "LOADING strip: the walk clamps at EXIT (got '%s')" % _ld_focused_rail_key())
+	_room._move_focus(Vector2(-1, 0))
+	_room._move_focus(Vector2(-1, 0))
+	_room._move_focus(Vector2(-1, 0))
+	_ld_expect(_ld_focused_rail_key() == "tournament", "LOADING strip: three steps left walk back to TOURNAMENT (got '%s')" % _ld_focused_rail_key())
+	_ld_grab("tournie_strip.png")
+
+
+func _ld_judge_marquee(target: String) -> void:
+	var want: Dictionary = {}
+	match target:
+		"dwLOAD01":
+			want = {"top": "1990", "bottom": "John Trudeau, Jon Norris", "facts": [
+				"Designer: John Trudeau, Jon Norris",
+				"Art: David Moore, Constantino Mitchell, Jeanine Mitchell",
+				"Units produced: 803"]}
+		"wcLOAD01":
+			want = {"top": "1994", "bottom": "Lyman F. Sheats Jr., Tim Seckel, Joe Kaminkow, Ed Cebula, John Borg", "facts": [
+				"Designer: Lyman F. Sheats Jr., Tim Seckel, Joe Kaminkow, Ed Cebula, John Borg",
+				"Art: Markus Rothkranz", "Music: Brian Schmidt",
+				"Software: Lonnie D. Ropp, John Carpenter", "Units produced: 5,505"]}
+	if want.is_empty():
+		_ld_fail("no expectations stand for target %s" % target)
+		return
+	var lines: Array[String] = _room.marquee_text()
+	_ld_expect(lines.size() == 2 and lines[0] == str(want["top"]) and lines[1] == str(want["bottom"]),
+		"LOADING marquee: %s's headline stands ('%s' / '%s')" % [target, lines[0] if lines.size() > 0 else "<none>", lines[1] if lines.size() > 1 else "<none>"])
+	var got_facts: Array[String] = _room.marquee_fact_text()
+	var want_facts: Array = want["facts"] as Array
+	var facts_ok: bool = got_facts.size() == want_facts.size()
+	if facts_ok:
+		for i: int in range(want_facts.size()):
+			if got_facts[i] != str(want_facts[i]):
+				facts_ok = false
+	_ld_expect(facts_ok, "LOADING marquee: %s's fact lines stand exact (got %s)" % [target, str(got_facts)])
+	# The geometry, off the rendered AABBs in holder space:
+	# every label exactly one line tall, consecutive spans
+	# disjoint with clearance, no line wider than the cap.
+	var labels: Array[Label3D] = []
+	labels.append(_room._marquee_year)
+	if _room._marquee_name.visible:
+		labels.append(_room._marquee_name)
+	for fl: Label3D in _room._marquee_facts:
+		if fl.visible:
+			labels.append(fl)
+	var prev_lo: float = 1e9
+	for i: int in range(labels.size()):
+		var lbl: Label3D = labels[i]
+		var ab: AABB = lbl.get_aabb()
+		var hi: float = lbl.position.y + ab.position.y + ab.size.y
+		var lo: float = lbl.position.y + ab.position.y
+		var f: Font = lbl.font if lbl.font != null else ThemeDB.fallback_font
+		var one_line: float = f.get_height(lbl.font_size) * lbl.pixel_size
+		print("  .. loading smoke: marquee label %d '%s' span [%.3f, %.3f] h=%.3f one-line=%.3f w=%.3f autowrap=%d" % [
+			i, lbl.text, lo, hi, ab.size.y, one_line, ab.size.x, lbl.autowrap_mode])
+		_ld_expect(ab.size.y <= one_line * 1.35 + 0.01,
+			"LOADING marquee: label %d ('%s') stands ONE line tall (h %.3f vs one-line %.3f) - no wrap, ever" % [i, lbl.text, ab.size.y, one_line])
+		_ld_expect(ab.size.x <= 2.30 + 0.01,
+			"LOADING marquee: label %d ('%s') fits the marquee's width cap (w %.3f of 2.30)" % [i, lbl.text, ab.size.x])
+		if i > 0:
+			_ld_expect(prev_lo - hi >= 0.015,
+				"LOADING marquee: labels %d and %d stand clear of each other (gap %.3f)" % [i - 1, i, prev_lo - hi])
+		prev_lo = lo
+	_ld_grab("marquee_" + target + ".png")
+
+
+func _drive_loading_smoke() -> void:
+	if _ld_done:
+		return
+	var target: String = OS.get_environment("PVLDS_LOADING_TARGET")
+	if target == "":
+		target = "dwLOAD01"
+	match _ld_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_ld_judge_specs()
+				_ld_expect_library_strip("at boot")
+				_room._handle_rail("tournament")
+				_ld_phase = 1
+				_ld_wait = 0
+			else:
+				_ld_wait += 1
+				if _ld_wait > 7200:
+					_ld_fail("the room never came up on the real boot path")
+					_finish_loading_smoke()
+		1:
+			_ld_wait += 1
+			if _ld_wait >= 60:
+				_ld_expect(_room._tournament, "LOADING strip: the TOURNAMENT press entered the Tournament Room")
+				_ld_judge_tournie_strip()
+				_room._b_exit_tournament()
+				_ld_phase = 2
+				_ld_wait = 0
+		2:
+			_ld_wait += 1
+			if _ld_wait >= 60:
+				_ld_expect(not _room._tournament, "LOADING strip: the B door left the Tournament Room")
+				_ld_expect_library_strip("after the door round trip")
+				_ld_phase = 3
+				_ld_wait = 0
+		3:
+			if _room != null and _room.visible and _room.wall_ready and _cb_visible_idx(target) >= 0:
+				var game: GameEntry = _scanner.game_by_id(target) if _scanner != null else null
+				if game == null:
+					_ld_fail("the scanner holds no game %s" % target)
+					_finish_loading_smoke()
+					return
+				_on_launch_requested(game, game.resolve_default_build(_state))
+				_ld_phase = 4
+				_ld_wait = 0
+			else:
+				_ld_wait += 1
+				if _ld_wait > 7200:
+					_ld_fail("the target never stood on the wall")
+					_finish_loading_smoke()
+		4:
+			_ld_wait += 1
+			if _room != null and _room._marquee_up and _room._marquee != null and _room._marquee_t > 2.0:
+				_ld_judge_marquee(target)
+				_finish_loading_smoke()
+			elif _ld_wait > 1800:
+				_ld_fail("the marquee for %s never stood settled (up=%s)" % [target, str(_room != null and _room._marquee_up)])
+				_finish_loading_smoke()
+
+
+func _finish_loading_smoke() -> void:
+	_ld_done = true
+	if _launch_service != null:
+		_launch_service.disarm("loading smoke")
+	if _ld_failures == 0:
+		print("PVLDS LOADING SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS LOADING SMOKE: FAIL (%d)" % _ld_failures)
 		get_tree().quit(1)
 
 
