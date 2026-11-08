@@ -84,6 +84,15 @@ const MARQUEE_PIXEL_SIZE: float = 0.005 ## Label3D world scale (the fit's ceilin
 const MARQUEE_YEAR_FONT_SIZE: int = 52 ## the year leads, quietly (was 110)
 const MARQUEE_NAME_FONT_SIZE: int = 32 ## the designer/title line (was 56)
 const MARQUEE_FACT_FONT_SIZE: int = 23 ## the fact lines under the headline (was 30)
+## FONT: the marquee's letterforms are Space Grotesk
+## (OFL, assets/fonts/) - static instances instanced
+## from the variable source: Medium for the year/name
+## headline, Regular for the fact lines. MARQUEE ONLY:
+## every other surface keeps the house font. No letter
+## tracking (the specimen carried a touch): Label3D
+## has no letter-spacing property, so none is faked.
+const MARQUEE_FONT_MEDIUM: Font = preload("res://assets/fonts/SpaceGrotesk-Medium.ttf")
+const MARQUEE_FONT_REGULAR: Font = preload("res://assets/fonts/SpaceGrotesk-Regular.ttf")
 const MARQUEE_MAX_LINE_W: float = 2.30 ## the widest a marquee line may stand at the settle seat; a longer line scales down to fit
 const MARQUEE_BLOCK_TOP: float = 0.48 ## the stack's top edge in holder space (the year's seat is constant; the stack hangs from here)
 const MARQUEE_GAP_YEAR_NAME: float = 0.055 ## clear air between the year and name boxes
@@ -10429,17 +10438,21 @@ func _raise_marquee(game: GameEntry) -> void:
 	# the standing gaps between boxes. The year's seat
 	# never moves; a facts-light marquee is a shorter
 	# stack under the same headline.
-	var font: Font = ThemeDB.fallback_font
-	var seq: Array = [[_marquee_year, 0.0]]
+	# FONT: measure with each label's OWN font - the
+	# headline in Space Grotesk Medium, the facts in
+	# Regular; the fit and the seats follow the font
+	# that actually renders (the LOADING smoke judges
+	# the same way, off lbl.font).
+	var seq: Array = [[_marquee_year, 0.0, MARQUEE_FONT_MEDIUM]]
 	if bottom != "":
-		seq.append([_marquee_name, MARQUEE_GAP_YEAR_NAME])
+		seq.append([_marquee_name, MARQUEE_GAP_YEAR_NAME, MARQUEE_FONT_MEDIUM])
 	for i2: int in range(facts.size()):
-		seq.append([_marquee_facts[i2], MARQUEE_GAP_NAME_FACTS if i2 == 0 else MARQUEE_GAP_FACT])
+		seq.append([_marquee_facts[i2], MARQUEE_GAP_NAME_FACTS if i2 == 0 else MARQUEE_GAP_FACT, MARQUEE_FONT_REGULAR])
 	var y_top: float = MARQUEE_BLOCK_TOP
 	for entry: Variant in seq:
 		var pair: Array = entry as Array
 		y_top -= float(pair[1])
-		y_top = _marquee_seat(pair[0] as Label3D, y_top, font)
+		y_top = _marquee_seat(pair[0] as Label3D, y_top, pair[2] as Font)
 	_marquee_t = 0.0
 	_marquee_up = true
 	add_child(_marquee)
@@ -10483,6 +10496,7 @@ func _build_marquee() -> void:
 	_marquee.position = Vector3(MARQUEE_SETTLE_POS.x, MARQUEE_SETTLE_POS.y, MARQUEE_START_Z)
 	_marquee_year = Label3D.new()
 	_marquee_year.pixel_size = MARQUEE_PIXEL_SIZE
+	_marquee_year.font = MARQUEE_FONT_MEDIUM ## FONT: the headline stands in Space Grotesk Medium
 	_marquee_year.font_size = MARQUEE_YEAR_FONT_SIZE
 	_marquee_year.outline_size = MARQUEE_OUTLINE_SIZE
 	_marquee_year.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -10491,6 +10505,7 @@ func _build_marquee() -> void:
 	_marquee.add_child(_marquee_year)
 	_marquee_name = Label3D.new()
 	_marquee_name.pixel_size = MARQUEE_PIXEL_SIZE
+	_marquee_name.font = MARQUEE_FONT_MEDIUM ## FONT: Space Grotesk Medium, like the year
 	_marquee_name.font_size = MARQUEE_NAME_FONT_SIZE
 	_marquee_name.outline_size = MARQUEE_OUTLINE_SIZE
 	_marquee_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -10508,6 +10523,7 @@ func _build_marquee() -> void:
 	for i: int in range(5):
 		var fl: Label3D = Label3D.new()
 		fl.pixel_size = MARQUEE_PIXEL_SIZE
+		fl.font = MARQUEE_FONT_REGULAR ## FONT: the facts stand in Space Grotesk Regular
 		fl.font_size = MARQUEE_FACT_FONT_SIZE
 		fl.outline_size = MARQUEE_OUTLINE_SIZE
 		fl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
