@@ -232,6 +232,7 @@ var _tournament_smoke_wait: int = 0
 var _tournament_smoke_failures: int = 0
 var _tournament_smoke_deadline_msec: int = 0
 var _tournament_validate_count_seen: int = 0 ## the stub's validate count when the panel length legs begin (their no-send witness)
+var _tournament_weekly_baseline: Array = [] ## PINEMHI2 harness contract: the standing WoVP boards' keys/seats before the full boot's weekly-present push (phases 17/18), for the WoVP-unaffected leg
 var _tournament_smoke_mode: String = "full" ## PVLDS_WOVP_SMOKE_MODE: full | nokey | failfetch | errbody | errempty | cache | layout - which harness boot this is
 var _tournament_pairing_stage: int = 0 ## full mode phase 13 (the standing-pair proof): step out, verify, step back, verify
 var _tournament_rendered_flip: int = 0 ## full mode phase 3: 0 seat the season card, 1 centre + Y-inert judge, 2 judged on its standing board
@@ -17511,7 +17512,14 @@ func _bootfocus_region_stdev(img: Image, rect: Rect2i) -> float:
 ##               board cannot launch, REFRESH re-fetches,
 ##               the view enters/leaves without stranding
 ##               focus, and the SETUP panel's PASTE KEY /
-##               TEST KEY work end to end.
+##               TEST KEY work end to end. PINEMHI2: the
+##               WoVP legs judge the five challenges; the
+##               PINemHi weekly panels behind them are
+##               judged in both of their settled shapes -
+##               the one failure-state board (the harness's
+##               dead weekly seam, no cache) in phase 1 and
+##               the three contest boards (fixture contests
+##               through Main's own push) in phases 17/18.
 ##   nokey     - no key in config: the view is the plain
 ##               "add your key in SETUP" state, not an error.
 ##   failfetch - key, dead base URL, no cache: the view is
@@ -17555,7 +17563,11 @@ func _bootfocus_region_stdev(img: Image, rect: Rect2i) -> float:
 ## failure recorded; room - the Tournament Room with
 ## fixture-backed weekly data pushed through Main's own
 ## door: three weekly board panels behind the WoVP rows,
-## his-row accents, the WoVP boards untouched.
+## his-row accents, the WoVP boards untouched; failstate -
+## no cache and the boot's own fetch failed (no seam: the
+## site's own URL, unreachable from the harness box): the
+## ONE plain-word failure-state board stands behind live
+## WoVP boards, its face real and inked on its own panel.
 ## Negative controls (PVLDS_PINEMHI2_NC): stale - Main's
 ## push claims the cache-served boards are live, so the
 ## stale leg fails by name; golfscore - the parser reads
@@ -17599,6 +17611,8 @@ func _drive_pinemhi2_smoke() -> void:
 				_finish_pinemhi2_smoke()
 		"room":
 			_drive_pinemhi2_room()
+		"failstate":
+			_drive_pinemhi2_failstate()
 
 
 func _pinemhi2_expect(cond: bool, label: String) -> void:
@@ -17848,6 +17862,95 @@ func _drive_pinemhi2_room() -> void:
 							continue
 						var cid4: String = str((_room._visible_games[i4] as GameEntry).game_id).trim_prefix("pinemhi:")
 						var fpath: String = grab.replace(".png", "-" + cid4 + ".png")
+						var ferr: Error = ftex.get_image().save_png(fpath)
+						print("PVLDS PINEMHI2 GRAB: ", fpath, " err=", ferr, " size=", ftex.get_size())
+				_finish_pinemhi2_smoke()
+
+
+## failstate variant (the tournament-full flag's diagnosis):
+## the boot's own weekly fetch fails with no cache standing
+## (fresh harness home; the base URL is the site's own - on
+## this sandbox direct egress is broken, which is exactly
+## the flagged condition), while fabricated WoVP challenges
+## stand live. The ONE weekly failure row must stand behind
+## them, and its panel must carry a real rendered board
+## face - the tournament standing-board checks, read off
+## the panel the face actually lives on (a weekly row has
+## no companion board; board_state() reports none for it,
+## by design - see RoomView.board_state).
+func _drive_pinemhi2_failstate() -> void:
+	match _pinemhi2_smoke_phase:
+		1:
+			if _room != null and _room.visible and _room.wall_ready:
+				_wovp_challenges = [
+					_pinemhi_fab_challenge("pinemhi2-alpha", "Apollo 13"),
+					_pinemhi_fab_challenge("pinemhi2-beta", "Medieval Madness"),
+					_pinemhi_fab_challenge("pinemhi2-gamma", "Twilight Zone"),
+				]
+				_wovp_user_id = "smoke-user"
+				_wovp_boards_live = true
+				_wovp_fetched_at = int(Time.get_unix_time_from_system())
+				_push_wovp_data()
+				_room._handle_rail("tournament")
+				_pinemhi2_expect(_room.tournament_active(), "failstate: the TOURNAMENT stop raises the Tournament Room")
+				_pinemhi2_smoke_phase = 2
+				_pinemhi2_smoke_wait = 0
+		2:
+			var settled: bool = _pinemhi_client != null and not _pinemhi_client.is_busy() \
+				and _pinemhi2_fetch_error != "" and _pinemhi2_contests.is_empty() and _pinemhi2_fetched_at == 0
+			if not settled:
+				return
+			var rows: Array = _room.tournament_rows()
+			var pidx: int = -1
+			var pcount: int = 0
+			for i: int in range(rows.size()):
+				if str((rows[i] as Dictionary).get("kind", "")) == "pinemhi":
+					pcount += 1
+					pidx = i
+			if pidx < 0 or pidx >= _room._panels.size():
+				return
+			var tex: Texture2D = _room._panels[pidx].current_texture()
+			var ready: bool = tex != null and tex.get_size() == Vector2(RoomSpecs.board_face_px()) and _room._tex_is_real(tex)
+			if (ready and _pinemhi2_smoke_wait > 25) or _pinemhi2_smoke_wait > 900:
+				print("PVLDS PINEMHI2 FAILSTATE ERROR: ", _pinemhi2_fetch_error)
+				_pinemhi2_expect(pcount == 1, "failstate: exactly one weekly failure row stands behind the WoVP boards (got %d)" % pcount)
+				var row: Dictionary = rows[pidx] as Dictionary
+				var game: GameEntry = row.get("game") as GameEntry
+				_pinemhi2_expect(game != null and game.game_id == "pinemhi:state" and game.title == "PINemHi Weekly",
+					"failstate: the failure row is the PINemHi Weekly state panel")
+				var spec: Dictionary = _room.pinemhi_board_spec_for(pidx)
+				_pinemhi2_expect(str(spec.get("band_text", "")) == "PINEMHI - WEEKLY" and str(spec.get("title", "")) == "PINemHi Weekly",
+					"failstate: the failure face spec wears the PINemHi band and title")
+				var spec_joined: String = ""
+				for rv: Variant in (spec.get("rows", []) as Array):
+					spec_joined += str((rv as Dictionary).get("text", "")) + " "
+				_pinemhi2_expect(spec_joined.contains("PINemHi weekly boards could not be fetched."),
+					"failstate: the failure face says in plain words that the weekly boards could not be fetched")
+				var ink: float = _tournament_tex_ink_stdev(tex)
+				_pinemhi2_expect(_room._panels[pidx].visible and tex != null
+						and tex.get_size() == Vector2(RoomSpecs.board_face_px()) and _room._tex_is_real(tex) and ink > 0.02,
+					"failstate: the failure-state board stands open at rest - visible, %dx%d, real, inked (size %s, real %s, ink stdev %.3f)"
+						% [RoomSpecs.BOARD_FACE_PX.x, RoomSpecs.BOARD_FACE_PX.y, str(tex.get_size()) if tex != null else "none", str(_room._tex_is_real(tex)), ink])
+				_room._set_centre(pidx, true)
+				_pinemhi2_smoke_phase = 3
+				_pinemhi2_smoke_wait = 0
+		3:
+			if _pinemhi2_smoke_wait > 25:
+				var grab: String = OS.get_environment("PVLDS_PINEMHI2_GRAB")
+				if grab != "":
+					var img: Image = get_viewport().get_texture().get_image()
+					var err: Error = img.save_png(grab)
+					print("PVLDS PINEMHI2 GRAB: ", grab, " err=", err, " size=", img.get_size())
+					var rows3: Array = _room.tournament_rows()
+					for i3: int in range(rows3.size()):
+						if str((rows3[i3] as Dictionary).get("kind", "")) != "pinemhi":
+							continue
+						if i3 >= _room._panels.size():
+							continue
+						var ftex: Texture2D = _room._panels[i3].current_texture()
+						if ftex == null:
+							continue
+						var fpath: String = grab.replace(".png", "-face.png")
 						var ferr: Error = ftex.get_image().save_png(fpath)
 						print("PVLDS PINEMHI2 GRAB: ", fpath, " err=", ferr, " size=", ftex.get_size())
 				_finish_pinemhi2_smoke()
@@ -18159,7 +18262,8 @@ func _drive_tournament_layout() -> void:
 					_tournament_fail("the room never came up")
 					_finish_tournament_smoke()
 		1:
-			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _room._panels.size() >= 2:
+			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _room._panels.size() >= 2 \
+					and _pinemhi_settled() and _tournament_weekly_panels_ready():
 				_tournament_leg_layout_boards()
 				_layout_start_probes()
 				_layout_wing_probe_start()
@@ -18253,6 +18357,163 @@ func _tournament_board_entry(idx: int) -> Dictionary:
 	return bs[idx] as Dictionary
 
 
+## PINEMHI2 harness contract: the Tournament Room's rows are
+## the WoVP challenges FIRST and the PINemHi weekly panels
+## behind them (RoomView._build_tournament_rows). The WoVP
+## legs judge the challenge subset; the weekly legs judge
+## the weekly panels. A weekly panel's face lives on its
+## own panel (it has no companion board - board_state()
+## reports none for it, by design), so its standing checks
+## read the panel's texture, never board_state().
+func _tournament_challenge_indices(rows: Array) -> Array[int]:
+	var out: Array[int] = []
+	for i: int in range(rows.size()):
+		if str((rows[i] as Dictionary).get("kind", "")) == "challenge":
+			out.append(i)
+	return out
+
+
+func _tournament_weekly_indices(rows: Array) -> Array[int]:
+	var out: Array[int] = []
+	for i: int in range(rows.size()):
+		if str((rows[i] as Dictionary).get("kind", "")) == "pinemhi":
+			out.append(i)
+	return out
+
+
+## The boot/refresh weekly fetch has answered (live, from
+## cache, or with a stated failure) and none is in flight -
+## the moment the weekly rows on the wall are the settled
+## ones, not a shape a landing push is about to replace.
+func _pinemhi_settled() -> bool:
+	return _pinemhi_client != null and not _pinemhi_client.is_busy() \
+		and (_pinemhi2_live or _pinemhi2_fetch_error != "" or _pinemhi2_fetched_at > 0 or not _pinemhi2_contests.is_empty())
+
+
+## Every standing weekly panel wears a real rendered board
+## face at the board's size (vacuously true when none stand).
+func _tournament_weekly_panels_ready() -> bool:
+	var rows: Array = _room.tournament_rows()
+	for idx: int in _tournament_weekly_indices(rows):
+		if idx >= _room._panels.size():
+			return false
+		var tex: Texture2D = _room._panels[idx].current_texture()
+		if tex == null or tex.get_size() != Vector2(RoomSpecs.board_face_px()) or not _room._tex_is_real(tex):
+			return false
+	return true
+
+
+## GRADFIX15 frameless judge, shared by the standing
+## companion boards and the weekly panels: the face is its
+## text block on transparency - corners clear, a real share
+## of sampled pixels transparent. Under PVLDS_GF15_NC=
+## panelfill the fill returns and this leg fails by name.
+func _tournament_expect_frameless(tex: Texture2D, tname: String) -> void:
+	var fimg: Image = tex.get_image() if tex != null else null
+	var corners_clear: bool = false
+	var transp_pct: int = 0
+	if fimg != null and not fimg.is_empty():
+		var fw: int = fimg.get_width()
+		var fh: int = fimg.get_height()
+		corners_clear = fimg.get_pixel(0, 0).a == 0.0 and fimg.get_pixel(fw - 1, 0).a == 0.0 \
+			and fimg.get_pixel(0, fh - 1).a == 0.0 and fimg.get_pixel(fw - 1, fh - 1).a == 0.0
+		var samp_n: int = 0
+		var samp_t: int = 0
+		for sy: int in range(0, fh, 16):
+			for sx: int in range(0, fw, 16):
+				samp_n += 1
+				if fimg.get_pixel(sx, sy).a == 0.0:
+					samp_t += 1
+		transp_pct = int(round(100.0 * float(samp_t) / float(maxi(1, samp_n))))
+	_tournament_expect(corners_clear and transp_pct >= 10,
+		"frameless board: '%s' board face is its text block on transparency - corners clear %s, %d%% of sampled pixels transparent (PVLDS_GF15_NC=panelfill restores the panel fill and this leg fails by name)"
+			% [tname, str(corners_clear), transp_pct])
+
+
+## PINEMHI2 harness contract: the weekly panels' legs, in
+## whichever shape the settled weekly state legitimately
+## stands - three contest boards when weekly data is
+## present, the ONE plain-word failure-state board when a
+## dead fetch left nothing and no cache stands (a designed
+## state, judged with the same standing-board checks as any
+## board: visible, the board's size, real, inked, frameless
+## - read off the panel, the surface its face lives on).
+func _tournament_leg_weekly_panels() -> void:
+	var rows: Array = _room.tournament_rows()
+	var ch_idx: Array[int] = _tournament_challenge_indices(rows)
+	var w_idx: Array[int] = _tournament_weekly_indices(rows)
+	if not _pinemhi2_contests.is_empty():
+		_tournament_expect(w_idx.size() == _pinemhi2_contests.size(),
+			"weekly boards: the weekly boards stand behind the WoVP rows (%d contests, %d panels)" % [_pinemhi2_contests.size(), w_idx.size()])
+	elif _pinemhi2_fetch_error != "" and _pinemhi2_fetched_at == 0:
+		_tournament_expect(w_idx.size() == 1,
+			"weekly boards: the one PINemHi failure-state board stands behind the WoVP rows (got %d panels)" % w_idx.size())
+	else:
+		_tournament_expect(w_idx.is_empty(),
+			"weekly boards: no weekly panels stand before the first weekly fetch lands (got %d)" % w_idx.size())
+	if not ch_idx.is_empty() and not w_idx.is_empty():
+		_tournament_expect(w_idx[0] > ch_idx[ch_idx.size() - 1],
+			"weekly boards: the weekly panels stand after the WoVP rows")
+	for idx: int in w_idx:
+		var tname: String = _tournament_row_table_name(rows[idx] as Dictionary)
+		var tex: Texture2D = _room._panels[idx].current_texture() if idx < _room._panels.size() else null
+		var ink: float = _tournament_tex_ink_stdev(tex)
+		_tournament_expect(idx < _room._panels.size() and _room._panels[idx].visible and tex != null
+				and tex.get_width() == RoomSpecs.BOARD_FACE_PX.x and tex.get_height() == RoomSpecs.BOARD_FACE_PX.y
+				and _room._tex_is_real(tex) and ink > 0.02,
+			"standing board: '%s' board stands open at rest - visible, %dx%d, real, inked (size %s, real %s, ink stdev %.3f)"
+				% [tname, RoomSpecs.BOARD_FACE_PX.x, RoomSpecs.BOARD_FACE_PX.y, str(tex.get_size()) if tex != null else "none", str(_room._tex_is_real(tex)), ink])
+		_tournament_expect_frameless(tex, tname)
+
+
+## PINEMHI2 harness contract (full mode phases 17/18): the
+## weekly-present shape - after the fixture contests land
+## through Main's own push, the three weekly boards stand
+## after the WoVP rows in the client's order, each face
+## judged by the weekly legs, the board contents match
+## their contests (golf's distances verbatim), and the
+## WoVP boards' keys and seats are the pre-push record's.
+func _tournament_leg_weekly_present() -> void:
+	var rows: Array = _room.tournament_rows()
+	var w_idx: Array[int] = _tournament_weekly_indices(rows)
+	var ids: Array = []
+	for idx: int in w_idx:
+		ids.append(str((_room._visible_games[idx] as GameEntry).game_id))
+	_tournament_expect(ids == ["pinemhi:main", "pinemhi:five", "pinemhi:golf"],
+		"weekly present: the weekly panels are main, five, golf in order (got %s)" % str(ids))
+	_tournament_leg_weekly_panels()
+	var by_band: Dictionary = {}
+	for idx2: int in w_idx:
+		var sp: Dictionary = _room.pinemhi_board_spec_for(idx2)
+		by_band[str(sp.get("band_text", ""))] = sp
+	var main_spec: Dictionary = by_band.get("PINEMHI - WEEKLY COMPETITION", {}) as Dictionary
+	_tournament_expect(str(main_spec.get("title", "")) == "Rolling Stones",
+		"weekly present: the Weekly Competition board names its table (Rolling Stones)")
+	var five_spec: Dictionary = by_band.get("PINEMHI - WEEKLY 5-MINUTE", {}) as Dictionary
+	_tournament_expect(str(five_spec.get("title", "")) == "Bad Cats",
+		"weekly present: the Weekly 5-Minute board names its table (Bad Cats)")
+	var golf_spec: Dictionary = by_band.get("PINEMHI - WEEKLY GOLF", {}) as Dictionary
+	var golf_texts: Array = []
+	for rv: Variant in (golf_spec.get("rows", []) as Array):
+		var rd: Dictionary = rv as Dictionary
+		if str(rd.get("kind", "")) == "score":
+			golf_texts.append(str(rd.get("score_text", "")))
+	_tournament_expect(golf_texts == ["-620", "-1.450"],
+		"weekly present: the Weekly Golf board carries its distances verbatim (got %s)" % str(golf_texts))
+	var now_boards: Array = []
+	for e: Variant in _room.board_state():
+		var ed: Dictionary = e as Dictionary
+		if str(ed.get("challenge_id", "")) != "":
+			now_boards.append({
+				"challenge_id": ed.get("challenge_id"),
+				"card_coord": ed.get("card_coord"),
+				"board_coord": ed.get("board_coord"),
+				"standing_key": ed.get("standing_key"),
+			})
+	_tournament_expect(now_boards == _tournament_weekly_baseline,
+		"weekly present: the WoVP boards' keys and seats are unchanged with the weekly boards standing")
+
+
 func _tournament_expected_board_left(i: int, n: int) -> bool:
 	var g: int = i / 2
 	var groups: int = maxi(1, int(ceil(float(maxi(1, n)) / 2.0)))
@@ -18270,7 +18531,11 @@ func _tournament_expect_board_side(i: int, row: Dictionary) -> void:
 	var card: Vector2i = entry.get("card_coord", Vector2i(-1, -1)) as Vector2i
 	var board: Vector2i = entry.get("board_coord", Vector2i(-1, -1)) as Vector2i
 	var actual_left: bool = board.x < card.x
-	var expected_left: bool = _tournament_expected_board_left(i, rows.size())
+	# PINEMHI2: the pair geometry derives from the challenge
+	# count alone (the weekly panels never join the pairing -
+	# RoomView._tourn_pair_coords), so the side law's n is
+	# the challenge subset's size, never the row count.
+	var expected_left: bool = _tournament_expected_board_left(i, maxi(1, _tournament_challenge_indices(rows).size()))
 	var label: String = "standing board side: '%s' board stands %s of its card (board col %d, card col %d)" % [
 		tname, "LEFT" if actual_left else "RIGHT", board.x, card.x]
 	if actual_left != expected_left or board.y != card.y:
@@ -18319,6 +18584,14 @@ func _tournament_boards_all_real() -> bool:
 func _tournament_leg_standing_boards() -> void:
 	var rows: Array = _room.tournament_rows()
 	for i: int in range(rows.size()):
+		# PINEMHI2: a weekly row's board IS its panel - it has
+		# no companion board for board_state() to report, so
+		# the companion checks below would measure a surface
+		# that does not exist. The weekly panels are judged
+		# after this loop, off their panels, by
+		# _tournament_leg_weekly_panels.
+		if str((rows[i] as Dictionary).get("kind", "")) != "challenge":
+			continue
 		var entry: Dictionary = _tournament_board_entry(i)
 		var tname: String = _tournament_row_table_name(rows[i] as Dictionary)
 		var tex: Texture2D = entry.get("texture") as Texture2D
@@ -18337,33 +18610,20 @@ func _tournament_leg_standing_boards() -> void:
 		# texture in the room.) Under PVLDS_GF15_NC=panelfill
 		# the fill returns, the corners go opaque and this
 		# leg fails by name.
-		var fimg: Image = tex.get_image() if tex != null else null
-		var corners_clear: bool = false
-		var transp_pct: int = 0
-		if fimg != null and not fimg.is_empty():
-			var fw: int = fimg.get_width()
-			var fh: int = fimg.get_height()
-			corners_clear = fimg.get_pixel(0, 0).a == 0.0 and fimg.get_pixel(fw - 1, 0).a == 0.0 \
-				and fimg.get_pixel(0, fh - 1).a == 0.0 and fimg.get_pixel(fw - 1, fh - 1).a == 0.0
-			var samp_n: int = 0
-			var samp_t: int = 0
-			for sy: int in range(0, fh, 16):
-				for sx: int in range(0, fw, 16):
-					samp_n += 1
-					if fimg.get_pixel(sx, sy).a == 0.0:
-						samp_t += 1
-			transp_pct = int(round(100.0 * float(samp_t) / float(maxi(1, samp_n))))
-		_tournament_expect(corners_clear and transp_pct >= 10,
-			"frameless board: '%s' board face is its text block on transparency - corners clear %s, %d%% of sampled pixels transparent (PVLDS_GF15_NC=panelfill restores the panel fill and this leg fails by name)"
-				% [tname, str(corners_clear), transp_pct])
+		_tournament_expect_frameless(tex, tname)
+	_tournament_leg_weekly_panels()
 
 
 func _tournament_leg_layout_boards() -> void:
 	var rows: Array = _room.tournament_rows()
-	_tournament_expect(rows.size() == 2, "layout: the two seeded worst-case challenges stand (got %d)" % rows.size())
+	# PINEMHI2: the layout legs judge the two seeded
+	# challenges; the weekly panels behind them are judged
+	# by the weekly legs at this function's end.
+	var ch_idx: Array[int] = _tournament_challenge_indices(rows)
+	_tournament_expect(ch_idx.size() == 2, "layout: the two seeded worst-case challenges stand (got %d)" % ch_idx.size())
 	var owned_flags: Array = []
-	for r: Variant in rows:
-		owned_flags.append(bool((r as Dictionary).get("owned", false)))
+	for ci: int in ch_idx:
+		owned_flags.append(bool((rows[ci] as Dictionary).get("owned", false)))
 	_tournament_expect(owned_flags == [true, true],
 		"layout: both seeded boards are his tables (owned - his rows stand on them; GRADFIX10: no footer stands on a standing board)")
 	# The redesign's shape (the GRAD FIX round, amending the
@@ -18386,19 +18646,22 @@ func _tournament_leg_layout_boards() -> void:
 			size_ok = false
 	_tournament_expect(size_ok,
 		"layout standing: every standing board's quad is the board size %s (GRADFIX8: widened 0.62 -> 0.72)" % str(RoomSpecs.board_panel_size()))
-	for li: int in range(rows.size()):
+	for li: int in ch_idx:
 		_tournament_expect_board_side(li, rows[li] as Dictionary)
-	if rows.size() >= 1:
-		var ch0: WovpChallenge = (rows[0] as Dictionary).get("challenge") as WovpChallenge
+	if ch_idx.size() >= 1:
+		var ch0: WovpChallenge = (rows[ch_idx[0]] as Dictionary).get("challenge") as WovpChallenge
 		_tournament_expect(ch0 != null and _room.centre_index() >= 0,
 			"layout pairing: the centred challenge's card stands beside its board")
+	_tournament_leg_weekly_panels()
 
 
 func _layout_start_probes() -> void:
 	_layout_probes_in_flight = true
 	var rows: Array = _room.tournament_rows()
 	var now_unix: int = int(Time.get_unix_time_from_system())
-	for i: int in range(rows.size()):
+	# PINEMHI2: probes render challenge boards only - a
+	# weekly row carries no challenge to spec from.
+	for i: int in _tournament_challenge_indices(rows):
 		var rd: Dictionary = rows[i]
 		var spec: Dictionary = RoomSpecs.tournament_board_spec(
 			rd["challenge"] as WovpChallenge, bool(rd.get("owned", false)), _wovp_user_id, now_unix)
@@ -18560,15 +18823,20 @@ func _layout_digit_ink(tex: Texture2D, row: Dictionary) -> bool:
 ## exactly the pad, its width the two-band fill's width.
 func _tournament_leg_block() -> void:
 	var rows: Array = _room.tournament_rows()
-	_tournament_expect(rows.size() >= 4,
-		"tourn layout: the seeded challenges stand to compose the block (got %d)" % rows.size())
-	var n: int = rows.size()
+	# PINEMHI2: the pair block is the challenges' alone -
+	# the weekly panels stand in their own run after it
+	# (RoomView._pinemhi_coord) and are not block seats.
+	var ch_idx: Array[int] = _tournament_challenge_indices(rows)
+	_tournament_expect(ch_idx.size() >= 4,
+		"tourn layout: the seeded challenges stand to compose the block (got %d)" % ch_idx.size())
+	var n: int = ch_idx.size()
 	var groups: int = maxi(1, int(ceil(float(maxi(1, n)) / 2.0)))
 	var seen: Dictionary = {}
 	var min_col: int = 1 << 30
 	var max_col: int = -1
 	var bad: String = ""
-	for i: int in range(n):
+	for p: int in range(n):
+		var i: int = ch_idx[p]
 		var entry: Dictionary = _tournament_board_entry(i)
 		if entry.is_empty():
 			bad = "challenge %d has no standing board state" % i
@@ -18588,7 +18856,7 @@ func _tournament_leg_block() -> void:
 			max_col = maxi(max_col, seat.x)
 		if bad != "":
 			break
-		var expected_left: bool = _tournament_expected_board_left(i, n)
+		var expected_left: bool = _tournament_expected_board_left(p, n)
 		var actual_left: bool = board.x < card.x
 		if actual_left != expected_left or board.y != card.y:
 			bad = "standing board side: '%s' board stands %s of its card (board col %d, card col %d)" % [
@@ -18704,7 +18972,8 @@ func _drive_tournament_full() -> void:
 				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 45000
 				_tournament_smoke_phase = 1
 		1:
-			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _tournament_boards_all_real():
+			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _tournament_boards_all_real() \
+					and _pinemhi_settled() and _tournament_weekly_panels_ready():
 				_tournament_leg_boards()
 				_tournament_leg_block()
 				_tournament_leg_standing_boards()
@@ -18720,10 +18989,54 @@ func _drive_tournament_full() -> void:
 			if _tournament_search_count() >= 2 and _wovp_client != null and not _wovp_client.is_busy() and _room.wall_ready:
 				_tournament_expect(true, "refresh: REFRESH on the rail re-fetches the boards")
 				_tournament_smoke_wait = 0
-				_tournament_smoke_phase = 13
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 60000
+				_tournament_smoke_phase = 17
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
 				_tournament_fail("refresh: REFRESH never produced a second search")
 				_finish_tournament_smoke()
+		17:
+			# PINEMHI2 harness contract, weekly-present shape:
+			# the settled failure shape was judged in phase 1;
+			# now the fixture weekly contests land through
+			# Main's own push (the pinemhi2 room legs' road),
+			# so the three weekly boards standing in this same
+			# room are judged in phase 18. The REFRESH above
+			# re-fired the weekly fetch too - wait for it to
+			# settle first, so its answer cannot overwrite
+			# the fixture push mid-judgement.
+			if _pinemhi_client != null and _pinemhi_client.is_busy():
+				if Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+					_tournament_fail("weekly present: the weekly fetch never settled before the fixture push")
+					_tournament_smoke_phase = 13
+			else:
+				_tournament_weekly_baseline = []
+				for e: Variant in _room.board_state():
+					var ed: Dictionary = e as Dictionary
+					if str(ed.get("challenge_id", "")) != "":
+						_tournament_weekly_baseline.append({
+							"challenge_id": ed.get("challenge_id"),
+							"card_coord": ed.get("card_coord"),
+							"board_coord": ed.get("board_coord"),
+							"standing_key": ed.get("standing_key"),
+						})
+				var contests: Array = _pinemhi2_fixture_contests()
+				_tournament_expect(contests.size() == 3, "weekly present: the fixture weekly contests load (got %d)" % contests.size())
+				if contests.size() == 3:
+					_pinemhi2_contests = contests
+					_pinemhi2_fetched_at = int(Time.get_unix_time_from_system())
+					_pinemhi2_live = true
+					_pinemhi2_fetch_error = ""
+					_push_pinemhi2_data()
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 30000
+				_tournament_smoke_phase = 18
+		18:
+			var rows18: Array = _room.tournament_rows()
+			if _tournament_weekly_indices(rows18).size() == 3 and _tournament_weekly_panels_ready():
+				_tournament_leg_weekly_present()
+				_tournament_smoke_phase = 13
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("weekly present: the three weekly boards never stood rendered")
+				_tournament_smoke_phase = 13
 		3:
 			# The rendered legs read the season board off the
 			# board STANDING beside the season card (GRADFIX7
@@ -18754,10 +19067,20 @@ func _drive_tournament_full() -> void:
 						_tournament_expect(not bool(yfs.get("active", true)) and absf(float(yfs.get("angle_deg", 1.0))) <= 0.5,
 							"Y no-flip: Y on a focused tournie card flips nothing (no turn stands, every angle 0)")
 						var ybs: Array = _room.board_state()
-						var y_standing: bool = ybs.size() == _room.tournament_rows().size()
-						for ye: Variant in ybs:
-							if not bool((ye as Dictionary).get("board_visible", false)):
-								y_standing = false
+						var yrows: Array = _room.tournament_rows()
+						var y_standing: bool = ybs.size() == yrows.size()
+						# PINEMHI2: "every standing board" is the
+						# challenges' companion boards; a weekly
+						# row's board is its panel, whose standing
+						# witness is the panel's own visibility.
+						for yi: int in range(yrows.size()):
+							var ykind: String = str((yrows[yi] as Dictionary).get("kind", ""))
+							if ykind == "challenge":
+								if not bool((ybs[yi] as Dictionary).get("board_visible", false)):
+									y_standing = false
+							elif ykind == "pinemhi":
+								if yi >= _room._panels.size() or not _room._panels[yi].visible:
+									y_standing = false
 						_tournament_expect(y_standing,
 							"Y no-flip: every standing board still stands after the Y press")
 						var yrow0: Dictionary = _room.tournament_rows()[0] as Dictionary if _room.tournament_rows().size() >= 1 else {}
@@ -19013,7 +19336,12 @@ func _tournament_walk_step() -> void:
 			match _tw_sub:
 				0:
 					if _tw_queue.is_empty():
-						for i: int in range(rows.size()):
+						# PINEMHI2: reachability is judged for
+						# the challenge panels - the walk's
+						# pair verification below is a challenge
+						# contract; the weekly panels behind
+						# them are judged by the weekly legs.
+						for i: int in _tournament_challenge_indices(rows):
 							_tournament_expect(_tw_visited.has(i),
 								"selection walk: '%s' can be selected on the tournie screen (stick steps from the TOURNAMENT stop reach it)" % _tournament_row_table_name(rows[i]))
 						_tw_stage = 1
@@ -19049,16 +19377,22 @@ func _tournament_walk_step() -> void:
 					if not _tw_expanded.has(landed.get_instance_id()) and not _tw_queue.has(landed):
 						_tw_queue.append(landed)
 		1:
-			if _tw_pair_i >= rows.size():
+			# PINEMHI2: the pair verification visits the
+			# challenge panels only - a weekly panel has no
+			# companion board to pair-verify (its face stands
+			# on its own panel, judged by the weekly legs).
+			var ch_idx: Array[int] = _tournament_challenge_indices(rows)
+			if _tw_pair_i >= ch_idx.size():
 				_tw_stage = 2
 				_tw_sub = 0
 				_tw_wait = 0
 				return
-			var row: Dictionary = rows[_tw_pair_i]
+			var pidx: int = ch_idx[_tw_pair_i]
+			var row: Dictionary = rows[pidx]
 			var ch: WovpChallenge = row.get("challenge") as WovpChallenge
 			match _tw_sub:
 				0:
-					_room._set_focused(_room._panels[_tw_pair_i])
+					_room._set_focused(_room._panels[pidx])
 					_tw_wait = 0
 					_tw_sub = 1
 				1:
@@ -19067,10 +19401,10 @@ func _tournament_walk_step() -> void:
 					# beside the card, once the drum settles
 					# and its texture is really rendered.
 					_tw_wait += 1
-					var wentry: Dictionary = _tournament_board_entry(_tw_pair_i)
-					if _room.centre_index() == _tw_pair_i and not _room.page_slide_active() and _tw_wait >= 6 \
+					var wentry: Dictionary = _tournament_board_entry(pidx)
+					if _room.centre_index() == pidx and not _room.page_slide_active() and _tw_wait >= 6 \
 							and bool(wentry.get("texture_real", false)):
-						_tournament_walk_judge_centre(_tw_pair_i, row)
+						_tournament_walk_judge_centre(pidx, row)
 						_tw_pair_i += 1
 						_tw_sub = 0
 					elif _tw_wait > 900:
@@ -19298,7 +19632,10 @@ func _tournament_walk_judge_centre(i: int, row: Dictionary) -> void:
 			hidden.append(j)
 	for j2: int in range(_room._board_nodes.size()):
 		var bn: MeshInstance3D = _room._board_nodes[j2] as MeshInstance3D
-		if bn == null or not bn.visible:
+		# PINEMHI2: a null companion node is a weekly/state
+		# row's by-design shape (its board is its panel) -
+		# never a hidden board.
+		if bn != null and not bn.visible:
 			hidden.append("board %d" % j2)
 	_tournament_expect(hidden.is_empty(),
 		"selection walk: no challenge is hidden or borrowed at '%s' (hidden %s)" % [tname, str(hidden)])
@@ -19543,25 +19880,33 @@ func _tournament_leg_wing_board() -> void:
 
 func _tournament_leg_boards() -> void:
 	var rows: Array = _room.tournament_rows()
-	_tournament_expect(rows.size() == 5, "boards: five live challenges stand on the wall (got %d)" % rows.size())
-	var all_challenges: bool = rows.size() == 5
-	var owned_flags: Array = []
+	# PINEMHI2 harness contract: the WoVP legs judge the
+	# challenge subset - the weekly panels standing behind
+	# the challenges are the room as it now legitimately is,
+	# judged by the weekly legs, not intruders in this count.
+	var ch_rows: Array = []
+	var state_rows: int = 0
 	for r: Variant in rows:
 		var rd: Dictionary = r
-		if str(rd.get("kind", "")) != "challenge":
-			all_challenges = false
-		owned_flags.append(bool(rd.get("owned", false)))
-	_tournament_expect(all_challenges, "boards: every panel is a challenge board (no state panel among live data)")
+		if str(rd.get("kind", "")) == "challenge":
+			ch_rows.append(rd)
+		elif str(rd.get("kind", "")) == "state":
+			state_rows += 1
+	_tournament_expect(ch_rows.size() == 5, "boards: five live challenges stand on the wall (got %d)" % ch_rows.size())
+	var owned_flags: Array = []
+	for r2: Variant in ch_rows:
+		owned_flags.append(bool((r2 as Dictionary).get("owned", false)))
+	_tournament_expect(state_rows == 0, "boards: no WoVP state panel stands among the live data (the panels behind the challenges are the PINemHi weekly boards, judged by the weekly legs)")
 	_tournament_expect(owned_flags == [true, true, true, true, false],
 		"boards: four challenges matched his library by VPS id; the fifth is not owned")
-	if rows.size() == 5:
-		var first_game: GameEntry = (rows[0] as Dictionary).get("game") as GameEntry
+	if ch_rows.size() == 5:
+		var first_game: GameEntry = (ch_rows[0] as Dictionary).get("game") as GameEntry
 		_tournament_expect(first_game != null and first_game.game_id == "aT_GONvw",
 			"boards: the season board is his Addams Family (matched by its VPS game id)")
-		var last_game: GameEntry = (rows[4] as Dictionary).get("game") as GameEntry
+		var last_game: GameEntry = (ch_rows[4] as Dictionary).get("game") as GameEntry
 		_tournament_expect(last_game != null and last_game.game_id.begins_with("wovp:none:"),
 			"boards: the not-owned board stands on a synthetic, unlaunchable entry")
-		var season: WovpChallenge = (rows[0] as Dictionary).get("challenge") as WovpChallenge
+		var season: WovpChallenge = (ch_rows[0] as Dictionary).get("challenge") as WovpChallenge
 		_tournament_expect(season != null and season.his_row(_wovp_user_id) != null and season.his_row(_wovp_user_id).position == 6,
 			"his row: his scoreboard row is identified by the validated userId, mid-board")
 	_tournament_expect(_room._banner_line().contains("updated"),
@@ -19700,12 +20045,24 @@ func _drive_tournament_state_mode(expect_failure: bool) -> void:
 					_tournament_fail("the room never came up")
 					_finish_tournament_smoke()
 		1:
-			var ready: bool = _room.wall_ready and (not expect_failure or _wovp_fetch_error != "")
+			# PINEMHI2: the weekly fetch settles too before
+			# the row census - the weekly panels stand behind
+			# the WoVP state panel in this shape as well, and
+			# a landing push must not change the count
+			# mid-judgement.
+			var ready: bool = _room.wall_ready and (not expect_failure or _wovp_fetch_error != "") \
+				and _pinemhi_settled() and _tournament_weekly_panels_ready()
 			if ready:
 				var rows: Array = _room.tournament_rows()
-				_tournament_expect(rows.size() == 1 and str((rows[0] as Dictionary).get("kind", "")) == "state",
-					"state: exactly one state panel stands (got %d rows)" % rows.size())
-				var lines: Array = (rows[0] as Dictionary).get("lines", []) if rows.size() == 1 else []
+				var state_idx: int = -1
+				var state_count: int = 0
+				for si: int in range(rows.size()):
+					if str((rows[si] as Dictionary).get("kind", "")) == "state":
+						state_count += 1
+						state_idx = si
+				_tournament_expect(state_count == 1,
+					"state: exactly one state panel stands (got %d state rows among %d)" % [state_count, rows.size()])
+				var lines: Array = (rows[state_idx] as Dictionary).get("lines", []) if state_idx >= 0 else []
 				var joined: String = ""
 				for lv: Variant in lines:
 					joined += str(lv) + " "
@@ -19731,8 +20088,9 @@ func _drive_tournament_state_mode(expect_failure: bool) -> void:
 						"state: the no-key state says to add the key in SETUP, plainly")
 					_tournament_expect(_room._banner_line().contains("no WoVP key yet"),
 						"state: the banner names the no-key state")
-				_tournament_expect(_room._panels.size() == 1 and (_room._panel_launches[0] == null or not _room._panel_launches[0].visible),
+				_tournament_expect(_room._panels.size() == rows.size() and state_idx >= 0 and state_idx < _room._panel_launches.size() and (_room._panel_launches[state_idx] == null or not _room._panel_launches[state_idx].visible),
 					"no launch: the state panel carries no Launch button (GRADFIX13 item 2)")
+				_tournament_leg_weekly_panels()
 				_finish_tournament_smoke()
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
 				_tournament_fail("the state never settled (mode %s)" % _tournament_smoke_mode)
@@ -19756,12 +20114,18 @@ func _drive_tournament_cache_mode() -> void:
 					_tournament_fail("the room never came up (cache mode)")
 					_finish_tournament_smoke()
 		1:
-			if _wovp_fetch_error != "":
+			if _wovp_fetch_error != "" and _pinemhi_settled() and _tournament_weekly_panels_ready():
 				var rows: Array = _room.tournament_rows()
-				_tournament_expect(rows.size() == 5,
-					"cache: the saved boards stand on the wall (got %d rows)" % rows.size())
+				# PINEMHI2: the saved boards are the challenge
+				# subset - the weekly failure-state board
+				# stands behind them (this home's weekly fetch
+				# is dead and no weekly cache stands), judged
+				# by the weekly legs below.
+				_tournament_expect(_tournament_challenge_indices(rows).size() == 5,
+					"cache: the saved boards stand on the wall (got %d challenge rows)" % _tournament_challenge_indices(rows).size())
 				_tournament_expect(_room._banner_line().contains("last good boards"),
 					"cache: the banner says these are the last good boards - the failed refresh is stated, not hidden")
+				_tournament_leg_weekly_panels()
 				_finish_tournament_smoke()
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
 				_tournament_fail("cache: the dead-URL refresh never reported its failure")
