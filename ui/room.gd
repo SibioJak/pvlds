@@ -588,9 +588,9 @@ const BG_STAR_NEAR_RADIUS: float = 12.0 ## the near star shell's distance (the f
 ## of the volume (the starfield smoke's NC); =uv keeps its
 ## GRADFIX4 meaning on that same legacy set.
 const BG_VOLUME_RADII: Array[float] = [4.6, 7.5, 12.1, 19.6, 31.8, 51.5, 83.5, 135.0, 219.0, 350.0] ## the volume's band radii in metres, near to far (log-spaced, ratio ~1.62)
-const BG_VOLUME_COUNT_BASE: float = 300.0 ## stars on the innermost band; a band's count grows as radius^BG_VOLUME_COUNT_GROWTH
+const BG_VOLUME_COUNT_BASE: float = 520.0 ## stars on the innermost band; a band's count grows as radius^BG_VOLUME_COUNT_GROWTH
 const BG_VOLUME_COUNT_GROWTH: float = 0.38
-const BG_VOLUME_STAR_DEG: float = 0.30 ## a near star's angular diameter in degrees; shrinks mildly with depth (BG_VOLUME_FAR_SHRINK at the far edge)
+const BG_VOLUME_STAR_DEG: float = 0.24 ## a near star's angular diameter in degrees; shrinks mildly with depth (BG_VOLUME_FAR_SHRINK at the far edge)
 const BG_VOLUME_FAR_SHRINK: float = 0.55 ## the far edge's angular-size factor (brightness falls to BG_VOLUME_FAR_DIM on the same scale)
 const BG_VOLUME_FAR_DIM: float = 0.38 ## the far edge's brightness factor
 const BG_VOLUME_TINT: Color = Color(0.90, 0.93, 1.0) ## the shells' star tint, carried into the volume's instance colours
@@ -2213,7 +2213,7 @@ func _build_star_volume() -> void:
 			var dir: Vector3 = Vector3(ring_r * cos(theta), z, ring_r * sin(theta))
 			var pos: Vector3 = dir * radius
 			var up: Vector3 = Vector3.UP if absf(dir.y) < 0.99 else Vector3.RIGHT
-			var basis: Basis = Basis.looking_at(dir, up).scaled(Vector3.ONE * base_size * rng.randf_range(0.7, 1.4))
+			var basis: Basis = Basis.looking_at(dir, up).scaled(Vector3.ONE * base_size * rng.randf_range(0.75, 1.25))
 			mm.set_instance_transform(s, Transform3D(basis, pos))
 			var shade: float = bright * rng.randf_range(0.55, 1.0)
 			mm.set_instance_color(s, Color(BG_VOLUME_TINT.r * shade, BG_VOLUME_TINT.g * shade, BG_VOLUME_TINT.b * shade))

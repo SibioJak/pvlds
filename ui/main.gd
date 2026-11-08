@@ -7143,8 +7143,8 @@ func _grad_sky_step() -> void:
 						zr += 1
 				var zratio: float = (float(zc) / 0.0625) / maxf(float(zr) / 0.26, 0.001)
 				print("GRAD SKY: zenith star counts - centre %d blobs, ring %d blobs, count-density ratio %.2f" % [zc, zr, zratio])
-				_grad_expect(zratio > 0.35 and zratio < 4.0,
-					"sky zenith: the star count does not explode at the pole the way a converging UV grid's does (count-density centre/ring %.2f; the UV field reads 7.71)" % zratio)
+				_grad_expect(zratio > 0.35 and zratio < 5.0,
+					"sky zenith: the star count does not explode at the pole the way a converging UV grid's does (count-density centre/ring %.2f; the UV field reads 7.71; STARFIELD calibration: the direction-space shells read 2.24-2.52 on this measure, a true 3D-uniform geometric field reads higher by projection law alone - 3.45 here - so the bound sits at 5.0, clear of both honest fields and well under the pinch fault)" % zratio)
 				# GRADFIX9: the wireframe shell is GONE - the
 				# zenith grab must show stars only, no radial
 				# line convergence at the pole (Chris's
@@ -7184,8 +7184,8 @@ func _grad_sky_step() -> void:
 				print("GRAD SKY: nadir densities - coverage ratio %.2f, count-density ratio %.2f" % [dd.x, dd.y])
 				_grad_expect(dd.x > 0.45 and dd.x < 2.2,
 					"sky nadir: looking straight down, the stars are still there - density even, no bare lower half (coverage centre/ring %.2f)" % dd.x)
-				_grad_expect(dd.y > 0.35 and dd.y < 4.0,
-					"sky nadir: the star count stays even at the nadir (count-density centre/ring %.2f)" % dd.y)
+				_grad_expect(dd.y > 0.35 and dd.y < 5.0,
+					"sky nadir: the star count stays even at the nadir (count-density centre/ring %.2f; STARFIELD calibration as at the zenith leg - shells 2.52, geometric volume 4.10, the UV pinch fault 7.71, bound 5.0)" % dd.y)
 				# GRADFIX9: the nadir is where Chris SAW the
 				# shell - "very feint lines that converge at a
 				# central point... radiate outward and cover
@@ -18803,8 +18803,8 @@ func _tournament_leg_sky_nadir() -> void:
 	var dd: Vector2 = _grad_sky_density(img)
 	_tournament_expect(dd.x > 0.45 and dd.x < 2.2,
 		"layout sky: looking straight down in the Tournament Room, the stars are still there - no bare lower half (coverage centre/ring %.2f)" % dd.x)
-	_tournament_expect(dd.y > 0.35 and dd.y < 4.0,
-		"layout sky: the Tournament Room's nadir star count stays even (count-density centre/ring %.2f)" % dd.y)
+	_tournament_expect(dd.y > 0.35 and dd.y < 5.0,
+		"layout sky: the Tournament Room's nadir star count stays even (count-density centre/ring %.2f; STARFIELD calibration as at the grad nadir leg, bound 5.0)" % dd.y)
 	# GRADFIX9: the wireframe shell is GONE from this view
 	# too (one room, one environment - the Tournament Room
 	# is the same Room re-dressed): zero shell nodes by
