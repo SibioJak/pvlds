@@ -17715,7 +17715,15 @@ func _finish_starfield_smoke() -> void:
 
 
 func _starfield_room_ready() -> bool:
-	return _room != null and _room.visible and _room.wall_ready and _room._visible_games.size() >= 8
+	return _room != null and _room.visible and _room.wall_ready and _room._visible_games.size() >= 1
+
+
+## The full library standing: the room boots on the VR
+## filter (3 of the letter fixtures), so the drivers press
+## the ALL rail stop themselves and wait for the whole
+## letter library to stand (14 tables in the fixture set).
+func _starfield_library_stood() -> bool:
+	return _room != null and _room.wall_ready and _room._visible_games.size() >= 12
 
 
 func _starfield_grab(name: String) -> Image:
@@ -17733,14 +17741,24 @@ func _drive_starfield_field() -> void:
 	match _starfield_smoke_phase:
 		1:
 			if _starfield_room_ready():
-				get_viewport().warp_mouse(Vector2(8.0, 592.0))
+				get_viewport().warp_mouse(Vector2(512.0, 764.0)) ## parked over the furniture: a drum park lets the resting hover drive the centre (the nav driver's lesson)
+				_room._handle_rail("filter:all")
+				_starfield_smoke_phase = 15
+				_starfield_smoke_wait = 0
+			else:
+				_starfield_smoke_wait += 1
+				if _starfield_smoke_wait > 7200:
+					_starfield_expect(false, "starfield field: the room never came up on the real boot path")
+					_finish_starfield_smoke()
+		15:
+			if _starfield_library_stood():
 				_room.set_starfield_mode("layered")
 				_starfield_smoke_phase = 2
 				_starfield_smoke_wait = 0
 			else:
 				_starfield_smoke_wait += 1
 				if _starfield_smoke_wait > 7200:
-					_starfield_expect(false, "starfield field: the room never came up on the real boot path")
+					_starfield_expect(false, "starfield field: the full letter library never stood")
 					_finish_starfield_smoke()
 		2:
 			_starfield_smoke_wait += 1
@@ -17806,6 +17824,11 @@ func _drive_starfield_field() -> void:
 		8:
 			_starfield_smoke_wait += 1
 			if _starfield_smoke_wait > 10:
+				# Seat the focus on a card first (the boot's
+				# rail press left it on the strip, where a
+				# stick feed walks the strip, not the wall) -
+				# the motion driver's own travel start.
+				_motion_snap_to_travel_start()
 				_input_feed_stick_x(1.0)
 				_starfield_smoke_phase = 9
 				_starfield_smoke_wait = 0
@@ -17985,14 +18008,24 @@ func _drive_starfield_gate() -> void:
 	match _starfield_smoke_phase:
 		1:
 			if _starfield_room_ready():
-				get_viewport().warp_mouse(Vector2(8.0, 592.0))
+				get_viewport().warp_mouse(Vector2(512.0, 764.0)) ## parked over the furniture: a drum park lets the resting hover drive the centre (the nav driver's lesson)
+				_room._handle_rail("filter:all")
 				_starfield_gate = {"order": ["off", "flat", "layered"], "idx": 0, "rest": 0}
-				_starfield_smoke_phase = 2
+				_starfield_smoke_phase = 15
 				_starfield_smoke_wait = 0
 			else:
 				_starfield_smoke_wait += 1
 				if _starfield_smoke_wait > 7200:
 					_starfield_expect(false, "starfield gate: the room never came up on the real boot path")
+					_finish_starfield_smoke()
+		15:
+			if _starfield_library_stood():
+				_starfield_smoke_phase = 2
+				_starfield_smoke_wait = 0
+			else:
+				_starfield_smoke_wait += 1
+				if _starfield_smoke_wait > 7200:
+					_starfield_expect(false, "starfield gate: the full letter library never stood")
 					_finish_starfield_smoke()
 		2:
 			var order: Array = _starfield_gate.get("order", [])
@@ -18008,6 +18041,13 @@ func _drive_starfield_gate() -> void:
 		3:
 			_starfield_smoke_wait += 1
 			if _starfield_smoke_wait > 40:
+				# Two trains per stop - right, then back
+				# left over the same ground - so the run
+				# samples enough frames to mean anything and
+				# direction bias cancels; the stamps run
+				# unbroken across both trains and the settle
+				# between them.
+				_starfield_gate["trains"] = 0
 				_starfield_gate["start_col"] = _room._grid_coord(_room.centre_index()).x
 				_starfield_gate["run_t0"] = Time.get_ticks_msec()
 				_starfield_gate_frames.clear()
@@ -18017,7 +18057,7 @@ func _drive_starfield_gate() -> void:
 		4:
 			_starfield_gate_frames.append(Time.get_ticks_usec())
 			var col: int = _room._grid_coord(_room.centre_index()).x
-			if absi(col - int(_starfield_gate.get("start_col", 0))) >= 5 or Time.get_ticks_msec() - int(_starfield_gate.get("run_t0", 0)) >= 9000:
+			if absi(col - int(_starfield_gate.get("start_col", 0))) >= 3 or Time.get_ticks_msec() - int(_starfield_gate.get("run_t0", 0)) >= 9000:
 				_input_feed_stick_x(0.0)
 				_starfield_gate["rest"] = 0
 				_starfield_smoke_phase = 5
@@ -18028,7 +18068,14 @@ func _drive_starfield_gate() -> void:
 				_starfield_gate["rest"] = int(_starfield_gate.get("rest", 0)) + 1
 			else:
 				_starfield_gate["rest"] = 0
-			if int(_starfield_gate.get("rest", 0)) >= 4 or _starfield_smoke_wait > 2400:
+			if int(_starfield_gate.get("rest", 0)) >= 4 and int(_starfield_gate.get("trains", 0)) == 0:
+				_starfield_gate["trains"] = 1
+				_starfield_gate["start_col"] = _room._grid_coord(_room.centre_index()).x
+				_starfield_gate["run_t0"] = Time.get_ticks_msec()
+				_input_feed_stick_x(-1.0)
+				_starfield_smoke_phase = 4
+				_starfield_smoke_wait = 0
+			elif (int(_starfield_gate.get("rest", 0)) >= 4 and int(_starfield_gate.get("trains", 0)) >= 1) or _starfield_smoke_wait > 2400:
 				var order2: Array = _starfield_gate.get("order", [])
 				var idx2: int = int(_starfield_gate.get("idx", 0))
 				var mode_name: String = str(order2[idx2])
@@ -18048,6 +18095,12 @@ func _starfield_gate_verdict() -> void:
 	var fl: Dictionary = _starfield_gate.get("flat", {})
 	var off: Dictionary = _starfield_gate.get("off", {})
 	print("PVLDS STARFIELD GATE SUMMARY: off %s | flat %s | layered %s" % [str(off), str(fl), str(lv)])
+	if RoomView.debug_bg_nc != "":
+		# A seam boot (the gatebase run): its "layered" is
+		# the OLD two-shell field - the numbers are the
+		# dossier's base evidence, not the volume's verdict.
+		print("PVLDS STARFIELD GATE: seam boot - verdict leg skipped by design")
+		return
 	if not lv.is_empty() and not fl.is_empty():
 		_starfield_expect(float(lv.get("mean_ms", 0.0)) <= float(fl.get("mean_ms", 0.0)) * 1.25 + 1.0,
 			"starfield gate: the volume's travel frame cost matches the flat field's (layered %.2f ms vs flat %.2f ms mean)" % [float(lv.get("mean_ms", 0.0)), float(fl.get("mean_ms", 0.0))])
