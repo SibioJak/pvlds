@@ -397,6 +397,20 @@ var _rs_done: bool = false
 var _rs_deadline: int = 0
 var _rs_idx: int = -1 ## the Addams challenge's row/panel index in the standing tournament view
 var _rs_searches_before: int = 0 ## the stub's search count when the send fired (the refresh leg's baseline)
+var _smoke_submitnav: bool = false ## --pvlds-smoke-submitnav (SUBMITNAV round): the submit panel's navigation + readability smoke - one boot over a SIX-shot fixture drives the panel with REAL stick steps through the room's poll, prints every observed focus path, and judges the one-step road to SEND, the row walk, the full-resolution big view and the focus==shown==sent identity. PVLDS_SUBMITNAV_NC=oldwalk restores the projection walk on the panel: the "one step to SEND" legs must fail by name
+var _sn_phase: int = 0
+var _sn_wait: int = 0
+var _sn_failures: int = 0
+var _sn_done: bool = false
+var _sn_deadline: int = 0
+var _sn_idx: int = -1 ## the Addams challenge's row index (RS_ADDAMS_ID's seat)
+var _sn_script: Array = [] ## the walk's step entries, built when the panel stands: {seat, verify, axis, value, expect, leg}
+var _sn_step: int = 0 ## the script entry in flight
+var _sn_sub: int = 0 ## 0 seat+settle, 1 step injected, 2 landed+judged, cooldown
+var _sn_from: ClickableQuad = null ## focus as the in-flight step was injected
+var _sn_after: int = 6 ## the phase the script executor hands over to when its script runs out
+var _sn_step_msec: int = 0
+var _sn_cool_until: int = 0
 var _smoke_return: bool = false ## --pvlds-smoke-return (RETURN round): the return-to-origin smoke - a launch boot fires a real launch (from the Tournament Room or the library wall) and the hand-off exits; a verify boot on the same staged HOME judges where the return landing put the player. Modes in PVLDS_RETURN_SMOKE_MODE: launch_tourn | launch_lib | verify_tourn | verify_lib | verify_vanish. PVLDS_RETURN_NC=oldway on the verify boot must fail the "tourn: returns to the tournament room" leg by name
 var _ret_mode: String = ""
 var _ret_phase: int = 0
@@ -792,6 +806,8 @@ func _ready() -> void:
 		_rs_mode = OS.get_environment("PVLDS_ROOMSUBMIT_SMOKE_MODE")
 		if _rs_mode == "":
 			_rs_mode = "happy"
+	if user_args.has("--pvlds-smoke-submitnav"):
+		_smoke_submitnav = true
 	if user_args.has("--pvlds-smoke-return"):
 		_smoke_return = true
 		_ret_mode = OS.get_environment("PVLDS_RETURN_SMOKE_MODE")
@@ -976,6 +992,12 @@ func _ready() -> void:
 	# ascent (item 4, the vertical-wall-law legs fail by
 	# name). Set here, before any room exists.
 	RoomView.debug_gf13_nc = OS.get_environment("PVLDS_GF13_NC")
+	# SUBMITNAV's negative-control seam (PVLDS_SUBMITNAV_NC=
+	# oldwalk): restores the projection walk on the submit
+	# panel - the panel's graph edges never engage - so the
+	# submitnav smoke's "one step to SEND" legs fail by
+	# name. Set here, before any room exists.
+	RoomView.debug_submitnav_nc = OS.get_environment("PVLDS_SUBMITNAV_NC")
 	# GRADFIX14's adoption negative-control seam (PVLDS_
 	# GF14_NC=oldadopt): restores the pre-fix adoption
 	# behaviour - refresh_library discards the player's
@@ -1085,7 +1107,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_loading or _smoke_scoremark or _smoke_pinemhi2 or _smoke_starfield) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_submitnav or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_loading or _smoke_scoremark or _smoke_pinemhi2 or _smoke_starfield) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1316,6 +1338,8 @@ func _process(_delta: float) -> void:
 		_drive_submit_smoke()
 	if _smoke_roomsubmit:
 		_drive_roomsubmit_smoke()
+	if _smoke_submitnav:
+		_drive_submitnav_smoke()
 	if _smoke_return:
 		_drive_return_smoke()
 	if _smoke_focusfix:
@@ -16532,6 +16556,373 @@ func _rs_finish_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS ROOMSUBMIT SMOKE: FAIL (%d)" % _rs_failures)
+		get_tree().quit(1)
+
+
+## Submitnav smoke (--pvlds-smoke-submitnav; the SUBMITNAV
+## round). One boot: the Tournament Room against the stub,
+## the Addams challenge, the submit panel over a SIX-shot
+## fixture (1600x900 frames, block-digit scores in a DMD
+## band; burst-6 newest .. burst-1 oldest - the harness
+## script makes them). The panel is driven with REAL stick
+## steps through the room's poll (synthetic joypad axis
+## events, the input smoke's proven route) and every
+## observed path is printed (SUBMITNAV PATH - the
+## reproduction record). Judged: the six thumbs newest
+## first; from EVERY shot one stick DOWN lands on SEND;
+## LEFT/RIGHT walk the row and clamp at its ends; UP from
+## the action row returns to the selected shot; SEND<->
+## BACK sideways; the focused shot stands large at FULL
+## decode width (1600 - the shared art cache caps at 1024)
+## and is the selected shot (hue witness on the big
+## texture's mean); D-pad Right from a shot closes the
+## panel with nothing sent; and the send itself - shot 3
+## focused, DOWN, A - whose photo step carries burst-3.png
+## on the wire before the submit step. PVLDS_SUBMITNAV_NC=
+## oldwalk restores the projection walk on the panel: the
+## "one step to SEND" legs must FAIL BY NAME.
+
+const SN_FILES: Array[String] = ["burst-6.png", "burst-5.png", "burst-4.png", "burst-3.png", "burst-2.png", "burst-1.png"] ## thumb order: newest first
+const SN_TAGS: Array[String] = ["teal", "orange", "purple", "green", "red", "blue"] ## each shot's playfield hue tag, same order
+
+
+func _sn_expect(ok: bool, label: String) -> void:
+	if ok:
+		print("PVLDS SUBMITNAV SMOKE OK: ", label)
+	else:
+		_sn_failures += 1
+		printerr("PVLDS SUBMITNAV SMOKE FAIL: ", label)
+
+
+func _sn_inject(button: JoyButton, pressed: bool) -> void:
+	var ev: InputEventJoypadButton = InputEventJoypadButton.new()
+	ev.device = 0
+	ev.button_index = button
+	ev.pressed = pressed
+	Input.parse_input_event(ev)
+
+
+func _sn_axis_x(value: float) -> void:
+	var ev: InputEventJoypadMotion = InputEventJoypadMotion.new()
+	ev.device = 0
+	ev.axis = JOY_AXIS_LEFT_X
+	ev.axis_value = value
+	Input.parse_input_event(ev)
+
+
+func _sn_axis_y(value: float) -> void:
+	var ev: InputEventJoypadMotion = InputEventJoypadMotion.new()
+	ev.device = 0
+	ev.axis = JOY_AXIS_LEFT_Y
+	ev.axis_value = value
+	Input.parse_input_event(ev)
+
+
+func _sn_name(q: ClickableQuad) -> String:
+	if q == null or _room == null:
+		return "none"
+	if q == _room.submit_send_quad():
+		return "SEND"
+	if q == _room.submit_back_quad():
+		return "BACK"
+	var thumbs: Array = _room.submit_thumb_quads()
+	for i: int in range(thumbs.size()):
+		if q == (thumbs[i] as ClickableQuad):
+			return "shot %d" % i
+	return "other"
+
+
+## The fixture's six playfield hues, told apart on the big
+## texture's mean colour (the roomsubmit witness technique;
+## the amber DMD digits lift r/g slightly on every frame
+## and the thresholds keep their margins).
+func _sn_hue_tag(m: Vector3) -> String:
+	if m.x < 0.0:
+		return "none"
+	if m.z > 0.35 and m.y > 0.35 and m.x < 0.25:
+		return "teal"
+	if m.x > 0.45 and m.y > 0.28:
+		return "orange"
+	if m.x > 0.45:
+		return "red"
+	if m.z > 0.35 and m.x > 0.28:
+		return "purple"
+	if m.y > 0.32 and m.z < 0.30:
+		return "green"
+	if m.z > 0.32:
+		return "blue"
+	return "unknown"
+
+
+## The verify step's identity, judged standing on a thumb:
+## the selected path is the focused shot's, the big view
+## carries THAT shot (hue), at full decode width.
+func _sn_verify(k: int) -> void:
+	var sel: String = _room.submit_selected_path().get_file()
+	_sn_expect(sel == SN_FILES[k], "verify: shot %d stands selected (got %s)" % [k, sel])
+	var bq: ClickableQuad = _room.submit_big_quad()
+	var tex: Texture2D = bq.current_texture() if bq != null else null
+	var w: int = tex.get_width() if tex != null else -1
+	_sn_expect(w == 1600, "big view: shot %d stands at full decode width (got %d; the art cache caps at 1024)" % [k, w])
+	var tag: String = _sn_hue_tag(_rs_mean_rgb(tex))
+	_sn_expect(tag == SN_TAGS[k], "big view: the shot standing large is shot %d (hue %s, want %s)" % [k, tag, SN_TAGS[k]])
+
+
+func _sn_open_legs() -> void:
+	var thumbs: Array = _room.submit_thumb_quads()
+	_sn_expect(thumbs.size() == 6, "open: the panel stands all six shots (got %d)" % thumbs.size())
+	for k: int in range(mini(thumbs.size(), 6)):
+		var nm: String = str((thumbs[k] as ClickableQuad).payload).get_file()
+		_sn_expect(nm == SN_FILES[k], "open: thumb %d is %s (got %s)" % [k, SN_FILES[k], nm])
+	if thumbs.size() == 6:
+		_sn_expect(_room.focused_quad() == (thumbs[0] as ClickableQuad), "open: focus stands on the newest shot")
+
+
+func _sn_build_script() -> void:
+	_sn_script.clear()
+	var thumbs: Array = _room.submit_thumb_quads()
+	var send_q: ClickableQuad = _room.submit_send_quad()
+	var back_q: ClickableQuad = _room.submit_back_quad()
+	var n: int = mini(thumbs.size(), 6)
+	for k: int in range(n):
+		var tk: ClickableQuad = thumbs[k] as ClickableQuad
+		_sn_script.append({"seat": tk, "verify": k, "axis": "y", "value": 1.0, "expect": send_q,
+			"leg": "one step to SEND: shot %d DOWN lands on SEND in one step" % k, "path": "shot %d DOWN" % k})
+		_sn_script.append({"seat": send_q, "verify": -1, "axis": "y", "value": -1.0, "expect": tk,
+			"leg": "return: UP from SEND lands on the selected shot %d" % k, "path": "SEND UP (shot %d selected)" % k})
+		var right_leg: String = "row walk: shot %d RIGHT lands on shot %d" % [k, k + 1] if k < n - 1 else "row walk: shot %d RIGHT stays at the row's end" % k
+		_sn_script.append({"seat": tk, "verify": -1, "axis": "x", "value": 1.0, "expect": thumbs[mini(k + 1, n - 1)] as ClickableQuad,
+			"leg": right_leg, "path": "shot %d RIGHT" % k})
+		var left_leg: String = "row walk: shot %d LEFT lands on shot %d" % [k, k - 1] if k > 0 else "row walk: shot 0 LEFT stays at the row's end"
+		_sn_script.append({"seat": tk, "verify": -1, "axis": "x", "value": -1.0, "expect": thumbs[maxi(k - 1, 0)] as ClickableQuad,
+			"leg": left_leg, "path": "shot %d LEFT" % k})
+	_sn_script.append({"seat": send_q, "verify": -1, "axis": "x", "value": 1.0, "expect": back_q,
+		"leg": "action row: SEND RIGHT lands on BACK", "path": "SEND RIGHT"})
+	_sn_script.append({"seat": back_q, "verify": -1, "axis": "x", "value": -1.0, "expect": send_q,
+		"leg": "action row: BACK LEFT lands on SEND", "path": "BACK LEFT"})
+	_sn_script.append({"seat": send_q, "verify": -1, "axis": "y", "value": 1.0, "expect": send_q,
+		"leg": "action row: DOWN from SEND stays on SEND", "path": "SEND DOWN"})
+	_sn_script.append({"seat": back_q, "verify": -1, "axis": "y", "value": 1.0, "expect": back_q,
+		"leg": "action row: DOWN from BACK stays on BACK", "path": "BACK DOWN"})
+
+
+func _sn_wire_legs() -> void:
+	var lines: Array = _submit_stub_lines()
+	var photo_i: int = -1
+	var submit_i: int = -1
+	for i: int in range(lines.size()):
+		var d: Dictionary = lines[i] as Dictionary
+		var p: String = str(d.get("path", ""))
+		if p.ends_with("/scores/submit-photo") and photo_i < 0:
+			photo_i = i
+			_sn_expect(str(d.get("multipart_file", "")) == "burst-3.png",
+				"wire identity: the photo step carries the focused shot (want burst-3.png, got '%s')" % str(d.get("multipart_file", "")))
+		elif p.ends_with("/scores/submit"):
+			submit_i = i
+	_sn_expect(photo_i >= 0 and submit_i > photo_i,
+		"wire order: the submit follows the photo (photo %d, submit %d)" % [photo_i, submit_i])
+
+
+func _sn_panel_dressed() -> bool:
+	var face: ClickableQuad = _room.submit_panel_face_quad() if _room != null else null
+	return _room != null and _room.is_submit_panel_up() and face != null and face.current_texture() != null \
+		and face.current_texture().get_size() == Vector2(1024, 532)
+
+
+func _drive_submitnav_smoke() -> void:
+	if _sn_done:
+		return
+	_sn_wait += 1
+	match _sn_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_room._handle_rail("tournament")
+				_sn_expect(_room.tournament_active(), "enter: the TOURNAMENT stop raises the Tournament Room")
+				_sn_deadline = Time.get_ticks_msec() + 45000
+				_sn_phase = 1
+				_sn_wait = 0
+			elif _sn_wait > 3600:
+				_sn_expect(false, "boot: the room never came up")
+				_sn_finish_smoke()
+		1:
+			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _tournament_boards_all_real():
+				_sn_idx = _rs_addams_idx()
+				_sn_expect(_sn_idx >= 0, "boards: the Addams challenge stands in the tournament view")
+				if _sn_idx < 0:
+					_sn_finish_smoke()
+					return
+				get_viewport().warp_mouse(Vector2(512, 764))
+				_room._set_centre(_sn_idx, false)
+				_room._set_focused(_room._panels[_sn_idx])
+				_sn_deadline = Time.get_ticks_msec() + 20000
+				_sn_phase = 2
+				_sn_wait = 0
+			elif Time.get_ticks_msec() > _sn_deadline:
+				_sn_expect(false, "boards: the boards never went live against the stub")
+				_sn_finish_smoke()
+		2:
+			if _room.centre_index() == _sn_idx and not _room.page_slide_active() and _sn_wait >= 6:
+				_sn_expect(_rs_stub_scores_count() == 0, "wire: nothing submitted before the panel opens")
+				_sn_inject(JOY_BUTTON_Y, true)
+				_sn_phase = 3
+				_sn_wait = 0
+			elif Time.get_ticks_msec() > _sn_deadline:
+				_sn_expect(false, "seat: the Addams card never centred")
+				_sn_finish_smoke()
+		3:
+			if _sn_wait >= 2:
+				_sn_inject(JOY_BUTTON_Y, false)
+				_sn_deadline = Time.get_ticks_msec() + 30000
+				_sn_phase = 4
+				_sn_wait = 0
+		4:
+			if _sn_panel_dressed():
+				if _sn_sub == 0:
+					_sn_open_legs()
+					_room._set_focused(_room.submit_thumb_quads()[2] as ClickableQuad)
+					_sn_sub = 1
+					_sn_wait = 0
+				elif _sn_wait >= 15:
+					# Presentation settle before the grab (the
+					# roomsubmit lesson): the big view of shot 2
+					# stands dressed, then the grab judges it.
+					_grad_save_grab("submitnav_panel_six.png")
+					_sn_build_script()
+					_sn_step = 0
+					_sn_sub = 0
+					_sn_after = 6
+					_sn_deadline = Time.get_ticks_msec() + 300000
+					_sn_phase = 5
+					_sn_wait = 0
+			elif Time.get_ticks_msec() > _sn_deadline:
+				_sn_expect(false, "panel: the submit panel never stood dressed")
+				_sn_finish_smoke()
+		5:
+			# The script executor: seat, settle, verify the
+			# standing shot, one stick step, judge the landing.
+			if Time.get_ticks_msec() > _sn_deadline:
+				_sn_expect(false, "walk: the script never finished")
+				_sn_finish_smoke()
+				return
+			if _sn_step >= _sn_script.size():
+				_sn_phase = _sn_after
+				_sn_sub = 0
+				_sn_wait = 0
+				return
+			var e: Dictionary = _sn_script[_sn_step] as Dictionary
+			match _sn_sub:
+				0:
+					if Time.get_ticks_msec() < _sn_cool_until:
+						return
+					var seat: ClickableQuad = e.get("seat") as ClickableQuad
+					if seat != null:
+						_room._set_focused(seat)
+					_sn_sub = 1
+					_sn_wait = 0
+				1:
+					if _sn_wait >= 4:
+						var vk: int = int(e.get("verify", -1))
+						if vk >= 0:
+							_sn_verify(vk)
+						_sn_from = _room.focused_quad()
+						if str(e.get("axis")) == "x":
+							_sn_axis_x(float(e.get("value")))
+						else:
+							_sn_axis_y(float(e.get("value")))
+						_sn_step_msec = Time.get_ticks_msec()
+						_sn_sub = 2
+						_sn_wait = 0
+				2:
+					var landed: bool = _room.focused_quad() != _sn_from
+					var timed_out: bool = Time.get_ticks_msec() - _sn_step_msec > 800
+					if landed or timed_out:
+						if str(e.get("axis")) == "x":
+							_sn_axis_x(0.0)
+						else:
+							_sn_axis_y(0.0)
+						var got: ClickableQuad = _room.focused_quad()
+						print("SUBMITNAV PATH: ", str(e.get("path")), " -> ", _sn_name(got))
+						_sn_expect(got == (e.get("expect") as ClickableQuad),
+							str(e.get("leg")) + " (got %s)" % _sn_name(got))
+						_sn_cool_until = Time.get_ticks_msec() + 330
+						_sn_step += 1
+						_sn_sub = 0
+						_sn_wait = 0
+		6:
+			if _sn_sub == 0:
+				_room._set_focused(_room.submit_thumb_quads()[2] as ClickableQuad)
+				_sn_sub = 1
+				_sn_wait = 0
+			elif _sn_wait >= 4:
+				_sn_inject(JOY_BUTTON_DPAD_RIGHT, true)
+				_sn_phase = 7
+				_sn_sub = 0
+				_sn_wait = 0
+		7:
+			if _sn_wait >= 2:
+				_sn_inject(JOY_BUTTON_DPAD_RIGHT, false)
+				_sn_phase = 8
+				_sn_wait = 0
+		8:
+			if not _room.is_submit_panel_up():
+				_sn_expect(true, "back sends nothing: D-pad Right closed the panel")
+				_sn_expect(_rs_stub_scores_count() == 0, "back sends nothing: the wire stayed silent")
+				_sn_expect(_room.focused_quad() == _room._panels[_sn_idx], "back: focus lands back on the challenge's card")
+				_sn_inject(JOY_BUTTON_Y, true)
+				_sn_phase = 9
+				_sn_wait = 0
+			elif _sn_wait > 600:
+				_sn_expect(false, "back: D-pad Right never closed the panel")
+				_sn_finish_smoke()
+		9:
+			if _sn_wait >= 2:
+				_sn_inject(JOY_BUTTON_Y, false)
+				_sn_deadline = Time.get_ticks_msec() + 30000
+				_sn_phase = 10
+				_sn_wait = 0
+		10:
+			if _sn_panel_dressed():
+				_sn_script.clear()
+				_sn_script.append({"seat": _room.submit_thumb_quads()[3] as ClickableQuad, "verify": 3,
+					"axis": "y", "value": 1.0, "expect": _room.submit_send_quad(),
+					"leg": "send road: shot 3 DOWN lands on SEND in one step", "path": "shot 3 DOWN (the send)"})
+				_sn_step = 0
+				_sn_sub = 0
+				_sn_after = 11
+				_sn_deadline = Time.get_ticks_msec() + 60000
+				_sn_phase = 5
+				_sn_wait = 0
+			elif Time.get_ticks_msec() > _sn_deadline:
+				_sn_expect(false, "reopen: the panel never stood dressed again")
+				_sn_finish_smoke()
+		11:
+			if _sn_wait >= 2:
+				_sn_inject(JOY_BUTTON_A, true)
+				_sn_phase = 12
+				_sn_wait = 0
+		12:
+			if _sn_wait >= 2:
+				_sn_inject(JOY_BUTTON_A, false)
+				_sn_deadline = Time.get_ticks_msec() + 30000
+				_sn_phase = 13
+				_sn_wait = 0
+		13:
+			if _room.submit_panel_message() == "Submitted - awaiting validation.":
+				_sn_expect(true, "verdict: the success words stand in the room")
+				_sn_wire_legs()
+				_sn_finish_smoke()
+			elif Time.get_ticks_msec() > _sn_deadline:
+				_sn_expect(false, "verdict: the success words never stood in the room (message: %s)" % _room.submit_panel_message())
+				_sn_finish_smoke()
+
+
+func _sn_finish_smoke() -> void:
+	_sn_done = true
+	if _sn_failures == 0:
+		print("PVLDS SUBMITNAV SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS SUBMITNAV SMOKE: FAIL (%d)" % _sn_failures)
 		get_tree().quit(1)
 
 
