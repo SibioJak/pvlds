@@ -7195,8 +7195,8 @@ func _grad_sky_step() -> void:
 				# wireframe shell entirely).
 				var dline: float = _grad_sky_line_ratio(down)
 				print("GRAD SKY: nadir dim-line densities - centre/ring ratio %.2f" % dline)
-				_grad_expect(dline > 0.40 and dline < 2.50,
-					"sky nadir: no wireframe lines converge at the centre point - stars only (dim-line centre/ring %.2f; GRADFIX9: shell removed, Chris's 2026-10-31 order)" % dline)
+				_grad_expect(dline > 0.25 and dline < 2.50,
+					"sky nadir: no wireframe lines converge at the centre point - stars only (dim-line centre/ring %.2f; GRADFIX9: shell removed, Chris's 2026-10-31 order; STARFIELD: the fault signature is centre-HIGH against the 2.50 top - the floor is a sanity bound only, re-based at 0.25 because the geometric field's dim band legitimately holds dim far stars and the backdrop's band glow, whose centre/ring split reads 0.32-1.41 across boots)" % dline)
 				cam.rotation_degrees = Vector3(-35.0, 0.0, 0.0) ## down-forward: the desk view's sky
 				_grad_sky_stage = 13
 				_grad_wait = 0
@@ -18814,8 +18814,8 @@ func _tournament_leg_sky_nadir() -> void:
 	_tournament_expect(_room.wireframe_shell_count() == 0,
 		"layout sky: zero wireframe shell nodes stand in the room (Tournament view; got %d - GRADFIX9: the shell is removed entirely, Chris's 2026-10-31 order)" % _room.wireframe_shell_count())
 	var tline: float = _grad_sky_line_ratio(img)
-	_tournament_expect(tline > 0.40 and tline < 2.50,
-		"layout sky: no wireframe lines converge at the Tournament Room's nadir - stars only (dim-line centre/ring %.2f; GRADFIX9: shell removed, Chris's 2026-10-31 order)" % tline)
+	_tournament_expect(tline > 0.25 and tline < 2.50,
+		"layout sky: no wireframe lines converge at the Tournament Room's nadir - stars only (dim-line centre/ring %.2f; GRADFIX9: shell removed, Chris's 2026-10-31 order; STARFIELD floor re-based at 0.25 as at the grad nadir leg)" % tline)
 	var cam: Camera3D = _room._active_camera()
 	if cam != null:
 		cam.rotation_degrees = Vector3.ZERO
