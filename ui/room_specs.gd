@@ -598,45 +598,45 @@ static func pinemhi_marked(game: GameEntry, personal: Dictionary, best: Dictiona
 	return not (rec.get("rows", []) as Array).is_empty()
 
 
-## PINEMHI MARKS: the corner's state for one game, from the
-## evidence the install actually carries. The honesty rule
-## is the function's shape:
+## PINEMHI MARKS + STRUCKLIGHT: the corner's state for one
+## game, from the evidence the install actually carries.
+## The honesty rule is the function's shape, and the
+## precedence is the brief's: his rows beat all, a Best
+## record beats the marker, the marker beats silence.
 ## - SOLID needs the player's own rows (pinemhi_marked) and
-##   wins over every other evidence - a held score beats a
-##   support list that forgot the game.
+##   wins over every other evidence - a held score beats
+##   any list that forgot the game.
 ## - HOLLOW needs POSITIVE support evidence: a TOP10_Best
 ##   record for the game (PINemHi's server keeps a board
 ##   only where scores can exist; the monitor downloads it
-##   into the player's own install), or the game's rom
-##   named in a supported-roms source when one is wired.
-## - STRUCK needs CERTAINTY of non-support: a supported-
-##   roms source EXISTS, the game's rom is KNOWN, and the
-##   rom is absent from it. Absence alone never strikes -
-##   and a rom-less game (rom == "") can never be struck,
-##   because PINemHi reaches some rom-less games through
-##   the USER folder. Note what is NOT evidence: romfind
-##   (the vpinmame name-conversion table) lists every rom,
-##   including unscored ones - Laser Cue stands in it - so
-##   it proves nothing either way and is never consulted.
+##   into the player's own install). A Best record also
+##   beats a NOT SUPPORTED marker for the same game - the
+##   positive proof outranks the marker's word.
+## - STRUCK needs CERTAINTY of non-support, and STRUCKLIGHT
+##   wires the real source: the unsupported key set Main
+##   pushes (PinemhiScores.load_unsupported_keys_for_config)
+##   - the monitor's own NOT SUPPORTED marker files, joined
+##   stem -> title through the install's romfind name index.
+##   Absence alone never strikes: no marker, no join, or no
+##   romfind leaves the game UNMARKED, and romfind itself
+##   (the vpinmame name-conversion table, every rom listed,
+##   Laser Cue included) is consulted ONLY as that name
+##   index, never as evidence either way.
 ## - Anything else is UNMARKED. When PINemHi is off or its
 ##   folder is missing, Main pushes empty maps and every
 ##   game lands here (or SOLID, which needs the same maps)
 ##   - exactly the pre-MARKS behaviour.
-## Production wiring passes NO supported-roms source (the
-## default empty map): no install file records the
-## supported set, so STRUCK is unreachable in the field
-## until a source is ruled in (STATUS.md carries the
-## survey). The fixtures pass a source and prove the legs.
-static func pinemhi_mark_state(game: GameEntry, personal: Dictionary, best: Dictionary, supported_roms: Dictionary = {}, game_rom: String = "") -> int:
+static func pinemhi_mark_state(game: GameEntry, personal: Dictionary, best: Dictionary, unsupported: Dictionary = {}) -> int:
 	if marks_nc == "bool":
 		return PINEMHI_MARK_SOLID if pinemhi_marked(game, personal, best) else PINEMHI_MARK_NONE
 	if pinemhi_marked(game, personal, best):
 		return PINEMHI_MARK_SOLID
-	var best_rec: Dictionary = best.get(PinemhiScores.challenge_key(game.title), {}) as Dictionary
+	var key: String = PinemhiScores.challenge_key(game.title)
+	var best_rec: Dictionary = best.get(key, {}) as Dictionary
 	if not (best_rec.get("rows", []) as Array).is_empty():
 		return PINEMHI_MARK_HOLLOW
-	if not supported_roms.is_empty() and game_rom != "":
-		return PINEMHI_MARK_HOLLOW if supported_roms.has(game_rom) else PINEMHI_MARK_STRUCK
+	if unsupported.has(key):
+		return PINEMHI_MARK_STRUCK
 	return PINEMHI_MARK_NONE
 
 static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}, submit_hint: bool = false) -> Dictionary:

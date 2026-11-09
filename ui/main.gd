@@ -1749,6 +1749,12 @@ func _push_wovp_data() -> void:
 	# (the card back's online-best section), re-read from
 	# the same install read.
 	_room.set_pinemhi_best_rows(PinemhiScores.load_best_rows_for_config(_config))
+	# STRUCKLIGHT: the unsupported title-key set rides the
+	# same push, after the rows/best maps it judges against
+	# (the monitor's NOT SUPPORTED markers, joined through
+	# romfind) - a marker written by a first play of an
+	# unsupported table lands on the next push, no restart.
+	_room.set_pinemhi_unsupported(PinemhiScores.load_unsupported_keys_for_config(_config))
 	# CARDBACK + BACKTRIM: the IPDB facts ride the same
 	# push, through the one door that carries the stamp
 	# law - a repeat ride of unchanged facts never bumps,
@@ -18234,13 +18240,21 @@ func _finish_scoremark_smoke() -> void:
 		get_tree().quit(1)
 
 
-## PINEMHI MARKS smoke (--pvlds-smoke-pinemhi-marks): the
-## three-state corner judged without a room - the state
-## function's legs over fixture evidence maps, the same
-## legs driven through PinemhiScores' own loaders on a
-## fixture folder built from Chris's REAL files, and the
-## three registers rendered through the factory at wall
-## size (grabs land in PVLDS_MARKS_GRABS). Under
+## PINEMHI MARKS + STRUCKLIGHT smoke
+## (--pvlds-smoke-pinemhi-marks): the three-state corner
+## judged without a room - the state function's legs over
+## fixture evidence maps, the same legs driven through
+## PinemhiScores' own loaders on fixture folders built
+## from Chris's REAL files (his Apollo Personal rows, his
+## Deadly Weapon Best board, his Laser Cue NOT SUPPORTED
+## marker, and the published romfind lines), and the three
+## registers rendered through the factory at wall size
+## (grabs land in PVLDS_MARKS_GRABS). STRUCKLIGHT: the
+## struck state now stands on the production chain -
+## marker files + the romfind name index - and the legs
+## judge its precedence (rows beat the marker, a Best
+## record beats the marker) and its silences (no romfind,
+## no markers, an unjoined stem: nothing struck). Under
 ## PVLDS_MARKS_NC=bool the state collapses to the old
 ## solid-or-nothing bool and the hollow + struck legs fail
 ## by name (the renders derive their marks from the state
@@ -18264,37 +18278,57 @@ func _run_pinemhi_marks_smoke() -> void:
 	var g_solid: GameEntry = mk_game.call("Apollo 13", "Sega")
 	var g_hollow: GameEntry = mk_game.call("Deadly Weapon", "Gottlieb")
 	var g_struck: GameEntry = mk_game.call("Laser Cue", "Williams")
-	var g_romless: GameEntry = mk_game.call("Original Nights", "Original")
+	var g_bestmark: GameEntry = mk_game.call("Blackout", "Williams")
+	var g_rowmark: GameEntry = mk_game.call("Gorgar", "Williams")
 	var g_unknown: GameEntry = mk_game.call("Unmatched Game", "Williams")
 	var k_solid: String = PinemhiScores.challenge_key(g_solid.title)
 	var k_hollow: String = PinemhiScores.challenge_key(g_hollow.title)
-	var personal: Dictionary = {k_solid: {"title": g_solid.title, "rows": row1}}
+	var personal: Dictionary = {
+		k_solid: {"title": g_solid.title, "rows": row1},
+		PinemhiScores.challenge_key(g_rowmark.title): {"title": g_rowmark.title, "rows": row1},
+	}
 	var best: Dictionary = {
 		k_solid: {"title": g_solid.title, "rows": row1},
 		k_hollow: {"title": g_hollow.title, "rows": row1},
+		PinemhiScores.challenge_key(g_bestmark.title): {"title": g_bestmark.title, "rows": row1},
 	}
-	var supported: Dictionary = {"deadweap": true, "whirl": true}
+	# The unsupported set as the production loader builds it:
+	# marker stems joined through romfind to title keys. The
+	# stray "devil s dare" key names no fixture game (its
+	# marker stands in Chris's install for a game this
+	# library does not hold) - it must strike nothing here.
+	var unsupported: Dictionary = {
+		PinemhiScores.challenge_key(g_struck.title): true,
+		PinemhiScores.challenge_key(g_bestmark.title): true,
+		PinemhiScores.challenge_key(g_rowmark.title): true,
+		"devil s dare": true,
+	}
 	# The semantics legs (pure, over the fixture maps).
-	_expect(RoomSpecs.pinemhi_mark_state(g_solid, personal, best) == RoomSpecs.PINEMHI_MARK_SOLID,
+	_expect(RoomSpecs.pinemhi_mark_state(g_solid, personal, best, unsupported) == RoomSpecs.PINEMHI_MARK_SOLID,
 		"marks: a game holding Personal rows is SOLID", failures)
-	_expect(RoomSpecs.pinemhi_mark_state(g_solid, personal, best, supported, "apollo13") == RoomSpecs.PINEMHI_MARK_SOLID,
-		"marks: SOLID wins over a supported source that lacks the game's rom (score beats romfind-style absence)", failures)
-	_expect(RoomSpecs.pinemhi_mark_state(g_hollow, {}, best) == RoomSpecs.PINEMHI_MARK_HOLLOW,
+	_expect(RoomSpecs.pinemhi_mark_state(g_rowmark, personal, best, unsupported) == RoomSpecs.PINEMHI_MARK_SOLID,
+		"marks: SOLID beats the marker - a game holding rows is never struck", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_hollow, {}, best, unsupported) == RoomSpecs.PINEMHI_MARK_HOLLOW,
 		"marks: a Best record with no score is HOLLOW (supported, go set one)", failures)
-	_expect(RoomSpecs.pinemhi_mark_state(g_hollow, {}, {}, supported, "deadweap") == RoomSpecs.PINEMHI_MARK_HOLLOW,
-		"marks: a rom named by a supported source is HOLLOW", failures)
-	_expect(RoomSpecs.pinemhi_mark_state(g_struck, {}, {}, supported, "lsrcu_l3") == RoomSpecs.PINEMHI_MARK_STRUCK,
-		"marks: a known rom absent from a supported source is STRUCK", failures)
-	_expect(RoomSpecs.pinemhi_mark_state(g_romless, {}, {}, supported, "") == RoomSpecs.PINEMHI_MARK_NONE,
-		"marks: a rom-less game is NEVER struck - unmarked", failures)
-	_expect(RoomSpecs.pinemhi_mark_state(g_unknown, {}, {}, supported, "") == RoomSpecs.PINEMHI_MARK_NONE,
-		"marks: a game unmatched to any rom evidence is unmarked, NOT struck", failures)
-	_expect(RoomSpecs.pinemhi_mark_state(g_unknown, {}, {}, {}, "unknown_rom") == RoomSpecs.PINEMHI_MARK_NONE,
-		"marks: with NO supported source, absence strikes nothing", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_bestmark, {}, best, unsupported) == RoomSpecs.PINEMHI_MARK_HOLLOW,
+		"marks: a Best record beats the marker - positive proof wins, HOLLOW not struck", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_struck, {}, {}, unsupported) == RoomSpecs.PINEMHI_MARK_STRUCK,
+		"marks: a game in the unsupported set with no rows and no Best record is STRUCK", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_unknown, {}, {}, unsupported) == RoomSpecs.PINEMHI_MARK_NONE,
+		"marks: a game outside the unsupported set is unmarked, NOT struck (the stray marker strikes nothing)", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_struck, {}, {}, {}) == RoomSpecs.PINEMHI_MARK_NONE,
+		"marks: with an empty unsupported set (no markers / no romfind), Laser Cue stands unmarked", failures)
 	_expect(RoomSpecs.pinemhi_mark_state(g_hollow, {}, {}) == RoomSpecs.PINEMHI_MARK_NONE,
 		"marks: empty maps (PINemHi off / folder missing) keep the old solid-or-nothing behaviour", failures)
 	# The FS legs: a fixture install built from the REAL
 	# files, read back through PinemhiScores' own loaders.
+	# STRUCKLIGHT: the fixture carries Chris's REAL Laser
+	# Cue marker file (its whole content is the NOT
+	# SUPPORTED line) on the Personal shelf, its twin on
+	# the Best shelf, and a romfind.ini holding the
+	# PUBLISHED lines for all 16 of his marker stems plus
+	# two supported controls - the production chain end to
+	# end, on the real shapes.
 	var root: String = ProjectSettings.globalize_path("user://marks_fixture")
 	DirAccess.make_dir_recursive_absolute(root.path_join("PINemHi LeaderBoard").path_join("TOP10_Personal"))
 	DirAccess.make_dir_recursive_absolute(root.path_join("PINemHi LeaderBoard").path_join("TOP10_Best"))
@@ -18302,21 +18336,57 @@ func _run_pinemhi_marks_smoke() -> void:
 		"PINEMHI ONLINE LEADERBOARD\n\n<<< Apollo 13 >>>\n\n\nTOP 10 Personal Best Scores\n1   1.638.803.870      Kubrick  2026-07-06 20:15:24\n2   1.333.372.730      Kubrick  2026-03-24 23:24:23\n")
 	_write_text_file(root.path_join("PINemHi LeaderBoard").path_join("TOP10_Best").path_join("deadweap.txt"),
 		"PINEMHI ONLINE LEADERBOARD\n\n<<< Deadly Weapon >>>\n\n\nTOP 10 Highest Scores\n1   71.748.000               xlDenislx  2025-11-25 07:45:32\n2   47.417.900       ALE 54 (VPA Team)  2025-11-23 22:30:40\n")
-	# The conviction, as a fixture: romfind.ini in the same
-	# folder NAMES Laser Cue (the published lines) - and the
-	# loaders + state below must draw nothing from it.
+	_write_text_file(root.path_join("PINemHi LeaderBoard").path_join("TOP10_Personal").path_join("lsrcu_l2.txt"),
+		"NOT SUPPORTED YET BY ONLINE PINEMHI LEADERBOARD\n")
+	_write_text_file(root.path_join("PINemHi LeaderBoard").path_join("TOP10_Best").path_join("lsrcu_l2.txt"),
+		"NOT SUPPORTED YET BY ONLINE PINEMHI LEADERBOARD\n")
 	_write_text_file(root.path_join("romfind.ini"),
-		"Deadly Weapon=deadweap.nv\nLaser Cue (L-2)=lsrcu_l2.nv\nLaser Cue (L-3)=lsrcu_l3.nv\n")
+		"; the published PINemHi romfind lines: the 16 marker stems of Chris's install + two supported controls\nAlien Star=alienstr.nv\nAndromeda=andromed.nv\nApollo 13 (5.01)=apollo13.nv\nBlackout (L-1)=blkou_l1.nv\nBuck Rogers=buckrgrs.nv\nDeadly Weapon=deadweap.nv\nDevil's Dare=dvlsdre.nv\nGorgar (L-1)=grgar_l1.nv\nIce Fever=icefever.nv\nJolly Park=jolypark.nv\nLaser Cue (L-2)=lsrcu_l2.nv\nLaser Cue (L-3)=lsrcu_l3.nv\nMonte Carlo=mntecrlo.nv\nRoller Disco=roldisco.nv\nRoyal Flush Deluxe=rflshdlx.nv\nStar Wars (Sonic)=sonstwar.nv\nTerminator 2: Judgement Day (P-2F Profanity)=t2_p2f.nv\nTime Fantasy (L-5)=tmfnt_l5.nv\nWarlok (L-3)=wrlok_l3.nv\n")
 	var fs_personal: Dictionary = PinemhiScores.load_folder_rows(root)
 	var fs_best: Dictionary = PinemhiScores.load_folder_best_rows(root)
+	var fs_unsupported: Dictionary = PinemhiScores.load_folder_unsupported_keys(root)
 	_expect(fs_personal.has(k_solid) and fs_best.has(k_hollow),
 		"marks: the real-file fixture loads (Apollo Personal, Deadly Weapon Best)", failures)
-	_expect(RoomSpecs.pinemhi_mark_state(g_solid, fs_personal, fs_best) == RoomSpecs.PINEMHI_MARK_SOLID,
+	_expect(fs_unsupported.has(PinemhiScores.challenge_key(g_struck.title)) and fs_unsupported.size() == 1,
+		"marks: the loader joins the real Laser Cue marker through romfind - and only it (the other 15 named stems have no marker here, the controls are supported)", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_solid, fs_personal, fs_best, fs_unsupported) == RoomSpecs.PINEMHI_MARK_SOLID,
 		"marks: through the real files, Apollo 13 is SOLID", failures)
-	_expect(RoomSpecs.pinemhi_mark_state(g_hollow, fs_personal, fs_best) == RoomSpecs.PINEMHI_MARK_HOLLOW,
+	_expect(RoomSpecs.pinemhi_mark_state(g_hollow, fs_personal, fs_best, fs_unsupported) == RoomSpecs.PINEMHI_MARK_HOLLOW,
 		"marks: through the real files, Deadly Weapon is HOLLOW", failures)
-	_expect(RoomSpecs.pinemhi_mark_state(g_struck, fs_personal, fs_best) == RoomSpecs.PINEMHI_MARK_NONE,
-		"marks: Laser Cue stands UNMARKED in production wiring - romfind names it, no Best file stands, no source is wired (never hollow, never struck on this evidence)", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_struck, fs_personal, fs_best, fs_unsupported) == RoomSpecs.PINEMHI_MARK_STRUCK,
+		"marks: through the real files, Laser Cue is STRUCK - the marker + the romfind join light the corner", failures)
+	# An unjoined marker stem strikes nothing: a marker the
+	# romfind index does not name joins to no title.
+	_write_text_file(root.path_join("PINemHi LeaderBoard").path_join("TOP10_Personal").path_join("zzunkn.txt"),
+		"NOT SUPPORTED YET BY ONLINE PINEMHI LEADERBOARD\n")
+	_expect(PinemhiScores.load_folder_unsupported_keys(root) == fs_unsupported,
+		"marks: an unjoined marker stem (zzunkn) changes nothing - no name, no strike", failures)
+	# The silences: markers with NO romfind anywhere join
+	# nothing; a romfind with NO markers strikes nothing;
+	# the legacy home (pinemhi.ini's [romfind] section)
+	# joins the same way when romfind.ini is absent.
+	var root_bare: String = ProjectSettings.globalize_path("user://marks_fixture_bare")
+	DirAccess.make_dir_recursive_absolute(root_bare.path_join("PINemHi LeaderBoard").path_join("TOP10_Personal"))
+	_write_text_file(root_bare.path_join("PINemHi LeaderBoard").path_join("TOP10_Personal").path_join("lsrcu_l2.txt"),
+		"NOT SUPPORTED YET BY ONLINE PINEMHI LEADERBOARD\n")
+	_expect(PinemhiScores.load_folder_unsupported_keys(root_bare).is_empty(),
+		"marks: markers with no romfind join nothing - the set is empty, nothing struck", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_struck, {}, {}, PinemhiScores.load_folder_unsupported_keys(root_bare)) == RoomSpecs.PINEMHI_MARK_NONE,
+		"marks: without romfind, Laser Cue stands UNMARKED beside its own marker", failures)
+	var root_nomark: String = ProjectSettings.globalize_path("user://marks_fixture_nomark")
+	DirAccess.make_dir_recursive_absolute(root_nomark.path_join("PINemHi LeaderBoard").path_join("TOP10_Personal"))
+	_write_text_file(root_nomark.path_join("romfind.ini"),
+		"Laser Cue (L-2)=lsrcu_l2.nv\n")
+	_expect(PinemhiScores.load_folder_unsupported_keys(root_nomark).is_empty(),
+		"marks: romfind alone strikes nothing - the name index is not evidence", failures)
+	var root_legacy: String = ProjectSettings.globalize_path("user://marks_fixture_legacy")
+	DirAccess.make_dir_recursive_absolute(root_legacy.path_join("PINemHi LeaderBoard").path_join("TOP10_Best"))
+	_write_text_file(root_legacy.path_join("PINemHi LeaderBoard").path_join("TOP10_Best").path_join("lsrcu_l2.txt"),
+		"NOT SUPPORTED YET BY ONLINE PINEMHI LEADERBOARD\n")
+	_write_text_file(root_legacy.path_join("pinemhi.ini"),
+		"[paths]\nVP=D:\\vPinball\\VisualPinball\\VPinMAME\\nvram\\\n[romfind]\nLaser Cue (L-2)=lsrcu_l2.nv\n")
+	_expect(RoomSpecs.pinemhi_mark_state(g_struck, {}, {}, PinemhiScores.load_folder_unsupported_keys(root_legacy)) == RoomSpecs.PINEMHI_MARK_STRUCK,
+		"marks: the legacy [romfind] section inside pinemhi.ini joins the same way (the Best shelf's marker stands)", failures)
 	# The render legs: the three registers at wall size,
 	# marks derived from the state function itself.
 	var art_img: Image = Image.create(496, 864, false, Image.FORMAT_RGBA8)
@@ -18327,9 +18397,9 @@ func _run_pinemhi_marks_smoke() -> void:
 		DirAccess.make_dir_recursive_absolute(grab_dir)
 	var band: Color = RoomSpecs.manufacturer_color(g_struck.manufacturer)
 	var render_marks: Dictionary = {
-		RoomSpecs.PINEMHI_MARK_SOLID: RoomSpecs.pinemhi_mark_state(g_solid, fs_personal, fs_best),
-		RoomSpecs.PINEMHI_MARK_HOLLOW: RoomSpecs.pinemhi_mark_state(g_hollow, fs_personal, fs_best),
-		RoomSpecs.PINEMHI_MARK_STRUCK: RoomSpecs.pinemhi_mark_state(g_struck, {}, {}, supported, "lsrcu_l3"),
+		RoomSpecs.PINEMHI_MARK_SOLID: RoomSpecs.pinemhi_mark_state(g_solid, fs_personal, fs_best, fs_unsupported),
+		RoomSpecs.PINEMHI_MARK_HOLLOW: RoomSpecs.pinemhi_mark_state(g_hollow, fs_personal, fs_best, fs_unsupported),
+		RoomSpecs.PINEMHI_MARK_STRUCK: RoomSpecs.pinemhi_mark_state(g_struck, fs_personal, fs_best, fs_unsupported),
 	}
 	for state_v: Variant in render_marks.keys():
 		var want: int = int(state_v)

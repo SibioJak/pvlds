@@ -26,6 +26,26 @@ const LEADERBOARD_DIR: String = "PINemHi LeaderBoard"
 const PERSONAL_DIR: String = "TOP10_Personal"
 const BEST_DIR: String = "TOP10_Best"
 
+## STRUCKLIGHT: the monitor's NOT SUPPORTED marker line. When
+## pinemhi_rom_monitor sees a ROM load that PINemHi cannot
+## score, it leaves a .txt on the LeaderBoard shelves whose
+## whole content is this one line, named by the ROM's stem
+## (lsrcu_l2.txt on both TOP10 shelves and the 5-min twins).
+## That file is PINemHi's own word that the ROM is not
+## supported - install-local, version-true non-support
+## certainty, the evidence the struck corner stands on.
+const NOT_SUPPORTED_LINE: String = "NOT SUPPORTED YET BY ONLINE PINEMHI LEADERBOARD"
+
+## STRUCKLIGHT: where the stem -> pretty-title name index
+## lives. PINemHi >= 3.6.3 keeps it in romfind.ini beside
+## pinemhi.ini; older vintages carry it as the [romfind]
+## section inside pinemhi.ini. It is read ONLY as a name
+## index (which title a marker's stem belongs to) - the
+## MARKS finding stands: romfind lists every VPinMAME rom,
+## supported or not, so it is never support evidence.
+const ROMFIND_FILE: String = "romfind.ini"
+const CONFIG_FILE: String = "pinemhi.ini"
+
 ## Common install locations, tried in order when the
 ## config's folder is empty (Chris's own install is the
 ## first). A found folder with no LeaderBoard inside is
@@ -290,6 +310,117 @@ static func load_rows_for_config(cfg: PvldsConfig) -> Dictionary:
 ## The config-driven Best read Main pushes to the room.
 static func load_best_rows_for_config(cfg: PvldsConfig) -> Dictionary:
 	return load_folder_best_rows(resolve_folder(cfg))
+
+
+## STRUCKLIGHT: the ROM stems PINemHi's monitor has marked
+## NOT SUPPORTED on one LeaderBoard shelf: {stem: true} for
+## every .txt whose content carries the marker line. Silent
+## on every absence, like every read here.
+static func marker_stems_in_shelf(folder: String, shelf: String) -> Dictionary:
+	var out: Dictionary = {}
+	if folder == "":
+		return out
+	var dir_path: String = folder.path_join(LEADERBOARD_DIR).path_join(shelf)
+	var da: DirAccess = DirAccess.open(dir_path)
+	if da == null:
+		return out
+	for file_name: String in da.get_files():
+		if not file_name.to_lower().ends_with(".txt"):
+			continue
+		var text: String = FileAccess.get_file_as_string(dir_path.path_join(file_name))
+		if text.contains(NOT_SUPPORTED_LINE):
+			out[file_name.get_basename().to_lower()] = true
+	return out
+
+
+## STRUCKLIGHT: the marker stems across the two TOP10
+## shelves, unioned - the same program leaves the same
+## answer on both, so either shelf's word stands.
+static func load_folder_marker_stems(folder: String) -> Dictionary:
+	var out: Dictionary = marker_stems_in_shelf(folder, PERSONAL_DIR)
+	for stem: Variant in marker_stems_in_shelf(folder, BEST_DIR):
+		out[stem] = true
+	return out
+
+
+## STRUCKLIGHT: the romfind name index under a PINemHi
+## folder: {stem: pretty title}. Read from romfind.ini in
+## the install root; when that file is missing or carries
+## no entries, the [romfind] section of pinemhi.ini serves
+## (the older vintages' home for the same list). Lines are
+## "Pretty Title (rev)=stem.nv"; ";" comments, blank lines
+## and other sections' entries never join. A file with no
+## section header at all is read as bare entries (the
+## standalone romfind.ini shape); once a header stands,
+## only [romfind]'s entries count. First entry for a stem
+## wins, the loaders' discipline.
+static func romfind_stem_titles(folder: String) -> Dictionary:
+	if folder == "":
+		return {}
+	var out: Dictionary = _parse_romfind(folder.path_join(ROMFIND_FILE))
+	if not out.is_empty():
+		return out
+	return _parse_romfind(folder.path_join(CONFIG_FILE))
+
+
+static func _parse_romfind(path: String) -> Dictionary:
+	var out: Dictionary = {}
+	if not FileAccess.file_exists(path):
+		return out
+	var text: String = FileAccess.get_file_as_string(path)
+	if text == "":
+		return out
+	var in_section: bool = true ## bare entries stand until a header says otherwise
+	for raw: String in text.split("\n"):
+		var line: String = raw.strip_edges()
+		if line == "" or line.begins_with(";") or line.begins_with("#"):
+			continue
+		if line.begins_with("[") and line.ends_with("]"):
+			in_section = line.trim_prefix("[").trim_suffix("]").strip_edges().to_lower() == "romfind"
+			continue
+		if not in_section:
+			continue
+		var eq: int = line.find("=")
+		if eq <= 0:
+			continue
+		var title: String = line.substr(0, eq).strip_edges()
+		var stem: String = line.substr(eq + 1).strip_edges().get_file().to_lower()
+		if stem.ends_with(".nv"):
+			stem = stem.left(stem.length() - 3)
+		if title == "" or stem == "" or out.has(stem):
+			continue
+		out[stem] = title
+	return out
+
+
+## STRUCKLIGHT: the unsupported title-key set for one
+## PINemHi folder: {challenge_key: true} for every marker
+## stem the romfind index joins to a title. A marker stem
+## with no join contributes nothing (no name, no mark -
+## the honesty rule), and no markers or no romfind means
+## the empty set: the struck corner stays dark, exactly
+## the pre-STRUCKLIGHT behaviour.
+static func load_folder_unsupported_keys(folder: String) -> Dictionary:
+	var out: Dictionary = {}
+	var stems: Dictionary = load_folder_marker_stems(folder)
+	if stems.is_empty():
+		return out
+	var titles: Dictionary = romfind_stem_titles(folder)
+	if titles.is_empty():
+		return out
+	for stem: Variant in stems:
+		var title: String = str(titles.get(stem, ""))
+		if title == "":
+			continue
+		var key: String = challenge_key(title)
+		if key != "":
+			out[key] = true
+	return out
+
+
+## The config-driven unsupported read Main pushes to the room.
+static func load_unsupported_keys_for_config(cfg: PvldsConfig) -> Dictionary:
+	return load_folder_unsupported_keys(resolve_folder(cfg))
 
 
 ## The SETUP surfaces' standing line, in plain words.

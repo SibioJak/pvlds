@@ -1327,6 +1327,7 @@ var _ipdb_facts: Dictionary = {} ## CARDBACK: the IPDB cache's facts by game id,
 var _ipdb_stamp: int = 0 ## CARDBACK: Main's cache stamp (the facts' name; the marquee reads live at raise, so no render key rides it since PINEMHI1)
 var _pinemhi_rows: Dictionary = {} ## PINEMHI1: PINemHi Personal full row lists by PinemhiScores title key, pushed by Main (set_pinemhi_rows); the card back renders these
 var _pinemhi_best_rows: Dictionary = {} ## BACKFINE: PINemHi TOP10_Best full row lists by the same title key, pushed by Main (set_pinemhi_best_rows); the card back's online-best section renders these
+var _pinemhi_unsupported: Dictionary = {} ## STRUCKLIGHT: the unsupported title-key set (PINemHi's own NOT SUPPORTED markers, joined through romfind), pushed by Main (set_pinemhi_unsupported); the front corner's STRUCK state reads it
 var _pinemhi_stamp: int = 0 ## PINEMHI1: the rows' name - bumped by set_pinemhi_rows when the pushed rows differ; it rides _card_back_key so a standing back heals under its new key
 var _wovp_shots_folder: String = "" ## ROOMSUBMIT: the config's screenshots folder, pushed by Main with the boards - the submit panel reads its photos from there
 var _wovp_fetched_at: int = 0 ## unix time the standing boards landed (0 = never)
@@ -2490,17 +2491,18 @@ func _has_pinemhi_score(game: GameEntry) -> bool:
 	return RoomSpecs.pinemhi_marked(game, _pinemhi_rows, _pinemhi_best_rows)
 
 
-## PINEMHI MARKS: the corner's three-state value for one
-## game (RoomSpecs.pinemhi_mark_state carries the semantics
-## + the honesty rule). Production wires NO supported-roms
-## source, so STRUCK is unreachable here today - HOLLOW
-## rides the Best rows Main already pushes for the card
-## backs. Every front consumer reads this: the specs, the
-## detail hand-off, and the face keys (via _pmh_segment),
-## so a rows push re-names and re-renders exactly the
-## fronts whose state moved.
+## PINEMHI MARKS + STRUCKLIGHT: the corner's three-state
+## value for one game (RoomSpecs.pinemhi_mark_state carries
+## the semantics + the honesty rule + the precedence).
+## HOLLOW rides the Best rows Main already pushes for the
+## card backs; STRUCK rides the unsupported key set Main
+## pushes beside them (the monitor's own NOT SUPPORTED
+## markers through the romfind name index). Every front
+## consumer reads this: the specs, the detail hand-off,
+## and the face keys (via _pmh_segment), so a push re-names
+## and re-renders exactly the fronts whose state moved.
 func _pinemhi_mark(game: GameEntry) -> int:
-	return RoomSpecs.pinemhi_mark_state(game, _pinemhi_rows, _pinemhi_best_rows)
+	return RoomSpecs.pinemhi_mark_state(game, _pinemhi_rows, _pinemhi_best_rows, _pinemhi_unsupported)
 
 
 ## The face key's mark segment: |pmh1 / |pmh2 / |pmh3, or
@@ -2571,6 +2573,24 @@ func set_pinemhi_best_rows(rows_map: Dictionary) -> void:
 	if _flip_idx >= 0:
 		_flip_key = _card_back_key(_flip_idx)
 		_refresh_card_back()
+
+
+## STRUCKLIGHT: Main's push of the unsupported title-key
+## set (the monitor's NOT SUPPORTED markers, joined to
+## titles through the install's romfind name index - the
+## read itself is PinemhiScores'). The set moves FRONT
+## marks only: a game that gains a marker (a first play of
+## an unsupported table wrote one) flips its corner to
+## STRUCK through the key's pmh segment, so - like the
+## rows push - a changed set re-asks the standing faces
+## and the fill's own key check leaves unchanged faces
+## unrendered. A repeat push of the same set is no churn.
+func set_pinemhi_unsupported(keys_map: Dictionary) -> void:
+	if keys_map == _pinemhi_unsupported:
+		return
+	_pinemhi_unsupported = keys_map
+	for idx: int in range(_panels.size()):
+		_fill_one_face(idx, _gen)
 
 
 ## CARDBACK: Main's push of the IPDB cache (facts by game
