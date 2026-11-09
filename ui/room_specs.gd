@@ -166,7 +166,7 @@ static func manufacturer_color(manufacturer: String) -> Color:
 const PUP_NOTE: String = "PuP pack — set PC display scale to 100%"
 
 
-static func panel_spec(game: GameEntry, store: StateStore, scoremark: bool = false) -> Dictionary:
+static func panel_spec(game: GameEntry, store: StateStore, scoremark: int = 0) -> Dictionary:
 	var chips: Array = []
 	if game.is_vr_tagged():
 		chips.append({"text": "VR", "accent": true})
@@ -183,8 +183,8 @@ static func panel_spec(game: GameEntry, store: StateStore, scoremark: bool = fal
 	# MARKWORD: the chip's word is the wordmark itself -
 	# "PINemHi", the service's own capitalization (the
 	# MARKWORD NC seam restores "PINEMHI BEST").
-	if scoremark:
-		chips.append({"text": "PINEMHI BEST" if markword_nc == "hash1" else "PINemHi", "accent": false, "color": manufacturer_color(game.manufacturer)})
+	if scoremark != PINEMHI_MARK_NONE:
+		chips.append({"text": "PINEMHI BEST" if markword_nc == "hash1" else "PINemHi", "accent": false, "color": manufacturer_color(game.manufacturer), "mark": scoremark})
 	# The build/file line: the exact file Play would launch (the
 	# player's default build), as ONE ellipsized line - the wall is a
 	# browsing surface, and the full string lives in the detail view.
@@ -215,7 +215,7 @@ static func panel_spec(game: GameEntry, store: StateStore, scoremark: bool = fal
 	}
 
 
-static func art_spec(game: GameEntry, art_texture: Texture2D, store: StateStore, strip: bool = true, scoremark: bool = false) -> Dictionary:
+static func art_spec(game: GameEntry, art_texture: Texture2D, store: StateStore, strip: bool = true, scoremark: int = 0) -> Dictionary:
 	return {
 		"kind": "art",
 		"art_texture": art_texture,
@@ -551,22 +551,93 @@ static var backfine_nc: String = "" ## Main sets this from PVLDS_BACKFINE_NC bef
 static var oneten_nc: String = "" ## Main sets this from PVLDS_ONETEN_NC before any room exists (ONETEN seams: allpersonal = the back's personal block renders every file row again, so the one-Kubrick legs fail by name; best1only = the Best section renders divider + #1 alone again, so the full-ten legs fail by name)
 static var scoremark_nc: String = "" ## Main sets this from PVLDS_SCOREMARK_NC before any room exists (SCOREMARK seams: bestkey = the front mark keys on the ONLINE Best rows instead of the player's own Personal rows, so the Best-only-no-mark leg fails by name; ghostmark = the mark stands for every game, so the scoreless-no-mark legs fail by name)
 static var markword_nc: String = "" ## Main sets this from PVLDS_MARKWORD_NC before any room exists (MARKWORD seams: hash1 = the retired "#1" glyph stands again - the art face's disc + "#1" and the panel chip's "PINEMHI BEST" - so the wordmark legs fail by name)
+static var marks_nc: String = "" ## Main sets this from PVLDS_MARKS_NC before any room exists (PINEMHI MARKS seam: bool = pinemhi_mark_state collapses to the old solid-or-nothing bool, so the hollow and struck legs fail by name)
+
+
+## PINEMHI MARKS: the front corner's three states (plus
+## none). The state rides every front consumer that used to
+## carry the SCOREMARK bool: the art face's wordmark badge,
+## the panel face's chip, the detail view, and the room's
+## face-cache keys (|pmh1 / |pmh2 / |pmh3).
+const PINEMHI_MARK_NONE: int = 0
+const PINEMHI_MARK_SOLID: int = 1 ## the player holds a Personal score
+const PINEMHI_MARK_HOLLOW: int = 2 ## PINemHi supports it; no score yet
+const PINEMHI_MARK_STRUCK: int = 3 ## PINemHi certainly cannot score it
+
+
+## The HOLLOW register's ground: the game's band colour
+## drained toward the card's dark ground - the same box,
+## the colour let out of it (CardFace draws a full-strength
+## outline over it, so the corner still speaks the game's
+## colour at a glance). One function so specs, faces and
+## smokes judge one colour.
+static func pinemhi_quiet_color(band: Color) -> Color:
+	return band.lerp(Color(0.09, 0.09, 0.12), 0.62)
+
+
+## The STRUCK register's ground: drained further, toward
+## grey - the corner's colour nearly gone, under a strike.
+static func pinemhi_struck_color(band: Color) -> Color:
+	return band.lerp(Color(0.16, 0.15, 0.16), 0.72)
 
 
 ## SCOREMARK: the front mark's one truth - the game holds
 ## at least one of the PLAYER'S OWN PINemHi Personal rows
 ## (the same records map the card back reads, joined by the
-## same challenge_key). An ONLINE Best file alone earns NO
-## mark: that table still needs a scoring, which is the
-## mark's whole point. The records' "rows" ride pre-shaped
-## from PinemhiScores; an absent record or an empty row
-## list is no score.
+## same challenge_key). This bool is the SOLID state of the
+## three-state corner (pinemhi_mark_state, below): an
+## ONLINE Best file alone earns no SOLID mark - it earns
+## the HOLLOW one, "supported, go set one". The records'
+## "rows" ride pre-shaped from PinemhiScores; an absent
+## record or an empty row list is no score.
 static func pinemhi_marked(game: GameEntry, personal: Dictionary, best: Dictionary) -> bool:
 	if scoremark_nc == "ghostmark":
 		return true
 	var map: Dictionary = best if scoremark_nc == "bestkey" else personal
 	var rec: Dictionary = map.get(PinemhiScores.challenge_key(game.title), {}) as Dictionary
 	return not (rec.get("rows", []) as Array).is_empty()
+
+
+## PINEMHI MARKS: the corner's state for one game, from the
+## evidence the install actually carries. The honesty rule
+## is the function's shape:
+## - SOLID needs the player's own rows (pinemhi_marked) and
+##   wins over every other evidence - a held score beats a
+##   support list that forgot the game.
+## - HOLLOW needs POSITIVE support evidence: a TOP10_Best
+##   record for the game (PINemHi's server keeps a board
+##   only where scores can exist; the monitor downloads it
+##   into the player's own install), or the game's rom
+##   named in a supported-roms source when one is wired.
+## - STRUCK needs CERTAINTY of non-support: a supported-
+##   roms source EXISTS, the game's rom is KNOWN, and the
+##   rom is absent from it. Absence alone never strikes -
+##   and a rom-less game (rom == "") can never be struck,
+##   because PINemHi reaches some rom-less games through
+##   the USER folder. Note what is NOT evidence: romfind
+##   (the vpinmame name-conversion table) lists every rom,
+##   including unscored ones - Laser Cue stands in it - so
+##   it proves nothing either way and is never consulted.
+## - Anything else is UNMARKED. When PINemHi is off or its
+##   folder is missing, Main pushes empty maps and every
+##   game lands here (or SOLID, which needs the same maps)
+##   - exactly the pre-MARKS behaviour.
+## Production wiring passes NO supported-roms source (the
+## default empty map): no install file records the
+## supported set, so STRUCK is unreachable in the field
+## until a source is ruled in (STATUS.md carries the
+## survey). The fixtures pass a source and prove the legs.
+static func pinemhi_mark_state(game: GameEntry, personal: Dictionary, best: Dictionary, supported_roms: Dictionary = {}, game_rom: String = "") -> int:
+	if marks_nc == "bool":
+		return PINEMHI_MARK_SOLID if pinemhi_marked(game, personal, best) else PINEMHI_MARK_NONE
+	if pinemhi_marked(game, personal, best):
+		return PINEMHI_MARK_SOLID
+	var best_rec: Dictionary = best.get(PinemhiScores.challenge_key(game.title), {}) as Dictionary
+	if not (best_rec.get("rows", []) as Array).is_empty():
+		return PINEMHI_MARK_HOLLOW
+	if not supported_roms.is_empty() and game_rom != "":
+		return PINEMHI_MARK_HOLLOW if supported_roms.has(game_rom) else PINEMHI_MARK_STRUCK
+	return PINEMHI_MARK_NONE
 
 static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}, submit_hint: bool = false) -> Dictionary:
 	var rows: Array = []

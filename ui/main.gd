@@ -699,6 +699,11 @@ func _ready() -> void:
 	if user_args.has("--pvlds-core-test"):
 		_run_core_test()
 		return
+	if user_args.has("--pvlds-smoke-pinemhi-marks"):
+		# Deferred: the factory's capture awaits frames, and a
+		# runner suspended inside _ready never sees them.
+		_run_pinemhi_marks_smoke.call_deferred()
+		return
 	var stats_idx: int = user_args.find("--pvlds-db-stats")
 	if stats_idx >= 0 and stats_idx + 1 < user_args.size():
 		_run_db_stats(user_args[stats_idx + 1])
@@ -972,6 +977,7 @@ func _ready() -> void:
 	# face's disc and the panel chip's "PINEMHI BEST" - so
 	# the wordmark legs fail by name. Same seam shape.
 	RoomSpecs.markword_nc = OS.get_environment("PVLDS_MARKWORD_NC")
+	RoomSpecs.marks_nc = OS.get_environment("PVLDS_MARKS_NC")
 	# GRADFIX8's tournie-border negative-control seam
 	# (PVLDS_GRADFIX8_NC=noborder): borders are never
 	# applied, so the census's tourney-border legs fail
@@ -17857,20 +17863,21 @@ func _finish_cardback_smoke() -> void:
 ## exact capitalization - no OCR); the detail view's
 ## inheritance is judged on its standing big face; and a
 ## heal leg pushes new rows at the standing room - a
-## first score for Indy raises its mark, Apollo's rows
-## leaving drops its mark, no rescan anywhere. Under
+## first score for Indy raises it to SOLID, Apollo's
+## Personal rows leaving drops it to HOLLOW (its Best
+## file still stands), no rescan anywhere. Under
 ## PVLDS_SCOREMARK_NC=bestkey the flag keys on the Best
-## rows, so Johnny gains a mark and the semantic legs
+## rows, so Johnny gains a SOLID mark and the semantic legs
 ## fail by name; under =ghostmark every game is marked
 ## and the scoreless legs fail; under
 ## PVLDS_MARKWORD_NC=hash1 the "#1" glyph stands again
 ## and the wordmark legs fail by name.
 const SM_TARGETS: Dictionary = {
-	"dhgyex0l": true, # Apollo 13 - Personal (the real file) + Best
-	"0-GeiE03": true, # Congo - Personal + Best, PuP
-	"1vJ_ZQYe": true, # Beetlejuice - Personal (a full 10) + Best
-	"-SbeVjPA": false, # Johnny Mnemonic - a Best file ONLY: NO mark (the semantic leg)
-	"lkSumsrF": false, # Indiana Jones - no PINemHi files at all
+	"dhgyex0l": 1, # Apollo 13 - Personal (the real file) + Best: SOLID (PINEMHI MARKS states)
+	"0-GeiE03": 1, # Congo - Personal + Best, PuP: SOLID
+	"1vJ_ZQYe": 1, # Beetlejuice - Personal (a full 10) + Best: SOLID
+	"-SbeVjPA": 2, # Johnny Mnemonic - a Best file ONLY: HOLLOW (the MARKS semantic leg; the SCOREMARK-era bool demanded NO mark here)
+	"lkSumsrF": 0, # Indiana Jones - no PINemHi files at all: UNMARKED
 }
 
 
@@ -17932,29 +17939,41 @@ func _sm_count_in(img: Image, rect: Rect2i, target: Color, tol: float) -> int:
 
 
 ## One standing wall face: its face key's pmh segment and
-## its rendered chip, judged against the fixture truth.
-func _sm_judge_standing(game_id: String, marked: bool) -> void:
+## its rendered chip, judged against the fixture truth
+## (PINEMHI MARKS: the truth is the corner's STATE).
+func _sm_judge_standing(game_id: String, state: int) -> void:
 	var game: GameEntry = _sm_game(game_id)
 	var idx: int = _sm_visible_idx(game_id)
 	if game == null or idx < 0:
 		_sm_expect(false, "fixture game %s never stood on the wall" % game_id)
 		return
 	var key: String = str(_room._panel_face_key.get(game_id, ""))
-	_sm_expect(key.ends_with("|pmh") == marked,
-		"the standing face key of %s %s the pmh segment (key '%s')" % [game.title, "carries" if marked else "carries NO", key])
+	if state == RoomSpecs.PINEMHI_MARK_NONE:
+		_sm_expect(not key.contains("|pmh"),
+			"the standing face key of %s carries NO pmh segment (key '%s')" % [game.title, key])
+	else:
+		_sm_expect(key.ends_with("|pmh" + str(state)),
+			"the standing face key of %s carries the |pmh%d segment (key '%s')" % [game.title, state, key])
 	var tex: Texture2D = (_room._panels[idx] as ClickableQuad).current_texture()
 	var img: Image = tex.get_image() if tex != null else null
 	_sm_expect(img != null and not img.is_empty(), "the standing face of %s reads as an image" % game.title)
 	if img == null or img.is_empty():
 		return
 	# The chips band (below the maker band, above the
-	# file line): the PINemHi chip's ground is the
-	# game's band colour - one flat run when it stands.
-	var run: int = _sm_max_run(img, 95, 430, RoomSpecs.manufacturer_color(game.manufacturer), 0.03)
-	if marked:
-		_sm_expect(run >= 40, "%s: the PINemHi chip stands on the rendered standing face (band-colour run %d px)" % [game.title, run])
-	else:
-		_sm_expect(run < 40, "%s: NO PINemHi chip on the rendered standing face (band-colour run %d px)" % [game.title, run])
+	# file line): the PINemHi chip's ground is the game's
+	# band colour at the state's register - SOLID one flat
+	# full-strength run; HOLLOW the drained ground's run
+	# and NO full-strength run; UNMARKED neither.
+	var band: Color = RoomSpecs.manufacturer_color(game.manufacturer)
+	var run: int = _sm_max_run(img, 95, 430, band, 0.03)
+	var quiet_run: int = _sm_max_run(img, 95, 430, RoomSpecs.pinemhi_quiet_color(band), 0.03)
+	match state:
+		RoomSpecs.PINEMHI_MARK_SOLID:
+			_sm_expect(run >= 40, "%s: the SOLID PINemHi chip stands on the rendered standing face (band-colour run %d px)" % [game.title, run])
+		RoomSpecs.PINEMHI_MARK_HOLLOW:
+			_sm_expect(run < 40 and quiet_run >= 40, "%s: the HOLLOW PINemHi chip stands drained on the rendered standing face (full run %d px, drained run %d px)" % [game.title, run, quiet_run])
+		_:
+			_sm_expect(run < 40 and quiet_run < 40, "%s: NO PINemHi chip on the rendered standing face (band-colour run %d px, drained run %d px)" % [game.title, run, quiet_run])
 
 
 ## The art citizen: each fixture game's front rendered
@@ -17979,10 +17998,10 @@ func _sm_judge_art() -> void:
 		if game == null:
 			_sm_expect(false, "art face: fixture game %s never stood on the wall" % gid)
 			continue
-		var marked: bool = bool(SM_TARGETS[gid])
+		var state: int = int(SM_TARGETS[gid])
 		var col: Color = RoomSpecs.manufacturer_color(game.manufacturer)
-		var flag: bool = _room._has_pinemhi_score(game)
-		_sm_expect(flag == marked, "art face: the room's mark flag for %s reads %s" % [game.title, str(marked)])
+		var flag: int = _room._pinemhi_mark(game)
+		_sm_expect(flag == state, "art face: the room's mark state for %s reads %s" % [game.title, str(state)])
 		var spec: Dictionary = RoomSpecs.art_spec(game, art_tex, _room._store, false, flag)
 		var tex: Texture2D = await _room._factory.render_texture(spec, Vector2i(496, 864))
 		_sm_expect(tex != null, "art face: %s renders at wall size" % game.title)
@@ -17993,22 +18012,31 @@ func _sm_judge_art() -> void:
 			# the white word inside the badge's own rect.
 			var ground: int = _sm_count_in(img, Rect2i(10, 798, 164, 56), col, 0.03)
 			var word: int = _sm_count_in(img, Rect2i(24, 810, 136, 34), Color(0.98, 0.98, 1.0), 0.06)
-			if marked:
-				_sm_expect(ground >= 2500 and word >= 400,
-					"art face: %s carries the PINemHi wordmark badge in its band colour (%d ground px, %d word px)" % [game.title, ground, word])
-			else:
-				_sm_expect(ground < 40 and word == 0,
-					"art face: %s carries NO wordmark badge (%d ground px, %d word px)" % [game.title, ground, word])
+			match state:
+				RoomSpecs.PINEMHI_MARK_SOLID:
+					_sm_expect(ground >= 2500 and word >= 400,
+						"art face: %s carries the SOLID PINemHi wordmark badge in its band colour (%d ground px, %d word px)" % [game.title, ground, word])
+				RoomSpecs.PINEMHI_MARK_HOLLOW:
+					# The drained ground fills the seat, the
+					# full band colour survives only as the
+					# outline, the word stands soft-white.
+					var qground: int = _sm_count_in(img, Rect2i(10, 798, 164, 56), RoomSpecs.pinemhi_quiet_color(col), 0.03)
+					var qword: int = _sm_count_in(img, Rect2i(24, 810, 136, 34), Color(0.88, 0.89, 0.94), 0.06)
+					_sm_expect(qground >= 2200 and ground >= 150 and ground < 1200 and qword >= 300,
+						"art face: %s carries the HOLLOW wordmark badge - drained ground, band-colour outline, soft word (%d drained px, %d outline px, %d word px)" % [game.title, qground, ground, qword])
+				_:
+					_sm_expect(ground < 40 and word == 0,
+						"art face: %s carries NO wordmark badge (%d ground px, %d word px)" % [game.title, ground, word])
 			# The word itself, from the label's state on
 			# the factory's face - the render path's own
 			# witness, exact capitalization, no OCR. Under
 			# PVLDS_MARKWORD_NC=hash1 the label reads "#1"
-			# and this leg fails by name.
+			# (SOLID badges) and this leg fails by name.
 			var face: CardFace = _room._factory._face as CardFace
-			_sm_expect(face != null and face._art_score.visible == marked \
+			_sm_expect(face != null and face._art_score.visible == (state != RoomSpecs.PINEMHI_MARK_NONE) \
 					and face._art_score_label.text == "PINemHi",
 				"wordmark: the art badge's label on %s's rendered face reads 'PINemHi' exactly and the badge stands %s (label '%s')" % [
-					game.title, str(marked),
+					game.title, str(state != RoomSpecs.PINEMHI_MARK_NONE),
 					face._art_score_label.text if face != null else "<no face>"])
 			if grab_dir != "":
 				img.save_png(grab_dir.path_join("face_" + gid + ".png"))
@@ -18018,10 +18046,14 @@ func _sm_judge_art() -> void:
 		if dtex != null:
 			var dimg: Image = dtex.get_image()
 			var dground: int = _sm_count_in(dimg, Rect2i(10, 734, 164, 56), col, 0.03)
-			if marked:
-				_sm_expect(dground >= 2500, "detail-size art face: %s carries the wordmark badge (%d ground px)" % [game.title, dground])
-			else:
-				_sm_expect(dground < 40, "detail-size art face: %s carries NO wordmark badge (%d ground px)" % [game.title, dground])
+			match state:
+				RoomSpecs.PINEMHI_MARK_SOLID:
+					_sm_expect(dground >= 2500, "detail-size art face: %s carries the SOLID wordmark badge (%d ground px)" % [game.title, dground])
+				RoomSpecs.PINEMHI_MARK_HOLLOW:
+					var dqground: int = _sm_count_in(dimg, Rect2i(10, 734, 164, 56), RoomSpecs.pinemhi_quiet_color(col), 0.03)
+					_sm_expect(dqground >= 2200 and dground < 1200, "detail-size art face: %s carries the HOLLOW wordmark badge (%d drained px, %d outline px)" % [game.title, dqground, dground])
+				_:
+					_sm_expect(dground < 40, "detail-size art face: %s carries NO wordmark badge (%d ground px)" % [game.title, dground])
 	_sm_judged = true
 
 
@@ -18035,10 +18067,10 @@ func _sm_judge_detail() -> void:
 		if game == null:
 			_sm_expect(false, "detail: fixture game %s never stood on the wall" % game_id)
 			continue
-		var marked: bool = bool(SM_TARGETS[game_id])
+		var state: int = int(SM_TARGETS[game_id])
 		_room._open_detail(game)
-		_sm_expect(_room._detail._scoremark == marked,
-			"detail: the room handed the detail view the mark state %s for %s" % [str(marked), game.title])
+		_sm_expect(_room._detail._scoremark == state,
+			"detail: the room handed the detail view the mark state %s for %s" % [str(state), game.title])
 		var first_tex: Texture2D = null
 		var big: Texture2D = null
 		for i: int in range(1200):
@@ -18062,12 +18094,18 @@ func _sm_judge_detail() -> void:
 			var col: Color = RoomSpecs.manufacturer_color(game.manufacturer)
 			var run: int = _sm_max_run(img, 95, 430, col, 0.03)
 			var badge: int = _sm_count_in(img, Rect2i(10, 734, 164, 56), col, 0.03)
-			if marked:
-				_sm_expect(run >= 40 or badge >= 2500,
-					"detail: the detail view's front for %s carries the mark (chip run %d px, badge %d px)" % [game.title, run, badge])
-			else:
-				_sm_expect(run < 40 and badge < 40,
-					"detail: the detail view's front for %s carries NO mark (chip run %d px, badge %d px)" % [game.title, run, badge])
+			match state:
+				RoomSpecs.PINEMHI_MARK_SOLID:
+					_sm_expect(run >= 40 or badge >= 2500,
+						"detail: the detail view's front for %s carries the SOLID mark (chip run %d px, badge %d px)" % [game.title, run, badge])
+				RoomSpecs.PINEMHI_MARK_HOLLOW:
+					var qrun: int = _sm_max_run(img, 95, 430, RoomSpecs.pinemhi_quiet_color(col), 0.03)
+					var qbadge: int = _sm_count_in(img, Rect2i(10, 734, 164, 56), RoomSpecs.pinemhi_quiet_color(col), 0.03)
+					_sm_expect(qrun >= 40 or qbadge >= 2200,
+						"detail: the detail view's front for %s carries the HOLLOW mark (drained chip run %d px, drained badge %d px)" % [game.title, qrun, qbadge])
+				_:
+					_sm_expect(run < 40 and badge < 40,
+						"detail: the detail view's front for %s carries NO mark (chip run %d px, badge %d px)" % [game.title, run, badge])
 			var grab_dir: String = OS.get_environment("PVLDS_SCOREMARK_GRABS")
 			if grab_dir != "":
 				img.save_png(grab_dir.path_join("detail_" + game_id + ".png"))
@@ -18091,7 +18129,7 @@ func _drive_scoremark_smoke() -> void:
 					_finish_scoremark_smoke()
 		1:
 			for game_id: Variant in SM_TARGETS.keys():
-				_sm_judge_standing(str(game_id), bool(SM_TARGETS[game_id]))
+				_sm_judge_standing(str(game_id), int(SM_TARGETS[game_id]))
 			_sm_judged = false
 			_sm_judge_art()
 			_sm_phase = 2
@@ -18128,9 +18166,9 @@ func _drive_scoremark_smoke() -> void:
 		4:
 			_sm_wait += 1
 			var ikey_now: String = str(_room._panel_face_key.get("lkSumsrF", ""))
-			if ikey_now.ends_with("|pmh"):
-				_sm_judge_standing("lkSumsrF", true)
-				_sm_expect(true, "heal: a rows push adding Indiana Jones's first score raised its standing mark without a rescan")
+			if ikey_now.ends_with("|pmh1"):
+				_sm_judge_standing("lkSumsrF", RoomSpecs.PINEMHI_MARK_SOLID)
+				_sm_expect(true, "heal: a rows push adding Indiana Jones's first score raised its standing mark to SOLID without a rescan")
 				# The second push: Apollo's rows leave.
 				var apollo: GameEntry = _sm_game("dhgyex0l")
 				var akey: String = PinemhiScores.challenge_key(apollo.title)
@@ -18145,12 +18183,12 @@ func _drive_scoremark_smoke() -> void:
 		5:
 			_sm_wait += 1
 			var akey_now: String = str(_room._panel_face_key.get("dhgyex0l", ""))
-			if not akey_now.ends_with("|pmh"):
-				_sm_judge_standing("dhgyex0l", false)
-				_sm_expect(true, "heal: a rows push removing Apollo 13's rows dropped its standing mark without a rescan")
+			if akey_now.ends_with("|pmh2"):
+				_sm_judge_standing("dhgyex0l", RoomSpecs.PINEMHI_MARK_HOLLOW)
+				_sm_expect(true, "heal: a rows push removing Apollo 13's Personal rows dropped its standing mark to HOLLOW (the Best file stands) without a rescan")
 				_finish_scoremark_smoke()
 			elif _sm_wait > 1800:
-				_sm_expect(false, "heal: Apollo's standing mark never dropped after the rows push (key '%s')" % akey_now)
+				_sm_expect(false, "heal: Apollo's standing mark never dropped to HOLLOW after the rows push (key '%s')" % akey_now)
 				_finish_scoremark_smoke()
 
 
@@ -18163,6 +18201,159 @@ func _finish_scoremark_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS SCOREMARK SMOKE: FAIL (%d)" % _sm_failures)
+		get_tree().quit(1)
+
+
+## PINEMHI MARKS smoke (--pvlds-smoke-pinemhi-marks): the
+## three-state corner judged without a room - the state
+## function's legs over fixture evidence maps, the same
+## legs driven through PinemhiScores' own loaders on a
+## fixture folder built from Chris's REAL files, and the
+## three registers rendered through the factory at wall
+## size (grabs land in PVLDS_MARKS_GRABS). Under
+## PVLDS_MARKS_NC=bool the state collapses to the old
+## solid-or-nothing bool and the hollow + struck legs fail
+## by name (the renders derive their marks from the state
+## function, so they fail with them).
+func _run_pinemhi_marks_smoke() -> void:
+	print("PVLDS PINEMHI MARKS SMOKE")
+	var failures: Array[String] = []
+	# The early-return path runs before _ready's seam block:
+	# wire this round's own seam here.
+	RoomSpecs.marks_nc = OS.get_environment("PVLDS_MARKS_NC")
+	_factory = TextureFactory.new()
+	add_child(_factory)
+	var row1: Array = [{"rank": 1, "score": 1000, "score_text": "1,000", "player": "Kubrick", "when": "2026-07-06 20:15:24"}]
+	var mk_game := func(title: String, maker: String) -> GameEntry:
+		var g: GameEntry = GameEntry.new()
+		g.game_id = PinemhiScores.title_key(title)
+		g.title = title
+		g.manufacturer = maker
+		g.year = 1990
+		return g
+	var g_solid: GameEntry = mk_game.call("Apollo 13", "Sega")
+	var g_hollow: GameEntry = mk_game.call("Deadly Weapon", "Gottlieb")
+	var g_struck: GameEntry = mk_game.call("Laser Cue", "Williams")
+	var g_romless: GameEntry = mk_game.call("Original Nights", "Original")
+	var g_unknown: GameEntry = mk_game.call("Unmatched Game", "Williams")
+	var k_solid: String = PinemhiScores.challenge_key(g_solid.title)
+	var k_hollow: String = PinemhiScores.challenge_key(g_hollow.title)
+	var personal: Dictionary = {k_solid: {"title": g_solid.title, "rows": row1}}
+	var best: Dictionary = {
+		k_solid: {"title": g_solid.title, "rows": row1},
+		k_hollow: {"title": g_hollow.title, "rows": row1},
+	}
+	var supported: Dictionary = {"deadweap": true, "whirl": true}
+	# The semantics legs (pure, over the fixture maps).
+	_expect(RoomSpecs.pinemhi_mark_state(g_solid, personal, best) == RoomSpecs.PINEMHI_MARK_SOLID,
+		"marks: a game holding Personal rows is SOLID", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_solid, personal, best, supported, "apollo13") == RoomSpecs.PINEMHI_MARK_SOLID,
+		"marks: SOLID wins over a supported source that lacks the game's rom (score beats romfind-style absence)", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_hollow, {}, best) == RoomSpecs.PINEMHI_MARK_HOLLOW,
+		"marks: a Best record with no score is HOLLOW (supported, go set one)", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_hollow, {}, {}, supported, "deadweap") == RoomSpecs.PINEMHI_MARK_HOLLOW,
+		"marks: a rom named by a supported source is HOLLOW", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_struck, {}, {}, supported, "lsrcu_l3") == RoomSpecs.PINEMHI_MARK_STRUCK,
+		"marks: a known rom absent from a supported source is STRUCK", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_romless, {}, {}, supported, "") == RoomSpecs.PINEMHI_MARK_NONE,
+		"marks: a rom-less game is NEVER struck - unmarked", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_unknown, {}, {}, supported, "") == RoomSpecs.PINEMHI_MARK_NONE,
+		"marks: a game unmatched to any rom evidence is unmarked, NOT struck", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_unknown, {}, {}, {}, "unknown_rom") == RoomSpecs.PINEMHI_MARK_NONE,
+		"marks: with NO supported source, absence strikes nothing", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_hollow, {}, {}) == RoomSpecs.PINEMHI_MARK_NONE,
+		"marks: empty maps (PINemHi off / folder missing) keep the old solid-or-nothing behaviour", failures)
+	# The FS legs: a fixture install built from the REAL
+	# files, read back through PinemhiScores' own loaders.
+	var root: String = ProjectSettings.globalize_path("user://marks_fixture")
+	DirAccess.make_dir_recursive_absolute(root.path_join("PINemHi LeaderBoard").path_join("TOP10_Personal"))
+	DirAccess.make_dir_recursive_absolute(root.path_join("PINemHi LeaderBoard").path_join("TOP10_Best"))
+	_write_text_file(root.path_join("PINemHi LeaderBoard").path_join("TOP10_Personal").path_join("apollo13.txt"),
+		"PINEMHI ONLINE LEADERBOARD\n\n<<< Apollo 13 >>>\n\n\nTOP 10 Personal Best Scores\n1   1.638.803.870      Kubrick  2026-07-06 20:15:24\n2   1.333.372.730      Kubrick  2026-03-24 23:24:23\n")
+	_write_text_file(root.path_join("PINemHi LeaderBoard").path_join("TOP10_Best").path_join("deadweap.txt"),
+		"PINEMHI ONLINE LEADERBOARD\n\n<<< Deadly Weapon >>>\n\n\nTOP 10 Highest Scores\n1   71.748.000               xlDenislx  2025-11-25 07:45:32\n2   47.417.900       ALE 54 (VPA Team)  2025-11-23 22:30:40\n")
+	# The conviction, as a fixture: romfind.ini in the same
+	# folder NAMES Laser Cue (the published lines) - and the
+	# loaders + state below must draw nothing from it.
+	_write_text_file(root.path_join("romfind.ini"),
+		"Deadly Weapon=deadweap.nv\nLaser Cue (L-2)=lsrcu_l2.nv\nLaser Cue (L-3)=lsrcu_l3.nv\n")
+	var fs_personal: Dictionary = PinemhiScores.load_folder_rows(root)
+	var fs_best: Dictionary = PinemhiScores.load_folder_best_rows(root)
+	_expect(fs_personal.has(k_solid) and fs_best.has(k_hollow),
+		"marks: the real-file fixture loads (Apollo Personal, Deadly Weapon Best)", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_solid, fs_personal, fs_best) == RoomSpecs.PINEMHI_MARK_SOLID,
+		"marks: through the real files, Apollo 13 is SOLID", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_hollow, fs_personal, fs_best) == RoomSpecs.PINEMHI_MARK_HOLLOW,
+		"marks: through the real files, Deadly Weapon is HOLLOW", failures)
+	_expect(RoomSpecs.pinemhi_mark_state(g_struck, fs_personal, fs_best) == RoomSpecs.PINEMHI_MARK_NONE,
+		"marks: Laser Cue stands UNMARKED in production wiring - romfind names it, no Best file stands, no source is wired (never hollow, never struck on this evidence)", failures)
+	# The render legs: the three registers at wall size,
+	# marks derived from the state function itself.
+	var art_img: Image = Image.create(496, 864, false, Image.FORMAT_RGBA8)
+	art_img.fill(Color(0.32, 0.30, 0.27))
+	var art_tex: Texture2D = ImageTexture.create_from_image(art_img)
+	var grab_dir: String = OS.get_environment("PVLDS_MARKS_GRABS")
+	if grab_dir != "":
+		DirAccess.make_dir_recursive_absolute(grab_dir)
+	var band: Color = RoomSpecs.manufacturer_color(g_struck.manufacturer)
+	var render_marks: Dictionary = {
+		RoomSpecs.PINEMHI_MARK_SOLID: RoomSpecs.pinemhi_mark_state(g_solid, fs_personal, fs_best),
+		RoomSpecs.PINEMHI_MARK_HOLLOW: RoomSpecs.pinemhi_mark_state(g_hollow, fs_personal, fs_best),
+		RoomSpecs.PINEMHI_MARK_STRUCK: RoomSpecs.pinemhi_mark_state(g_struck, {}, {}, supported, "lsrcu_l3"),
+	}
+	for state_v: Variant in render_marks.keys():
+		var want: int = int(state_v)
+		var got: int = int(render_marks[state_v])
+		_expect(got == want, "marks: the state function hands the render its state %d" % want, failures)
+		var spec: Dictionary = RoomSpecs.art_spec(g_struck, art_tex, null, false, got)
+		var tex: Texture2D = await _factory.render_texture(spec, Vector2i(496, 864))
+		_expect(tex != null, "marks: the state %d art face renders" % want, failures)
+		if tex == null:
+			continue
+		var img: Image = tex.get_image()
+		var badge_rect: Rect2i = Rect2i(10, 798, 164, 56)
+		match want:
+			RoomSpecs.PINEMHI_MARK_SOLID:
+				_expect(_sm_count_in(img, badge_rect, band, 0.03) >= 2500 and _sm_count_in(img, Rect2i(24, 810, 136, 34), Color(0.98, 0.98, 1.0), 0.06) >= 400,
+					"marks: the SOLID badge renders flat band colour + white word", failures)
+			RoomSpecs.PINEMHI_MARK_HOLLOW:
+				_expect(_sm_count_in(img, badge_rect, RoomSpecs.pinemhi_quiet_color(band), 0.03) >= 2200,
+					"marks: the HOLLOW badge renders its drained ground", failures)
+			RoomSpecs.PINEMHI_MARK_STRUCK:
+				var line_px: int = _sm_count_in(img, Rect2i(16, 818, 152, 18), Color(0.93, 0.93, 0.96), 0.05)
+				_expect(_sm_count_in(img, badge_rect, RoomSpecs.pinemhi_struck_color(band), 0.03) >= 2200 and line_px >= 60,
+					"marks: the STRUCK badge renders its near-grey ground + the strike line (%d line px)" % line_px, failures)
+		if grab_dir != "":
+			img.save_png(grab_dir.path_join("marks_state_%d.png" % want))
+		# The panel citizen of the same state.
+		var pspec: Dictionary = RoomSpecs.panel_spec(g_struck, null, got)
+		var ptex: Texture2D = await _factory.render_texture(pspec, Vector2i(496, 864))
+		_expect(ptex != null, "marks: the state %d panel face renders" % want, failures)
+		if ptex != null:
+			var pimg: Image = ptex.get_image()
+			match want:
+				RoomSpecs.PINEMHI_MARK_SOLID:
+					_expect(_sm_max_run(pimg, 95, 430, band, 0.03) >= 40,
+						"marks: the SOLID chip renders its full-strength run", failures)
+				RoomSpecs.PINEMHI_MARK_HOLLOW:
+					# The outline is full band BY DESIGN; the
+					# drained claim is judged on the chip's
+					# middle rows (232-248, measured off the
+					# grab: the chip spans ~213-267), which
+					# cross only the 2px side outlines and
+					# the ground.
+					_expect(_sm_max_run(pimg, 232, 248, band, 0.03) < 40 and _sm_max_run(pimg, 95, 430, RoomSpecs.pinemhi_quiet_color(band), 0.03) >= 40,
+						"marks: the HOLLOW chip renders drained, no full-strength run", failures)
+				RoomSpecs.PINEMHI_MARK_STRUCK:
+					_expect(_sm_max_run(pimg, 95, 430, RoomSpecs.pinemhi_struck_color(band), 0.03) >= 40,
+						"marks: the STRUCK chip renders its near-grey run", failures)
+			if grab_dir != "":
+				pimg.save_png(grab_dir.path_join("marks_panel_%d.png" % want))
+	if failures.is_empty():
+		print("PVLDS PINEMHI MARKS SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS PINEMHI MARKS SMOKE: FAIL (%d)" % failures.size())
 		get_tree().quit(1)
 
 
@@ -25315,6 +25506,7 @@ func _run_core_test() -> void:
 	RoomSpecs.oneten_nc = OS.get_environment("PVLDS_ONETEN_NC")
 	RoomSpecs.scoremark_nc = OS.get_environment("PVLDS_SCOREMARK_NC")
 	RoomSpecs.markword_nc = OS.get_environment("PVLDS_MARKWORD_NC")
+	RoomSpecs.marks_nc = OS.get_environment("PVLDS_MARKS_NC")
 	_expect(IpdbFacts.ipdb_id_from_url("https://www.ipdb.org/machine.cgi?id=1267") == 1267,
 		"cardback: the IPDB id parses out of the db's ipdbUrl", failures)
 	_expect(IpdbFacts.ipdb_id_from_url("") == 0 and IpdbFacts.ipdb_id_from_url("https://example.com/x") == 0,
@@ -25595,12 +25787,12 @@ func _run_core_test() -> void:
 	# The specs carry the flag + the band colour; the
 	# defaults carry neither (every existing caller is
 	# untouched).
-	var sm_art: Dictionary = RoomSpecs.art_spec(bf_game, null, null, true, true)
-	_expect(bool(sm_art.get("scoremark", false)) and (sm_art.get("scoremark_color", Color()) as Color) == RoomSpecs.manufacturer_color(bf_game.manufacturer),
+	var sm_art: Dictionary = RoomSpecs.art_spec(bf_game, null, null, true, RoomSpecs.PINEMHI_MARK_SOLID)
+	_expect(int(sm_art.get("scoremark", 0)) == RoomSpecs.PINEMHI_MARK_SOLID and (sm_art.get("scoremark_color", Color()) as Color) == RoomSpecs.manufacturer_color(bf_game.manufacturer),
 		"scoremark: the art spec carries the mark in the game's own back-band colour", failures)
-	_expect(not bool(RoomSpecs.art_spec(bf_game, null, null).get("scoremark", true)),
+	_expect(int(RoomSpecs.art_spec(bf_game, null, null).get("scoremark", -1)) == RoomSpecs.PINEMHI_MARK_NONE,
 		"scoremark: the art spec's default carries no mark", failures)
-	var sm_panel: Dictionary = RoomSpecs.panel_spec(bf_game, null, true)
+	var sm_panel: Dictionary = RoomSpecs.panel_spec(bf_game, null, RoomSpecs.PINEMHI_MARK_SOLID)
 	var sm_chip_found: bool = false
 	var sm_chip_color_ok: bool = false
 	for cv: Variant in (sm_panel.get("chips", []) as Array):

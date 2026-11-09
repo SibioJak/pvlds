@@ -133,9 +133,21 @@ var _art_fav: PanelContainer
 var _art_fav_label: Label
 var _art_pup: PanelContainer ## art kind (GRADFIX6): the PuP badge, top-left (the star's opposite corner)
 var _art_pup_label: Label
-var _art_score: PanelContainer ## art kind (SCOREMARK, glyph MARKWORD): the PINemHi wordmark badge, bottom-left (the free corner: star top-right, PuP top-left, the nameplate's plate rides the lower-middle band). A badge in the PuP badge's discipline - ground in the game's OWN back-band colour (RoomSpecs.manufacturer_color - the colour the flipped back's PINEMHI band wears), white text reading "PINemHi" in the service's own capitalization (MARKWORD: the retired "#1" medallion misread as a ranking; the word cannot). Stands only when the game holds the player's own PINemHi Personal rows.
+var _art_score: PanelContainer ## art kind (SCOREMARK, glyph MARKWORD; states PINEMHI MARKS): the PINemHi wordmark badge, bottom-left (the free corner: star top-right, PuP top-left, the nameplate's plate rides the lower-middle band). A badge in the PuP badge's discipline - ground in the game's OWN back-band colour family (RoomSpecs.manufacturer_color - the colour the flipped back's PINEMHI band wears), white text reading "PINemHi" in the service's own capitalization (MARKWORD: the retired "#1" medallion misread as a ranking; the word cannot). PINEMHI MARKS: the badge's register carries the corner's state - SOLID flat band colour (the player holds a score), HOLLOW drained ground + full-colour outline (supported, no score yet), STRUCK near-grey ground + a strike line (cannot be scored).
 var _art_score_label: Label
+var _art_score_strike: StrikeLine ## art kind (PINEMHI MARKS): the STRUCK register's line across the badge; stands only at mark state 3
 var _label_stock: Array = [] ## [label, autowrap, max_lines, overrun] per text label, for per-spec restore
+
+
+## PINEMHI MARKS: the STRUCK badge's strike - one light line
+## drawn across the badge's face, slightly downhill. A
+## dedicated Control because a Label has no strike of its
+## own; the badge's PanelContainer stretches it full-rect.
+class StrikeLine:
+	extends Control
+	func _draw() -> void:
+		draw_line(Vector2(5.0, size.y * 0.60), Vector2(size.x - 5.0, size.y * 0.40),
+			Color(0.93, 0.93, 0.96), 4.0, true)
 
 
 func _init() -> void:
@@ -253,6 +265,10 @@ func _init() -> void:
 	_art_score_label.add_theme_font_size_override("font_size", 30)
 	_art_score_label.add_theme_color_override("font_color", Color(0.98, 0.98, 1.0))
 	_art_score.add_child(_art_score_label)
+	_art_score_strike = StrikeLine.new()
+	_art_score_strike.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_art_score_strike.visible = false
+	_art_score.add_child(_art_score_strike)
 	_art_score.visible = false
 	add_child(_art_score)
 
@@ -354,6 +370,26 @@ func _score_box(color: Color) -> StyleBoxFlat:
 	sb.content_margin_top = 6
 	sb.content_margin_bottom = 6
 	return sb
+
+
+## The PINEMHI MARKS registers of the badge's box: HOLLOW
+## keeps the SOLID box's shape and margins over the drained
+## ground (RoomSpecs.pinemhi_quiet_color), with a 2 px
+## outline in the full band colour - the word stands inside
+## a frame of the game's own colour, the fill let out.
+## STRUCK wears the near-grey ground
+## (RoomSpecs.pinemhi_struck_color), no outline; the strike
+## line over it is _art_score_strike's, asserted in
+## apply_spec.
+func _score_box_hollow(band: Color) -> StyleBoxFlat:
+	var sb: StyleBoxFlat = _score_box(RoomSpecs.pinemhi_quiet_color(band))
+	sb.set_border_width_all(2)
+	sb.border_color = band
+	return sb
+
+
+func _score_box_struck(band: Color) -> StyleBoxFlat:
+	return _score_box(RoomSpecs.pinemhi_struck_color(band))
 
 
 ## The retired medallion's style, kept ONLY behind the
@@ -517,21 +553,34 @@ func apply_spec(spec: Dictionary) -> void:
 	# name; the seat, offsets and glyph are re-asserted on
 	# every marked spec, so the seam can never leak into a
 	# later face.
-	_art_score.visible = kind == "art" and bool(spec.get("scoremark", false))
+	var mark_state: int = int(spec.get("scoremark", 0))
+	_art_score.visible = kind == "art" and mark_state != RoomSpecs.PINEMHI_MARK_NONE
+	_art_score_strike.visible = false
 	if _art_score.visible:
 		var score_col: Color = _color_of(spec, "scoremark_color", Color(0.30, 0.34, 0.60))
-		if RoomSpecs.markword_nc == "hash1":
+		if RoomSpecs.markword_nc == "hash1" and mark_state == RoomSpecs.PINEMHI_MARK_SOLID:
 			_art_score.offset_top = -68.0
 			_art_score.offset_right = 68.0
 			_art_score.add_theme_stylebox_override("panel", _score_disc_box(score_col))
 			_art_score_label.text = "#1"
 			_art_score_label.add_theme_font_size_override("font_size", 25)
+			_art_score_label.add_theme_color_override("font_color", Color(0.98, 0.98, 1.0))
 		else:
 			_art_score.offset_top = -62.0
 			_art_score.offset_right = 170.0
-			_art_score.add_theme_stylebox_override("panel", _score_box(score_col))
 			_art_score_label.text = "PINemHi"
 			_art_score_label.add_theme_font_size_override("font_size", 30)
+			match mark_state:
+				RoomSpecs.PINEMHI_MARK_HOLLOW:
+					_art_score.add_theme_stylebox_override("panel", _score_box_hollow(score_col))
+					_art_score_label.add_theme_color_override("font_color", Color(0.88, 0.89, 0.94))
+				RoomSpecs.PINEMHI_MARK_STRUCK:
+					_art_score.add_theme_stylebox_override("panel", _score_box_struck(score_col))
+					_art_score_label.add_theme_color_override("font_color", Color(0.70, 0.70, 0.74))
+					_art_score_strike.visible = true
+				_:
+					_art_score.add_theme_stylebox_override("panel", _score_box(score_col))
+					_art_score_label.add_theme_color_override("font_color", Color(0.98, 0.98, 1.0))
 	_margin.visible = kind != "art"
 	if kind == "art":
 		var tex: Variant = spec.get("art_texture", null)
@@ -679,7 +728,7 @@ func apply_spec(spec: Dictionary) -> void:
 				# absent, the accent/plain grounds stand.
 				var chip_col: Variant = cd.get("color", null)
 				_chips_row.add_child(_make_chip(str(cd.get("text", "")), bool(cd.get("accent", false)),
-					chip_col if chip_col is Color else null))
+					chip_col if chip_col is Color else null, int(cd.get("mark", 0))))
 
 	# The board kind's rows: rebuilt per spec like the chips
 	# (one CardFace serves every render, so nothing may leak
@@ -1233,14 +1282,29 @@ func _discipline_label(l: Label, max_lines: int) -> void:
 		l.autowrap_mode = TextServer.AUTOWRAP_OFF
 
 
-func _make_chip(text: String, accent: bool, ground: Variant = null) -> PanelContainer:
+func _make_chip(text: String, accent: bool, ground: Variant = null, mark: int = 0) -> PanelContainer:
 	var pc: PanelContainer = PanelContainer.new()
 	var col: Color = Color(0.55, 0.38, 0.08) if accent else Color(0.16, 0.16, 0.24)
 	var ink: Color = Color(0.97, 0.95, 0.9) if accent else Color(0.82, 0.84, 0.92)
 	if ground is Color:
 		col = ground
 		ink = Color(0.98, 0.98, 1.0)
-	pc.add_theme_stylebox_override("panel", _box(col, 8))
+		# PINEMHI MARKS: the scoremark chip wears the corner's
+		# register, same grounds as the art badge - HOLLOW
+		# drained + outlined, STRUCK near-grey + dimmed ink.
+		if mark == RoomSpecs.PINEMHI_MARK_HOLLOW:
+			var hb: StyleBoxFlat = _box(RoomSpecs.pinemhi_quiet_color(col), 8)
+			hb.set_border_width_all(2)
+			hb.border_color = col
+			pc.add_theme_stylebox_override("panel", hb)
+			ink = Color(0.88, 0.89, 0.94)
+		elif mark == RoomSpecs.PINEMHI_MARK_STRUCK:
+			pc.add_theme_stylebox_override("panel", _box(RoomSpecs.pinemhi_struck_color(col), 8))
+			ink = Color(0.70, 0.70, 0.74)
+		else:
+			pc.add_theme_stylebox_override("panel", _box(col, 8))
+	else:
+		pc.add_theme_stylebox_override("panel", _box(col, 8))
 	var l: Label = Label.new()
 	l.text = text
 	l.add_theme_font_size_override("font_size", 28)

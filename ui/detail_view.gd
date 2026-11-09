@@ -22,7 +22,7 @@ const MAX_ROWS: int = 6
 var _factory: TextureFactory
 var _store: StateStore
 var _game: GameEntry = null
-var _scoremark: bool = false ## SCOREMARK: the front mark's state for the opened game (set via set_scoremark before show_game)
+var _scoremark: int = 0 ## SCOREMARK (states PINEMHI MARKS): the front corner's state for the opened game (set via set_scoremark before show_game)
 var _selected_path: String = ""
 var _once_path: String = ""
 var _gen: int = 0
@@ -43,13 +43,14 @@ func setup(factory: TextureFactory, store: StateStore) -> void:
 	visible = false
 
 
-## SCOREMARK: the room hands the front mark's state for
-## the game being opened (Room._has_pinemhi_score) before
-## show_game renders - the detail front inherits the
-## wall's marks exactly as it inherits the star and the
-## PuP badge (the spec builders carry all three).
-func set_scoremark(on: bool) -> void:
-	_scoremark = on
+## SCOREMARK (states PINEMHI MARKS): the room hands the
+## front corner's state for the game being opened
+## (Room._pinemhi_mark) before show_game renders - the
+## detail front inherits the wall's marks exactly as it
+## inherits the star and the PuP badge (the spec builders
+## carry all three).
+func set_scoremark(mark: int) -> void:
+	_scoremark = mark
 
 
 func is_open() -> bool:
