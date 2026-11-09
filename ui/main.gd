@@ -17929,6 +17929,31 @@ func _sm_max_run(img: Image, y0: int, y1: int, target: Color, tol: float) -> int
 	return best
 
 
+## The full-colour (target) run on the middle row of the
+## chip whose ground is `ground`: the rows carrying a
+## ground run of 40+ px span the chip, and its middle row
+## crosses only the chip's interior (ground, glyphs, the
+## 2 px side outlines) - never the outline's horizontal
+## edges, which span the chip's whole width BY DESIGN.
+## Returns -1 when no ground row stands in the band.
+## (PINEMHI MARKS adjudication: a whole-band max-run scan
+## convicts the HOLLOW outline's edges, not its ground -
+## the marks smoke's own panel leg judges the chip's
+## middle rows for the same reason.)
+func _sm_chip_middle_run(img: Image, y0: int, y1: int, ground: Color, target: Color, tol: float) -> int:
+	var first: int = -1
+	var last: int = -1
+	for y: int in range(y0, mini(y1, img.get_height())):
+		if _sm_max_run(img, y, y + 1, ground, tol) >= 40:
+			if first < 0:
+				first = y
+			last = y
+	if first < 0:
+		return -1
+	var mid: int = (first + last) / 2
+	return _sm_max_run(img, mid, mid + 1, target, tol)
+
+
 func _sm_count_in(img: Image, rect: Rect2i, target: Color, tol: float) -> int:
 	var n: int = 0
 	for y: int in range(rect.position.y, mini(rect.end.y, img.get_height())):
@@ -17963,7 +17988,11 @@ func _sm_judge_standing(game_id: String, state: int) -> void:
 	# file line): the PINemHi chip's ground is the game's
 	# band colour at the state's register - SOLID one flat
 	# full-strength run; HOLLOW the drained ground's run
-	# and NO full-strength run; UNMARKED neither.
+	# across the band and NO full-strength run on the
+	# chip's middle row (the full-strength OUTLINE's
+	# horizontal edges span the chip by design, so the
+	# denial is judged mid-chip - see _sm_chip_middle_run);
+	# UNMARKED neither.
 	var band: Color = RoomSpecs.manufacturer_color(game.manufacturer)
 	var run: int = _sm_max_run(img, 95, 430, band, 0.03)
 	var quiet_run: int = _sm_max_run(img, 95, 430, RoomSpecs.pinemhi_quiet_color(band), 0.03)
@@ -17971,7 +18000,8 @@ func _sm_judge_standing(game_id: String, state: int) -> void:
 		RoomSpecs.PINEMHI_MARK_SOLID:
 			_sm_expect(run >= 40, "%s: the SOLID PINemHi chip stands on the rendered standing face (band-colour run %d px)" % [game.title, run])
 		RoomSpecs.PINEMHI_MARK_HOLLOW:
-			_sm_expect(run < 40 and quiet_run >= 40, "%s: the HOLLOW PINemHi chip stands drained on the rendered standing face (full run %d px, drained run %d px)" % [game.title, run, quiet_run])
+			var mid_run: int = _sm_chip_middle_run(img, 95, 430, RoomSpecs.pinemhi_quiet_color(band), band, 0.03)
+			_sm_expect(mid_run >= 0 and mid_run < 40 and quiet_run >= 40, "%s: the HOLLOW PINemHi chip stands drained on the rendered standing face (full run %d px on the chip's middle row, drained run %d px)" % [game.title, mid_run, quiet_run])
 		_:
 			_sm_expect(run < 40 and quiet_run < 40, "%s: NO PINemHi chip on the rendered standing face (band-colour run %d px, drained run %d px)" % [game.title, run, quiet_run])
 
