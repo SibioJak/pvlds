@@ -202,6 +202,7 @@ var _wovp_identity_state: String = "untested" ## "untested" | "ok" | "failed" - 
 var _wovp_identity_note: String = "" ## the last validation failure's words
 var _wovp_challenges: Array = [] ## the standing boards (Array of WovpChallenge): live, or the disk cache's at boot
 var _wovp_fetched_at: int = 0 ## when the standing boards landed (0 = never this device)
+var _wovp_fetch_seq: int = 0 ## SUBMITPANEL: bumped on EVERY challenges fetch completion (ok or not) and pushed to the room with the boards - how the submit panel's read-back tells a fresh fetch from a re-push of the same boards (fetched_at is second-granular and cannot)
 var _wovp_boards_live: bool = false ## the standing boards came from a fetch this session
 var _wovp_fetch_error: String = "" ## the last fetch's failure in words, while it stands
 # PINemHi weekly boards (PINEMHI2, Part A): Main owns the
@@ -398,6 +399,16 @@ var _rs_deadline: int = 0
 var _rs_idx: int = -1 ## the Addams challenge's row/panel index in the standing tournament view
 var _rs_searches_before: int = 0 ## the stub's search count when the send fired (the refresh leg's baseline)
 var _smoke_submitnav: bool = false ## --pvlds-smoke-submitnav (SUBMITNAV round): the submit panel's navigation + readability smoke - one boot over a SIX-shot fixture drives the panel with REAL stick steps through the room's poll, prints every observed focus path, and judges the one-step road to SEND, the row walk, the full-resolution big view and the focus==shown==sent identity. PVLDS_SUBMITNAV_NC=oldwalk restores the projection walk on the panel: the "one step to SEND" legs must fail by name
+var _smoke_submitpanel: bool = false ## --pvlds-smoke-submitpanel (SUBMITPANEL round): the reworked panel's smoke - Part A geometry legs (the big view grown, the face strip low) plus a rendered grab, and Part B read-back legs over the stub's rb-* variants (modes in PVLDS_SUBMITPANEL_SMOKE_MODE: pending | approved | late | absent | refused): after a REAL pad send, the panel must read back what WoVP recorded ("They recorded: 54,488,150") with the standing in the boards' words, land it by polling when the row arrives late, and close the window with "Not on the board yet." when it never lands. PVLDS_SUBMITPANEL_NC=nofetch must fail the read-back legs by name
+var _sp_mode: String = ""
+var _sp_phase: int = 0
+var _sp_wait: int = 0
+var _sp_failures: int = 0
+var _sp_done: bool = false
+var _sp_deadline: int = 0
+var _sp_idx: int = -1 ## the Addams challenge's row/panel index in the standing tournament view
+var _sp_saw_checking: bool = false ## the "Checking what WoVP recorded..." line stood before the verdict (polled every frame while waiting)
+var _sp_grab_done: bool = false ## the rendered grab of the reworked panel landed
 var _sn_phase: int = 0
 var _sn_wait: int = 0
 var _sn_failures: int = 0
@@ -813,6 +824,11 @@ func _ready() -> void:
 			_rs_mode = "happy"
 	if user_args.has("--pvlds-smoke-submitnav"):
 		_smoke_submitnav = true
+	if user_args.has("--pvlds-smoke-submitpanel"):
+		_smoke_submitpanel = true
+		_sp_mode = OS.get_environment("PVLDS_SUBMITPANEL_SMOKE_MODE")
+		if _sp_mode == "":
+			_sp_mode = "pending"
 	if user_args.has("--pvlds-smoke-return"):
 		_smoke_return = true
 		_ret_mode = OS.get_environment("PVLDS_RETURN_SMOKE_MODE")
@@ -1004,6 +1020,12 @@ func _ready() -> void:
 	# submitnav smoke's "one step to SEND" legs fail by
 	# name. Set here, before any room exists.
 	RoomView.debug_submitnav_nc = OS.get_environment("PVLDS_SUBMITNAV_NC")
+	# SUBMITPANEL's negative-control seam (PVLDS_
+	# SUBMITPANEL_NC=nofetch): the post-submit read-back
+	# never arms - the panel keeps the submit's own success
+	# words and never re-reads the board - so the
+	# submitpanel smoke's read-back legs fail by name.
+	RoomView.debug_submitpanel_nc = OS.get_environment("PVLDS_SUBMITPANEL_NC")
 	# GRADFIX14's adoption negative-control seam (PVLDS_
 	# GF14_NC=oldadopt): restores the pre-fix adoption
 	# behaviour - refresh_library discards the player's
@@ -1346,6 +1368,8 @@ func _process(_delta: float) -> void:
 		_drive_roomsubmit_smoke()
 	if _smoke_submitnav:
 		_drive_submitnav_smoke()
+	if _smoke_submitpanel:
+		_drive_submitpanel_smoke()
 	if _smoke_return:
 		_drive_return_smoke()
 	if _smoke_focusfix:
@@ -1731,6 +1755,7 @@ func _push_wovp_data() -> void:
 		"user_id": _wovp_user_id,
 		"challenges": _wovp_challenges,
 		"fetched_at": _wovp_fetched_at,
+		"fetch_seq": _wovp_fetch_seq, ## SUBMITPANEL: the read-back's fetch clock (see _wovp_fetch_seq)
 		"live": _wovp_boards_live,
 		"fetch_error": _wovp_fetch_error,
 		"shots_folder": _config.screenshots_folder if _config != null else "", ## ROOMSUBMIT: the submit panel's photo shelf rides the same push
@@ -1957,6 +1982,7 @@ func _on_wovp_validation_finished(ok: bool, message: String, user_id: String, di
 
 
 func _on_wovp_challenges_finished(ok: bool, message: String, challenges: Array, raw_body: String) -> void:
+	_wovp_fetch_seq += 1 ## SUBMITPANEL: a fetch completed - the read-back's clock ticks on completions, ok or not
 	if ok:
 		_wovp_challenges = challenges
 		_wovp_fetched_at = int(Time.get_unix_time_from_system())
@@ -16295,7 +16321,7 @@ func _drive_roomsubmit_smoke() -> void:
 			# rendered surface, not a flag): judge the open.
 			var face: ClickableQuad = _room.submit_panel_face_quad() if _room != null else null
 			var dressed: bool = face != null and face.current_texture() != null \
-				and face.current_texture().get_size() == Vector2(1024, 532)
+				and face.current_texture().get_size() == Vector2(1664, 400)
 			if _room.is_submit_panel_up() and dressed:
 				_rs_open_legs()
 				if _rs_mode == "happy":
@@ -16352,7 +16378,7 @@ func _drive_roomsubmit_smoke() -> void:
 			# quad's own pixels.
 			var face8: ClickableQuad = _room.submit_panel_face_quad() if _room != null else null
 			var dressed8: bool = face8 != null and face8.current_texture() != null \
-				and face8.current_texture().get_size() == Vector2(1024, 532)
+				and face8.current_texture().get_size() == Vector2(1664, 400)
 			if not (_room.is_submit_panel_up() and dressed8):
 				if Time.get_ticks_msec() > _rs_deadline:
 					_rs_expect(false, "reopen: the panel never stood dressed again")
@@ -16389,13 +16415,13 @@ func _drive_roomsubmit_smoke() -> void:
 				_rs_phase = 10
 				_rs_wait = 0
 		10:
-			if _room.submit_panel_message() == "Submitted - awaiting validation.":
+			if _room.submit_panel_message() == "They recorded: 24,531,070 - awaiting validation.":
 				_rs_happy_verdict_legs()
 				_rs_deadline = Time.get_ticks_msec() + 15000
 				_rs_phase = 15
 				_rs_wait = 0
 			elif Time.get_ticks_msec() > _rs_deadline:
-				_rs_expect(false, "verdict: the success words never stood in the room (message: %s)" % _room.submit_panel_message())
+				_rs_expect(false, "verdict: the read-back line never stood in the room (message: %s)" % _room.submit_panel_message())
 				_rs_finish_smoke()
 		15:
 			# The refresh the success triggers is a fetch -
@@ -16528,7 +16554,7 @@ func _rs_open_legs() -> void:
 
 
 func _rs_happy_verdict_legs() -> void:
-	_rs_expect(true, "success words: Submitted - awaiting validation stands in the room")
+	_rs_expect(true, "read-back: the panel reports what WoVP recorded (They recorded: 24,531,070 - awaiting validation)")
 	var lines: Array = _submit_stub_lines()
 	var photo_idx: int = -1
 	var submit_idx: int = -1
@@ -16751,7 +16777,7 @@ func _sn_wire_legs() -> void:
 func _sn_panel_dressed() -> bool:
 	var face: ClickableQuad = _room.submit_panel_face_quad() if _room != null else null
 	return _room != null and _room.is_submit_panel_up() and face != null and face.current_texture() != null \
-		and face.current_texture().get_size() == Vector2(1024, 532)
+		and face.current_texture().get_size() == Vector2(1664, 400)
 
 
 func _drive_submitnav_smoke() -> void:
@@ -16932,12 +16958,12 @@ func _drive_submitnav_smoke() -> void:
 				_sn_phase = 13
 				_sn_wait = 0
 		13:
-			if _room.submit_panel_message() == "Submitted - awaiting validation.":
-				_sn_expect(true, "verdict: the success words stand in the room")
+			if _room.submit_panel_message().begins_with("They recorded:"):
+				_sn_expect(true, "verdict: the read-back line stands in the room (%s)" % _room.submit_panel_message())
 				_sn_wire_legs()
 				_sn_finish_smoke()
 			elif Time.get_ticks_msec() > _sn_deadline:
-				_sn_expect(false, "verdict: the success words never stood in the room (message: %s)" % _room.submit_panel_message())
+				_sn_expect(false, "verdict: the read-back line never stood in the room (message: %s)" % _room.submit_panel_message())
 				_sn_finish_smoke()
 
 
@@ -16948,6 +16974,210 @@ func _sn_finish_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS SUBMITNAV SMOKE: FAIL (%d)" % _sn_failures)
+		get_tree().quit(1)
+
+
+## Submitpanel smoke (--pvlds-smoke-submitpanel; the
+## SUBMITPANEL round). One boot per mode: the Tournament
+## Room against the stub's rb-* variants, the Addams
+## challenge, the reworked panel driven with REAL pad
+## presses and stick steps through the room's poll (Y
+## opens, one stick DOWN to SEND, A sends, B closes).
+## Part A legs: the big view stands 1.66x1.06 m at full
+## decode width, the face is a 1.66x0.40 strip seated
+## BELOW the SEND/BACK row, and a rendered grab of the
+## standing panel lands for the eye. Part B legs (modes in
+## PVLDS_SUBMITPANEL_SMOKE_MODE, stub variant rb-<mode>):
+## the post-submit board carries his row at a NEW score
+## (54,488,150 - not his posted 24,531,070), and the panel
+## must read it back in words: pending -> "They recorded:
+## 54,488,150 - awaiting validation.", approved ->
+## "... - Approved.", refused -> "... - Refused.", late
+## (the row absent from the first post-submit board,
+## present on the next) -> the line lands with NO further
+## pad input, on a fetch the panel asked for itself;
+## absent -> "Not on the board yet." and the panel still
+## closes. PVLDS_SUBMITPANEL_NC=nofetch must fail the
+## read-back legs by name.
+
+var _sp_searches_at_send: int = 0 ## the stub's search count when the send fired (the late leg's baseline)
+
+
+func _sp_expect(ok: bool, label: String) -> void:
+	if ok:
+		print("PVLDS SUBMITPANEL SMOKE OK: ", label)
+	else:
+		_sp_failures += 1
+		printerr("PVLDS SUBMITPANEL SMOKE FAIL: ", label)
+
+
+func _sp_expected_line() -> String:
+	match _sp_mode:
+		"approved":
+			return "They recorded: 54,488,150 - Approved."
+		"refused":
+			return "They recorded: 54,488,150 - Refused."
+		"absent":
+			return "Not on the board yet."
+		_:
+			return "They recorded: 54,488,150 - awaiting validation."
+
+
+func _sp_geometry_legs() -> void:
+	var bq: ClickableQuad = _room.submit_big_quad()
+	var fq: ClickableQuad = _room.submit_panel_face_quad()
+	_sp_expect(bq != null and bq.quad_size() == Vector2(1.66, 1.06),
+		"photo dominance: the big view stands 1.66x1.06 m (was 1.30x0.86)")
+	if bq != null:
+		var area: float = bq.quad_size().x * bq.quad_size().y
+		_sp_expect(area >= 1.7, "photo dominance: the big view's area is %.2f m2 (was 1.118)" % area)
+		var btex: Texture2D = bq.current_texture()
+		_sp_expect(btex != null and btex.get_width() == 1600,
+			"photo dominance: the big view carries the shot at full decode width (got %d, want 1600)" % (btex.get_width() if btex != null else -1))
+	_sp_expect(fq != null and fq.quad_size() == Vector2(1.66, 0.40) \
+		and fq.position.y < _room.submit_send_quad().position.y,
+		"text low: the face is a 1.66x0.40 strip seated below the SEND/BACK row")
+	var thumbs: Array = _room.submit_thumb_quads()
+	_sp_expect(thumbs.size() == 3, "open: the panel stands the fixture's three shots (got %d)" % thumbs.size())
+	if not thumbs.is_empty():
+		_sp_expect(_room.focused_quad() == (thumbs[0] as ClickableQuad), "open: focus stands on the newest shot")
+	_sp_expect(_room.submit_selected_path().ends_with("shot-a.png"),
+		"open: the newest shot is the standing selection (got %s)" % _room.submit_selected_path())
+
+
+func _drive_submitpanel_smoke() -> void:
+	if _sp_done:
+		return
+	_sp_wait += 1
+	match _sp_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_room._handle_rail("tournament")
+				_sp_expect(_room.tournament_active(), "enter: the TOURNAMENT stop raises the Tournament Room")
+				_sp_deadline = Time.get_ticks_msec() + 45000
+				_sp_phase = 1
+				_sp_wait = 0
+			elif _sp_wait > 3600:
+				_sp_expect(false, "boot: the room never came up")
+				_sp_finish_smoke()
+		1:
+			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _tournament_boards_all_real():
+				_sp_idx = _rs_addams_idx()
+				_sp_expect(_sp_idx >= 0, "boards: the Addams challenge stands in the tournament view")
+				if _sp_idx < 0:
+					_sp_finish_smoke()
+					return
+				get_viewport().warp_mouse(Vector2(512, 764))
+				_room._set_centre(_sp_idx, false)
+				_room._set_focused(_room._panels[_sp_idx])
+				_sp_deadline = Time.get_ticks_msec() + 20000
+				_sp_phase = 2
+				_sp_wait = 0
+			elif Time.get_ticks_msec() > _sp_deadline:
+				_sp_expect(false, "boards: the boards never went live against the stub")
+				_sp_finish_smoke()
+		2:
+			if _room.centre_index() == _sp_idx and not _room.page_slide_active() and _sp_wait >= 6:
+				_rs_inject(JOY_BUTTON_Y, true)
+				_sp_phase = 3
+				_sp_wait = 0
+			elif Time.get_ticks_msec() > _sp_deadline:
+				_sp_expect(false, "seat: the Addams card never centred")
+				_sp_finish_smoke()
+		3:
+			if _sp_wait >= 2:
+				_rs_inject(JOY_BUTTON_Y, false)
+				_sp_deadline = Time.get_ticks_msec() + 30000
+				_sp_phase = 4
+				_sp_wait = 0
+		4:
+			var face: ClickableQuad = _room.submit_panel_face_quad() if _room != null else null
+			var dressed: bool = face != null and face.current_texture() != null \
+				and face.current_texture().get_size() == Vector2(1664, 400)
+			if _room.is_submit_panel_up() and dressed:
+				_sp_geometry_legs()
+				_sp_phase = 45
+				_sp_wait = 0
+			elif Time.get_ticks_msec() > _sp_deadline:
+				_sp_expect(false, "panel: the submit panel never stood dressed")
+				_sp_finish_smoke()
+		45:
+			# Presentation settle before the grab (the
+			# roomsubmit lesson: a grab on the dressed
+			# condition's own tick reads the last frame).
+			if _sp_wait >= 15:
+				_grad_save_grab("submitpanel_panel.png")
+				_sp_grab_done = true
+				_sn_axis_y(1.0)
+				_sp_phase = 5
+				_sp_wait = 0
+		5:
+			if _sp_wait >= 3:
+				_sn_axis_y(0.0)
+				_sp_phase = 6
+				_sp_wait = 0
+		6:
+			if _sp_wait >= 4:
+				_sp_expect(_room.focused_quad() == _room.submit_send_quad(),
+					"nav: one stick DOWN from the shot lands on SEND on the reworked panel")
+				_sp_searches_at_send = _tournament_search_count()
+				_rs_inject(JOY_BUTTON_A, true)
+				_sp_phase = 7
+				_sp_wait = 0
+		7:
+			if _sp_wait >= 2:
+				_rs_inject(JOY_BUTTON_A, false)
+				_sp_deadline = Time.get_ticks_msec() + 35000
+				_sp_phase = 8
+				_sp_wait = 0
+		8:
+			var msg: String = _room.submit_panel_message()
+			if msg == "Checking what WoVP recorded...":
+				_sp_saw_checking = true
+			if msg == _sp_expected_line():
+				_sp_expect(_sp_saw_checking, "read-back: the panel said it was checking before the verdict stood")
+				match _sp_mode:
+					"pending":
+						_sp_expect(true, "read-back pending: they recorded: 54,488,150 - awaiting validation")
+					"approved":
+						_sp_expect(true, "read-back approved: they recorded: 54,488,150 - Approved")
+					"refused":
+						_sp_expect(true, "read-back refused: they recorded: 54,488,150 - Refused")
+					"late":
+						_sp_expect(true, "read-back late: the line landed with no further pad input after the send")
+						_sp_expect(_tournament_search_count() >= _sp_searches_at_send + 2,
+							"read-back late: the panel asked for another fetch itself (searches %d -> %d)" % [_sp_searches_at_send, _tournament_search_count()])
+					"absent":
+						_sp_expect(true, "read-back absent: not on the board yet - plain words, no error face")
+						_sp_expect(_room.is_submit_panel_up(), "read-back absent: the panel still stands (closable)")
+				_rs_inject(JOY_BUTTON_B, true)
+				_sp_phase = 9
+				_sp_wait = 0
+			elif Time.get_ticks_msec() > _sp_deadline:
+				_sp_expect(false, "read-back %s: the expected line never stood (message: %s)" % [_sp_mode, msg])
+				_sp_finish_smoke()
+		9:
+			if _sp_wait >= 2:
+				_rs_inject(JOY_BUTTON_B, false)
+				_sp_phase = 10
+				_sp_wait = 0
+		10:
+			if not _room.is_submit_panel_up():
+				_sp_expect(true, "back: B closed the panel after the read-back")
+				_sp_expect(_room.focused_quad() == _room._panels[_sp_idx], "back: focus lands back on the challenge's card")
+				_sp_finish_smoke()
+			elif _sp_wait > 600:
+				_sp_expect(false, "back: B never closed the panel")
+				_sp_finish_smoke()
+
+
+func _sp_finish_smoke() -> void:
+	_sp_done = true
+	if _sp_failures == 0:
+		print("PVLDS SUBMITPANEL SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS SUBMITPANEL SMOKE: FAIL (%d)" % _sp_failures)
 		get_tree().quit(1)
 
 

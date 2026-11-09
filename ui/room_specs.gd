@@ -483,6 +483,14 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 ## (ShotsFolder.panel_line - the folder read's truth).
 ## The photos themselves stand BELOW this face as their
 ## own quads; the face never carries one.
+##
+## SUBMITPANEL: the face is no longer the panel's head -
+## it is a slim strip seated LOW on the panel (1.66x0.40 m,
+## rendered 1664x400), under the SEND/BACK row, while the
+## big photo view takes the panel. The type shrinks with
+## the strip (title 64->54, sub 36->34, body 32->25): the
+## case lines stay - they are the panel's facts - but
+## nothing textual competes with the photo for the eye.
 static func submit_panel_spec(ch: WovpChallenge, owned: bool, build_owned: bool, user_id: String, now_unix: int, status: String, shots_line: String) -> Dictionary:
 	var lines: Array[String] = []
 	lines.append("%s - %s" % [ch.type_label(), ch.name])
@@ -503,12 +511,12 @@ static func submit_panel_spec(ch: WovpChallenge, owned: bool, build_owned: bool,
 		"kind": "banner",
 		"bg": Color(0.05, 0.05, 0.09),
 		"title": ch.table_name if ch.table_name != "" else ch.name,
-		"title_size": 64,
+		"title_size": 54,
 		"title_max_lines": 1,
 		"sub": status if status != "" else "Pick the shot that shows your score, then SEND.",
-		"sub_size": 36,
+		"sub_size": 34,
 		"body": "\n".join(lines),
-		"body_size": 32,
+		"body_size": 25,
 	}
 
 

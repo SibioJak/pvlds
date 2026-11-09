@@ -1029,6 +1029,14 @@ static var debug_gf13_nc: String = ""
 ## engage - so the submitnav smoke's "one step to SEND"
 ## legs fail by name. Empty in every real run.
 static var debug_submitnav_nc: String = ""
+## Negative-control seam for the SUBMITPANEL round (the
+## harness env PVLDS_SUBMITPANEL_NC, set by Main before any
+## room exists): "nofetch" - the post-submit read-back
+## never arms (the panel keeps the submit's own success
+## words and never re-reads the board), so the submitpanel
+## smoke's read-back legs fail by name. Empty in every
+## real run.
+static var debug_submitpanel_nc: String = ""
 ## Negative-control seam for GRADFIX14 item 2 (the harness
 ## env PVLDS_GF14_NC, set by Main before any room exists):
 ## "oldadopt" restores the pre-fix adoption behaviour -
@@ -1277,6 +1285,26 @@ var _submit_shots_line: String = "" ## ShotsFolder.panel_line for the folder rea
 var _submit_selected_path: String = "" ## the shot SEND would post: the focused thumb's (focus IS the verify step)
 var _submit_status: String = "" ## the face's message line: states and verdicts in words
 var _submit_sending: bool = false
+## SUBMITPANEL (Part B): the post-submit read-back. After a
+## successful submit the panel re-reads the challenge's
+## board (through Main's standing fetch door - the room
+## only watches the boards land and asks for another fetch
+## through the standing refresh signal) and reports what
+## WoVP recorded. Bounded: at most SUBMITPANEL_RB_MAX_TRIES
+## fresh fetches are evaluated, spaced by room-asked
+## fetches SUBMITPANEL_RB_POLL_GAP_MSEC apart; then the
+## panel says "Not on the board yet." and stops. Closing
+## the panel stops it at any moment. It never re-submits
+## and never writes anything.
+const SUBMITPANEL_RB_MAX_TRIES: int = 5
+const SUBMITPANEL_RB_POLL_GAP_MSEC: int = 3000
+var _rb_active: bool = false ## the read-back is armed (a successful submit landed, no verdict yet)
+var _rb_challenge_id: String = "" ## the challenge the read-back watches
+var _rb_tries: int = 0 ## fresh fetches evaluated since the submit
+var _rb_start_seq: int = -1 ## the fetch sequence standing when the submit landed - only NEWER fetches count
+var _rb_last_seq: int = -1 ## the newest fetch sequence already evaluated
+var _rb_next_fetch_msec: int = 0 ## when the next room-asked fetch is due (0 = none scheduled)
+var _wovp_fetch_seq: int = 0 ## Main's fetch sequence, pushed with the boards (see set_wovp_data): bumped on every challenges fetch completion, so a NEW fetch is told from a re-push of the same boards (fetched_at is second-granular and cannot)
 var _setup_health: Dictionary = {} ## the last completed scan's numbers, fed by Main (see set_setup_health)
 var _setup_message: String = "" ## the panel's message line: the last action's outcome, in plain words
 var _setup_scanning: bool = false ## a scan Main started for the panel is running (its progress feeds the message line)
@@ -2618,6 +2646,7 @@ func set_wovp_data(d: Dictionary) -> void:
 	_wovp_fetched_at = int(d.get("fetched_at", 0))
 	_wovp_live = bool(d.get("live", false))
 	_wovp_fetch_error = str(d.get("fetch_error", ""))
+	_wovp_fetch_seq = int(d.get("fetch_seq", 0))
 	if _tournament:
 		# RETURN round: the player's place survives a boards
 		# landing. _rebuild_wall drops the focus to nothing,
@@ -2695,6 +2724,11 @@ func set_wovp_data(d: Dictionary) -> void:
 	# its ring, one that ended loses it - on the standing
 	# wall, without waiting for a rebuild.
 	_apply_tourney_borders()
+	# SUBMITPANEL (Part B): if the submit panel's read-back
+	# is armed, this push may be the fresh fetch it waits
+	# on - judge it (the sequence inside decides whether
+	# anything actually landed).
+	_rb_evaluate()
 
 
 ## PINEMHI2 (Part A): Main's delivery of the PINemHi
@@ -10035,6 +10069,7 @@ func _open_submit_for_focused() -> void:
 
 
 func show_submit_panel(ch: WovpChallenge, owned: bool, build_owned: bool) -> void:
+	_rb_stop() ## a fresh panel owes no old read-back
 	_submit_challenge = ch
 	_submit_challenge_id = ch.challenge_id
 	_submit_owned = owned
@@ -10080,43 +10115,55 @@ func _build_submit_panel() -> void:
 	# and the SETUP panel keeps its own -1.72 seat.
 	_submit_panel.position = Vector3(0.0, 1.32, -2.30)
 	var placeholder: Texture2D = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
+	# SUBMITPANEL (Part A): the layout inverts - the photo
+	# takes the panel and the text drops to a slim strip at
+	# the bottom. Chris's law: "Photos should be dominant,
+	# that's its sole purpose." The face (1.5x0.78 at the
+	# panel's head) shrinks to 1.66x0.40 seated LOW, under
+	# the SEND/BACK row; the big view grows to 1.66x1.06
+	# (1.118 -> 1.760 m2) and takes the panel's head and
+	# middle. The footprint barely moves (top +0.96 /
+	# bottom -1.06, was +0.97 / -1.135): the photo's growth
+	# is paid for by the face, not by the panel's seat.
 	_submit_panel_face = ClickableQuad.new()
-	_submit_panel_face.setup("submit_panel_face", "", placeholder, Vector2(1.5, 0.78))
-	_submit_panel_face.position = Vector3(0.0, 0.58, 0.0)
+	_submit_panel_face.setup("submit_panel_face", "", placeholder, Vector2(1.66, 0.40))
+	_submit_panel_face.position = Vector3(0.0, -0.86, 0.0)
 	_submit_panel_face.pick_enabled = false
 	_submit_panel.add_child(_submit_panel_face)
 	_submit_big_quad = ClickableQuad.new()
-	# SUBMITNAV: the big view grows (1.06x0.76 -> 1.30x0.86)
-	# and its texture stops being the art cache's 1024 px
-	# decode (see _submit_show_shot): together they are the
-	# readability fix - this surface's whole job is reading
-	# a score off the shot.
-	_submit_big_quad.setup("submit_photo", "", placeholder, Vector2(1.30, 0.86))
-	_submit_big_quad.position = Vector3(0.0, -0.26, 0.0)
+	# SUBMITNAV: the big view's texture is the native-
+	# resolution decode (see _submit_show_shot);
+	# SUBMITPANEL grows the surface itself (1.30x0.86 ->
+	# 1.66x1.06): together they are the readability fix -
+	# this surface's whole job is reading a score off the
+	# shot, at a glance, without leaning in.
+	_submit_big_quad.setup("submit_photo", "", placeholder, Vector2(1.66, 1.06))
+	_submit_big_quad.position = Vector3(0.0, 0.43, 0.0)
 	_submit_big_quad.pick_enabled = false
 	_submit_panel.add_child(_submit_big_quad)
 	_submit_thumb_quads.clear()
 	# SUBMITNAV: the strip seats six and centres itself on
-	# the panel (it used to start at a fixed -0.58, so a
-	# short strip stood off-centre); the thumbs shrink a
-	# step (0.27x0.20 -> 0.22x0.17) to fit the six - the
-	# strip is for browsing; the big view is for reading.
-	var tx: float = -0.5 * float(_submit_shots.size() - 1) * 0.245
+	# the panel; SUBMITPANEL seats it directly under the
+	# big view at the big view's own pitch discipline (the
+	# thumbs grow a touch, 0.22x0.17 -> 0.24x0.18, on the
+	# wider panel) - the strip is for browsing; the big
+	# view is for reading.
+	var tx: float = -0.5 * float(_submit_shots.size() - 1) * 0.265
 	for sv: Variant in _submit_shots:
 		var shot: Dictionary = sv as Dictionary
 		var tq: ClickableQuad = ClickableQuad.new()
-		tq.setup("submit_shot", str(shot.get("path", "")), placeholder, Vector2(0.22, 0.17))
-		tq.position = Vector3(tx, -0.81, 0.0)
+		tq.setup("submit_shot", str(shot.get("path", "")), placeholder, Vector2(0.24, 0.18))
+		tq.position = Vector3(tx, -0.27, 0.0)
 		_submit_panel.add_child(tq)
 		_submit_thumb_quads.append(tq)
-		tx += 0.245
+		tx += 0.265
 	_submit_send_btn = ClickableQuad.new()
-	_submit_send_btn.setup("submit_send", "", placeholder, Vector2(0.52, 0.15))
-	_submit_send_btn.position = Vector3(-0.28, -1.06, 0.0)
+	_submit_send_btn.setup("submit_send", "", placeholder, Vector2(0.56, 0.15))
+	_submit_send_btn.position = Vector3(-0.30, -0.52, 0.0)
 	_submit_panel.add_child(_submit_send_btn)
 	_submit_back_btn = ClickableQuad.new()
-	_submit_back_btn.setup("submit_back", "", placeholder, Vector2(0.52, 0.15))
-	_submit_back_btn.position = Vector3(0.28, -1.06, 0.0)
+	_submit_back_btn.setup("submit_back", "", placeholder, Vector2(0.56, 0.15))
+	_submit_back_btn.position = Vector3(0.30, -0.52, 0.0)
 	_submit_panel.add_child(_submit_back_btn)
 	# The photos' textures: the thumbs ride the house
 	# decode path (TextureFactory.load_art_texture -
@@ -10204,7 +10251,111 @@ func set_wovp_submit_result(_ok: bool, message: String, challenge_id: String) ->
 		return
 	_submit_sending = false
 	_submit_status = message
+	if _ok:
+		# SUBMITPANEL (Part B): a successful submit arms the
+		# read-back - the panel now goes and reads what WoVP
+		# actually recorded (see _rb_evaluate). The submit's
+		# own words are replaced by the checking line at
+		# once: from here the panel's status is the
+		# read-back's story, not the send's.
+		_rb_start()
 	_request_submit_panel_render(true)
+
+
+## SUBMITPANEL (Part B): arm the read-back for the panel's
+## challenge. The first re-read is Main's own post-submit
+## fetch (its standing success path); the room only
+## watches for it and asks for more if the row has not
+## landed. Under the NC seam the read-back never arms.
+func _rb_start() -> void:
+	_rb_stop()
+	if debug_submitpanel_nc == "nofetch":
+		return
+	if _submit_challenge_id == "":
+		return
+	_rb_active = true
+	_rb_challenge_id = _submit_challenge_id
+	_rb_start_seq = _wovp_fetch_seq
+	_rb_last_seq = _wovp_fetch_seq
+	_submit_status = "Checking what WoVP recorded..."
+
+
+## Stop the read-back (panel closing, a new panel opening,
+## or its own verdict). Nothing is owed afterwards.
+func _rb_stop() -> void:
+	_rb_active = false
+	_rb_challenge_id = ""
+	_rb_tries = 0
+	_rb_next_fetch_msec = 0
+
+
+## Judge one boards push against the armed read-back.
+## Only a push carrying a NEW fetch sequence counts as a
+## try - a re-push of the same boards (Main pushes for
+## many reasons) must not burn the bounded window. On a
+## try: his row on the fresh board ends the read-back
+## with the recorded line; otherwise the next fetch is
+## scheduled, or the window closes in plain words.
+func _rb_evaluate() -> void:
+	if not _rb_active or not _submit_panel_up:
+		return
+	if _wovp_fetch_seq <= _rb_start_seq or _wovp_fetch_seq == _rb_last_seq:
+		return
+	_rb_last_seq = _wovp_fetch_seq
+	_rb_tries += 1
+	_rb_next_fetch_msec = 0
+	if _wovp_live and _wovp_user_id != "":
+		for cv: Variant in _wovp_challenges:
+			var ch: WovpChallenge = cv as WovpChallenge
+			if ch == null or ch.challenge_id != _rb_challenge_id:
+				continue
+			var row: WovpScoreRow = ch.his_row(_wovp_user_id)
+			if row != null:
+				_submit_status = _rb_recorded_line(row)
+				_rb_active = false
+				_request_submit_panel_render(true)
+				return
+			break
+	if _rb_tries >= SUBMITPANEL_RB_MAX_TRIES:
+		_submit_status = "Not on the board yet."
+		_rb_active = false
+		_request_submit_panel_render(true)
+		return
+	_rb_next_fetch_msec = Time.get_ticks_msec() + SUBMITPANEL_RB_POLL_GAP_MSEC
+
+
+## The read-back's one line, in the boards' own words for
+## the standing: what they recorded, and where it sits in
+## WoVP's validation. The approvalStatus vocabulary is
+## the site's own (the WOVP spike's FINDINGS): 0 NotSet,
+## 1 Submitted, 2 Approved, 3 Pending, 4 Refused,
+## 5 Cancelled.
+func _rb_recorded_line(row: WovpScoreRow) -> String:
+	var line: String = "They recorded: " + WovpChallenge.format_score(row.score)
+	if row.approval_status == 2:
+		return line + " - Approved."
+	if row.approval_status == 4:
+		return line + " - Refused."
+	if row.approval_status == 5:
+		return line + " - Cancelled."
+	# isPending, or Submitted (1) / Pending (3) / NotSet
+	# (0): the boards' own standing words for a score
+	# still in validation.
+	return line + " - awaiting validation."
+
+
+## The read-back's clock: when the next fetch falls due,
+## ask for it through the standing refresh door (the rail
+## REFRESH's own signal - Main owns the fetch, its
+## busy/validate discipline included). Runs every frame;
+## costs nothing while unarmed or unscheduled.
+func _rb_update() -> void:
+	if not _rb_active or _rb_next_fetch_msec == 0:
+		return
+	if Time.get_ticks_msec() < _rb_next_fetch_msec:
+		return
+	_rb_next_fetch_msec = 0
+	tournament_refresh_requested.emit()
 
 
 ## The panel's BACK: tear it down, hand the room back, and
@@ -10233,6 +10384,7 @@ func hide_submit_panel() -> void:
 func clear_submit_panel() -> void:
 	if not _submit_panel_up:
 		return
+	_rb_stop() ## SUBMITPANEL: closing the panel stops the read-back, at any moment
 	_submit_panel_up = false
 	_submit_panel_gen += 1
 	_submit_sending = false
@@ -10348,7 +10500,7 @@ func _fill_submit_panel_textures(gen: int) -> void:
 		_after_submit_render()
 		return
 	var face_tex: Texture2D = await _factory.render_texture(
-		submit_face_spec(), Vector2i(1024, 532))
+		submit_face_spec(), Vector2i(1664, 400))
 	if gen != _submit_panel_gen or not _submit_panel_up or _submit_panel_face == null:
 		_after_submit_render()
 		return
@@ -11685,6 +11837,7 @@ func _process(delta: float) -> void:
 	if _marquee_up:
 		_update_marquee(delta)
 	_update_background(delta) ## the starfield drift (GRADFIX4 item 5d) - its own beat, ungated
+	_rb_update() ## SUBMITPANEL: the submit read-back's poll clock - asks Main for the next board fetch when one falls due
 	if _plates_pending:
 		# Nameplates re-derive from the labels' live AABBs
 		# until every standing card's plate wears its shaped
