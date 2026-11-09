@@ -36,13 +36,28 @@ extends RefCounted
 ##                    through its load-then-save untouched
 ##                    because load/save carry them verbatim.
 ##                    Schema stays v2.
-##   (No close-duty or hold keys: the exit model was simplified
-##   by the player's ruling, 2026-10-22 - the watchdog's
-##   session-close duty is unconditional and there is no hold
-##   gesture. Contracts written by older builds may still carry
-##   close_vpx_on_table_exit / hold_exit_enabled /
-##   hold_exit_button; both readers ignore them, and writes here
-##   stop emitting them. Schema stays v2.)
+##   hold_exit_enabled  HOLD-EXIT: the config's hold-to-exit
+##                    toggle, mirrored for the watchdog exactly
+##                    like focus_herding (checkin/launch). The
+##                    watchdog's session-close duty stays
+##                    unconditional; this gates only the hold
+##                    gesture. Absent in contracts written
+##                    before the key existed: loads default it
+##                    ON (the feature's own default).
+##   hold_exit_fired_unix  HOLD-EXIT: WATCHDOG-owned: stamped
+##                    once when a session's D-pad-right hold
+##                    fires; it is the app-exit signal - a
+##                    resident launcher that reads it for its
+##                    own session exits through its own Exit
+##                    path, and the watchdog reads the same
+##                    firing to stand down (no relaunch) when
+##                    VPX dies. The launcher never writes it,
+##                    except to CLEAR it when a fresh session
+##                    is armed (checkin / perform_launch). The
+##                    button is fixed to D-pad right:
+##                    hold_exit_button from older builds is
+##                    still not read, and there is no
+##                    close-duty key. Schema stays v2.
 ##   session_id       increments on every launch; how the watchdog
 ##                    knows a NEW session was armed after a relaunch
 ##   session_state    idle | loading | live | returned | failed
@@ -92,6 +107,8 @@ var pinemhi_manage: bool = false
 var pinemhi_folder: String = ""
 var pinemhi_watcher_pid: int = 0
 var pinemhi_watcher_state: String = ""
+var hold_exit_enabled: bool = true
+var hold_exit_fired_unix: int = 0
 var session_id: int = 0
 var session_state: String = "idle"
 var game_exe_path: String = ""
@@ -145,6 +162,8 @@ static func load_from_disk() -> WatchdogContract:
 	c.pinemhi_folder = str(d.get("pinemhi_folder", ""))
 	c.pinemhi_watcher_pid = int(d.get("pinemhi_watcher_pid", 0))
 	c.pinemhi_watcher_state = str(d.get("pinemhi_watcher_state", ""))
+	c.hold_exit_enabled = bool(d.get("hold_exit_enabled", true))
+	c.hold_exit_fired_unix = int(d.get("hold_exit_fired_unix", 0))
 	c.session_id = int(d.get("session_id", 0))
 	c.session_state = str(d.get("session_state", "idle"))
 	c.session_state = WatchdogContract.normalize_state(c.session_state)
@@ -175,6 +194,8 @@ func to_dictionary() -> Dictionary:
 	d["pinemhi_folder"] = pinemhi_folder
 	d["pinemhi_watcher_pid"] = pinemhi_watcher_pid
 	d["pinemhi_watcher_state"] = pinemhi_watcher_state
+	d["hold_exit_enabled"] = hold_exit_enabled
+	d["hold_exit_fired_unix"] = hold_exit_fired_unix
 	d["session_id"] = session_id
 	d["session_state"] = session_state
 	d["game_exe_path"] = game_exe_path

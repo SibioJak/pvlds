@@ -133,6 +133,10 @@ func checkin(config: PvldsConfig) -> WatchdogContract:
 	# with the contract and save back out as they were.
 	c.pinemhi_manage = config.pinemhi_manage_watcher if config != null else false
 	c.pinemhi_folder = PinemhiScores.resolve_folder(config) if config != null else ""
+	# HOLD-EXIT: mirror the hold toggle the same way, and bury
+	# the last session's fired stamp - a fresh arm starts clean.
+	c.hold_exit_enabled = config.hold_exit_enabled if config != null else true
+	c.hold_exit_fired_unix = 0
 	c.launcher_path = LaunchService.launcher_path()
 	c.launcher_args = LaunchService.launcher_args()
 	c.launcher_pid = OS.get_process_id()
@@ -171,6 +175,10 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	# watchdog-owned pid/state ride through untouched).
 	c.pinemhi_manage = config.pinemhi_manage_watcher
 	c.pinemhi_folder = PinemhiScores.resolve_folder(config)
+	# HOLD-EXIT: the same mirror + a clean fired stamp for the
+	# new session (checkin above does the same at boot).
+	c.hold_exit_enabled = config.hold_exit_enabled
+	c.hold_exit_fired_unix = 0
 	c.session_id += 1
 	c.session_state = "loading"
 	c.game_exe_path = plan.exe_path

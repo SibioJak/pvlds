@@ -81,15 +81,20 @@ const STARFIELD_MODES: Array[String] = ["layered", "flat", "off"]
 ## "stepped". The SETUP panel's WALL MOTION button is gone.
 var wall_motion_mode: String = "stepped" ## always "stepped" (OPTIMIZE)
 const WALL_MOTION_MODES: Array[String] = ["stepped"]
-## Deliberately absent: any close-duty or hold-to-exit setting.
-## The exit model was simplified by the player's ruling
-## (2026-10-22): the watchdog's session-close duty is
-## unconditional and there is no hold gesture - D-pad right is a
-## plain BACK button (in play: VPX's own Exit Game, then the
-## watchdog closes the editor it lands in; in the room: quit to
-## the desktop). Old configs carrying close_vpx_on_table_exit /
-## hold_exit_enabled / hold_exit_button load fine - the keys are
-## simply not read - and saves stop writing them.
+## HOLD-EXIT: the hold-to-exit toggle. Holding D-pad right for
+## 1.5 s during a table session shuts the whole works down
+## (the watchdog reads the pad and fires; see watchdog/
+## hold_logic.go). The button is FIXED to D-pad right - the
+## old hold_exit_button key is still not read, and no picker
+## exists. Default ON: the player asked for the feature
+## (2026-11-09, reviving what the 2026-10-22 simplification
+## struck). A config written before the key existed loads it
+## ON; an explicit false in any config is honoured. The
+## watchdog's session-close duty stays unconditional either
+## way - this toggle gates only the hold gesture. There is
+## still no close-duty setting (close_vpx_on_table_exit is
+## likewise not read).
+var hold_exit_enabled: bool = true
 
 
 static func beside_exe_path() -> String:
@@ -141,6 +146,7 @@ func load_from_disk() -> bool:
 		starfield_mode = "layered"
 	pinemhi_folder = str(d.get("pinemhi_folder", ""))
 	pinemhi_enabled = bool(d.get("pinemhi_enabled", true))
+	hold_exit_enabled = bool(d.get("hold_exit_enabled", true))
 	pinemhi_manage_watcher = bool(d.get("pinemhi_manage_watcher", false))
 	screenshots_folder = str(d.get("screenshots_folder", ""))
 	# OPTIMIZE: any stored gait coerces to the one gait -
@@ -168,6 +174,7 @@ func save_to_disk() -> bool:
 	d["starfield_mode"] = starfield_mode
 	d["pinemhi_folder"] = pinemhi_folder
 	d["pinemhi_enabled"] = pinemhi_enabled
+	d["hold_exit_enabled"] = hold_exit_enabled
 	d["pinemhi_manage_watcher"] = pinemhi_manage_watcher
 	d["screenshots_folder"] = screenshots_folder
 	wall_motion_mode = "stepped" ## OPTIMIZE: saves write the one gait, whatever a caller left standing in the var

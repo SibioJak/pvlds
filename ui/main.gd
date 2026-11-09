@@ -2561,6 +2561,19 @@ func _poll_launch() -> void:
 		_settle_launch(true, "the XR session changed hands")
 		return
 	var contract: WatchdogContract = WatchdogContract.load_from_disk()
+	if contract.session_id == _launch_session_id and contract.hold_exit_fired_unix > 0:
+		# HOLD-EXIT: the watchdog's hold fired for this session
+		# (the player held D-pad right through the threshold
+		# during the load). Exit through the app's own Exit
+		# path - the disarm names the gesture - never the
+		# hand-off: nothing about this session returns.
+		_launch_pending = false
+		_launch_game = null
+		print("PVLDS LAUNCH: hold-exit signal from the watchdog; exiting")
+		_request_art_warm_stop()
+		_launch_service.disarm("hold exit")
+		get_tree().quit()
+		return
 	if contract.session_id == _launch_session_id and contract.runtime_seen_unix > 0:
 		if _launch_runtime_seen_msec < 0:
 			_launch_runtime_seen_msec = now
@@ -21920,10 +21933,12 @@ func _drive_desk_smoke() -> void:
 				var before: PvldsConfig = PvldsConfig.new()
 				_desk_expect(before.load_from_disk(), "the scratch config loads")
 				_desk_expect(not before.focus_herding, "the scratch config starts with herding off")
-				# The stricken controls are ABSENT: no Close VPX
-				# checkbox (the watchdog's close duty is
-				# unconditional now), no Hold-to-exit checkbox,
-				# no hold-button picker (there is no hold gesture).
+				# The desk controls are ABSENT by design: no Close
+				# VPX checkbox (the watchdog's close duty is
+				# unconditional), no Hold-to-exit checkbox and no
+				# hold-button picker (HOLD-EXIT: the toggle lives
+				# in the config file only this round, and the
+				# button is fixed to D-pad right).
 				_desk_expect(_desk._close_check == null, "the desk has no Close VPX checkbox")
 				_desk_expect(_desk._hold_check == null, "the desk has no Hold-to-exit checkbox")
 				_desk_expect(_desk._hold_button_picker == null, "the desk has no hold-button picker")
@@ -21949,11 +21964,12 @@ func _drive_desk_smoke() -> void:
 				_desk_expect(after.focus_herding, "the config FILE has herding on, no Save & Scan pressed")
 				_desk_expect(after.vpx_exe_path == _config.vpx_exe_path and after.table_folders == _config.table_folders,
 					"fields the flip does not own (exe path, folders) are untouched on disk")
-				# And the save is clean of the stricken keys: the
-				# simplified exit model writes no close/hold fields.
+				# And the save carries the live toggle but none of
+				# the dead keys (HOLD-EXIT: hold_exit_enabled is a
+				# config-file key again; close/button keys are not).
 				var raw: String = FileAccess.get_file_as_string(PvldsConfig.existing_path())
 				_desk_expect(not raw.contains("close_vpx_on_table_exit"), "the saved config carries no close_vpx_on_table_exit key")
-				_desk_expect(not raw.contains("hold_exit_enabled"), "the saved config carries no hold_exit_enabled key")
+				_desk_expect(raw.contains("hold_exit_enabled"), "the saved config carries the hold_exit_enabled key")
 				_desk_expect(not raw.contains("hold_exit_button"), "the saved config carries no hold_exit_button key")
 				# Missing-backglass row (this round): the count
 				# line + Open list button beside the scan summary.
@@ -23286,6 +23302,8 @@ func _run_core_test() -> void:
 	contract.runtime_seen_unix = 2345678
 	contract.launcher_path = "C:/PVLDS/PVLDS.exe"
 	contract.focus_herding = false
+	contract.hold_exit_enabled = false
+	contract.hold_exit_fired_unix = 3456789
 	contract.disarm_reason = "room Exit"
 	_expect(contract.save_to_disk(), "watchdog contract saves", failures)
 	var contract2: WatchdogContract = WatchdogContract.load_from_disk()
@@ -23293,23 +23311,28 @@ func _run_core_test() -> void:
 		and contract2.session_state == "live" and contract2.game_window_seen_unix == 1234567
 		and contract2.runtime_seen_unix == 2345678
 		and not contract2.focus_herding
+		and not contract2.hold_exit_enabled and contract2.hold_exit_fired_unix == 3456789
 		and contract2.launcher_path == "C:/PVLDS/PVLDS.exe",
 		"watchdog contract round-trips (incl. the window-seen and runtime stamps)", failures)
 	_expect(contract2.disarm_reason == "room Exit",
 		"the disarm reason round-trips with the contract", failures)
-	# The simplified exit model writes NO close-duty or hold keys
-	# (the close duty is unconditional; hold was stricken) - and a
-	# contract that still CARRIES the old keys (written by an older
-	# build) loads without a murmur: both readers ignore them.
+	# HOLD-EXIT: the written contract carries the hold toggle
+	# (mirrored) and the fired stamp (watchdog-owned), but never
+	# a close-duty key and never a button key - the button is
+	# fixed to D-pad right. A contract written by an older build
+	# still loads cleanly: its close/button keys are ignored,
+	# and its hold_exit_enabled value is HONOURED (it is the
+	# player's own setting, in either generation's spelling).
 	var written: Dictionary = contract.to_dictionary()
-	_expect(not written.has("close_vpx_on_table_exit") and not written.has("hold_exit_enabled")
-		and not written.has("hold_exit_button"),
-		"the written contract carries no close-duty or hold keys", failures)
+	_expect(not written.has("close_vpx_on_table_exit") and written.has("hold_exit_enabled")
+		and written.has("hold_exit_fired_unix") and not written.has("hold_exit_button"),
+		"the written contract carries the hold keys and no close-duty or button keys", failures)
 	_expect(_write_text_file(contract_file, "{\"session_state\": \"live\", \"close_vpx_on_table_exit\": false, \"hold_exit_enabled\": false, \"hold_exit_button\": \"y\"}"),
-		"legacy contract with the stricken keys written", failures)
+		"legacy contract with the old keys written", failures)
 	var legacy_keys: WatchdogContract = WatchdogContract.load_from_disk()
-	_expect(legacy_keys.session_state == "live",
-		"a contract carrying the stricken keys loads (they are ignored)", failures)
+	_expect(legacy_keys.session_state == "live" and not legacy_keys.hold_exit_enabled
+		and legacy_keys.hold_exit_fired_unix == 0,
+		"a contract carrying the old keys loads (the toggle is honoured, the button key ignored, no fired stamp)", failures)
 	# And the disarm reason: no key, empty string - the watchdog
 	# falls back to its legacy generic in the stand-down line.
 	_expect(legacy_keys.disarm_reason == "",
@@ -23383,28 +23406,38 @@ func _run_core_test() -> void:
 	var own_exit_cfg: PvldsConfig = PvldsConfig.new()
 	_expect(own_exit_cfg.load_from_disk() and own_exit_cfg.launch_args_template == "-minimized -play -exit \"{table}\"",
 		"a user's own -exit-bearing template (not byte-identical to the bad default) is preserved", failures)
-	# The stricken exit-model keys: a config that still CARRIES
-	# them (written by an older build) loads cleanly - they are
-	# simply not read - and the next save writes a file without
-	# them. There are no close-duty or hold settings any more:
-	# the watchdog's close is unconditional and hold is gone.
+	# The legacy exit-model keys (HOLD-EXIT): a config that
+	# still CARRIES them (written by an older build) loads
+	# cleanly. The close-duty and button keys are simply not
+	# read - but hold_exit_enabled is a live key again: the
+	# player's own false is HONOURED, and the next save writes
+	# the toggle back while the dead keys stay unwritten. A
+	# config without the key loads the feature ON (its
+	# default).
 	_expect(_write_text_file(config_file, JSON.stringify({
 		"close_vpx_on_table_exit": false,
 		"hold_exit_enabled": false,
 		"hold_exit_button": "y",
 		"focus_herding": false,
-	})), "legacy config with the stricken keys written", failures)
+	})), "legacy config with the old keys written", failures)
 	var legacy_cfg: PvldsConfig = PvldsConfig.new()
-	_expect(legacy_cfg.load_from_disk() and not legacy_cfg.focus_herding,
-		"a config carrying the stricken keys loads (they are ignored)", failures)
+	_expect(legacy_cfg.load_from_disk() and not legacy_cfg.focus_herding
+		and not legacy_cfg.hold_exit_enabled,
+		"a config carrying the old keys loads (the toggle's false is honoured, the dead keys ignored)", failures)
 	_expect(legacy_cfg.save_to_disk(), "legacy config saves", failures)
 	var saved_raw: String = FileAccess.get_file_as_string(config_file)
-	_expect(not saved_raw.contains("close_vpx_on_table_exit") and not saved_raw.contains("hold_exit_enabled")
+	_expect(not saved_raw.contains("close_vpx_on_table_exit") and saved_raw.contains("hold_exit_enabled")
 		and not saved_raw.contains("hold_exit_button"),
-		"the saved config carries none of the stricken keys", failures)
+		"the saved config carries the live toggle and none of the dead keys", failures)
 	var resaved_cfg: PvldsConfig = PvldsConfig.new()
-	_expect(resaved_cfg.load_from_disk() and not resaved_cfg.focus_herding,
-		"the cleaned config round-trips through save", failures)
+	_expect(resaved_cfg.load_from_disk() and not resaved_cfg.focus_herding
+		and not resaved_cfg.hold_exit_enabled,
+		"the cleaned config round-trips through save (toggle still off)", failures)
+	_expect(_write_text_file(config_file, JSON.stringify({"focus_herding": false})),
+		"config without the hold key written", failures)
+	var default_cfg: PvldsConfig = PvldsConfig.new()
+	_expect(default_cfg.load_from_disk() and default_cfg.hold_exit_enabled,
+		"a config without hold_exit_enabled loads the feature ON (its default)", failures)
 
 	# ROOMSUBMIT (M1): the screenshots folder round-trips
 	# through the config file - set on the desk, read by the

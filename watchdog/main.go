@@ -14,13 +14,17 @@
 //     detector: when the table exit lands in the VPX editor, the
 //     editor takes and holds the foreground, and the watchdog
 //     closes VPX orderly so the return trip can finish; see
-//     closer.go). The close duty is unconditional - there is no
-//     hold gesture
-//     and no exit switch (both were stricken by the player's
-//     ruling, 2026-10-22): D-pad right is a plain BACK button -
-//     in play it is VPX's own Exit Game binding and lands in the
-//     editor, which this duty then closes promptly; in the room
-//     the same press quits the app (the launcher's side),
+//     closer.go). The close duty is unconditional, and D-pad
+//     right is a plain BACK button — in play a TAP is VPX's own
+//     Exit Game binding and lands in the editor, which this
+//     duty then closes promptly; in the room the same press
+//     quits the app (the launcher's side). The one ruled
+//     exception (HOLD-EXIT, 2026-11-09): a continuous 1.5 s
+//     HOLD of D-pad right during a session is the deliberate
+//     shut-everything-down gesture — the hold watch below
+//     (hold_logic.go) fires the same close ladder at VPX and
+//     stamps the contract's hold_exit_fired_unix, on which the
+//     works stand down instead of returning to the room,
 //   - stamp the contract when the game's player window is first
 //     sighted (runtime.go's sibling, sighting.go - the exit
 //     detector arms on it) and again when the game's table
@@ -107,12 +111,25 @@ type Contract struct {
 	PinemhiFolder       string `json:"pinemhi_folder"`
 	PinemhiWatcherPID   int    `json:"pinemhi_watcher_pid"`
 	PinemhiWatcherState string `json:"pinemhi_watcher_state"`
-	// No close-duty or hold keys: the exit model was simplified
-	// (2026-10-22) - the close duty is unconditional and there is
-	// no hold gesture. Contracts written by older builds may
-	// still carry close_vpx_on_table_exit / hold_exit_enabled /
-	// hold_exit_button; encoding/json ignores unknown keys on
-	// read, and merged writes here simply stop carrying them.
+	// Hold-to-exit (HOLD-EXIT round; hold_logic.go carries the
+	// law). HoldExitEnabled is mirrored by the launcher from its
+	// config on every check-in / launch write, like FocusHerding
+	// above; absent in older contracts, where encoding/json
+	// leaves it false — the launcher's own default is ON, and a
+	// contract the current launcher writes always carries it, so
+	// absence only ever describes a pre-HOLD-EXIT writer.
+	// HoldExitFiredUnix is owned by THIS process: stamped once
+	// when a session's hold fires, it is the app-exit signal —
+	// a resident launcher reading it for its own session exits
+	// through its own Exit path, and the watchdog's death paths
+	// read the same fact (via the detector's latch) to stand
+	// down instead of relaunching. The button is fixed to
+	// D-pad right; hold_exit_button from older builds is not
+	// read. The close duty itself stays unconditional — the
+	// hold is an ADDITIONAL, separately gated exit, not a
+	// switch on the closer.
+	HoldExitEnabled   bool  `json:"hold_exit_enabled"`
+	HoldExitFiredUnix int64 `json:"hold_exit_fired_unix"`
 	SessionID          int    `json:"session_id"`
 	SessionState       string `json:"session_state"`
 	GameExePath        string `json:"game_exe_path"`
@@ -214,6 +231,68 @@ func writeContractMerged(mutate func(*Contract)) {
 	os.Rename(tmp, contractPath)
 }
 
+// holdWatchState is the shared state between the watchdog's
+// main loop and the hold watch goroutine: the main loop
+// publishes the standing context (session, phase, alive,
+// sighted, toggle) every tick; the goroutine polls the button
+// leaf at holdPollIntervalMs — only while a session is active,
+// never when no session is live — feeds the detector, and
+// latches the fire here for the main loop to act on (the
+// contract writes and close sends stay on the main loop, where
+// every other contract write and close send already lives).
+type holdWatchState struct {
+	mu       sync.Mutex
+	ctx      holdSample
+	fired    bool
+	firedFor int
+}
+
+func (w *holdWatchState) publish(s holdSample) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.ctx = s
+}
+
+func (w *holdWatchState) firedForSession(sessionID int) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.fired && w.firedFor == sessionID
+}
+
+// run is the hold watch goroutine: one detector, fed at the
+// poll cadence off the published context.
+func (w *holdWatchState) run() {
+	det := &holdDetector{}
+	for {
+		time.Sleep(holdPollIntervalMs * time.Millisecond)
+		w.mu.Lock()
+		ctx := w.ctx
+		w.mu.Unlock()
+		pressed := false
+		if ctx.phase == "loading" || ctx.phase == "live" {
+			pressed = holdButtonPressed()
+		}
+		ctx.pressed = pressed
+		if det.observe(time.Now().UnixMilli(), ctx) {
+			w.mu.Lock()
+			w.fired = true
+			w.firedFor = ctx.sessionID
+			w.mu.Unlock()
+		}
+	}
+}
+
+// holdLadder is the main loop's escalation state for a fired
+// hold: the same orderly ladder the closer drives (FEC, grace,
+// WM_CLOSE, give up — closer.go's timing constants), advanced
+// on main ticks while the game stays alive. Stage 0 = not
+// started for this session.
+type holdLadder struct {
+	sessionID  int
+	stage      int // 1 FEC sent, 2 WM_CLOSE sent, 3 gave up
+	actionAtMs int64
+}
+
 func gameAlive(c *Contract) (bool, int) {
 	if c.GamePID > 0 && processAlive(c.GamePID) {
 		return true, c.GamePID
@@ -275,6 +354,13 @@ func main() {
 	// return above never reaches here: a twin owns nothing.)
 	defer closePinemhiWatcher()
 	logf("watchdog: on duty (pid %d), contract %s", os.Getpid(), contractPath)
+
+	// The hold watch (hold_logic.go): polls the button on its
+	// own goroutine at 50 ms — the 400 ms main tick would smear
+	// the 1.5 s threshold — and only while a session is active.
+	holdW := &holdWatchState{}
+	go holdW.run()
+	var sessionHold holdLadder
 
 	var (
 		sawGameAlive      bool
@@ -346,6 +432,19 @@ func main() {
 		if alive && gpid > 0 && gpid != c.GamePID {
 			c.GamePID = gpid
 		}
+		// Publish this tick's context to the hold watch. The
+		// sighting read is the gate's latch (fed by the window
+		// snapshots below and on earlier ticks — a tick of lag
+		// at worst, against a 1.5 s threshold).
+		holdPhase := ""
+		if sessionActive {
+			holdPhase = c.SessionState
+		}
+		holdSighted := false
+		if sessionActive && alive && c.GamePID > 0 {
+			holdSighted, _ = gameWindowExists(c.GamePID, c.SessionID)
+		}
+		holdW.publish(holdSample{sessionID: c.SessionID, phase: holdPhase, alive: alive, sighted: holdSighted, enabled: c.HoldExitEnabled})
 		// ---- relaunch outcome tracking -------------------------
 		if awaitingOutcome {
 			switch {
@@ -572,8 +671,56 @@ func main() {
 				case closeGiveUp:
 					logf("watchdog: session %d: VPX did not close after FrontEndControls + WM_CLOSE; leaving VPX alone", c.SessionID)
 				}
+				// Hold-exit (HOLD-EXIT): the hold watch has
+				// fired for this session — the player held
+				// D-pad right through the threshold, the
+				// deliberate shut-everything-down gesture.
+				// Stamp the contract (the app-exit signal a
+				// resident launcher consumes) and drive the
+				// same orderly ladder at VPX. When VPX dies,
+				// the death path below reads the fired latch
+				// and stands the works down instead of
+				// relaunching; if the ladder gives up, the
+				// session simply continues — the player is
+				// never left with a dead watch.
+				if holdW.firedForSession(c.SessionID) {
+					nowMs := time.Now().UnixMilli()
+					if sessionHold.sessionID != c.SessionID {
+						sessionHold = holdLadder{sessionID: c.SessionID, stage: 1, actionAtMs: nowMs}
+						writeContractMerged(func(mc *Contract) {
+							if mc.SessionID == c.SessionID && mc.HoldExitFiredUnix == 0 {
+								mc.HoldExitFiredUnix = time.Now().Unix()
+							}
+						})
+						ack := sendFrontEndControlsClose(c.GamePID)
+						logf("watchdog: session %d: hold-exit fired (D-pad right held %dms) - signal stamped in the contract; sent PinSim::FrontEndControls CLOSE_APP (acknowledged: %v)", c.SessionID, holdExitThresholdMs, ack)
+					} else if sessionHold.stage == 1 && nowMs-sessionHold.actionAtMs >= fecGraceMs {
+						sessionHold.stage = 2
+						sessionHold.actionAtMs = nowMs
+						ok := sendEditorClose(ws.editorHWND)
+						logf("watchdog: session %d: hold-exit: VPX still open after the FrontEndControls request; sent WM_CLOSE to the editor window (posted: %v)", c.SessionID, ok)
+					} else if sessionHold.stage == 2 && nowMs-sessionHold.actionAtMs >= closeGiveUpMs {
+						sessionHold.stage = 3
+						logf("watchdog: session %d: hold-exit: VPX did not close after FrontEndControls + WM_CLOSE; leaving VPX alone (the session continues)", c.SessionID)
+					}
+				}
 			} else if sawGameAlive {
 				sawGameAlive = false
+				if holdW.firedForSession(c.SessionID) {
+					// HOLD-EXIT: VPX died under a fired hold —
+					// the works stand down, no return trip. The
+					// disarm names the gesture; the deferred
+					// PINemHi close at this process's exit is
+					// the watcher's end, as for any true exit.
+					logf("watchdog: game process died, session %d; the hold-exit was fired - disarming (hold exit) and standing down", c.SessionID)
+					writeContractMerged(func(mc *Contract) {
+						mc.Armed = false
+						mc.DisarmReason = "hold exit"
+						mc.SessionState = "idle"
+						mc.GamePID = 0
+					})
+					return
+				}
 				if c.SessionState == "loading" && c.LauncherPID > 0 && processAlive(c.LauncherPID) {
 					// Died during the load, and the resident launcher
 					// is right there to show the failure. Terminal:
