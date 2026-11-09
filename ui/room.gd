@@ -8446,7 +8446,7 @@ func _activate(quad: ClickableQuad) -> void:
 			"setup_setting_pinemhi_watcher":
 				quad.pulse()
 				_pinemhi_manage_watcher = not _pinemhi_manage_watcher
-				set_setup_panel_message("PINemHi watcher: PVLDS will run the watcher while PVLDS is open - saving..." if _pinemhi_manage_watcher else "PINemHi watcher: PVLDS will not run the watcher - saving...")
+				set_setup_panel_message("PINemHi watcher: PVLDS will run the watcher while a table is playing - saving..." if _pinemhi_manage_watcher else "PINemHi watcher: PVLDS will not run the watcher - saving...")
 				pinemhi_watcher_toggled.emit(_pinemhi_manage_watcher)
 				_request_setup_panel_render(true)
 		return

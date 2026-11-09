@@ -52,11 +52,14 @@ var pinemhi_enabled: bool = true
 ## PINEMHI2 (Part B): the watcher-management toggle.
 ## pinemhi_manage_watcher: when true, PVLDS runs the
 ## PINemHi watcher (pinemhi_rom_monitor.exe, in the folder
-## above) strictly inside PVLDS's own open hours - the
-## watchdog process starts it if it is not running, leaves
-## a pre-running one adopted and untouched, and closes
-## only a watcher PVLDS itself started, at true exit.
-## Default OFF: PVLDS never touches the watcher process.
+## above) strictly inside a table session's life
+## (WATCHERLIFE) - the watchdog starts it when a session
+## starts if it is not running, leaves a pre-running one
+## adopted and untouched, and closes only a watcher PVLDS
+## itself started, after the session's extraction tail (or
+## at true exit inside that life). It never runs while the
+## app merely sits open. Default OFF: PVLDS never touches
+## the watcher process.
 var pinemhi_manage_watcher: bool = false
 ## ROOMSUBMIT: the screenshots folder the in-room WoVP
 ## score submission reads score photos from - the folder

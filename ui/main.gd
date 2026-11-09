@@ -1989,7 +1989,7 @@ func _on_room_pinemhi_watcher_toggled(on: bool) -> void:
 	_config.pinemhi_manage_watcher = on
 	if _config.save_to_disk():
 		if _room != null:
-			_room.set_setup_panel_message("PINemHi watcher: PVLDS will run the watcher while PVLDS is open." if on else "PINemHi watcher: PVLDS will not run the watcher.")
+			_room.set_setup_panel_message("PINemHi watcher: PVLDS will run the watcher while a table is playing." if on else "PINemHi watcher: PVLDS will not run the watcher.")
 		_refresh_setup_panel_health()
 		return
 	_config.pinemhi_manage_watcher = not on

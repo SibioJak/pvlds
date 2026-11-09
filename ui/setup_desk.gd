@@ -307,8 +307,10 @@ func _build_ui() -> void:
 	# leaves behind and shows your own #1 under the league
 	# scores on a tournament board. PINEMHI2 (Part B) adds
 	# ONE opt-in on top of that: the watcher checkbox below
-	# lets PVLDS run PINemHi's watcher while PVLDS is open
-	# (see its label). Like the key, these are live
+	# lets PVLDS run PINemHi's watcher while a table is
+	# playing (WATCHERLIFE: its life is the session's, never
+	# the app's open hours - see its label). Like the key,
+	# these are live
 	# settings: Save writes the config on the spot.
 	var pinemhi_title: Label = Label.new()
 	pinemhi_title.text = "PINemHi - your personal bests on the tournament boards"
@@ -322,8 +324,8 @@ func _build_ui() -> void:
 	_pinemhi_check.text = "Show my PINemHi personal bests on tournament boards"
 	vbox.add_child(_pinemhi_check)
 	_pinemhi_manage_check = CheckBox.new()
-	_pinemhi_manage_check.text = "Let PVLDS run the PINemHi watcher while PVLDS is open"
-	_pinemhi_manage_check.tooltip_text = "Off (the default): PVLDS never touches the watcher process. On: the watchdog starts pinemhi_rom_monitor.exe when PVLDS opens if it is not already running, and closes it when PVLDS exits. A watcher that was already running before PVLDS opened is left running - PVLDS only ever closes one it started itself."
+	_pinemhi_manage_check.text = "Let PVLDS run the PINemHi watcher while a table is playing"
+	_pinemhi_manage_check.tooltip_text = "Off (the default): PVLDS never touches the watcher process. On: the watchdog starts pinemhi_rom_monitor.exe when a table starts if it is not already running, and closes it shortly after the table exits (or when PVLDS exits, if that comes first). A watcher that was already running before is left running - PVLDS only ever closes one it started itself."
 	vbox.add_child(_pinemhi_manage_check)
 	_pinemhi_edit = LineEdit.new()
 	_pinemhi_edit.placeholder_text = "PINemHi folder - empty = auto-detect"

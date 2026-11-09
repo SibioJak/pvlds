@@ -5,25 +5,47 @@ package main
 // launcher exits at every table hand-off - only this resident
 // process spans a whole PVLDS session.
 //
-// THE LAW (Chris's quit reasons are the spec): a toggle in the
-// launcher config, mirrored into the contract as pinemhi_manage,
-// default OFF. Off = the watcher process is never touched.
-// On = the watcher lives strictly inside PVLDS's open hours:
-//   - started at session start if it is not already running,
-//   - left alone across table hand-offs (nothing here keys on
-//     session state at all - the duty runs on every tick),
-//   - closed at TRUE exit only: every watchdog stand-down path
-//     returns from main(), and the deferred close below is
-//     registered right after the single-instance lock is held,
-//     so disarm, contract-gone, stale watch and the loop cap
-//     all pass through it.
-// ADOPT-DON'T-DUPLICATE: a watcher already running when the
-// duty first looks is adopted - used, and NEVER closed by
-// PVLDS. Only a watcher PVLDS started is closed by PVLDS.
+// THE LAW (WATCHERLIFE, Chris's ruling 2026-11-08, a field
+// defect): the managed watcher exists ONLY while a play session
+// is live or in its extraction tail. It is never running while
+// the app idles - not in the room, not on the desk, not at boot.
+// The defect: with PVLDS open on the desk, the watcher's GLOBAL
+// hotkeys (PINemHi registers them system-wide, by its own
+// design) stayed live during ordinary desktop file work and a
+// stray keystroke tripped a challenge start. PINemHi's hotkeys
+// are not PVLDS's to change - the watcher's LIFETIME is the only
+// lever, and it now belongs to the session:
+//   - management is a toggle in the launcher config, mirrored
+//     into the contract as pinemhi_manage, default OFF. Off =
+//     the watcher process is never touched.
+//   - the watcher starts when a table session starts (the
+//     contract's session lifecycle: loading/live) if it is not
+//     already running, and is left alone across table hand-offs
+//     inside that life,
+//   - when the session ends, the watcher stays up for the
+//     extraction tail (pinemhiTailSeconds) - it extracts the
+//     score from nvram at/after game end, and an exit that raced
+//     extraction once left an empty personal file - then a
+//     PVLDS-started watcher is closed and ownership cleared.
+//     A new session starting inside the tail keeps it up: no
+//     close/reopen churn.
+//   - at TRUE app exit during a session or tail, the deferred
+//     close below still closes a PVLDS-started watcher: every
+//     watchdog stand-down path returns from main(), and the
+//     deferred close is registered right after the single-
+//     instance lock is held, so disarm, contract-gone, stale
+//     watch and the loop cap all pass through it.
+// ADOPT-DON'T-DUPLICATE: a watcher already running when a
+// session starts is adopted - used, and NEVER closed by PVLDS.
+// Only a watcher PVLDS started is closed by PVLDS. The tail-end
+// close clears an adopted watcher's ownership RECORD only; the
+// process itself is left running, always.
 // The ownership facts (pid + state) live in the contract, so
 // a watchdog killed mid-session leaves them behind: the next
 // watchdog reads state="started" with a live pid and does not
-// stack a second watcher.
+// stack a second watcher. (At idle, though, that leftover now
+// reads as end-of-life and is closed - the watcher may not
+// squat outside a session just because its watchdog died.)
 //
 // The DECISIONS are pure and unit-tested (pinemhi_test.go);
 // the tick duty and the exit close in main.go / below are the
@@ -32,6 +54,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -63,6 +86,58 @@ func pinemhiDecide(manage bool, state string, running bool) pinemhiAction {
 		return pinemhiAdopt
 	}
 	return pinemhiStart
+}
+
+// pinemhiTailSeconds is the extraction tail: how long the
+// watcher stays up after the session's last active tick. The
+// watcher extracts the score from nvram at/after game end, and
+// the field record holds one empty personal file from an exit
+// that raced extraction - so the close waits. 90 s: the brief's
+// floor was 60 ("when in doubt, longer"); no dossier holds a
+// measured extraction lag, and the successful field submissions
+// all completed while the watcher simply stayed up. The cost
+// side is bounded: hotkey exposure ends a minute and a half
+// after the table, not after hours of desk idling.
+const pinemhiTailSeconds int64 = 90
+
+// pinemhiTail resolves the tail length. The bench seam
+// (PVLDS_PINEMHI_TAIL_SECONDS, same family as PVLDS_PINEMHI_NC)
+// lets the smoke run the tail legs in seconds; production never
+// sets it and always gets the constant.
+func pinemhiTail() int64 {
+	if v := os.Getenv("PVLDS_PINEMHI_TAIL_SECONDS"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return pinemhiTailSeconds
+}
+
+// pinemhiLifetime is the session/tail tracker: fed the
+// contract's sessionActive and the tick's clock, it answers the
+// only question the duty asks - should the watcher be up on this
+// tick? Pure; unit-tested (pinemhi_test.go).
+type pinemhiLifetime struct {
+	inSession bool  // the previous tick saw a live session
+	tailUntil int64 // unix seconds the tail runs to; 0 = no tail
+}
+
+// wanted reports whether the watcher should exist on this tick:
+// inside a session, always; on the first inactive tick after a
+// session, the tail starts; inside the tail, still wanted; past
+// it, not. A session starting inside the tail cancels the tail
+// (the watcher simply stays up - no close/reopen churn).
+func (l *pinemhiLifetime) wanted(sessionActive bool, now int64, tail int64) bool {
+	if sessionActive {
+		l.inSession = true
+		l.tailUntil = 0
+		return true
+	}
+	if l.inSession {
+		l.inSession = false
+		l.tailUntil = now + tail
+	}
+	return l.tailUntil != 0 && now < l.tailUntil
 }
 
 // pinemhiStartLatch is the failed-start latch (WATCHERFIX). Field
@@ -131,15 +206,42 @@ func pinemhiFileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
+// closePinemhiProcess closes ONE watcher process PVLDS started:
+// graceful first - the watcher's windows are asked to close -
+// with a brief grace, then a terminate if it is still alive.
+// `why` names the close in the log ("exit close" at TRUE exit,
+// "session over" at the tail's end); each step is logged in
+// plain words.
+func closePinemhiProcess(pid int, why string) {
+	logf("watchdog: pinemhi: %s - closing the watcher PVLDS started (pid %d)", why, pid)
+	if closeProcessWindows(pid) {
+		logf("watchdog: pinemhi: %s - asked the watcher's windows to close (pid %d)", why, pid)
+	}
+	// Brief grace for the graceful close to land (~1.5s max).
+	for i := 0; i < 10; i++ {
+		if !processAlive(pid) {
+			logf("watchdog: pinemhi: %s - watcher pid %d closed gracefully", why, pid)
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	logf("watchdog: pinemhi: %s - watcher pid %d still alive after the grace; terminating it", why, pid)
+	if terminateProcess(pid) {
+		logf("watchdog: pinemhi: %s - watcher pid %d terminated", why, pid)
+	} else {
+		logf("watchdog: pinemhi: %s - could not terminate watcher pid %d; leaving it", why, pid)
+	}
+}
+
 // closePinemhiWatcher is the deferred TRUE-exit duty, registered
 // in main() immediately after the single-instance lock is held
 // so every return path out of main passes through it. It
 // re-reads the contract at exit time (the on-disk facts are the
 // session's truth, not any tick's snapshot), and closes only
 // what pinemhiShouldClose allows: the watcher PVLDS started.
-// The close is graceful first - the watcher's windows are asked
-// to close - with a brief grace, then a terminate if it is
-// still alive. Each step is logged in plain words.
+// Under WATCHERLIFE this fires only when the exit lands inside
+// a session or its tail - at idle the tail-end close has
+// already run and cleared the ownership, so this is a no-op.
 func closePinemhiWatcher() {
 	c, err := readContract()
 	if err != nil {
@@ -157,22 +259,5 @@ func closePinemhiWatcher() {
 		logf("watchdog: pinemhi: exit close - the watcher PVLDS started (pid %d) is already gone", pid)
 		return
 	}
-	logf("watchdog: pinemhi: exit close - closing the watcher PVLDS started (pid %d)", pid)
-	if closeProcessWindows(pid) {
-		logf("watchdog: pinemhi: exit close - asked the watcher's windows to close (pid %d)", pid)
-	}
-	// Brief grace for the graceful close to land (~1.5s max).
-	for i := 0; i < 10; i++ {
-		if !processAlive(pid) {
-			logf("watchdog: pinemhi: exit close - watcher pid %d closed gracefully", pid)
-			return
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	logf("watchdog: pinemhi: exit close - watcher pid %d still alive after the grace; terminating it", pid)
-	if terminateProcess(pid) {
-		logf("watchdog: pinemhi: exit close - watcher pid %d terminated", pid)
-	} else {
-		logf("watchdog: pinemhi: exit close - could not terminate watcher pid %d; leaving it", pid)
-	}
+	closePinemhiProcess(pid, "exit close")
 }
