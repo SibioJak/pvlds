@@ -17919,6 +17919,14 @@ func _sm_near(c: Color, target: Color, tol: float) -> bool:
 		and absf(c.b - target.b) <= tol and c.a >= 0.9
 
 
+## HOLLOWFIX: the MARKS-era drained ground, remembered by
+## the legs ONLY to deny it - production retired the colour
+## with the register (RoomSpecs carries no hollow colour
+## any more; the hollow badge paints no interior at all).
+func _sm_retired_quiet(band: Color) -> Color:
+	return band.lerp(Color(0.09, 0.09, 0.12), 0.62)
+
+
 ## The longest horizontal run of near-target pixels in a
 ## row band of the image - a chip's ground is one flat run.
 func _sm_max_run(img: Image, y0: int, y1: int, target: Color, tol: float) -> int:
@@ -17936,11 +17944,15 @@ func _sm_max_run(img: Image, y0: int, y1: int, target: Color, tol: float) -> int
 
 
 ## The full-colour (target) run on the middle row of the
-## chip whose ground is `ground`: the rows carrying a
-## ground run of 40+ px span the chip, and its middle row
-## crosses only the chip's interior (ground, glyphs, the
-## 2 px side outlines) - never the outline's horizontal
-## edges, which span the chip's whole width BY DESIGN.
+## chip located by `ground`: the rows carrying a ground
+## run of 40+ px span the chip, and its middle row crosses
+## only the chip's interior (ground, glyphs, the frame's
+## side edges) - never the frame's horizontal edges, which
+## span the chip's whole width BY DESIGN. HOLLOWFIX locates
+## the hollow chip by its own frame colour: within the
+## chips band the only full-band runs are the empty frame's
+## top and bottom edges, so the middle row lands inside the
+## unpainted interior.
 ## Returns -1 when no ground row stands in the band.
 ## (PINEMHI MARKS adjudication: a whole-band max-run scan
 ## convicts the HOLLOW outline's edges, not its ground -
@@ -17991,25 +18003,25 @@ func _sm_judge_standing(game_id: String, state: int) -> void:
 	if img == null or img.is_empty():
 		return
 	# The chips band (below the maker band, above the
-	# file line): the PINemHi chip's ground is the game's
-	# band colour at the state's register - SOLID one flat
-	# full-strength run; HOLLOW the drained ground's run
-	# across the band and NO full-strength run on the
-	# chip's middle row (the full-strength OUTLINE's
-	# horizontal edges span the chip by design, so the
-	# denial is judged mid-chip - see _sm_chip_middle_run);
-	# UNMARKED neither.
+	# file line): the PINemHi chip wears the game's band
+	# colour in the state's shape - SOLID one flat
+	# full-strength run; HOLLOW (HOLLOWFIX) an EMPTY FRAME:
+	# its horizontal edges are full-strength runs (the
+	# `run` above), its middle row crosses only the
+	# frame's sides and the unpainted interior (judged
+	# mid-chip - see _sm_chip_middle_run), and the retired
+	# drained ground stands nowhere; UNMARKED neither.
 	var band: Color = RoomSpecs.manufacturer_color(game.manufacturer)
 	var run: int = _sm_max_run(img, 95, 430, band, 0.03)
-	var quiet_run: int = _sm_max_run(img, 95, 430, RoomSpecs.pinemhi_quiet_color(band), 0.03)
+	var quiet_run: int = _sm_max_run(img, 95, 430, _sm_retired_quiet(band), 0.03)
 	match state:
 		RoomSpecs.PINEMHI_MARK_SOLID:
 			_sm_expect(run >= 40, "%s: the SOLID PINemHi chip stands on the rendered standing face (band-colour run %d px)" % [game.title, run])
 		RoomSpecs.PINEMHI_MARK_HOLLOW:
-			var mid_run: int = _sm_chip_middle_run(img, 95, 430, RoomSpecs.pinemhi_quiet_color(band), band, 0.03)
-			_sm_expect(mid_run >= 0 and mid_run < 40 and quiet_run >= 40, "%s: the HOLLOW PINemHi chip stands drained on the rendered standing face (full run %d px on the chip's middle row, drained run %d px)" % [game.title, mid_run, quiet_run])
+			var mid_run: int = _sm_chip_middle_run(img, 95, 430, band, band, 0.03)
+			_sm_expect(mid_run >= 0 and mid_run < 40 and quiet_run < 40, "%s: the HOLLOW PINemHi chip stands as an empty frame on the rendered standing face (full run %d px on the chip's middle row, frame-edge run %d px, retired drained run %d px)" % [game.title, mid_run, run, quiet_run])
 		_:
-			_sm_expect(run < 40 and quiet_run < 40, "%s: NO PINemHi chip on the rendered standing face (band-colour run %d px, drained run %d px)" % [game.title, run, quiet_run])
+			_sm_expect(run < 40 and quiet_run < 40, "%s: NO PINemHi chip on the rendered standing face (band-colour run %d px, retired drained run %d px)" % [game.title, run, quiet_run])
 
 
 ## The art citizen: each fixture game's front rendered
@@ -18053,13 +18065,18 @@ func _sm_judge_art() -> void:
 					_sm_expect(ground >= 2500 and word >= 400,
 						"art face: %s carries the SOLID PINemHi wordmark badge in its band colour (%d ground px, %d word px)" % [game.title, ground, word])
 				RoomSpecs.PINEMHI_MARK_HOLLOW:
-					# The drained ground fills the seat, the
-					# full band colour survives only as the
-					# outline, the word stands soft-white.
-					var qground: int = _sm_count_in(img, Rect2i(10, 798, 164, 56), RoomSpecs.pinemhi_quiet_color(col), 0.03)
-					var qword: int = _sm_count_in(img, Rect2i(24, 810, 136, 34), Color(0.88, 0.89, 0.94), 0.06)
-					_sm_expect(qground >= 2200 and ground >= 150 and ground < 1200 and qword >= 300,
-						"art face: %s carries the HOLLOW wordmark badge - drained ground, band-colour outline, soft word (%d drained px, %d outline px, %d word px)" % [game.title, qground, ground, qword])
+					# HOLLOWFIX: the badge is an EMPTY FRAME -
+					# the full band colour stands only as the
+					# frame (perimeter px, not a fill), the
+					# retired drained ground stands nowhere,
+					# the interior carries no band colour and
+					# the fixture art itself shows through it,
+					# and the word stands bright white.
+					var qground: int = _sm_count_in(img, Rect2i(10, 798, 164, 56), _sm_retired_quiet(col), 0.03)
+					var inner_band: int = _sm_count_in(img, Rect2i(18, 806, 148, 40), col, 0.03)
+					var inner_art: int = _sm_count_in(img, Rect2i(18, 806, 148, 40), Color(0.22, 0.20, 0.24), 0.03)
+					_sm_expect(qground < 100 and ground >= 700 and ground < 2200 and inner_band < 40 and inner_art >= 2500 and word >= 300,
+						"art face: %s carries the HOLLOW wordmark badge - empty frame, bright word, the face showing through (%d frame px, %d retired-drained px, %d inner band px, %d inner art px, %d word px)" % [game.title, ground, qground, inner_band, inner_art, word])
 				_:
 					_sm_expect(ground < 40 and word == 0,
 						"art face: %s carries NO wordmark badge (%d ground px, %d word px)" % [game.title, ground, word])
@@ -18086,8 +18103,9 @@ func _sm_judge_art() -> void:
 				RoomSpecs.PINEMHI_MARK_SOLID:
 					_sm_expect(dground >= 2500, "detail-size art face: %s carries the SOLID wordmark badge (%d ground px)" % [game.title, dground])
 				RoomSpecs.PINEMHI_MARK_HOLLOW:
-					var dqground: int = _sm_count_in(dimg, Rect2i(10, 734, 164, 56), RoomSpecs.pinemhi_quiet_color(col), 0.03)
-					_sm_expect(dqground >= 2200 and dground < 1200, "detail-size art face: %s carries the HOLLOW wordmark badge (%d drained px, %d outline px)" % [game.title, dqground, dground])
+					var dqground: int = _sm_count_in(dimg, Rect2i(10, 734, 164, 56), _sm_retired_quiet(col), 0.03)
+					var dinner_band: int = _sm_count_in(dimg, Rect2i(18, 742, 148, 40), col, 0.03)
+					_sm_expect(dqground < 100 and dground >= 700 and dground < 2200 and dinner_band < 40, "detail-size art face: %s carries the HOLLOW wordmark badge - empty frame only (%d frame px, %d retired-drained px, %d inner band px)" % [game.title, dground, dqground, dinner_band])
 				_:
 					_sm_expect(dground < 40, "detail-size art face: %s carries NO wordmark badge (%d ground px)" % [game.title, dground])
 	_sm_judged = true
@@ -18135,10 +18153,15 @@ func _sm_judge_detail() -> void:
 					_sm_expect(run >= 40 or badge >= 2500,
 						"detail: the detail view's front for %s carries the SOLID mark (chip run %d px, badge %d px)" % [game.title, run, badge])
 				RoomSpecs.PINEMHI_MARK_HOLLOW:
-					var qrun: int = _sm_max_run(img, 95, 430, RoomSpecs.pinemhi_quiet_color(col), 0.03)
-					var qbadge: int = _sm_count_in(img, Rect2i(10, 734, 164, 56), RoomSpecs.pinemhi_quiet_color(col), 0.03)
-					_sm_expect(qrun >= 40 or qbadge >= 2200,
-						"detail: the detail view's front for %s carries the HOLLOW mark (drained chip run %d px, drained badge %d px)" % [game.title, qrun, qbadge])
+					# HOLLOWFIX: either citizen proves the
+					# empty frame - the panel chip's full-band
+					# frame edges (run >= 40) or the art
+					# badge's frame-only band count - and the
+					# retired drained ground stands on neither.
+					var qrun: int = _sm_max_run(img, 95, 430, _sm_retired_quiet(col), 0.03)
+					var qbadge: int = _sm_count_in(img, Rect2i(10, 734, 164, 56), _sm_retired_quiet(col), 0.03)
+					_sm_expect((run >= 40 or (badge >= 700 and badge < 2200)) and qrun < 40 and qbadge < 100,
+						"detail: the detail view's front for %s carries the HOLLOW mark (frame run %d px, badge frame %d px, retired drained run %d px, retired drained badge %d px)" % [game.title, run, badge, qrun, qbadge])
 				_:
 					_sm_expect(run < 40 and badge < 40,
 						"detail: the detail view's front for %s carries NO mark (chip run %d px, badge %d px)" % [game.title, run, badge])
@@ -18417,8 +18440,17 @@ func _run_pinemhi_marks_smoke() -> void:
 				_expect(_sm_count_in(img, badge_rect, band, 0.03) >= 2500 and _sm_count_in(img, Rect2i(24, 810, 136, 34), Color(0.98, 0.98, 1.0), 0.06) >= 400,
 					"marks: the SOLID badge renders flat band colour + white word", failures)
 			RoomSpecs.PINEMHI_MARK_HOLLOW:
-				_expect(_sm_count_in(img, badge_rect, RoomSpecs.pinemhi_quiet_color(band), 0.03) >= 2200,
-					"marks: the HOLLOW badge renders its drained ground", failures)
+				# HOLLOWFIX: empty frame - the band colour
+				# stands only as the frame, the retired
+				# drained ground nowhere, the interior
+				# carries no band colour and the flat
+				# fixture art shows through it, the word
+				# bright white.
+				var frame_px: int = _sm_count_in(img, badge_rect, band, 0.03)
+				var inner_band_m: int = _sm_count_in(img, Rect2i(18, 806, 148, 40), band, 0.03)
+				var inner_art_m: int = _sm_count_in(img, Rect2i(18, 806, 148, 40), Color(0.32, 0.30, 0.27), 0.03)
+				_expect(frame_px >= 700 and frame_px < 2200 and _sm_count_in(img, badge_rect, _sm_retired_quiet(band), 0.03) < 100 and inner_band_m < 40 and inner_art_m >= 2500 and _sm_count_in(img, Rect2i(24, 810, 136, 34), Color(0.98, 0.98, 1.0), 0.06) >= 300,
+					"marks: the HOLLOW badge renders its empty frame (%d frame px, %d inner art px)" % [frame_px, inner_art_m], failures)
 			RoomSpecs.PINEMHI_MARK_STRUCK:
 				var line_px: int = _sm_count_in(img, Rect2i(16, 818, 152, 18), Color(0.93, 0.93, 0.96), 0.05)
 				_expect(_sm_count_in(img, badge_rect, RoomSpecs.pinemhi_struck_color(band), 0.03) >= 2200 and line_px >= 60,
@@ -18436,14 +18468,17 @@ func _run_pinemhi_marks_smoke() -> void:
 					_expect(_sm_max_run(pimg, 95, 430, band, 0.03) >= 40,
 						"marks: the SOLID chip renders its full-strength run", failures)
 				RoomSpecs.PINEMHI_MARK_HOLLOW:
-					# The outline is full band BY DESIGN; the
-					# drained claim is judged on the chip's
-					# middle rows (232-248, measured off the
-					# grab: the chip spans ~213-267), which
-					# cross only the 2px side outlines and
-					# the ground.
-					_expect(_sm_max_run(pimg, 232, 248, band, 0.03) < 40 and _sm_max_run(pimg, 95, 430, RoomSpecs.pinemhi_quiet_color(band), 0.03) >= 40,
-						"marks: the HOLLOW chip renders drained, no full-strength run", failures)
+					# HOLLOWFIX: the frame's edges carry the
+					# full band colour (a 40+ run stands
+					# somewhere in the band); the middle rows
+					# (232-248, measured off the grab: the
+					# chip spans ~213-267) cross only the
+					# frame's sides and the unpainted
+					# interior, so no full-strength run
+					# stands there; and the retired drained
+					# ground stands nowhere in the band.
+					_expect(_sm_max_run(pimg, 95, 430, band, 0.03) >= 40 and _sm_max_run(pimg, 232, 248, band, 0.03) < 40 and _sm_max_run(pimg, 95, 430, _sm_retired_quiet(band), 0.03) < 40,
+						"marks: the HOLLOW chip renders its empty frame, no fill, no drained ground", failures)
 				RoomSpecs.PINEMHI_MARK_STRUCK:
 					_expect(_sm_max_run(pimg, 95, 430, RoomSpecs.pinemhi_struck_color(band), 0.03) >= 40,
 						"marks: the STRUCK chip renders its near-grey run", failures)

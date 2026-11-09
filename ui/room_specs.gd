@@ -565,14 +565,16 @@ const PINEMHI_MARK_HOLLOW: int = 2 ## PINemHi supports it; no score yet
 const PINEMHI_MARK_STRUCK: int = 3 ## PINemHi certainly cannot score it
 
 
-## The HOLLOW register's ground: the game's band colour
-## drained toward the card's dark ground - the same box,
-## the colour let out of it (CardFace draws a full-strength
-## outline over it, so the corner still speaks the game's
-## colour at a glance). One function so specs, faces and
-## smokes judge one colour.
-static func pinemhi_quiet_color(band: Color) -> Color:
-	return band.lerp(Color(0.09, 0.09, 0.12), 0.62)
+## The HOLLOW register has NO ground (HOLLOWFIX): the
+## MARKS-era drained ground (the band colour let out toward
+## the card's dark ground) failed the field test - it got
+## lost against the wall. The hollow badge is an EMPTY
+## frame instead: a full-strength band-colour outline and
+## the bright white word over an interior nobody paints,
+## so the card's own face shows through (CardFace's
+## _score_box_hollow / chip box draw no centre). There is
+## deliberately no hollow colour function left to judge:
+## the register is defined by an ABSENCE of fill.
 
 
 ## The STRUCK register's ground: drained further, toward

@@ -372,19 +372,42 @@ func _score_box(color: Color) -> StyleBoxFlat:
 	return sb
 
 
-## The PINEMHI MARKS registers of the badge's box: HOLLOW
-## keeps the SOLID box's shape and margins over the drained
-## ground (RoomSpecs.pinemhi_quiet_color), with a 2 px
-## outline in the full band colour - the word stands inside
-## a frame of the game's own colour, the fill let out.
-## STRUCK wears the near-grey ground
+## The PINEMHI MARKS registers of the badge's box. HOLLOW
+## (HOLLOWFIX, the field-ruled register): an EMPTY frame -
+## no centre is drawn at all, so the card's own face shows
+## through the interior; a 3 px outline in the full band
+## colour and the bright white word carry it. The MARKS-era
+## drained fill under a 2 px outline got lost against the
+## wall in the field; filled (SOLID) vs empty (HOLLOW) is
+## the grammar now. STRUCK wears the near-grey ground
 ## (RoomSpecs.pinemhi_struck_color), no outline; the strike
 ## line over it is _art_score_strike's, asserted in
 ## apply_spec.
 func _score_box_hollow(band: Color) -> StyleBoxFlat:
-	var sb: StyleBoxFlat = _score_box(RoomSpecs.pinemhi_quiet_color(band))
-	sb.set_border_width_all(2)
+	var sb: StyleBoxFlat = StyleBoxFlat.new()
+	sb.draw_center = false
+	sb.set_border_width_all(3)
 	sb.border_color = band
+	sb.corner_radius_top_left = 10
+	sb.corner_radius_top_right = 10
+	sb.corner_radius_bottom_left = 10
+	sb.corner_radius_bottom_right = 10
+	sb.content_margin_left = 14
+	sb.content_margin_right = 14
+	sb.content_margin_top = 6
+	sb.content_margin_bottom = 6
+	return sb
+
+
+## The panel chip's citizen of the same empty frame
+## (HOLLOWFIX): _make_chip's hollow register - no centre,
+## the face's own ground inside a 3 px full-colour frame.
+func _chip_box_hollow(col: Color) -> StyleBoxFlat:
+	var sb: StyleBoxFlat = _box(col, 8)
+	sb.draw_center = false
+	sb.bg_color = Color(0, 0, 0, 0)
+	sb.set_border_width_all(3)
+	sb.border_color = col
 	return sb
 
 
@@ -573,7 +596,7 @@ func apply_spec(spec: Dictionary) -> void:
 			match mark_state:
 				RoomSpecs.PINEMHI_MARK_HOLLOW:
 					_art_score.add_theme_stylebox_override("panel", _score_box_hollow(score_col))
-					_art_score_label.add_theme_color_override("font_color", Color(0.88, 0.89, 0.94))
+					_art_score_label.add_theme_color_override("font_color", Color(0.98, 0.98, 1.0))
 				RoomSpecs.PINEMHI_MARK_STRUCK:
 					_art_score.add_theme_stylebox_override("panel", _score_box_struck(score_col))
 					_art_score_label.add_theme_color_override("font_color", Color(0.70, 0.70, 0.74))
@@ -1290,14 +1313,12 @@ func _make_chip(text: String, accent: bool, ground: Variant = null, mark: int = 
 		col = ground
 		ink = Color(0.98, 0.98, 1.0)
 		# PINEMHI MARKS: the scoremark chip wears the corner's
-		# register, same grounds as the art badge - HOLLOW
-		# drained + outlined, STRUCK near-grey + dimmed ink.
+		# register, same shapes as the art badge - HOLLOW the
+		# empty frame (HOLLOWFIX: no centre, full-colour
+		# border, bright ink), STRUCK near-grey + dimmed ink.
 		if mark == RoomSpecs.PINEMHI_MARK_HOLLOW:
-			var hb: StyleBoxFlat = _box(RoomSpecs.pinemhi_quiet_color(col), 8)
-			hb.set_border_width_all(2)
-			hb.border_color = col
-			pc.add_theme_stylebox_override("panel", hb)
-			ink = Color(0.88, 0.89, 0.94)
+			pc.add_theme_stylebox_override("panel", _chip_box_hollow(col))
+			ink = Color(0.98, 0.98, 1.0)
 		elif mark == RoomSpecs.PINEMHI_MARK_STRUCK:
 			pc.add_theme_stylebox_override("panel", _box(RoomSpecs.pinemhi_struck_color(col), 8))
 			ink = Color(0.70, 0.70, 0.74)
