@@ -311,6 +311,7 @@ var _bootface_phase: int = 0
 var _bootface_wait: int = 0
 var _bootface_failures: int = 0
 var _bootface_grabbed: bool = false
+var _bootface_scanner_before: LibraryScanner = null ## DESKEXIT: the scanner standing when SETUP opened - identity proves Enter ran no new scan
 var _smoke_dpadexit: bool = false ## --pvlds-smoke-dpadexit: a fresh D-pad Right in the room must exit the app
 var _dpadexit_held_leg: bool = false ## --pvlds-smoke-dpadexit-held: the button is pinned from boot; no exit until a witnessed release, then a fresh press exits
 var _dpadexit_smoke_phase: int = 0
@@ -3961,6 +3962,21 @@ func _show_desk(message: String = "") -> void:
 		_desk.ipdb_snapshot_requested.connect(_apply_ipdb_snapshot)
 		_desk.set_ipdb_status(_ipdb_health_line())
 		_push_submit_data()
+	# DESKEXIT: a desk shown while a completed scan's results
+	# stand opens knowing it - the standing summary and both
+	# health counts land on it, so Enter the Room is armed
+	# without a fresh scan. (BOOTFACE made the desk lazy: a
+	# desk created at SETUP-open otherwise believes no scan
+	# ever happened and traps the player into scanning again
+	# just to leave.) While a scan runs, progress owns the
+	# desk's stats line and buttons - nothing is applied. A
+	# launch-failure message is posted by the caller AFTER
+	# this door returns (show_message in the launch path), so
+	# it still lands on top of the summary and stands.
+	if _scanner != null and not _scan_active:
+		_desk.apply_scan_summary(build_scan_summary())
+		_desk.apply_missing_b2s(_scanner.missing_b2s_files.size())
+		_desk.apply_unplaced(_scanner.unplaced_files.size())
 	_desk.visible = true
 
 
@@ -23157,7 +23173,13 @@ func _finish_desk_smoke() -> void:
 ##              scan lands, the face drops, the room stands;
 ##              SETUP opened from the room (the very _show_desk
 ##              door the room's signal connects to) then stands
-##              the desk in its full FIRST SETUP dress.
+##              the desk in its full FIRST SETUP dress. DESKEXIT:
+##              the desk opens knowing the boot scan stands -
+##              Enter the Room armed, the standing summary and
+##              health lines on it - and pressing Enter through
+##              the real button returns to the room with no new
+##              scan; a desk-started Save & Scan then disables
+##              the exit while it runs and re-arms on landing.
 ##   sample   - a configured boot whose scan resolves to the
 ##              bundled sample database: the auto-enter is
 ##              cancelled, the boot face drops, and the desk
@@ -23183,6 +23205,10 @@ func _drive_bootface_smoke() -> void:
 						"firstrun: the 'Done once' line stands")
 					_bootface_expect(bool(fdress["pointer_visible"]),
 						"firstrun: the IN-VR pointer line stands")
+					_bootface_expect(not _desk._scanned,
+						"firstrun: no scan stands yet (_scanned is false)")
+					_bootface_expect(_desk._enter_button.disabled,
+						"firstrun: Enter the Room stays greyed until the desk's first scan")
 					_bootface_wait = 0
 					_bootface_phase = 3
 				else:
@@ -23265,6 +23291,67 @@ func _drive_bootface_smoke() -> void:
 					"setup-open: the title reads FIRST SETUP (got '%s')" % str(dress3["title"]))
 				_bootface_expect(bool(dress3["sub_visible"]) and bool(dress3["pointer_visible"]),
 					"setup-open: the title block stands complete")
+				# DESKEXIT: the desk opens knowing the boot
+				# scan stands - exit armed, no fresh scan.
+				_bootface_expect(_desk._scanned,
+					"setup-open: the desk knows the standing scan (_scanned)")
+				_bootface_expect(not _desk._enter_button.disabled,
+					"setup-open: Enter the Room is armed on open")
+				_bootface_expect(_desk._stats_label.text.begins_with("Scanned"),
+					"setup-open: the stats line carries the standing summary (got '%s')" % _desk._stats_label.text.left(40))
+				_bootface_expect(not _desk._b2s_label.text.contains("not scanned yet"),
+					"setup-open: the missing-backglass line shows the standing count")
+				_bootface_expect(not _desk._b2s_button.disabled,
+					"setup-open: the missing-backglass list button is armed")
+				_bootface_expect(not _desk._unplaced_label.text.contains("not scanned yet"),
+					"setup-open: the couldn't-place line shows the standing count")
+				_bootface_expect(not _desk._unplaced_button.disabled,
+					"setup-open: the couldn't-place list button is armed")
+				_bootface_scanner_before = _scanner
+				# Leave through the real button: its pressed
+				# signal is the door the player presses.
+				_desk._enter_button.pressed.emit()
+				_bootface_wait = 0
+				_bootface_phase = 4
+		4:
+			_bootface_wait += 1
+			if _room != null and _room.visible and _desk != null and not _desk.visible:
+				_bootface_expect(not _scan_active,
+					"enter: no scan is running after Enter the Room")
+				_bootface_expect(_scanner == _bootface_scanner_before,
+					"enter: the same scanner stands - no new scan ran")
+				# Re-open SETUP: the standing trio re-applies
+				# (idempotent) - the exit stays armed.
+				_show_desk()
+				_bootface_wait = 0
+				_bootface_phase = 6
+			elif _bootface_wait > 7200:
+				_bootface_fail("enter: the room never stood after Enter the Room")
+				_finish_bootface_smoke()
+		6:
+			_bootface_wait += 1
+			if _bootface_wait >= 3:
+				_bootface_expect(_desk != null and _desk.visible,
+					"reopen: the desk shows again")
+				_bootface_expect(_desk._scanned and not _desk._enter_button.disabled,
+					"reopen: the exit is still armed (the standing summary re-applied)")
+				_desk._on_save_and_scan()
+				_bootface_expect(_scan_active,
+					"desk scan: Save & Scan starts the scan")
+				_bootface_expect(_desk._enter_button.disabled,
+					"desk scan: Enter the Room disables while the scan runs")
+				_bootface_expect(not _desk._scanned,
+					"desk scan: the desk waits on its own scan again")
+				_bootface_wait = 0
+				_bootface_phase = 7
+		7:
+			_bootface_wait += 1
+			if not _scan_active and _desk != null and _desk._scanned:
+				_bootface_expect(not _desk._enter_button.disabled,
+					"desk scan: Enter the Room re-arms when the summary lands")
+				_finish_bootface_smoke()
+			elif _bootface_wait > 7200:
+				_bootface_fail("desk scan: the desk scan never landed")
 				_finish_bootface_smoke()
 		3:
 			_bootface_wait += 1
