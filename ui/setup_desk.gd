@@ -61,6 +61,10 @@ var _pinemhi_label: Label
 var _shots_edit: LineEdit
 var _shots_label: Label
 var _ipdb_label: Label
+var _title_label: Label ## the title block: "FIRST SETUP" stood upon, "LaunchPin" in shell dress
+var _title_sub_label: Label ## "Done once, on your PC, before you play." (stood-upon dress only)
+var _title_pointer_label: Label ## the pointer to the IN-VR SETUP panel (stood-upon dress only)
+var _shell_dress: bool = false ## BOOTSHELL: true while the desk serves as a configured boot's shell pass
 
 const MAX_FOLDER_ROWS: int = 6
 
@@ -69,6 +73,44 @@ func setup(config: PvldsConfig) -> void:
 	_config = config
 	_build_ui()
 	_fill_from_config()
+
+
+## BOOTSHELL: the desk wears two dresses. Stood upon for real
+## (an unconfigured / first-run boot, a --setup launch, SETUP
+## opened from the room, a boot whose auto-enter was cancelled)
+## it is FIRST SETUP, title block in place. While it serves as
+## a configured boot's shell pass - shown for the scan, the room
+## auto-entering behind it - the title block hides and a plain
+## "LaunchPin" header stands instead, so a user who set up long
+## ago never gets "first setup" flashed at him. Main owns the
+## decision (it knows which pass it is showing the desk for);
+## the desk only wears the dress it is handed.
+func set_shell_dress(shell: bool) -> void:
+	_shell_dress = shell
+	_apply_title_dress()
+
+
+func _apply_title_dress() -> void:
+	if _title_label == null:
+		return
+	if _shell_dress:
+		_title_label.text = "LaunchPin"
+		_title_sub_label.visible = false
+		_title_pointer_label.visible = false
+	else:
+		_title_label.text = "FIRST SETUP"
+		_title_sub_label.visible = true
+		_title_pointer_label.visible = true
+
+
+## Smoke census of the title block's dress (the BOOTSHELL legs).
+func title_dress() -> Dictionary:
+	return {
+		"shell": _shell_dress,
+		"title": _title_label.text if _title_label != null else "",
+		"sub_visible": _title_sub_label != null and _title_sub_label.visible,
+		"pointer_visible": _title_pointer_label != null and _title_pointer_label.visible,
+	}
 
 
 func _build_ui() -> void:
@@ -91,20 +133,21 @@ func _build_ui() -> void:
 	vbox.add_theme_constant_override("separation", 12)
 	margin.add_child(vbox)
 
-	var title: Label = Label.new()
+	_title_label = Label.new()
 	# ENDGAME (Part A): the two setups carry two names. This
 	# desk is FIRST SETUP - the one-time, important initial
 	# setup; the room's panel is IN-VR SETUP.
-	title.text = "FIRST SETUP"
-	title.add_theme_font_size_override("font_size", 34)
-	vbox.add_child(title)
-	var title_sub: Label = Label.new()
-	title_sub.text = "Done once, on your PC, before you play."
-	vbox.add_child(title_sub)
-	var title_pointer: Label = Label.new()
-	title_pointer.text = "Day-to-day settings live in the headset - the IN-VR SETUP panel in the room."
-	title_pointer.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(title_pointer)
+	_title_label.text = "FIRST SETUP"
+	_title_label.add_theme_font_size_override("font_size", 34)
+	vbox.add_child(_title_label)
+	_title_sub_label = Label.new()
+	_title_sub_label.text = "Done once, on your PC, before you play."
+	vbox.add_child(_title_sub_label)
+	_title_pointer_label = Label.new()
+	_title_pointer_label.text = "Day-to-day settings live in the headset - the IN-VR SETUP panel in the room."
+	_title_pointer_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(_title_pointer_label)
+	_apply_title_dress()
 	var intro: Label = Label.new()
 	intro.text = "Point LaunchPin at your VPX executable and your table folder(s). The headset room is for playing, not setup."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

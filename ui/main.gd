@@ -303,6 +303,12 @@ var _scanwall_wait: int = 0
 var _scanwall_failures: int = 0
 var _scanwall_deadline_msec: int = 0
 var _smoke_desk: bool = false ## --pvlds-smoke-desk: drive the desk's live session switch, assert the config file follows
+var _smoke_bootshell: bool = false ## --pvlds-smoke-bootshell: the BOOTSHELL dress contract through the real boot paths (PVLDS_BOOTSHELL_MODE = shell | sample | firstrun)
+var _bootshell_mode: String = "shell"
+var _bootshell_phase: int = 0
+var _bootshell_wait: int = 0
+var _bootshell_failures: int = 0
+var _bootshell_grabbed: bool = false
 var _smoke_dpadexit: bool = false ## --pvlds-smoke-dpadexit: a fresh D-pad Right in the room must exit the app
 var _dpadexit_held_leg: bool = false ## --pvlds-smoke-dpadexit-held: the button is pinned from boot; no exit until a witnessed release, then a fresh press exits
 var _dpadexit_smoke_phase: int = 0
@@ -678,6 +684,7 @@ var _scan_task_id: int = -1
 var _scan_active: bool = false
 var _scan_folders: Array[String] = []
 var _enter_room_after_scan: bool = false
+var _desk_shell_pass: bool = false ## BOOTSHELL: the desk is up as a configured boot's shell pass (auto-enter pending) - it wears the neutral dress until it either hands off to the room or ends up standing, when the full FIRST SETUP dress returns
 var _seeded_dummy: bool = false ## --pvlds-seed-dummy route: sample db + dummy folders, deliberately
 var _worker_db: VpsDatabase = null
 var _worker_db_ok: bool = false
@@ -790,6 +797,11 @@ func _ready() -> void:
 		_shot_setup_panel_after_scan = true
 	if user_args.has("--pvlds-smoke-desk"):
 		_smoke_desk = true
+	if user_args.has("--pvlds-smoke-bootshell"):
+		_smoke_bootshell = true
+		_bootshell_mode = OS.get_environment("PVLDS_BOOTSHELL_MODE")
+		if _bootshell_mode == "":
+			_bootshell_mode = "shell"
 	if user_args.has("--pvlds-smoke-dpadexit"):
 		_smoke_dpadexit = true
 	if user_args.has("--pvlds-smoke-dpadexit-held"):
@@ -1272,10 +1284,18 @@ func _ready() -> void:
 		# the threaded scan lands. No scan runs before the first frame.
 		# One exception: a scan that resolves to the bundled sample
 		# database never auto-enters the room (see _finish_scan).
+		# BOOTSHELL: this pass is a shell, not a setup - the desk
+		# wears its neutral dress (no FIRST SETUP title block)
+		# until it hands off to the room or ends up standing.
+		_desk_shell_pass = true
 		_show_desk()
 		_enter_room_after_scan = true
 		if not start_scan():
 			_enter_room_after_scan = false
+			# No scan is coming: the desk stays standing, and a
+			# standing desk is stood upon - full dress.
+			_desk_shell_pass = false
+			_show_desk()
 	else:
 		_show_desk()
 
@@ -1372,6 +1392,8 @@ func _process(_delta: float) -> void:
 		_drive_shot_setup_panel()
 	if _smoke_desk:
 		_drive_desk_smoke()
+	if _smoke_bootshell:
+		_drive_bootshell_smoke()
 	if _smoke_dpadexit:
 		_drive_dpadexit_smoke()
 	if _smoke_lockout:
@@ -1637,6 +1659,9 @@ func _finish_scan() -> void:
 			# (Download VPS database) lives on this desk. The summary
 			# applied above already carries the loud sample warning;
 			# stay here so the user actually sees it.
+			# BOOTSHELL: the desk ends up standing, so it is stood
+			# upon - the shell dress comes off before the re-show.
+			_desk_shell_pass = false
 			_show_desk()
 			return
 		_enter_room()
@@ -2459,6 +2484,9 @@ func _enter_room() -> void:
 		return
 	if _desk != null:
 		_desk.visible = false
+	# BOOTSHELL: entering the room ends any boot shell pass - the
+	# next desk opening is a stood-upon one, in full dress.
+	_desk_shell_pass = false
 	_ensure_xr()
 	if _room == null:
 		_room = RoomView.new()
@@ -3910,6 +3938,11 @@ func _show_desk(message: String = "") -> void:
 		_desk.ipdb_snapshot_requested.connect(_apply_ipdb_snapshot)
 		_desk.set_ipdb_status(_ipdb_health_line())
 		_push_submit_data()
+	# BOOTSHELL: the dress is re-applied on every show - the one
+	# desk serves the boot shell pass and every later stood-upon
+	# opening, and only the boot shell pass wears the neutral
+	# dress (_desk_shell_pass, owned by the boot path).
+	_desk.set_shell_dress(_desk_shell_pass)
 	_desk.visible = true
 
 
@@ -23084,6 +23117,164 @@ func _finish_desk_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS DESK SMOKE: FAIL (%d)" % _desk_smoke_failures)
+		get_tree().quit(1)
+
+
+# -------------------------------------------------- bootshell smoke
+
+## --pvlds-smoke-bootshell: the BOOTSHELL dress contract, driven
+## through the real boot paths. The harness picks the fixture;
+## PVLDS_BOOTSHELL_MODE picks the legs:
+##   shell    - a configured boot: while the scan runs, the desk
+##              stands as the boot shell in the neutral dress
+##              (title "LaunchPin", the FIRST SETUP sub and the
+##              pointer line hidden, the auto-enter pending);
+##              the scan lands, the room stands, the desk is
+##              gone; SETUP opened from the room (the very
+##              _show_desk door the room's signal connects to)
+##              then shows the desk in its full FIRST SETUP
+##              dress.
+##   sample   - a configured boot whose scan resolves to the
+##              bundled sample database: the auto-enter is
+##              cancelled, so the desk ends up standing - in the
+##              full dress, not the shell's.
+##   firstrun - an unconfigured boot: the desk stands in the
+##              full FIRST SETUP dress from the first frame on.
+## PVLDS_BOOTSHELL_GRAB_DIR, when set, receives a rendered grab
+## of the shell pass (shell / sample) or of the stood-upon desk
+## (firstrun).
+func _drive_bootshell_smoke() -> void:
+	match _bootshell_phase:
+		0:
+			if _desk != null and _desk.visible:
+				var dress: Dictionary = _desk.title_dress()
+				if _bootshell_mode == "firstrun":
+					_bootshell_expect(not bool(dress["shell"]),
+						"firstrun: the desk wears the stood-upon dress from the first frame")
+					_bootshell_expect(str(dress["title"]) == "FIRST SETUP",
+						"firstrun: the title reads FIRST SETUP (got '%s')" % str(dress["title"]))
+					_bootshell_expect(bool(dress["sub_visible"]),
+						"firstrun: the 'Done once' line stands")
+					_bootshell_expect(bool(dress["pointer_visible"]),
+						"firstrun: the IN-VR pointer line stands")
+					_bootshell_wait = 0
+					_bootshell_phase = 3
+				else:
+					_bootshell_expect(bool(dress["shell"]),
+						"%s: the boot pass wears the shell dress" % _bootshell_mode)
+					_bootshell_expect(str(dress["title"]) == "LaunchPin",
+						"%s: the shell header reads LaunchPin (got '%s')" % [_bootshell_mode, str(dress["title"])])
+					_bootshell_expect(not bool(dress["sub_visible"]),
+						"%s: the 'Done once' line is hidden in the shell pass" % _bootshell_mode)
+					_bootshell_expect(not bool(dress["pointer_visible"]),
+						"%s: the IN-VR pointer line is hidden in the shell pass" % _bootshell_mode)
+					_bootshell_expect(_enter_room_after_scan,
+						"%s: the auto-enter is pending behind the shell" % _bootshell_mode)
+					_bootshell_wait = 0
+					_bootshell_phase = 5
+			else:
+				_bootshell_wait += 1
+				if _bootshell_wait > 3600:
+					_bootshell_fail("the desk never came up")
+					_finish_bootshell_smoke()
+		5:
+			# The frame right after the dress was confirmed: the
+			# viewport texture still holds the shell pass as drawn
+			# (the hand-off, when it comes, lands later in the
+			# frame's own poll) - grab it before judging anything.
+			_bootshell_wait += 1
+			if _bootshell_wait == 1:
+				_bootshell_grab("bootshell_shell.png")
+				_bootshell_wait = 0
+				_bootshell_phase = 1
+		1:
+			_bootshell_wait += 1
+			if _bootshell_mode == "sample":
+				if not _scan_active and _scanner != null and _last_db_kind == "sample" and _bootshell_wait > 10:
+					var dress2: Dictionary = _desk.title_dress()
+					_bootshell_expect(_desk.visible, "sample: the desk ends up standing")
+					_bootshell_expect(not bool(dress2["shell"]),
+						"sample: a standing desk leaves the shell dress")
+					_bootshell_expect(str(dress2["title"]) == "FIRST SETUP",
+						"sample: the standing desk reads FIRST SETUP (got '%s')" % str(dress2["title"]))
+					_bootshell_expect(bool(dress2["sub_visible"]) and bool(dress2["pointer_visible"]),
+						"sample: the title block stands complete")
+					_bootshell_expect(_room == null or not _room.visible,
+						"sample: the room never stood (no auto-enter on sample data)")
+					_finish_bootshell_smoke()
+				elif _bootshell_wait > 7200:
+					_bootshell_fail("sample: the scan never landed on the sample database")
+					_finish_bootshell_smoke()
+			else:
+				if _room != null and _room.visible and not _desk.visible:
+					_bootshell_expect(_room.visible,
+						"shell: after the scan lands the room stands")
+					_bootshell_expect(not _desk.visible,
+						"shell: after the scan lands the desk is gone")
+					# SETUP opened from the room: the same door
+					# the room's setup_requested signal fires.
+					_show_desk()
+					_bootshell_wait = 0
+					_bootshell_phase = 2
+				elif _bootshell_wait > 7200:
+					_bootshell_fail("shell: the room never stood")
+					_finish_bootshell_smoke()
+		2:
+			_bootshell_wait += 1
+			if _bootshell_wait >= 3:
+				var dress3: Dictionary = _desk.title_dress()
+				_bootshell_expect(not _room.visible,
+					"setup-open: the room hides for the desk (the flat path)")
+				_bootshell_expect(_desk.visible, "setup-open: the desk shows")
+				_bootshell_expect(not bool(dress3["shell"]),
+					"setup-open: the desk wears the stood-upon dress")
+				_bootshell_expect(str(dress3["title"]) == "FIRST SETUP",
+					"setup-open: the title reads FIRST SETUP (got '%s')" % str(dress3["title"]))
+				_bootshell_expect(bool(dress3["sub_visible"]) and bool(dress3["pointer_visible"]),
+					"setup-open: the title block stands complete")
+				_finish_bootshell_smoke()
+		3:
+			_bootshell_wait += 1
+			if _bootshell_wait == 3:
+				_bootshell_grab("bootshell_desk.png")
+			if _bootshell_wait >= 30:
+				_bootshell_expect(_desk != null and _desk.visible,
+					"firstrun: the desk stands (no auto-enter without a config)")
+				_bootshell_expect(_room == null or not _room.visible,
+					"firstrun: no room stands behind the first setup")
+				_finish_bootshell_smoke()
+
+
+func _bootshell_grab(file_name: String) -> void:
+	if _bootshell_grabbed:
+		return
+	_bootshell_grabbed = true
+	var dir: String = OS.get_environment("PVLDS_BOOTSHELL_GRAB_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	if img != null:
+		img.save_png(dir.path_join(file_name))
+
+
+func _bootshell_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - bootshell smoke: ", label)
+	else:
+		_bootshell_fail(label)
+
+
+func _bootshell_fail(label: String) -> void:
+	_bootshell_failures += 1
+	printerr("  FAIL - bootshell smoke: ", label)
+
+
+func _finish_bootshell_smoke() -> void:
+	if _bootshell_failures == 0:
+		print("PVLDS BOOTSHELL SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS BOOTSHELL SMOKE: FAIL (%d)" % _bootshell_failures)
 		get_tree().quit(1)
 
 
