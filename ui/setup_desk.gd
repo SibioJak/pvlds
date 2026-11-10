@@ -75,6 +75,9 @@ var _herding_tag: Label ## DESKHEAD: the green "- On By Default -" tag under the
 const HERDING_TAG_GREEN: Color = Color(0.4, 0.9, 0.5)
 var _details_fold: _Fold ## DESKEDIT: the Scan details fold (the scan summary's diagnostics)
 var _details_label: Label ## DESKEDIT: the folded diagnostics text inside the Scan details fold
+var _browse_buttons: Array[Button] = [] ## DESKCOLOR: every Browse... button (path rows + folder rows) - the picker family
+var _shots_browse_button: Button ## DESKCOLOR: the Screenshots section's Browse... (picker family)
+var _add_folder_button: Button ## DESKCOLOR: Add table folder... (picker family - it opens the picker)
 
 const MAX_FOLDER_ROWS: int = 6
 
@@ -353,6 +356,9 @@ func _build_ui() -> void:
 	vbox.add_child(dl_row)
 	_dl_button = Button.new()
 	_dl_button.text = "Download VPS database"
+	# DESKCOLOR: Download rides with the picker family -
+	# it is a get-the-file button.
+	DeskTheme.dress_button_family(_dl_button, DeskTheme.FAMILY_PICKER)
 	_dl_button.pressed.connect(_on_download_pressed)
 	dl_row.add_child(_dl_button)
 	_dl_label = Label.new()
@@ -409,7 +415,7 @@ func _build_ui() -> void:
 	# config on the spot (no Save & Scan), Test key validates
 	# the field's text and names whose key it is. The field
 	# is masked - it is a secret, and it is never printed.
-	vbox.add_child(_section_header("World of Virtual Pinball (WoVP) - the Tournament Room's boards"))
+	vbox.add_child(_section_header("World of Virtual Pinball (WoVP) - the Tournament Room's boards", DeskTheme.FAMILY_WOVP))
 	var wovp_intro: Label = Label.new()
 	wovp_intro.text = "Your WoVP API key (from your WoVP profile) shows your live league boards in the Tournament Room. Stored only in the config file on this PC."
 	wovp_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -423,10 +429,13 @@ func _build_ui() -> void:
 	vbox.add_child(wovp_row)
 	_wovp_save_button = Button.new()
 	_wovp_save_button.text = "Save key"
+	# DESKCOLOR: the key pair wears the confirm green.
+	DeskTheme.dress_button_family(_wovp_save_button, DeskTheme.FAMILY_CONFIRM)
 	_wovp_save_button.pressed.connect(_on_wovp_save_pressed)
 	wovp_row.add_child(_wovp_save_button)
 	_wovp_test_button = Button.new()
 	_wovp_test_button.text = "Test key"
+	DeskTheme.dress_button_family(_wovp_test_button, DeskTheme.FAMILY_CONFIRM)
 	_wovp_test_button.pressed.connect(_on_wovp_test_pressed)
 	wovp_row.add_child(_wovp_test_button)
 	_wovp_label = Label.new()
@@ -445,7 +454,7 @@ func _build_ui() -> void:
 	# only a HIGHER score than the one already posted - so
 	# both are read BEFORE anything is sent. Nothing here
 	# gates on the library state: it is shown, never a lock.
-	vbox.add_child(_section_header("Submit a score to WoVP"))
+	vbox.add_child(_section_header("Submit a score to WoVP", DeskTheme.FAMILY_WOVP))
 	var submit_intro: Label = Label.new()
 	submit_intro.text = "Finished a game on a live challenge? Take the photo the league's way (last score, DMD and full playfield in frame), move it to this PC, then pick the challenge and the photo here. The photo carries the score; the league validates it."
 	submit_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -470,6 +479,9 @@ func _build_ui() -> void:
 	vbox.add_child(submit_photo_row)
 	_submit_photo_button = Button.new()
 	_submit_photo_button.text = "Choose photo..."
+	# DESKCOLOR: the photo pair wears the amber - the
+	# photo IS the submission.
+	DeskTheme.dress_button_family(_submit_photo_button, DeskTheme.FAMILY_AMBER)
 	_submit_photo_button.pressed.connect(func() -> void: _open_dialog_for("photo"))
 	submit_photo_row.add_child(_submit_photo_button)
 	_submit_photo_label = Label.new()
@@ -526,6 +538,7 @@ func _build_ui() -> void:
 	vbox.add_child(submit_row)
 	_submit_button = Button.new()
 	_submit_button.text = "Submit score"
+	DeskTheme.dress_button_family(_submit_button, DeskTheme.FAMILY_AMBER)
 	_submit_button.pressed.connect(_on_submit_pressed)
 	submit_row.add_child(_submit_button)
 	_submit_label = Label.new()
@@ -554,7 +567,7 @@ func _build_ui() -> void:
 	# the PINemHi settings, this is a live setting: Save
 	# writes the config on the spot. No toggle: an unset
 	# folder is the off state, and the panel says so.
-	vbox.add_child(_section_header("Screenshots - the folder your score photos land in"))
+	vbox.add_child(_section_header("Screenshots - the folder your score photos land in", DeskTheme.FAMILY_WOVP))
 	var shots_intro: Label = Label.new()
 	shots_intro.text = "The folder your headset screenshots end up in on this PC. In the Tournament Room, press Y on a challenge card: the newest shots here stand on the submit panel - pick the one that shows your score and send it, headset on. Same key, same send as the desk above."
 	shots_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -568,6 +581,10 @@ func _build_ui() -> void:
 	shots_row.add_child(_shots_edit)
 	var shots_browse: Button = Button.new()
 	shots_browse.text = "Browse..."
+	# DESKCOLOR: a Browse button wears the picker slate
+	# wherever it stands.
+	DeskTheme.dress_button_family(shots_browse, DeskTheme.FAMILY_PICKER)
+	_shots_browse_button = shots_browse
 	shots_browse.pressed.connect(func() -> void: _open_dialog_for("shots"))
 	shots_row.add_child(shots_browse)
 	var shots_save_row: HBoxContainer = HBoxContainer.new()
@@ -594,7 +611,7 @@ func _build_ui() -> void:
 	# the app's open hours - see its label). Like the key,
 	# these are live
 	# settings: Save writes the config on the spot.
-	vbox.add_child(_section_header("PINemHi - your personal bests on the tournament boards"))
+	vbox.add_child(_section_header("PINemHi - your personal bests on the tournament boards", DeskTheme.FAMILY_PINEMHI))
 	var pinemhi_intro: Label = Label.new()
 	pinemhi_intro.text = "If you use PINemHi, LaunchPin can read its TOP10_Personal files and show your best beneath the league scores on a tournament board. That's all it does by default - it never runs PINemHi or its watcher unless you opt in below. Leave the folder empty to auto-detect the usual install places (D:\\vPinball\\Pinemhi and friends)."
 	pinemhi_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -653,6 +670,10 @@ func _build_ui() -> void:
 	vbox.add_child(_folder_rows)
 	var add_folder: Button = Button.new()
 	add_folder.text = "Add table folder..."
+	# DESKCOLOR: Add folder opens the picker, so it wears
+	# the picker slate too.
+	DeskTheme.dress_button_family(add_folder, DeskTheme.FAMILY_PICKER)
+	_add_folder_button = add_folder
 	add_folder.pressed.connect(_on_add_folder_row)
 	vbox.add_child(add_folder)
 
@@ -728,21 +749,31 @@ func _build_ui() -> void:
 
 
 func _folder_label() -> PanelContainer:
-	return _section_header("Table folders")
+	return _section_header("Table folders", DeskTheme.FAMILY_AMBER)
 
 
 ## SETUPLOOK: a section header bar - the section's name in
 ## the house display type on the resting graphite gradient,
 ## in the strip segment's manner, instead of a plain bold
 ## label. Dress only: the words and the order never move.
-func _section_header(text: String) -> PanelContainer:
+## DESKCOLOR: a section in a colour family passes its
+## family - the bar's gradient tints toward it, the accent
+## underline and edges wear it, and the title takes its
+## lightened tint. No family (the default) is the plain
+## graphite bar, exactly as SETUPLOOK built it.
+func _section_header(text: String, family: Color = Color(0, 0, 0, 0)) -> PanelContainer:
 	var p: PanelContainer = PanelContainer.new()
-	p.add_theme_stylebox_override("panel", DeskTheme.section_header_box())
+	var tint: Color = RoomSpecs.STRIP_LABEL_ACCENT
+	if family.a > 0.0:
+		p.add_theme_stylebox_override("panel", DeskTheme.section_header_box_family(family))
+		tint = DeskTheme.section_title_tint(family)
+	else:
+		p.add_theme_stylebox_override("panel", DeskTheme.section_header_box())
 	var l: Label = Label.new()
 	l.text = text
 	l.add_theme_font_override("font", DeskTheme.FONT_MEDIUM)
 	l.add_theme_font_size_override("font_size", 20)
-	l.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_ACCENT)
+	l.add_theme_color_override("font_color", tint)
 	p.add_child(l)
 	return p
 
@@ -771,6 +802,9 @@ func _add_path_row(parent: VBoxContainer, label_text: String, button_text: Strin
 	row.add_child(edit)
 	var b: Button = Button.new()
 	b.text = button_text
+	# DESKCOLOR: every Browse... wears the picker slate.
+	DeskTheme.dress_button_family(b, DeskTheme.FAMILY_PICKER)
+	_browse_buttons.append(b)
 	var t: String = target
 	b.pressed.connect(func() -> void: _open_dialog_for(t))
 	row.add_child(b)
@@ -790,6 +824,8 @@ func _add_folder_row(prefill: String) -> void:
 	var idx: int = _folder_edits.size()
 	var b: Button = Button.new()
 	b.text = "Browse..."
+	DeskTheme.dress_button_family(b, DeskTheme.FAMILY_PICKER)
+	_browse_buttons.append(b)
 	b.pressed.connect(func() -> void: _open_dialog_for("folder:" + str(idx)))
 	row.add_child(b)
 	_folder_rows.add_child(row)
@@ -1298,6 +1334,118 @@ func deskedit_census() -> Dictionary:
 		"herding_tag": _herding_tag.text if _herding_tag != null else "",
 		"herding_tag_color": _herding_tag.get_theme_color("font_color") if _herding_tag != null else Color.BLACK,
 	}
+
+
+## Smoke census of the DESKCOLOR dress: for each named
+## heading bar and button, the colours sampled off the
+## stylebox it actually wears (the patch texture's middle
+## and its accent-underline row) plus its font colour -
+## the stylebox's own colours, never screen pixels. A
+## control with no family dress reports dressed=false and
+## the plain theme box's samples.
+func deskcolor_census() -> Dictionary:
+	var browse_ok: bool = not _browse_buttons.is_empty()
+	for b: Button in _browse_buttons:
+		var s: Dictionary = _sample_button(b)
+		if not bool(s["found"]) or not bool(s["dressed"]) or _color_dist(s["bar"] as Color, DeskTheme.FAMILY_PICKER) > 0.05:
+			browse_ok = false
+	return {
+		"hdr_wovp": _sample_header(_find_header("World of Virtual Pinball (WoVP) - the Tournament Room's boards")),
+		"hdr_submit": _sample_header(_find_header("Submit a score to WoVP")),
+		"hdr_shots": _sample_header(_find_header("Screenshots - the folder your score photos land in")),
+		"hdr_pinemhi": _sample_header(_find_header("PINemHi - your personal bests on the tournament boards")),
+		"hdr_folders": _sample_header(_find_header("Table folders")),
+		"hdr_ipdb": _sample_header(_find_header("IPDB data - the card backs' second well")),
+		"browse_count": _browse_buttons.size(),
+		"browse_all_picker": browse_ok,
+		"browse": _sample_button(_browse_buttons[0] if not _browse_buttons.is_empty() else null),
+		"shots_browse": _sample_button(_shots_browse_button),
+		"add_folder": _sample_button(_add_folder_button),
+		"download": _sample_button(_dl_button),
+		"save_key": _sample_button(_wovp_save_button),
+		"test_key": _sample_button(_wovp_test_button),
+		"choose_photo": _sample_button(_submit_photo_button),
+		"submit_score": _sample_button(_submit_button),
+		"scan": _sample_button(_scan_button),
+		"enter": _sample_button(_enter_button),
+		"open_b2s": _sample_button(_b2s_button),
+		"open_unplaced": _sample_button(_unplaced_button),
+		"shots_save": _sample_button(_find_button("Save screenshots folder")),
+		"pinemhi_save": _sample_button(_find_button("Save PINemHi settings")),
+		"ipdb_apply": _sample_button(_find_button("Re-apply bundled IPDB data")),
+		"advanced_toggle": _sample_button(_advanced_fold.toggle if _advanced_fold != null else null),
+		"details_toggle": _sample_button(_details_fold.toggle if _details_fold != null else null),
+	}
+
+
+static func _color_dist(a: Color, b: Color) -> float:
+	var dr: float = a.r - b.r
+	var dg: float = a.g - b.g
+	var db: float = a.b - b.b
+	return sqrt(dr * dr + dg * dg + db * db)
+
+
+func _sample_button(b: Button) -> Dictionary:
+	if b == null:
+		return {"found": false, "dressed": false, "mid": Color.TRANSPARENT, "bar": Color.TRANSPARENT, "font": Color.TRANSPARENT}
+	var out: Dictionary = _sample_stylebox(b.get_theme_stylebox("normal", "Button"))
+	out["found"] = true
+	out["dressed"] = b.has_theme_stylebox_override("normal")
+	out["font"] = b.get_theme_color("font_color", "Button")
+	return out
+
+
+func _sample_header(p: PanelContainer) -> Dictionary:
+	if p == null:
+		return {"found": false, "mid": Color.TRANSPARENT, "bar": Color.TRANSPARENT, "tint": Color.TRANSPARENT}
+	var out: Dictionary = _sample_stylebox(p.get_theme_stylebox("panel", "PanelContainer"))
+	out["found"] = true
+	out["tint"] = Color.TRANSPARENT
+	for ch: Node in p.get_children():
+		var l: Label = ch as Label
+		if l != null:
+			out["tint"] = l.get_theme_color("font_color", "Label")
+	return out
+
+
+## A patch stylebox's colours: the gradient's middle row
+## and the accent-underline row of its baked texture.
+func _sample_stylebox(sb: StyleBox) -> Dictionary:
+	var out: Dictionary = {"mid": Color.TRANSPARENT, "bar": Color.TRANSPARENT}
+	var tsb: StyleBoxTexture = sb as StyleBoxTexture
+	if tsb != null and tsb.texture != null:
+		var img: Image = tsb.texture.get_image()
+		if img != null and img.get_width() >= 96 and img.get_height() >= 48:
+			out["mid"] = img.get_pixel(48, 24)
+			out["bar"] = img.get_pixel(48, 43)
+	return out
+
+
+func _find_header(text: String) -> PanelContainer:
+	var stack: Array[Node] = [self]
+	while not stack.is_empty():
+		var nd: Node = stack.pop_back() as Node
+		var pc: PanelContainer = nd as PanelContainer
+		if pc != null:
+			for ch: Node in pc.get_children():
+				var l: Label = ch as Label
+				if l != null and l.text == text:
+					return pc
+		for ch: Node in nd.get_children():
+			stack.append(ch)
+	return null
+
+
+func _find_button(text: String) -> Button:
+	var stack: Array[Node] = [self]
+	while not stack.is_empty():
+		var nd: Node = stack.pop_back() as Node
+		var b: Button = nd as Button
+		if b != null and b.text == text:
+			return b
+		for ch: Node in nd.get_children():
+			stack.append(ch)
+	return null
 
 
 ## The missing-backglass count from the scan that just landed

@@ -333,6 +333,10 @@ var _smoke_deskcenter: bool = false ## --pvlds-smoke-deskcenter: DESKCENTER layo
 var _deskcenter_phase: int = 0
 var _deskcenter_wait: int = 0
 var _deskcenter_failures: int = 0
+var _smoke_deskcolor: bool = false ## --pvlds-smoke-deskcolor: DESKCOLOR census + grab driver
+var _deskcolor_phase: int = 0
+var _deskcolor_wait: int = 0
+var _deskcolor_failures: int = 0
 var _smoke_dpadexit: bool = false ## --pvlds-smoke-dpadexit: a fresh D-pad Right in the room must exit the app
 var _dpadexit_held_leg: bool = false ## --pvlds-smoke-dpadexit-held: the button is pinned from boot; no exit until a witnessed release, then a fresh press exits
 var _dpadexit_smoke_phase: int = 0
@@ -841,6 +845,8 @@ func _ready() -> void:
 			_deskedit_mode = "desk"
 	if user_args.has("--pvlds-smoke-deskcenter"):
 		_smoke_deskcenter = true
+	if user_args.has("--pvlds-smoke-deskcolor"):
+		_smoke_deskcolor = true
 	if user_args.has("--pvlds-smoke-dpadexit"):
 		_smoke_dpadexit = true
 	if user_args.has("--pvlds-smoke-dpadexit-held"):
@@ -1509,6 +1515,8 @@ func _process(_delta: float) -> void:
 		_drive_deskedit_smoke()
 	if _smoke_deskcenter:
 		_drive_deskcenter_smoke()
+	if _smoke_deskcolor:
+		_drive_deskcolor_smoke()
 	if _smoke_dpadexit:
 		_drive_dpadexit_smoke()
 	if _smoke_lockout:
@@ -24393,6 +24401,198 @@ func _finish_deskcenter_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS DESKCENTER SMOKE: FAIL (%d)" % _deskcenter_failures)
+		get_tree().quit(1)
+
+
+# -------------------------------------------------- deskcolor smoke
+
+## --pvlds-smoke-deskcolor: DESKCOLOR's census + grab driver.
+## Boots a configured library, stands the desk, and reads the
+## deskcolor census off it: each named heading bar and button
+## sampled from the stylebox it actually wears (the patch
+## texture's gradient middle + accent-underline row, the
+## title tint, the font colour) - the family's colour must be
+## ON the named furniture and NOWHERE else. Then the brief's
+## grabs, each stretch scrolled into place: the desk top, the
+## WoVP stretch, the submit stretch, Screenshots, PINemHi,
+## and the bottom (Table folders + the primary pair).
+## Grabs land in PVLDS_DESKCOLOR_GRAB_DIR.
+func _drive_deskcolor_smoke() -> void:
+	match _deskcolor_phase:
+		0:
+			if _room != null and _room.visible:
+				_show_desk()
+				_deskcolor_wait = 0
+				_deskcolor_phase = 1
+			else:
+				_deskcolor_wait += 1
+				if _deskcolor_wait > 7200:
+					_deskcolor_fail("the room never stood")
+					_finish_deskcolor_smoke()
+		1:
+			_deskcolor_wait += 1
+			if _deskcolor_wait >= 6:
+				_deskcolor_census_legs()
+				_deskcolor_scroll_to(null)
+				_deskcolor_wait = 0
+				_deskcolor_phase = 2
+		2:
+			_deskcolor_wait += 1
+			if _deskcolor_wait >= 4:
+				_deskcolor_grab("deskcolor_top.png")
+				_deskcolor_scroll_to(_desk._find_header("World of Virtual Pinball (WoVP) - the Tournament Room's boards"))
+				_deskcolor_wait = 0
+				_deskcolor_phase = 3
+		3:
+			_deskcolor_wait += 1
+			if _deskcolor_wait >= 4:
+				_deskcolor_grab("deskcolor_wovp.png")
+				_deskcolor_scroll_to(_desk._submit_button)
+				_deskcolor_wait = 0
+				_deskcolor_phase = 4
+		4:
+			_deskcolor_wait += 1
+			if _deskcolor_wait >= 4:
+				_deskcolor_grab("deskcolor_submit.png")
+				_deskcolor_scroll_to(_desk._find_header("Screenshots - the folder your score photos land in"))
+				_deskcolor_wait = 0
+				_deskcolor_phase = 5
+		5:
+			_deskcolor_wait += 1
+			if _deskcolor_wait >= 4:
+				_deskcolor_grab("deskcolor_shots.png")
+				_deskcolor_scroll_to(_desk._find_header("PINemHi - your personal bests on the tournament boards"))
+				_deskcolor_wait = 0
+				_deskcolor_phase = 6
+		6:
+			_deskcolor_wait += 1
+			if _deskcolor_wait >= 4:
+				_deskcolor_grab("deskcolor_pinemhi.png")
+				_deskcolor_scroll_to(_desk._find_header("Table folders"))
+				_deskcolor_wait = 0
+				_deskcolor_phase = 7
+		7:
+			_deskcolor_wait += 1
+			if _deskcolor_wait >= 4:
+				_deskcolor_grab("deskcolor_bottom.png")
+				_finish_deskcolor_smoke()
+
+
+func _deskcolor_census_legs() -> void:
+	var cen: Dictionary = _desk.deskcolor_census()
+	var plain_mid: Color = (cen["scan"] as Dictionary)["mid"]
+	# The family headings: colour on the bar, tint in the
+	# title, the gradient itself leaning family-ward (the
+	# IPDB bar's plain middle is the graphite reference).
+	var plain_hdr_mid: Color = (cen["hdr_ipdb"] as Dictionary)["mid"]
+	_deskcolor_expect_header(cen["hdr_wovp"], DeskTheme.FAMILY_WOVP, plain_hdr_mid, "WoVP boards header")
+	_deskcolor_expect_header(cen["hdr_submit"], DeskTheme.FAMILY_WOVP, plain_hdr_mid, "Submit header")
+	_deskcolor_expect_header(cen["hdr_shots"], DeskTheme.FAMILY_WOVP, plain_hdr_mid, "Screenshots header")
+	_deskcolor_expect_header(cen["hdr_pinemhi"], DeskTheme.FAMILY_PINEMHI, plain_hdr_mid, "PINemHi header")
+	_deskcolor_expect_header(cen["hdr_folders"], DeskTheme.FAMILY_AMBER, plain_hdr_mid, "Table folders header")
+	# The IPDB header stands in NO family.
+	var ipdb: Dictionary = cen["hdr_ipdb"]
+	_deskcolor_expect(bool(ipdb["found"]), "IPDB header: found")
+	_deskcolor_expect(not _deskcolor_near_any_family(ipdb["bar"]), "IPDB header: no family colour on its bar row")
+	_deskcolor_expect((ipdb["tint"] as Color).is_equal_approx(RoomSpecs.STRIP_LABEL_ACCENT),
+		"IPDB header: the title keeps the plain accent tint")
+	# The family buttons.
+	_deskcolor_expect_button(cen["browse"], DeskTheme.FAMILY_PICKER, plain_mid, "a Browse button")
+	_deskcolor_expect(int(cen["browse_count"]) >= 3 and bool(cen["browse_all_picker"]),
+		"every Browse button wears the picker slate (%d standing)" % int(cen["browse_count"]))
+	_deskcolor_expect_button(cen["shots_browse"], DeskTheme.FAMILY_PICKER, plain_mid, "the Screenshots Browse button")
+	_deskcolor_expect_button(cen["add_folder"], DeskTheme.FAMILY_PICKER, plain_mid, "Add table folder")
+	_deskcolor_expect_button(cen["download"], DeskTheme.FAMILY_PICKER, plain_mid, "Download VPS database")
+	_deskcolor_expect_button(cen["save_key"], DeskTheme.FAMILY_CONFIRM, plain_mid, "Save key")
+	_deskcolor_expect_button(cen["test_key"], DeskTheme.FAMILY_CONFIRM, plain_mid, "Test key")
+	_deskcolor_expect_button(cen["choose_photo"], DeskTheme.FAMILY_AMBER, plain_mid, "Choose photo")
+	_deskcolor_expect_button(cen["submit_score"], DeskTheme.FAMILY_AMBER, plain_mid, "Submit score")
+	# The rest of the desk carries NO family colour.
+	for key: String in ["scan", "enter", "open_b2s", "open_unplaced", "shots_save", "pinemhi_save", "ipdb_apply", "advanced_toggle", "details_toggle"]:
+		_deskcolor_expect_plain(cen[key], key)
+
+
+func _deskcolor_expect_header(s: Dictionary, family: Color, plain_mid: Color, label: String) -> void:
+	_deskcolor_expect(bool(s["found"]), label + ": found")
+	_deskcolor_expect(_deskcolor_dist(s["bar"] as Color, family) <= 0.05,
+		label + ": the accent underline is the family colour (got %s)" % str(s["bar"]))
+	_deskcolor_expect(_deskcolor_dist(s["tint"] as Color, DeskTheme.section_title_tint(family)) <= 0.01,
+		label + ": the title tint is the lightened family colour (got %s)" % str(s["tint"]))
+	_deskcolor_expect(_deskcolor_dist(s["mid"] as Color, family) <= _deskcolor_dist(plain_mid, family) * 0.8,
+		label + ": the gradient leans toward the family (mid %s)" % str(s["mid"]))
+
+
+func _deskcolor_expect_button(s: Dictionary, family: Color, plain_mid: Color, label: String) -> void:
+	_deskcolor_expect(bool(s["found"]), label + ": found")
+	_deskcolor_expect(bool(s["dressed"]), label + ": carries its family dress")
+	_deskcolor_expect(_deskcolor_dist(s["bar"] as Color, family) <= 0.05,
+		label + ": the accent underline is the family colour (got %s)" % str(s["bar"]))
+	_deskcolor_expect(_deskcolor_dist(s["mid"] as Color, family) <= _deskcolor_dist(plain_mid, family) * 0.8,
+		label + ": the gradient leans toward the family (mid %s)" % str(s["mid"]))
+	_deskcolor_expect(_deskcolor_dist(s["font"] as Color, DeskTheme.FAMILY_TEXT) <= 0.01,
+		label + ": the text stays near-white (got %s)" % str(s["font"]))
+
+
+func _deskcolor_expect_plain(s: Dictionary, label: String) -> void:
+	_deskcolor_expect(bool(s["found"]), label + ": found")
+	_deskcolor_expect(not bool(s["dressed"]), label + ": no family dress")
+	_deskcolor_expect(not _deskcolor_near_any_family(s["bar"]), label + ": no family colour on its bar row")
+
+
+## Colour distance (Color has no distance_to - it is an
+## RGB triple for this census's purposes).
+func _deskcolor_dist(a: Color, b: Color) -> float:
+	var dr: float = a.r - b.r
+	var dg: float = a.g - b.g
+	var db: float = a.b - b.b
+	return sqrt(dr * dr + dg * dg + db * db)
+
+
+func _deskcolor_near_any_family(c: Color) -> bool:
+	for fam: Color in [DeskTheme.FAMILY_WOVP, DeskTheme.FAMILY_PINEMHI, DeskTheme.FAMILY_AMBER, DeskTheme.FAMILY_PICKER, DeskTheme.FAMILY_CONFIRM]:
+		if _deskcolor_dist(c, fam) <= 0.15:
+			return true
+	return false
+
+
+func _deskcolor_scroll_to(target: Control) -> void:
+	if _desk == null or _desk._scroll == null:
+		return
+	var sc: ScrollContainer = _desk._scroll
+	if target == null:
+		sc.scroll_vertical = 0
+		return
+	var y: int = int(target.get_global_position().y - sc.get_global_position().y) + sc.scroll_vertical - 24
+	sc.scroll_vertical = clampi(y, 0, int(sc.get_v_scroll_bar().max_value))
+
+
+func _deskcolor_grab(file_name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_DESKCOLOR_GRAB_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	if img != null:
+		img.save_png(dir.path_join(file_name))
+
+
+func _deskcolor_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - deskcolor smoke: ", label)
+	else:
+		_deskcolor_fail(label)
+
+
+func _deskcolor_fail(label: String) -> void:
+	_deskcolor_failures += 1
+	printerr("  FAIL - deskcolor smoke: ", label)
+
+
+func _finish_deskcolor_smoke() -> void:
+	if _deskcolor_failures == 0:
+		print("PVLDS DESKCOLOR SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS DESKCOLOR SMOKE: FAIL (%d)" % _deskcolor_failures)
 		get_tree().quit(1)
 
 

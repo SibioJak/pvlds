@@ -55,7 +55,27 @@ const DISABLED_FG: Color = Color8(102, 107, 118)
 const _PATCH_W: int = 96
 const _PATCH_H: int = 48
 
+## DESKCOLOR: the desk's colour families (Chris's map, the
+## brief's literals). The graphite stays the base; a family
+## colour tints the machined gradient, tints the edges, and
+## wears the accent underline, so the page's colour tells
+## the story before the words do. WoVP steel dresses its
+## three section bars; PINemHi violet its own; amber the
+## Table folders bar and the photo pair; slate the picker
+## buttons; green the WoVP key pair.
+const FAMILY_WOVP: Color = Color(0.36, 0.55, 0.72)
+const FAMILY_PINEMHI: Color = Color(0.62, 0.45, 0.85)
+const FAMILY_AMBER: Color = Color(1.0, 0.66, 0.16)
+const FAMILY_PICKER: Color = Color(0.45, 0.55, 0.68)
+const FAMILY_CONFIRM: Color = Color(0.35, 0.75, 0.45)
+## Family buttons keep their text near-white so the colour
+## reads as the button's own, not the text's.
+const FAMILY_TEXT: Color = Color(0.94, 0.95, 0.98)
+## The standing accent underline's ink on undressed boxes.
+const ACCENT_INK: Color = Color(0.85, 0.87, 0.92, 0.9)
+
 static var _cached: Theme = null
+static var _family_boxes: Dictionary = {}
 
 
 ## The desk's whole theme, built once per process (the
@@ -135,6 +155,62 @@ static func title_header_box() -> StyleBoxTexture:
 ## segment's manner.
 static func section_header_box() -> StyleBoxTexture:
 	return _patch_box(RoomSpecs.STRIP_GRAD_REST, false, 12, 7)
+
+
+## DESKCOLOR: a family section bar — the resting gradient
+## tinted toward the family colour, the family colour on
+## the accent underline and in the edges; the bar's body
+## stays graphite family.
+static func section_header_box_family(family: Color) -> StyleBoxTexture:
+	return _patch_box_dressed(_tint_grad(RoomSpecs.STRIP_GRAD_REST, family, 0.30), true, 12, 7,
+		family, RoomSpecs.STRIP_BORDER.lerp(family, 0.45))
+
+
+## A family title's tint: the family colour lightened
+## toward white, readability first.
+static func section_title_tint(family: Color) -> Color:
+	return family.lerp(Color(1, 1, 1), 0.45)
+
+
+## DESKCOLOR: a family's button dress, built once per
+## family. Every state wears the tinted gradient and the
+## family's accent underline — except disabled, which is
+## the stock drained box: the colour drains with the
+## button (the DESKEDIT rule).
+static func button_family_boxes(family: Color) -> Dictionary:
+	if _family_boxes.has(family):
+		return _family_boxes[family]
+	var border: Color = RoomSpecs.STRIP_BORDER.lerp(family, 0.45)
+	var boxes: Dictionary = {
+		"normal": _patch_box_dressed(_tint_grad(RoomSpecs.STRIP_GRAD_REST, family, 0.30), true, 14, 7, family, border),
+		"hover": _patch_box_dressed(_tint_grad(RoomSpecs.STRIP_GRAD_ACCENT, family, 0.30), true, 14, 7, family, border),
+		"pressed": _patch_box_dressed(_tint_grad(GRAD_PRESSED, family, 0.25), true, 14, 7, family, border),
+		"focus": _patch_box_dressed(_tint_grad(RoomSpecs.STRIP_GRAD_LIFTED, family, 0.30), true, 14, 7, family, border),
+		"disabled": _disabled_box(),
+	}
+	_family_boxes[family] = boxes
+	return boxes
+
+
+## Dress one button in a family's colours (stylebox
+## overrides on the button itself; the desk's theme keeps
+## every other button). Text stays near-white.
+static func dress_button_family(b: Button, family: Color) -> void:
+	var boxes: Dictionary = button_family_boxes(family)
+	for state: String in boxes:
+		b.add_theme_stylebox_override(state, boxes[state])
+	b.add_theme_color_override("font_color", FAMILY_TEXT)
+	b.add_theme_color_override("font_hover_color", Color(1, 1, 1))
+	b.add_theme_color_override("font_pressed_color", Color(1, 1, 1))
+	b.add_theme_color_override("font_focus_color", Color(1, 1, 1))
+	b.add_theme_color_override("font_disabled_color", DISABLED_FG)
+
+
+static func _tint_grad(grad: Array, tint: Color, amount: float) -> Array:
+	var out: Array = []
+	for c: Variant in grad:
+		out.append(Color(c).lerp(tint, amount))
+	return out
 
 
 ## A dark inset frame (the submit photo's seat).
@@ -221,8 +297,12 @@ static func _disabled_box() -> StyleBoxTexture:
 
 
 static func _patch_box(grad: Array, accent: bool, pad_x: int, pad_y: int) -> StyleBoxTexture:
+	return _patch_box_dressed(grad, accent, pad_x, pad_y, ACCENT_INK, RoomSpecs.STRIP_BORDER)
+
+
+static func _patch_box_dressed(grad: Array, accent: bool, pad_x: int, pad_y: int, accent_ink: Color, border_ink: Color) -> StyleBoxTexture:
 	var sb: StyleBoxTexture = StyleBoxTexture.new()
-	sb.texture = ImageTexture.create_from_image(_patch_image(grad, accent, false))
+	sb.texture = ImageTexture.create_from_image(_patch_image_dressed(grad, accent, false, accent_ink, border_ink))
 	# The margins pin the edge rows/columns: the gradient's
 	# middle stretches, the machined edges never do.
 	sb.texture_margin_left = 4
@@ -242,6 +322,10 @@ static func _patch_box(grad: Array, accent: bool, pad_x: int, pad_y: int) -> Sty
 ## highlight under the top edge, the dark bottom edge, and
 ## — when accented — the standing light underline.
 static func _patch_image(grad: Array, accent: bool, flat: bool) -> Image:
+	return _patch_image_dressed(grad, accent, flat, ACCENT_INK, RoomSpecs.STRIP_BORDER)
+
+
+static func _patch_image_dressed(grad: Array, accent: bool, flat: bool, accent_ink: Color, border_ink: Color) -> Image:
 	var img: Image = Image.create(_PATCH_W, _PATCH_H, false, Image.FORMAT_RGBA8)
 	if flat:
 		for y: int in range(_PATCH_H):
@@ -263,18 +347,18 @@ static func _patch_image(grad: Array, accent: bool, flat: bool) -> Image:
 		for x: int in range(_PATCH_W):
 			img.set_pixel(x, y, row)
 	for y: int in range(_PATCH_H):
-		img.set_pixel(0, y, RoomSpecs.STRIP_BORDER)
-		img.set_pixel(1, y, RoomSpecs.STRIP_BORDER)
-		img.set_pixel(_PATCH_W - 2, y, RoomSpecs.STRIP_BORDER)
-		img.set_pixel(_PATCH_W - 1, y, RoomSpecs.STRIP_BORDER)
+		img.set_pixel(0, y, border_ink)
+		img.set_pixel(1, y, border_ink)
+		img.set_pixel(_PATCH_W - 2, y, border_ink)
+		img.set_pixel(_PATCH_W - 1, y, border_ink)
 	for x: int in range(_PATCH_W):
-		img.set_pixel(x, 0, RoomSpecs.STRIP_BORDER)
-		img.set_pixel(x, 1, RoomSpecs.STRIP_BORDER)
+		img.set_pixel(x, 0, border_ink)
+		img.set_pixel(x, 1, border_ink)
 		img.set_pixel(x, 2, img.get_pixel(x, 2).lerp(Color(1, 1, 1), 0.10))
 		img.set_pixel(x, _PATCH_H - 2, img.get_pixel(x, _PATCH_H - 2).lerp(Color.BLACK, 0.6))
 		img.set_pixel(x, _PATCH_H - 1, img.get_pixel(x, _PATCH_H - 1).lerp(Color.BLACK, 0.6))
 	if accent:
-		var bar: Color = Color(0.85, 0.87, 0.92, 0.9)
+		var bar: Color = accent_ink
 		for y: int in range(_PATCH_H - 6, _PATCH_H - 3):
 			for x: int in range(int(_PATCH_W * 0.18), int(_PATCH_W * 0.82)):
 				img.set_pixel(x, y, img.get_pixel(x, y).lerp(bar, bar.a))
