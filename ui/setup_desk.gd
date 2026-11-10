@@ -78,6 +78,49 @@ var _details_label: Label ## DESKEDIT: the folded diagnostics text inside the Sc
 
 const MAX_FOLDER_ROWS: int = 6
 
+var _scroll: ScrollContainer ## DESKCENTER: the desk's scroll - the layout pass sizes/scales it
+var _center: CenterContainer ## DESKCENTER: centres the form column inside the scroll's layout area
+var _margin: MarginContainer ## DESKCENTER: the form column's margin box (census: deskcenter_census)
+var _layout_factor: float = 1.0 ## DESKCENTER: the standing layout factor (1.0 = the design size)
+
+## DESKCENTER: the size the form was authored at - DESKHEAD's
+## window stamp, 1280x720. On bigger windows the form scales
+## up from it (never past MAX_LAYOUT_FACTOR) and centres; on
+## smaller ones it never shrinks below the design layout.
+const DESIGN_WINDOW_SIZE: Vector2 = Vector2(1280, 720)
+const MAX_LAYOUT_FACTOR: float = 1.5
+## The form column's standing width: the margin box's own
+## width - its 760 minimum, with the 40px side margins living
+## INSIDE that width (the MarginContainer wears them as theme
+## constants, not as extra size). Proven on the standing desk:
+## the margin box's global rect at factor 1.5 measured 1140 =
+## 760 x 1.5 (the deskcenter census leg).
+const FORM_COLUMN_WIDTH: float = 760.0
+
+
+## The pure layout factor for a window size: how much bigger
+## than the design size the window is, the tighter dimension
+## governing, never below 1.0 and never above the cap. A
+## degenerate size answers 1.0.
+static func desk_layout_factor(win: Vector2) -> float:
+	if win.x <= 0.0 or win.y <= 0.0:
+		return 1.0
+	return clampf(minf(win.x / DESIGN_WINDOW_SIZE.x, win.y / DESIGN_WINDOW_SIZE.y), 1.0, MAX_LAYOUT_FACTOR)
+
+
+## The layout for a window size at a factor: the scroll's
+## layout area (the window measured in desk coordinates) and
+## the form column's offset inside it - the column stands in
+## the middle of the area, or at its left edge when the area
+## is narrower than the column (it scrolls instead).
+static func desk_layout(win: Vector2, factor: float) -> Dictionary:
+	var area: Vector2 = win / maxf(factor, 0.01)
+	return {
+		"factor": factor,
+		"area": area,
+		"form_x": maxf(0.0, (area.x - FORM_COLUMN_WIDTH) * 0.5),
+	}
+
 
 ## DESKEDIT: one collapsible desk section - a dressed toggle
 ## row (a checkable Button in the theme's button dress, a
@@ -111,6 +154,69 @@ func setup(config: PvldsConfig) -> void:
 	visibility_changed.connect(func() -> void:
 		if visible:
 			_reset_folds())
+	# DESKCENTER: the form centres and scales with the
+	# window - now, and live on every window resize.
+	_hook_window_layout()
+
+
+func _hook_window_layout() -> void:
+	if is_inside_tree():
+		var win: Window = get_window()
+		if win != null and not win.size_changed.is_connected(_apply_window_layout):
+			win.size_changed.connect(_apply_window_layout)
+	_apply_window_layout()
+
+
+## The factor the desk wears for a window of the given size.
+## A --pvlds- test boot pins exactly 1.0: every grab and leg
+## stands at the design layout (the brief's guard). The
+## DESKCENTER driver may force a factor through the
+## environment to prove real input under scaling - nothing
+## in production sets that variable.
+func _standing_factor(win: Vector2) -> float:
+	var forced: String = OS.get_environment("PVLDS_DESKCENTER_FORCE_FACTOR")
+	if forced != "":
+		return clampf(forced.to_float(), 1.0, MAX_LAYOUT_FACTOR)
+	for arg: String in OS.get_cmdline_user_args():
+		if arg.begins_with("--pvlds-"):
+			return 1.0
+	return desk_layout_factor(win)
+
+
+## DESKCENTER: centre + scale the form to the window. The
+## scroll wears the window in desk coordinates (its size is
+## the window divided by the factor) and scales by the
+## factor, so its footprint is the window exactly while the
+## form inside keeps laying out at the design measure; the
+## centring parent spans the layout width, so the form
+## column stands in the middle of the area at every size.
+## At factor 1.0 the geometry is the design layout (the
+## scroll covers the window 1:1, as before).
+func _apply_window_layout() -> void:
+	if _scroll == null or not is_inside_tree():
+		return
+	var win_size: Vector2 = Vector2(get_window().size)
+	_layout_factor = _standing_factor(win_size)
+	var layout: Dictionary = desk_layout(win_size, _layout_factor)
+	var area: Vector2 = layout["area"] as Vector2
+	_scroll.position = Vector2.ZERO
+	_scroll.size = area
+	_scroll.scale = Vector2(_layout_factor, _layout_factor)
+	if _center != null:
+		_center.custom_minimum_size = Vector2(area.x, 0.0)
+
+
+## Smoke census of the DESKCENTER layout: the standing
+## factor, the scroll's transform, and the form column's
+## rect in window pixels (global rects carry the scale).
+func deskcenter_census() -> Dictionary:
+	return {
+		"factor": _layout_factor,
+		"scroll_scale": _scroll.scale if _scroll != null else Vector2.ONE,
+		"scroll_size": _scroll.size if _scroll != null else Vector2.ZERO,
+		"form_rect": _margin.get_global_rect() if _margin != null else Rect2(),
+		"dialog_scale_factor": _dialog.content_scale_factor if _dialog != null else 1.0,
+	}
 
 
 func _make_fold(parent: VBoxContainer, title: String) -> _Fold:
@@ -165,9 +271,22 @@ func _build_ui() -> void:
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 	var scroll: ScrollContainer = ScrollContainer.new()
-	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# DESKCENTER: no full-rect anchors - the layout pass
+	# (setup's _hook_window_layout) owns the scroll's size,
+	# position and scale, and re-owns them on every resize.
+	scroll.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	scroll.theme = DeskTheme.build()
 	add_child(scroll)
+	_scroll = scroll
+	# DESKCENTER: a centring parent between the scroll and
+	# the form - the ScrollContainer alone parks its child
+	# at its minimum width against the left edge on wide
+	# windows (Chris's field shot); the layout pass spans
+	# this parent across the layout area and it centres the
+	# column inside it.
+	var center: CenterContainer = CenterContainer.new()
+	scroll.add_child(center)
+	_center = center
 	var margin: MarginContainer = MarginContainer.new()
 	margin.custom_minimum_size = Vector2(760, 0)
 	margin.add_theme_constant_override("margin_left", 40)
@@ -175,7 +294,8 @@ func _build_ui() -> void:
 	margin.add_theme_constant_override("margin_top", 30)
 	margin.add_theme_constant_override("margin_bottom", 30)
 	margin.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	scroll.add_child(margin)
+	center.add_child(margin)
+	_margin = margin
 	var vbox: VBoxContainer = VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 12)
 	margin.add_child(vbox)
@@ -700,6 +820,16 @@ func _open_dialog_for(target: String) -> void:
 	else:
 		_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 		_dialog.title = "Pick a folder full of .vpx tables"
+	# DESKCENTER: the picker is desk furniture and rides the
+	# layout scale - it is a Window, which Control scaling
+	# never reaches, so it wears the factor through its own
+	# content scale instead.
+	if _layout_factor > 1.0:
+		_dialog.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+		_dialog.content_scale_factor = _layout_factor
+	else:
+		_dialog.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
+		_dialog.content_scale_factor = 1.0
 	_dialog.popup_centered_ratio(0.75)
 
 

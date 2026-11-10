@@ -329,6 +329,10 @@ var _deskedit_mode: String = "desk"
 var _deskedit_phase: int = 0
 var _deskedit_wait: int = 0
 var _deskedit_failures: int = 0
+var _smoke_deskcenter: bool = false ## --pvlds-smoke-deskcenter: DESKCENTER layout/input proof (PVLDS_DESKCENTER_FORCE_FACTOR forces the desk's factor)
+var _deskcenter_phase: int = 0
+var _deskcenter_wait: int = 0
+var _deskcenter_failures: int = 0
 var _smoke_dpadexit: bool = false ## --pvlds-smoke-dpadexit: a fresh D-pad Right in the room must exit the app
 var _dpadexit_held_leg: bool = false ## --pvlds-smoke-dpadexit-held: the button is pinned from boot; no exit until a witnessed release, then a fresh press exits
 var _dpadexit_smoke_phase: int = 0
@@ -835,6 +839,8 @@ func _ready() -> void:
 		_deskedit_mode = OS.get_environment("PVLDS_DESKEDIT_MODE")
 		if _deskedit_mode == "":
 			_deskedit_mode = "desk"
+	if user_args.has("--pvlds-smoke-deskcenter"):
+		_smoke_deskcenter = true
 	if user_args.has("--pvlds-smoke-dpadexit"):
 		_smoke_dpadexit = true
 	if user_args.has("--pvlds-smoke-dpadexit-held"):
@@ -1501,6 +1507,8 @@ func _process(_delta: float) -> void:
 		_drive_setuplook_smoke()
 	if _smoke_deskedit:
 		_drive_deskedit_smoke()
+	if _smoke_deskcenter:
+		_drive_deskcenter_smoke()
 	if _smoke_dpadexit:
 		_drive_dpadexit_smoke()
 	if _smoke_lockout:
@@ -24250,6 +24258,141 @@ func _finish_deskedit_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS DESKEDIT SMOKE: FAIL (%d)" % _deskedit_failures)
+		get_tree().quit(1)
+
+
+# -------------------------------------------------- deskcenter smoke
+
+## --pvlds-smoke-deskcenter: DESKCENTER's proof driver. The
+## runner boots a configured library at a big window
+## (--resolution 2200x1250) with PVLDS_DESKCENTER_FORCE_FACTOR
+## set, so the desk wears a real scale factor despite the
+## --pvlds- guard. Legs:
+##   math   - the pure layout math on synthetic window sizes
+##            (design size, the 2176x1224 DESKHEAD window,
+##            tall-narrow, sub-design, degenerate).
+##   census - the standing desk's factor IS the forced one,
+##            the scroll wears it, and the form column's
+##            global rect is centred in the window and grown
+##            by the factor.
+##   input  - REAL presses under the scale: the Advanced
+##            fold's toggle pressed through a synthetic
+##            mouse click warped to the toggle's global
+##            centre must expand the fold (the deskedit
+##            driver's own evidence that Godot carries
+##            input through Control scaling exactly).
+##   grab   - the desk's top, eyeballed: centred and grown.
+## Grabs land in PVLDS_DESKCENTER_GRAB_DIR.
+func _drive_deskcenter_smoke() -> void:
+	match _deskcenter_phase:
+		0:
+			# The pure math first (no desk needed).
+			_deskcenter_expect(is_equal_approx(SetupDesk.desk_layout_factor(Vector2(1280, 720)), 1.0),
+				"math: the design size answers factor 1.0")
+			_deskcenter_expect(is_equal_approx(SetupDesk.desk_layout_factor(Vector2(2176, 1224)), 1.5),
+				"math: 2176x1224 (DESKHEAD's 85%% window on 2560x1440) is capped at 1.5 (got %.3f)" % SetupDesk.desk_layout_factor(Vector2(2176, 1224)))
+			_deskcenter_expect(is_equal_approx(SetupDesk.desk_layout_factor(Vector2(1600, 1080)), 1.25),
+				"math: 1600x1080 - the width limits the factor to 1.25 (got %.3f)" % SetupDesk.desk_layout_factor(Vector2(1600, 1080)))
+			_deskcenter_expect(is_equal_approx(SetupDesk.desk_layout_factor(Vector2(1000, 2000)), 1.0),
+				"math: tall-narrow 1000x2000 - the width is under the design size, factor 1.0")
+			_deskcenter_expect(is_equal_approx(SetupDesk.desk_layout_factor(Vector2(2560, 900)), 1.25),
+				"math: 2560x900 - the height limits the factor to 1.25 (got %.3f)" % SetupDesk.desk_layout_factor(Vector2(2560, 900)))
+			_deskcenter_expect(is_equal_approx(SetupDesk.desk_layout_factor(Vector2(800, 600)), 1.0),
+				"math: a sub-design window never shrinks the form (factor 1.0)")
+			_deskcenter_expect(is_equal_approx(SetupDesk.desk_layout_factor(Vector2.ZERO), 1.0),
+				"math: a degenerate size answers 1.0")
+			var lay_big: Dictionary = SetupDesk.desk_layout(Vector2(2176, 1224), 1.5)
+			_deskcenter_expect(is_equal_approx(float(lay_big["form_x"]), (2176.0 / 1.5 - 760.0) * 0.5),
+				"math: at 2176x1224 x1.5 the column's offset centres it in the layout area (got %.1f)" % float(lay_big["form_x"]))
+			_deskcenter_expect(is_equal_approx(float(SetupDesk.desk_layout(Vector2(1280, 720), 1.0)["form_x"]), 260.0),
+				"math: at the design size the column centres too (offset 260)")
+			_deskcenter_expect(is_equal_approx(float(SetupDesk.desk_layout(Vector2(700, 720), 1.0)["form_x"]), 0.0),
+				"math: an area narrower than the column answers offset 0 (it scrolls)")
+			_deskcenter_phase = 1
+		1:
+			if _room != null and _room.visible:
+				_show_desk()
+				_deskcenter_wait = 0
+				_deskcenter_phase = 2
+			else:
+				_deskcenter_wait += 1
+				if _deskcenter_wait > 7200:
+					_deskcenter_fail("the room never stood")
+					_finish_deskcenter_smoke()
+		2:
+			_deskcenter_wait += 1
+			if _deskcenter_wait >= 6:
+				var forced: float = OS.get_environment("PVLDS_DESKCENTER_FORCE_FACTOR").to_float()
+				var cen: Dictionary = _desk.deskcenter_census()
+				_deskcenter_expect(is_equal_approx(float(cen["factor"]), forced),
+					"census: the desk wears the forced factor %.2f (got %.3f)" % [forced, float(cen["factor"])])
+				_deskcenter_expect((cen["scroll_scale"] as Vector2).is_equal_approx(Vector2(forced, forced)),
+					"census: the scroll wears the factor as its scale (got %s)" % str(cen["scroll_scale"]))
+				var fr: Rect2 = cen["form_rect"]
+				var win: Vector2 = Vector2(get_window().size)
+				_deskcenter_expect(absf(fr.size.x - 760.0 * forced) <= 4.0,
+					"census: the form column is grown by the factor (width %.1f, want %.1f)" % [fr.size.x, 760.0 * forced])
+				_deskcenter_expect(absf(fr.position.x - (win.x - fr.size.x) * 0.5) <= 3.0,
+					"census: the form column is centred in the window (x %.1f, want %.1f)" % [fr.position.x, (win.x - fr.size.x) * 0.5])
+				_deskcenter_grab("deskcenter_top.png")
+				_deskcenter_phase = 3
+				_deskcenter_wait = 0
+		3:
+			# A real press under the scale: click the
+			# Advanced fold's toggle at its global centre
+			# (the deskedit driver's warp pattern).
+			var toggle: Button = _desk._advanced_fold.toggle
+			var centre: Vector2 = toggle.get_global_rect().get_center()
+			get_viewport().warp_mouse(centre)
+			var press: InputEventMouseButton = InputEventMouseButton.new()
+			press.button_index = MOUSE_BUTTON_LEFT
+			press.pressed = true
+			press.position = centre
+			press.global_position = centre
+			Input.parse_input_event(press)
+			var release: InputEventMouseButton = InputEventMouseButton.new()
+			release.button_index = MOUSE_BUTTON_LEFT
+			release.pressed = false
+			release.position = centre
+			release.global_position = centre
+			Input.parse_input_event(release)
+			_deskcenter_wait = 0
+			_deskcenter_phase = 4
+		4:
+			_deskcenter_wait += 1
+			if _deskcenter_wait >= 4:
+				_deskcenter_expect(_desk._advanced_fold.is_expanded(),
+					"input: a real click on the Advanced toggle under scale x%.2f expanded the fold" % _desk._layout_factor)
+				_finish_deskcenter_smoke()
+
+
+func _deskcenter_grab(file_name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_DESKCENTER_GRAB_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	if img != null:
+		img.save_png(dir.path_join(file_name))
+
+
+func _deskcenter_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - deskcenter smoke: ", label)
+	else:
+		_deskcenter_fail(label)
+
+
+func _deskcenter_fail(label: String) -> void:
+	_deskcenter_failures += 1
+	printerr("  FAIL - deskcenter smoke: ", label)
+
+
+func _finish_deskcenter_smoke() -> void:
+	if _deskcenter_failures == 0:
+		print("PVLDS DESKCENTER SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS DESKCENTER SMOKE: FAIL (%d)" % _deskcenter_failures)
 		get_tree().quit(1)
 
 
