@@ -298,6 +298,13 @@ var _shot_setup_panel_frames: int = 0
 var _shot_setup_panel_after_scan: bool = false ## --pvlds-shot-setup-panel-scan: run the panel's scan first, capture the post-scan room (Chris's stray framing)
 var _shot_setup_panel_scan_fired: bool = false
 var _shot_setup_panel_scanned: bool = false
+var _shot_panelfit_path: String = "" ## --pvlds-shot-panelfit P: capture the SETUP panel at PANELFIT's worst-case census and judge the fit + numbers-pop legs on the render
+var _shot_panelfit_phase: int = -1
+var _shot_panelfit_frames: int = 0
+var _shot_panelfit_pushed: bool = false
+var _shot_panelfit_tex_before: Texture2D = null ## the face texture instance standing when the census was pushed - the judged render must be a later instance
+var _shot_panelfit_last_tex: Texture2D = null ## the latest post-push face texture instance - it must stand unchanged to be judged
+var _shot_panelfit_settled: int = 0 ## frames the current face texture instance has stood unchanged
 var _smoke_scanwall: bool = false ## --pvlds-smoke-scanwall: GRADFIX14 item 2 - mid-session scans WITH library changes, across the panel / early-close / desk / tournament routes
 var _scanwall_phase: int = 0
 var _scanwall_wait: int = 0
@@ -807,6 +814,10 @@ func _ready() -> void:
 		_shot_setup_panel_phase = 0
 	if user_args.has("--pvlds-shot-setup-panel-scan"):
 		_shot_setup_panel_after_scan = true
+	var shot_pf_idx: int = user_args.find("--pvlds-shot-panelfit")
+	if shot_pf_idx >= 0 and shot_pf_idx + 1 < user_args.size():
+		_shot_panelfit_path = user_args[shot_pf_idx + 1]
+		_shot_panelfit_phase = 0
 	if user_args.has("--pvlds-smoke-desk"):
 		_smoke_desk = true
 	if user_args.has("--pvlds-smoke-bootface"):
@@ -1213,7 +1224,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _smoke_snappybench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_submitnav or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_loading or _smoke_scoremark or _smoke_pinemhi2 or _smoke_starfield) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _smoke_snappybench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _shot_panelfit_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_submitnav or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_loading or _smoke_scoremark or _smoke_pinemhi2 or _smoke_starfield) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1411,6 +1422,8 @@ func _process(_delta: float) -> void:
 		_drive_scanwall_smoke()
 	if _shot_setup_panel_phase >= 0:
 		_drive_shot_setup_panel()
+	if _shot_panelfit_phase >= 0:
+		_drive_shot_panelfit()
 	if _smoke_desk:
 		_drive_desk_smoke()
 	if _smoke_bootface:
@@ -4366,7 +4379,7 @@ func _drive_setup_panel_smoke() -> void:
 			_setup_panel_smoke_wait += 1
 			var face: ClickableQuad = _room.setup_panel_face_quad() if _room != null else null
 			var dressed: bool = face != null and face.current_texture() != null \
-				and face.current_texture().get_size() == Vector2(1024, 546)
+				and face.current_texture().get_size() == Vector2(1472, 1024)
 			if _setup_panel_smoke_wait >= 3 and dressed:
 				_setup_panel_surface_assertions()
 				_setup_panel_smoke_wait = 0
@@ -4423,17 +4436,32 @@ func _drive_setup_panel_smoke() -> void:
 				_setup_panel_expect(not _setup_panel_smoke_orphan_highlight(),
 					"scan leg: no highlight frame shows without a visible quad behind it (no invisible highlighted buttons)")
 				_setup_panel_expect(_room.setup_panel_face_quad().current_texture() != null
-					and _room.setup_panel_face_quad().current_texture().get_size() == Vector2(1024, 546),
+					and _room.setup_panel_face_quad().current_texture().get_size() == Vector2(1472, 1024),
 					"scan leg: the panel's face wears its own texture (not a wall texture)")
 				_setup_panel_expect(_room.setup_panel_scan_quad().current_texture() != null
-					and _room.setup_panel_scan_quad().current_texture().get_size() == Vector2(512, 124),
+					and _room.setup_panel_scan_quad().current_texture().get_size() == Vector2(672, 116),
 					"scan leg: SCAN LIBRARY wears its own button face")
 				_setup_panel_expect(_room.setup_panel_download_quad().current_texture() != null
-					and _room.setup_panel_download_quad().current_texture().get_size() == Vector2(512, 124),
+					and _room.setup_panel_download_quad().current_texture().get_size() == Vector2(672, 116),
 					"scan leg: DOWNLOAD VPS DATABASE wears its own button face")
 				_setup_panel_expect(_room.setup_panel_back_quad().current_texture() != null
-					and _room.setup_panel_back_quad().current_texture().get_size() == Vector2(512, 164),
+					and _room.setup_panel_back_quad().current_texture().get_size() == Vector2(672, 116),
 					"scan leg: BACK wears its own button face")
+				# PANELFIT (item 1): no button label wraps -
+				# every button's rendered ink stands in ONE
+				# text band. DOWNLOAD VPS DATABASE, the long
+				# label that wrapped and spilled off its face
+				# in the field, is named on its own.
+				_setup_panel_expect(_setup_panel_button_one_band(_room.setup_panel_download_quad()),
+					"PANELFIT: DOWNLOAD VPS DATABASE stands on one line inside its face")
+				var all_one_band: bool = true
+				for bq: ClickableQuad in [_room.setup_panel_scan_quad(), _room.setup_panel_wovp_paste_quad(),
+						_room.setup_panel_wovp_test_quad(), _room.setup_panel_stars_quad(),
+						_room.setup_panel_ipdb_quad(), _room.setup_panel_back_quad(), _room.setup_panel_watcher_quad()]:
+					if not _setup_panel_button_one_band(bq):
+						all_one_band = false
+				_setup_panel_expect(all_one_band,
+					"PANELFIT: every panel button's label stands on one line")
 				_setup_panel_expect(_room.is_setup_panel_up(), "scan leg: the panel stands through its scan")
 				_setup_panel_expect(not _room._setup_scanning, "scan leg: the working state cleared")
 				var f: ClickableQuad = _room.focused_quad()
@@ -4644,6 +4672,62 @@ func _setup_panel_smoke_orphan_highlight() -> bool:
 	return false
 
 
+## PANELFIT (item 1): the panel's lowest quad (the watcher
+## row) measured against the numbers line - both as downward
+## angles from EYE. True when the panel's bottom edge stays
+## at least 3 degrees above the numbers line's centre, so
+## the stack reads clear of the strip furniture under it.
+func _setup_panel_bottom_clears_numbers() -> bool:
+	if _room == null or _room.setup_panel_watcher_quad() == null or _room._numbers_label == null:
+		return false
+	var wq: ClickableQuad = _room.setup_panel_watcher_quad()
+	var gt: Transform3D = wq.get_global_transform()
+	var half: Vector2 = wq.quad_size() * 0.5
+	var worst: float = -90.0
+	for cx: float in [-half.x, half.x]:
+		var p: Vector3 = gt * Vector3(cx, -half.y, 0.0)
+		var flat: float = Vector2(p.x - RoomView.EYE.x, p.z - RoomView.EYE.z).length()
+		worst = maxf(worst, rad_to_deg(atan2(RoomView.EYE.y - p.y, flat)))
+	var np: Vector3 = _room._numbers_label.global_position
+	var nflat: float = Vector2(np.x - RoomView.EYE.x, np.z - RoomView.EYE.z).length()
+	var num_ang: float = rad_to_deg(atan2(RoomView.EYE.y - np.y, nflat))
+	return worst < num_ang - 3.0
+
+
+## PANELFIT (item 1): a panel button's label ink stands in
+## ONE text band on its rendered face. The machined label
+## ink (resting grey, accent, or lifted white) is far
+## brighter than the graphite ground, so a row census of
+## bright pixels finds the label's band; a wrapped label
+## would stand about two lines tall and fail. The census
+## window is the face's middle - its edge lines and the
+## accent underline are furniture, not label ink.
+func _setup_panel_button_one_band(q: ClickableQuad) -> bool:
+	if q == null or q.current_texture() == null:
+		return false
+	var img: Image = q.current_texture().get_image()
+	if img == null or img.get_height() == 0:
+		return false
+	var h: int = img.get_height()
+	var w: int = img.get_width()
+	var first: int = -1
+	var last: int = -1
+	for y: int in range(10, h - 14):
+		var row_ink: bool = false
+		var x: int = 4
+		while x < w - 4:
+			var px: Color = img.get_pixel(x, y)
+			if px.r + px.g + px.b > 1.55:
+				row_ink = true
+				break
+			x += 3
+		if row_ink:
+			if first < 0:
+				first = y
+			last = y
+	return first >= 0 and last - first <= 52
+
+
 func _setup_panel_surface_assertions() -> void:
 	_setup_panel_expect(_room.is_setup_panel_up(), "XR setup: the panel is up")
 	var holder: Node3D = _room.setup_panel_holder()
@@ -4663,6 +4747,11 @@ func _setup_panel_surface_assertions() -> void:
 	# standing gait is STEPPED, and panel interaction (the
 	# surviving STARS dial, cycled a full turn so the panel is
 	# left as it was found) never moves the config off it.
+	# PANELFIT closes this leg's long stale run: the dial's
+	# retirement left a LABEL button standing on the panel
+	# (its press only re-affirmed STEPPED), so the census
+	# below failed on the standing build until PANELFIT
+	# removed the button outright.
 	var wall_control_found: bool = false
 	for fq: Variant in _room._focusables:
 		var fquad: ClickableQuad = fq as ClickableQuad
@@ -4686,7 +4775,18 @@ func _setup_panel_surface_assertions() -> void:
 		"wall motion dial: the config still reads STEPPED after panel interaction")
 	_room._activate(_room.setup_panel_stars_quad())
 	_room._activate(_room.setup_panel_stars_quad())
+	_setup_panel_expect(_room.setup_panel_ipdb_quad() != null, "XR setup: the panel has RE-APPLY IPDB DATA")
+	_setup_panel_expect(_room.setup_panel_watcher_quad() != null, "XR setup: the panel has PINEMHI WATCHER (the watcher dial row)")
 	_setup_panel_expect(_room.setup_panel_back_quad() != null, "XR setup: the panel has BACK")
+	# PANELFIT (item 1): the reseated panel's bottom clears
+	# the numbers line - the lowest panel quad's downward
+	# angle from EYE stays at least 3 degrees above the
+	# numbers line's angle, so the rows no longer run into
+	# the strip furniture (Chris's field report).
+	_setup_panel_expect(holder != null and holder.position == Vector3(0.0, 1.32, -2.35),
+		"PANELFIT: the panel holder stands at the reseated seat (0, 1.32, -2.35)")
+	_setup_panel_expect(_setup_panel_bottom_clears_numbers(),
+		"PANELFIT: the panel's bottom clears the numbers line by 3+ degrees of view")
 	_setup_panel_expect(_room.visible, "XR setup: the room stays visible")
 	_setup_panel_expect(not _room.is_setup_placard_up(), "XR setup: no placard - the desktop route is retired")
 	_setup_panel_expect(_desk == null or not _desk.visible, "XR setup: the desk never opens - no desktop trip")
@@ -4710,16 +4810,27 @@ func _setup_panel_surface_assertions() -> void:
 		and _room.setup_panel_wovp_paste_quad().pick_enabled
 		and _room.setup_panel_wovp_test_quad().pick_enabled
 		and _room.setup_panel_stars_quad().pick_enabled
+		and _room.setup_panel_ipdb_quad().pick_enabled
+		and _room.setup_panel_watcher_quad().pick_enabled
 		and _room.setup_panel_back_quad().pick_enabled,
 		"XR setup: the panel's own buttons are live")
-	_setup_panel_expect(_room._focusables.size() == 6
+	# PANELFIT restatement: this leg was written when the
+	# panel had six buttons; it then grew past them (the
+	# IPDB and watcher rows) and the leg stood stale against
+	# the real census. PANELFIT removes the WALL MOTION
+	# button, and the leg now pins the surviving EIGHT -
+	# same intent (focus is confined to the panel's own
+	# buttons), true census.
+	_setup_panel_expect(_room._focusables.size() == 8
 		and _room._focusables.has(_room.setup_panel_scan_quad())
 		and _room._focusables.has(_room.setup_panel_download_quad())
 		and _room._focusables.has(_room.setup_panel_wovp_paste_quad())
 		and _room._focusables.has(_room.setup_panel_wovp_test_quad())
 		and _room._focusables.has(_room.setup_panel_stars_quad())
+		and _room._focusables.has(_room.setup_panel_ipdb_quad())
+		and _room._focusables.has(_room.setup_panel_watcher_quad())
 		and _room._focusables.has(_room.setup_panel_back_quad()),
-		"XR setup: focus navigation is confined to the panel's six buttons")
+		"XR setup: focus navigation is confined to the panel's eight buttons")
 	_setup_panel_expect(_room._focused == _room.setup_panel_scan_quad(),
 		"XR setup: focus opens on SCAN LIBRARY")
 	# Confinement under travel: TAB around the stops and
@@ -5213,7 +5324,7 @@ func _drive_shot_setup_panel() -> void:
 			_shot_setup_panel_frames += 1
 			var face: ClickableQuad = _room.setup_panel_face_quad()
 			var dressed: bool = face != null and face.current_texture() != null \
-				and face.current_texture().get_size() == Vector2(1024, 546)
+				and face.current_texture().get_size() == Vector2(1472, 1024)
 			if _shot_setup_panel_after_scan and not _shot_setup_panel_scanned:
 				# The after-scan variant (the after-scan strays'
 				# framing): fire SCAN through the panel, wait
@@ -5238,6 +5349,158 @@ func _drive_shot_setup_panel() -> void:
 			elif _shot_setup_panel_frames > 3600:
 				printerr("PVLDS SETUP PANEL SHOT: FAIL - the panel never dressed")
 				get_tree().quit(1)
+
+
+# --------------------------------------------------- panelfit shot
+
+## --pvlds-shot-panelfit P: PANELFIT's proof driver. Opens
+## the SETUP panel through the rail, then pushes the
+## worst-case census into it - the full health stack in its
+## longest forms (the sample database standing, every
+## optional line present, the folder-path line at field
+## length) under the standing sub, the message slot's
+## longest standing form - waits for that render to land,
+## judges the fit and the numbers-pop on the face texture
+## itself, and saves the grab for the eyeball pass.
+func _drive_shot_panelfit() -> void:
+	match _shot_panelfit_phase:
+		0:
+			if _room == null or not _room.visible or not _room.wall_ready:
+				return
+			_room._xr_enabled = true
+			_room._activate(_room.rail_quad("desk"))
+			_shot_panelfit_phase = 1
+		1:
+			if _room == null or not _room.is_setup_panel_up():
+				return
+			_shot_panelfit_frames += 1
+			if _shot_panelfit_frames > 3600:
+				printerr("PVLDS PANELFIT SHOT: FAIL - the census render never landed")
+				get_tree().quit(1)
+				return
+			var face: ClickableQuad = _room.setup_panel_face_quad()
+			if face == null or face.current_texture() == null:
+				return
+			# Main re-pushes the real health over the census
+			# when its boot-time events land (the WoVP identity
+			# check resolving, the IPDB push) - so the census
+			# is re-pushed whenever the room's standing health
+			# is not the census, and only a render of the
+			# census itself, settled, is judged.
+			if int(_room.setup_panel_health().get("files", -1)) != 363:
+				_shot_panelfit_pushed = true
+				_shot_panelfit_tex_before = face.current_texture()
+				_shot_panelfit_last_tex = null
+				_shot_panelfit_settled = 0
+				_room.set_setup_health({
+					"files": 363, "games": 344,
+					"matched": 252, "game_matched": 110,
+					"db_ok": true, "db_kind": "sample",
+					"missing": 82, "unplaced": 1,
+					"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in FIRST SETUP.",
+					"pinemhi_line": "PINemHi: on, but no PINemHi folder found - set the folder to show your personal bests on tournament boards.",
+					"ipdb_line": "IPDB data: 340 of 344 games",
+					"shots_line": "Screenshots folder: C:\\Users\\cfond\\Pictures\\Virtual Desktop - 128 screenshots on file, newest first in the room.",
+				})
+				return
+			# The judged render must be a POST-push texture
+			# instance, standing unchanged, with the panel's
+			# render machinery idle. The instance test alone
+			# is not enough: the panel's own first fill
+			# captures its spec before the push and can land
+			# its (pre-census) face after it, then stand for
+			# the whole button fill - so the census render is
+			# only certainly the standing one once no fill is
+			# in flight or pending AND one instance has stood
+			# unchanged since.
+			var cur_tex: Texture2D = face.current_texture()
+			if cur_tex == _shot_panelfit_tex_before or _room._setup_render_in_flight or _room._setup_render_pending:
+				_shot_panelfit_settled = 0
+			elif cur_tex != _shot_panelfit_last_tex:
+				_shot_panelfit_last_tex = cur_tex
+				_shot_panelfit_settled = 0
+			else:
+				_shot_panelfit_settled += 1
+			if _shot_panelfit_settled >= 10:
+				var fails: Array[String] = []
+				var tex: Texture2D = face.current_texture()
+				if tex.get_size() != Vector2(1472, 1024):
+					fails.append("the face texture is %s, not the PANELFIT canvas" % str(tex.get_size()))
+				var census: Vector2i = _panelfit_amber_census(tex)
+				if census.x < 1200:
+					fails.append("numbers pop: only %d amber digit pixels in the body band (the census carries ~30 digit glyphs)" % census.x)
+				if census.y > 0:
+					fails.append("numbers pop: %d amber pixels above the body band (the colour leaked into title/sub)" % census.y)
+				var span: Vector2i = _panelfit_content_span(tex)
+				if span.x < 14:
+					fails.append("fit: content ink starts at row %d - the top margin is gone" % span.x)
+				if span.y > 1024 - 24:
+					fails.append("fit: content ink ends at row %d - the bottom margin is gone (the stack clips)" % span.y)
+				var path: String = _shot_panelfit_path
+				_shot_panelfit_phase = -1
+				var err: Error = _save_shot_png(path)
+				if err != OK:
+					fails.append("the grab failed to save (err %d)" % err)
+				if fails.is_empty():
+					print("PVLDS PANELFIT SHOT: PASS - ", path, " (amber body px=", census.x, ", content rows ", span.x, "..", span.y, " of 1024)")
+					get_tree().quit(0)
+				else:
+					for f: String in fails:
+						printerr("PVLDS PANELFIT SHOT: FAIL - ", f)
+					get_tree().quit(1)
+
+
+## PANELFIT (item 2): the amber ink census on a face
+## texture. x = amber pixels in the body band (y >= 210,
+## below the title/sub block); y = amber pixels above it.
+## The amber (1.0, 0.66, 0.16) is the number pop's colour;
+## the face's other bright ink (the silvery title and
+## labels, the accent underline) carries a high blue and
+## never counts.
+func _panelfit_amber_census(tex: Texture2D) -> Vector2i:
+	var img: Image = tex.get_image()
+	if img == null:
+		return Vector2i.ZERO
+	var body: int = 0
+	var above: int = 0
+	for y: int in range(img.get_height()):
+		for x: int in range(0, img.get_width(), 2):
+			var px: Color = img.get_pixel(x, y)
+			if px.r > 0.8 and px.g > 0.45 and px.g < 0.85 and px.b < 0.40:
+				if y >= 210:
+					body += 1
+				else:
+					above += 1
+	return Vector2i(body, above)
+
+
+## PANELFIT (item 1): the content ink's vertical span on a
+## face texture - the first and last rows carrying bright
+## ink (text ink is bright; the graphite ground and its
+## edge lines are not), the side borders and the bottom
+## furniture rows excluded. A stack that outgrows its
+## canvas pushes its last line into the bottom margin,
+## and this span shows it.
+func _panelfit_content_span(tex: Texture2D) -> Vector2i:
+	var img: Image = tex.get_image()
+	if img == null:
+		return Vector2i(-1, -1)
+	var first: int = -1
+	var last: int = -1
+	for y: int in range(img.get_height() - 12):
+		var row_ink: bool = false
+		var x: int = 6
+		while x < img.get_width() - 6:
+			var px: Color = img.get_pixel(x, y)
+			if px.r + px.g + px.b > 1.2:
+				row_ink = true
+				break
+			x += 3
+		if row_ink:
+			if first < 0:
+				first = y
+			last = y
+	return Vector2i(first, last)
 
 
 # --------------------------------------------------- grad smoke
@@ -23564,7 +23827,7 @@ func _drive_setuplook_panel() -> void:
 			_setuplook_wait += 1
 			var face: ClickableQuad = _room.setup_panel_face_quad() if _room != null else null
 			var dressed: bool = face != null and face.current_texture() != null \
-				and face.current_texture().get_size() == Vector2(1024, 546)
+				and face.current_texture().get_size() == Vector2(1472, 1024)
 			if dressed and _setuplook_wait >= 8:
 				_setuplook_expect(_room.is_setup_panel_up(), "panel: the SETUP panel stands")
 				_setuplook_grab("setuplook_panel.png")
@@ -26461,6 +26724,16 @@ func _run_core_test() -> void:
 		_expect(not _nav_spec_has_chip(RoomSpecs.panel_spec(mt_qq, store), "PuP")
 			and not bool(RoomSpecs.art_spec(mt_qq, null, store).get("pup", true)),
 			"PuP control: the unflagged game's panel spec has no PuP chip and its art spec's pup key is false", failures)
+	# PANELFIT (item 2): the numbers-pop key is the SETUP
+	# panel spec's alone - the placard and the submit face,
+	# the banner family's other standing members, do not
+	# carry it, so no other surface's body changes colour.
+	_expect(RoomSpecs.setup_panel_spec({}, "").get("body_number_color") == RoomSpecs.NUMBER_POP,
+		"PANELFIT: the SETUP panel spec carries the numbers-pop colour (the room's amber)", failures)
+	_expect(not RoomSpecs.placard_spec("").has("body_number_color"),
+		"PANELFIT: the placard spec carries no numbers-pop key (the colour cannot leak)", failures)
+	_expect(not RoomSpecs.banner_spec("LOADING").has("body_number_color"),
+		"PANELFIT: the loading banner spec carries no numbers-pop key", failures)
 	var mt_pr: GameEntry = mt_scan.game_by_id("fx-panic-room")
 	_expect(mt_pr != null and mt_pr.builds.size() == 1, "matcher fixture: Panic Room holds its file", failures)
 	if mt_pr != null:

@@ -131,6 +131,7 @@ var _band_label: Label
 var _title_label: Label
 var _sub_label: Label
 var _body_label: Label
+var _body_rich: RichTextLabel ## PANELFIT: the body label's rich twin - stands only for a spec carrying "body_number_color" (its numbers coloured); hidden for every other spec, asserted per spec like display_type
 var _chips_row: HBoxContainer
 var _rows_box: VBoxContainer ## the board kind's stacked rows (score / divider / note)
 var _top_spacer: Control ## board kind (GRADFIX8): the centring spacer above the band - shares the face's spare height with _footer_spacer so the content block centres (see apply_spec)
@@ -332,6 +333,23 @@ func _init() -> void:
 	_body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_body_label.add_theme_color_override("font_color", Color(0.85, 0.86, 0.92))
 	_vbox.add_child(_body_label)
+
+	# PANELFIT: the body's rich twin, built beside the plain
+	# label and hidden - it stands only while a spec carries
+	# "body_number_color" (see apply_spec), mirroring the
+	# plain label's wrap, ink and (for display_type specs)
+	# font, so the swap changes nothing but the numbers'
+	# colour.
+	_body_rich = RichTextLabel.new()
+	_body_rich.bbcode_enabled = true
+	_body_rich.fit_content = true
+	_body_rich.scroll_active = false
+	_body_rich.selection_enabled = false
+	_body_rich.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_body_rich.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_body_rich.add_theme_color_override("default_color", Color(0.85, 0.86, 0.92))
+	_body_rich.visible = false
+	_vbox.add_child(_body_rich)
 
 	_chips_row = HBoxContainer.new()
 	_chips_row.add_theme_constant_override("separation", 10)
@@ -785,9 +803,36 @@ func apply_spec(spec: Dictionary) -> void:
 	# stock colour as the default so no warmth can leak.
 	_sub_label.add_theme_color_override("font_color",
 		_color_of(spec, "sub_color", Color(0.75, 0.78, 0.88)))
-	_body_label.text = str(spec.get("body", ""))
-	_body_label.visible = _body_label.text != ""
-	_body_label.add_theme_font_size_override("font_size", int(spec.get("body_size", 34)))
+	var body_text: String = str(spec.get("body", ""))
+	var body_px: int = int(spec.get("body_size", 34))
+	_body_label.text = body_text
+	_body_label.add_theme_font_size_override("font_size", body_px)
+	# PANELFIT (item 2): a spec carrying "body_number_color"
+	# (only the SETUP panel's) stands the body's RICH twin in
+	# the plain label's place, its digit tokens wrapped in
+	# the colour - the numbers are the payload of those
+	# lines, and they pop while the words keep the resting
+	# ink. Asserted and restored on every spec, like
+	# display_type above: no key (or no body), no rich twin,
+	# and the plain label renders exactly as before. The
+	# line discipline below stays the plain label's; no spec
+	# sets both (the panel sets no body cap - its canvas is
+	# budgeted for its census, see PANELFIT's STATUS).
+	var pop_col: Variant = spec.get("body_number_color", null)
+	var pop: bool = pop_col is Color and body_text != ""
+	_body_label.visible = body_text != "" and not pop
+	_body_rich.visible = pop
+	if pop:
+		if display_type:
+			_body_rich.add_theme_font_override("normal_font", DISPLAY_FONT_REGULAR)
+		elif _body_rich.has_theme_font_override("normal_font"):
+			_body_rich.remove_theme_font_override("normal_font")
+		_body_rich.add_theme_font_size_override("normal_font_size", body_px)
+		_body_rich.add_theme_color_override("default_color", Color(0.85, 0.86, 0.92))
+		var rich_text: String = _pop_numbers(body_text, pop_col as Color)
+		if centered:
+			rich_text = "[center]" + rich_text + "[/center]"
+		_body_rich.text = rich_text
 	# Optional per-spec line discipline ("<slot>_max_lines" > 0): cap
 	# the label's lines and ellipsize the overrun, so a long string
 	# can never push the rest of the card off its texture. Specs that
@@ -1298,7 +1343,7 @@ func board_metrics() -> Dictionary:
 	# block's centroid against the canvas centre from here.
 	var block: Rect2 = Rect2()
 	var have_block: bool = false
-	var parts: Array[Control] = [_band_panel, _title_label, _sub_label, _body_label]
+	var parts: Array[Control] = [_band_panel, _title_label, _sub_label, _body_label, _body_rich]
 	if _chips_row.get_child_count() > 0:
 		parts.append(_chips_row)
 	if _rows_box.visible and _rows_box.get_child_count() > 0:
@@ -1357,6 +1402,56 @@ func _restore_labels() -> void:
 		l.set("autowrap_mode", e[1])
 		l.max_lines_visible = int(e[2])
 		l.set("text_overrun_behavior", e[3])
+
+
+## PANELFIT (item 2): wrap a body's digit tokens in a colour
+## tag for the rich twin. A token is a digit run that does
+## not touch a letter or underscore on its left - so
+## ".directb2s" and "TOP10_Personal" (filenames, not
+## numbers) stay plain, as does the tail of a dotted word
+## ("v2.0") - and it may carry commas or dots BETWEEN
+## digits ("2,672"); a trailing separator is not part of
+## the number. Brackets in the source are escaped first -
+## the health lines carry none, but a folder path could.
+func _pop_numbers(text: String, col: Color) -> String:
+	var src: String = text.replace("[", "[lb]")
+	var tag: String = "[color=#%s]" % col.to_html(false)
+	var out: String = ""
+	var i: int = 0
+	var n: int = src.length()
+	while i < n:
+		var c: String = src[i]
+		if c >= "0" and c <= "9":
+			var glued: bool = false
+			if i > 0:
+				var prev: String = src[i - 1]
+				if (prev >= "a" and prev <= "z") or (prev >= "A" and prev <= "Z") or prev == "_":
+					glued = true
+				elif prev == "." and i > 1:
+					var pp: String = src[i - 2]
+					if (pp >= "a" and pp <= "z") or (pp >= "A" and pp <= "Z") or (pp >= "0" and pp <= "9"):
+						glued = true
+			if glued:
+				out += c
+				i += 1
+				continue
+			var j: int = i
+			var last_digit: int = i
+			while j < n:
+				var d: String = src[j]
+				if d >= "0" and d <= "9":
+					last_digit = j
+					j += 1
+				elif (d == "," or d == ".") and j + 1 < n and src[j + 1] >= "0" and src[j + 1] <= "9":
+					j += 1
+				else:
+					break
+			out += tag + src.substr(i, last_digit - i + 1) + "[/color]"
+			i = last_digit + 1
+		else:
+			out += c
+			i += 1
+	return out
 
 
 func _discipline_label(l: Label, max_lines: int) -> void:

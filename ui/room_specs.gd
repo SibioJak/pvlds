@@ -359,6 +359,13 @@ const STRIP_GRAD_LIFTED: Array[Color] = [Color8(76, 82, 94), Color8(62, 67, 77),
 const STRIP_BORDER: Color = Color8(76, 81, 90)
 const STRIP_LABEL_REST: Color = Color8(168, 173, 184)
 const STRIP_LABEL_ACCENT: Color = Color8(216, 221, 232)
+## PANELFIT (item 2): the room's accent amber - the centre
+## frame's colour (RoomView's amber, unshaded), the favourite
+## star's family. The SETUP panel's body numbers render in
+## it (see setup_panel_spec's "body_number_color"): the
+## counts are the payload of the health lines, and they
+## catch the eye before the words around them are read.
+const NUMBER_POP: Color = Color(1.0, 0.66, 0.16)
 
 
 ## One section of the machined strip: its label on the bar's
@@ -508,6 +515,11 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 		# header like a strip stop (bright), the sub in the
 		# resting grey. Words and sizes are unchanged.
 		"machined_panel": true,
+		# PANELFIT (item 2): the body's numbers pop in the
+		# room's amber - a key only this spec carries, so no
+		# other face's body changes colour (CardFace asserts
+		# and restores it per spec, like display_type).
+		"body_number_color": NUMBER_POP,
 		"grad": STRIP_GRAD_REST,
 		"bg": STRIP_GRAD_REST[2],
 		"accent_bar": true,

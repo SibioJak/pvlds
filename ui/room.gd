@@ -1154,7 +1154,7 @@ var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD F
 var _bg_backdrop: MeshInstance3D = null ## STARFIELD: the starless deep-colour backdrop behind the volume (LAYERED only)
 var _bg_volume_bands: Array[MultiMeshInstance3D] = [] ## STARFIELD: the volume's band nodes, near to far, each centred on EYE and drifting at its own depth-scaled rate
 var _starfield_mode: String = "layered" ## the SETUP dial: "layered" | "flat" | "off" (see set_starfield_mode)
-var _wall_motion_mode: String = "stepped" ## OPTIMIZE: STEPPED is the only gait - the field stands for the SETUP panel's label, and set_wall_motion_mode coerces every value to "stepped"
+var _wall_motion_mode: String = "stepped" ## OPTIMIZE: STEPPED is the only gait - set_wall_motion_mode coerces every value to "stepped" (PANELFIT removed the panel button that wore it as a label)
 var _bg_ring: MeshInstance3D = null ## always null since GRADFIX4 removed the orbit ring (item 5e); background_layers() skips it
 ## The card flip's standing state (GRADFIX6 item 1): one
 ## card at a time wears the turn - the one the player
@@ -1268,8 +1268,7 @@ var _setup_panel_scan_btn: ClickableQuad = null
 var _setup_panel_dl_btn: ClickableQuad = null
 var _setup_panel_wovp_paste_btn: ClickableQuad = null ## PASTE KEY: reads the WoVP key off the PC clipboard (VR has no keyboard - the paste IS the field)
 var _setup_panel_wovp_test_btn: ClickableQuad = null ## TEST KEY: Main validates the saved key and names whose it is
-var _setup_panel_stars_btn: ClickableQuad = null ## STARS: LAYERED/FLAT/OFF - the display dial (the GRAD FIX round)
-var _setup_panel_wall_btn: ClickableQuad = null ## WALL MOTION: STEPPED - the panel's gait label (OPTIMIZE: the dial is gone, STEPPED is the only gait)
+var _setup_panel_stars_btn: ClickableQuad = null ## STARS: LAYERED/FLAT/OFF - the display dial (the GRAD FIX round); PANELFIT: full-width since the WALL MOTION button beside it was removed (the gait is STEPPED, always - a button that only re-affirmed it was a label in a control's clothes)
 var _setup_panel_back_btn: ClickableQuad = null
 var _setup_panel_ipdb_btn: ClickableQuad = null ## CARDBACK/IPDBFIX: RE-APPLY IPDB DATA - Main re-applies the bundled snapshot, the panel's mirror of the desk's button
 var _setup_panel_watcher_btn: ClickableQuad = null ## PINEMHI2 (Part B): PINEMHI WATCHER: ON/OFF - the watcher-management dial, a full-width row under BACK's row (the panel's PINemHi presence is its face line; the dial stands beside it in the button stack)
@@ -7835,7 +7834,7 @@ func _refresh_focusables() -> void:
 		if _placard_back != null:
 			_focusables.append(_placard_back)
 	elif _setup_panel_up:
-		# The SETUP panel owns the room: its six buttons are
+		# The SETUP panel owns the room: its eight buttons are
 		# the only focus stops (see show_setup_panel).
 		if _setup_panel_scan_btn != null:
 			_focusables.append(_setup_panel_scan_btn)
@@ -7847,8 +7846,6 @@ func _refresh_focusables() -> void:
 			_focusables.append(_setup_panel_wovp_test_btn)
 		if _setup_panel_stars_btn != null:
 			_focusables.append(_setup_panel_stars_btn)
-		if _setup_panel_wall_btn != null:
-			_focusables.append(_setup_panel_wall_btn)
 		if _setup_panel_ipdb_btn != null:
 			_focusables.append(_setup_panel_ipdb_btn)
 		if _setup_panel_watcher_btn != null:
@@ -7931,7 +7928,7 @@ func _set_focused(q: ClickableQuad) -> void:
 func _apply_setup_panel_button_dress() -> void:
 	for bq: ClickableQuad in [_setup_panel_scan_btn, _setup_panel_dl_btn,
 			_setup_panel_wovp_paste_btn, _setup_panel_wovp_test_btn,
-			_setup_panel_stars_btn, _setup_panel_wall_btn,
+			_setup_panel_stars_btn,
 			_setup_panel_ipdb_btn, _setup_panel_back_btn, _setup_panel_watcher_btn]:
 		if bq == null:
 			continue
@@ -7993,8 +7990,6 @@ func _refresh_quad_states() -> void:
 		all.append(_setup_panel_wovp_test_btn)
 	if _setup_panel_stars_btn != null:
 		all.append(_setup_panel_stars_btn)
-	if _setup_panel_wall_btn != null:
-		all.append(_setup_panel_wall_btn)
 	if _setup_panel_ipdb_btn != null:
 		all.append(_setup_panel_ipdb_btn)
 	if _setup_panel_watcher_btn != null:
@@ -8797,7 +8792,7 @@ func _on_select(quad: ClickableQuad) -> void:
 
 func _activate(quad: ClickableQuad) -> void:
 	if _setup_panel_up:
-		# While the SETUP panel stands, its six buttons are
+		# While the SETUP panel stands, its eight buttons are
 		# the room: everything else refuses. The pick flags
 		# already say so for the pointer; this is the lock for
 		# the keyboard/gamepad paths, which activate the
@@ -8830,11 +8825,6 @@ func _activate(quad: ClickableQuad) -> void:
 				var modes: Array[String] = ["layered", "flat", "off"]
 				var next: String = modes[(modes.find(_starfield_mode) + 1) % modes.size()]
 				set_starfield_mode(next)
-				display_settings_changed.emit()
-				_request_setup_panel_render(true)
-			"setup_setting_wall_motion":
-				quad.pulse()
-				set_wall_motion_mode("stepped") ## OPTIMIZE: STEPPED is the only gait - the button stands as the panel's label, its press re-affirms the one mode
 				display_settings_changed.emit()
 				_request_setup_panel_render(true)
 			"setup_setting_pinemhi_watcher":
@@ -9916,7 +9906,7 @@ func _restore_room_pick_states() -> void:
 ## While the panel stands, the room behind it is inert,
 ## exactly as behind the placard: pick flags down (the
 ## snapshot restores them on the way out), focus confined
-## to the panel's six buttons, _activate refusing
+## to the panel's eight buttons, _activate refusing
 ## everything else, launching unreachable, and B / D-pad
 ## Right acting as BACK - the panel never exits the app.
 func show_setup_panel() -> void:
@@ -10027,8 +10017,8 @@ func setup_panel_stars_quad() -> ClickableQuad:
 	return _setup_panel_stars_btn
 
 
-func setup_panel_wall_quad() -> ClickableQuad:
-	return _setup_panel_wall_btn
+func setup_panel_ipdb_quad() -> ClickableQuad:
+	return _setup_panel_ipdb_btn
 
 
 func setup_panel_watcher_quad() -> ClickableQuad:
@@ -10140,20 +10130,30 @@ func _on_setup_panel_download_finished(ok: bool, message: String, _downloaded_pa
 func _build_setup_panel() -> void:
 	_setup_panel = Node3D.new()
 	_setup_panel.name = "SetupPanel"
-	_setup_panel.position = Vector3(0.0, 1.32, -1.72)
+	# PANELFIT (item 1): the seat takes the SUBMITDIST
+	# family's distance (-1.72 -> -2.35) and the whole stack
+	# is re-proportioned at the standing texture density
+	# (~681 px/m, so the spec's text sizes keep their
+	# physical size): the face grows to hold the worst-case
+	# health census with margin, the buttons widen until no
+	# label wraps, and the stack's bottom (local -1.065,
+	# world y 0.255) clears the numbers line and the strip
+	# below it. Stack: face +0.14..+1.645, rows at 0.0 /
+	# -0.245 / -0.49 / -0.735 / -0.98.
+	_setup_panel.position = Vector3(0.0, 1.32, -2.35)
 	var placeholder: Texture2D = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
 	_setup_panel_face = ClickableQuad.new()
-	_setup_panel_face.setup("setup_panel_face", "", placeholder, Vector2(1.5, 0.8))
-	_setup_panel_face.position = Vector3(0.0, 0.38, 0.0)
+	_setup_panel_face.setup("setup_panel_face", "", placeholder, Vector2(2.16, 1.505))
+	_setup_panel_face.position = Vector3(0.0, 0.8925, 0.0)
 	_setup_panel_face.pick_enabled = false
 	_setup_panel.add_child(_setup_panel_face)
 	_setup_panel_scan_btn = ClickableQuad.new()
-	_setup_panel_scan_btn.setup("setup_panel_scan", "", placeholder, Vector2(0.66, 0.16))
-	_setup_panel_scan_btn.position = Vector3(-0.375, -0.24, 0.0)
+	_setup_panel_scan_btn.setup("setup_panel_scan", "", placeholder, Vector2(0.98, 0.17))
+	_setup_panel_scan_btn.position = Vector3(-0.515, 0.0, 0.0)
 	_setup_panel.add_child(_setup_panel_scan_btn)
 	_setup_panel_dl_btn = ClickableQuad.new()
-	_setup_panel_dl_btn.setup("setup_panel_download", "", placeholder, Vector2(0.66, 0.16))
-	_setup_panel_dl_btn.position = Vector3(0.375, -0.24, 0.0)
+	_setup_panel_dl_btn.setup("setup_panel_download", "", placeholder, Vector2(0.98, 0.17))
+	_setup_panel_dl_btn.position = Vector3(0.515, 0.0, 0.0)
 	_setup_panel.add_child(_setup_panel_dl_btn)
 	# The WoVP row (the Tournament Room round): the key's
 	# two acts in the room. PASTE KEY is the paste field and
@@ -10162,12 +10162,12 @@ func _build_setup_panel() -> void:
 	# Main whose the saved key is. The face's WoVP line says
 	# the standing state in words.
 	_setup_panel_wovp_paste_btn = ClickableQuad.new()
-	_setup_panel_wovp_paste_btn.setup("setup_panel_wovp_paste", "", placeholder, Vector2(0.66, 0.16))
-	_setup_panel_wovp_paste_btn.position = Vector3(-0.375, -0.5, 0.0)
+	_setup_panel_wovp_paste_btn.setup("setup_panel_wovp_paste", "", placeholder, Vector2(0.98, 0.17))
+	_setup_panel_wovp_paste_btn.position = Vector3(-0.515, -0.245, 0.0)
 	_setup_panel.add_child(_setup_panel_wovp_paste_btn)
 	_setup_panel_wovp_test_btn = ClickableQuad.new()
-	_setup_panel_wovp_test_btn.setup("setup_panel_wovp_test", "", placeholder, Vector2(0.66, 0.16))
-	_setup_panel_wovp_test_btn.position = Vector3(0.375, -0.5, 0.0)
+	_setup_panel_wovp_test_btn.setup("setup_panel_wovp_test", "", placeholder, Vector2(0.98, 0.17))
+	_setup_panel_wovp_test_btn.position = Vector3(0.515, -0.245, 0.0)
 	_setup_panel.add_child(_setup_panel_wovp_test_btn)
 	# The display dial row (the GRAD FIX round; the WING
 	# dial retired with the wing itself in GRADFIX6 - the
@@ -10176,31 +10176,28 @@ func _build_setup_panel() -> void:
 	# standing value; a press turns the dial one step,
 	# applies it in the room at once, and Main persists it
 	# (display_settings_changed).
+	# PANELFIT (item 3): the row is STARS' alone now, so it
+	# takes the full width like the watcher row. The WALL
+	# MOTION button that shared it (GRADFIX10) is gone:
+	# since OPTIMIZE the gait is stepped, always - the
+	# config coerces every value to it - so the button's
+	# press only ever re-affirmed the one mode, a control
+	# that could not change anything.
 	_setup_panel_stars_btn = ClickableQuad.new()
-	_setup_panel_stars_btn.setup("setup_setting_stars", "", placeholder, Vector2(0.66, 0.16))
-	_setup_panel_stars_btn.position = Vector3(-0.375, -0.76, 0.0)
+	_setup_panel_stars_btn.setup("setup_setting_stars", "", placeholder, Vector2(2.01, 0.17))
+	_setup_panel_stars_btn.position = Vector3(0.0, -0.49, 0.0)
 	_setup_panel.add_child(_setup_panel_stars_btn)
-	# The wall-motion dial (GRADFIX10 item 3) shares the
-	# display row with STARS: WALL MOTION cycles SMOOTH /
-	# STEPPED. Same terms as STARS - the label states the
-	# standing value, a press applies it in the room at once
-	# and Main persists it (display_settings_changed).
-	_setup_panel_wall_btn = ClickableQuad.new()
-	_setup_panel_wall_btn.setup("setup_setting_wall_motion", "", placeholder, Vector2(0.66, 0.16))
-	_setup_panel_wall_btn.position = Vector3(0.375, -0.76, 0.0)
-	_setup_panel.add_child(_setup_panel_wall_btn)
-	# The last row (CARDBACK/IPDBFIX): RE-APPLY IPDB DATA
-	# shares it with BACK - the bundled snapshot's apply
-	# is Main's (the signal route, like SCAN), the panel
-	# only asks. The row keeps the panel's standing
-	# height: nothing hangs lower than BACK always did.
+	# The last two-column row (CARDBACK/IPDBFIX): RE-APPLY
+	# IPDB DATA shares it with BACK - the bundled snapshot's
+	# apply is Main's (the signal route, like SCAN), the
+	# panel only asks.
 	_setup_panel_ipdb_btn = ClickableQuad.new()
-	_setup_panel_ipdb_btn.setup("setup_panel_ipdb", "", placeholder, Vector2(0.66, 0.16))
-	_setup_panel_ipdb_btn.position = Vector3(-0.375, -1.02, 0.0)
+	_setup_panel_ipdb_btn.setup("setup_panel_ipdb", "", placeholder, Vector2(0.98, 0.17))
+	_setup_panel_ipdb_btn.position = Vector3(-0.515, -0.735, 0.0)
 	_setup_panel.add_child(_setup_panel_ipdb_btn)
 	_setup_panel_back_btn = ClickableQuad.new()
-	_setup_panel_back_btn.setup("setup_panel_back", "", placeholder, Vector2(0.66, 0.16))
-	_setup_panel_back_btn.position = Vector3(0.375, -1.02, 0.0)
+	_setup_panel_back_btn.setup("setup_panel_back", "", placeholder, Vector2(0.98, 0.17))
+	_setup_panel_back_btn.position = Vector3(0.515, -0.735, 0.0)
 	_setup_panel.add_child(_setup_panel_back_btn)
 	# The watcher row (PINEMHI2 Part B): one full-width dial
 	# under the BACK row - PINEMHI WATCHER: ON/OFF, the STARS
@@ -10211,8 +10208,8 @@ func _build_setup_panel() -> void:
 	# is that line's one control, standing in the button
 	# stack directly beneath it.
 	_setup_panel_watcher_btn = ClickableQuad.new()
-	_setup_panel_watcher_btn.setup("setup_setting_pinemhi_watcher", "", placeholder, Vector2(1.41, 0.16))
-	_setup_panel_watcher_btn.position = Vector3(0.0, -1.28, 0.0)
+	_setup_panel_watcher_btn.setup("setup_setting_pinemhi_watcher", "", placeholder, Vector2(2.01, 0.17))
+	_setup_panel_watcher_btn.position = Vector3(0.0, -0.98, 0.0)
 	_setup_panel.add_child(_setup_panel_watcher_btn)
 	# ENDGAME (Part B): the panel's buttons wear the machined
 	# dress - their focus read is the bevel-lift (lifted
@@ -10222,7 +10219,7 @@ func _build_setup_panel() -> void:
 	# here, at build, for the lift to rise off.
 	for bq: ClickableQuad in [_setup_panel_scan_btn, _setup_panel_dl_btn,
 			_setup_panel_wovp_paste_btn, _setup_panel_wovp_test_btn,
-			_setup_panel_stars_btn, _setup_panel_wall_btn,
+			_setup_panel_stars_btn,
 			_setup_panel_ipdb_btn, _setup_panel_back_btn, _setup_panel_watcher_btn]:
 		bq.suppress_frame = true
 		_setup_btn_home[bq] = bq.position
@@ -10236,7 +10233,7 @@ func _build_setup_panel() -> void:
 	# placard's lesson).
 
 
-## Panel textures - face plus the six buttons - render
+## Panel textures - face plus the eight buttons - render
 ## from current state, generation-guarded like the
 ## placard's. Renders serialize (the shared factory takes
 ## one at a time): a state change during a render, or
@@ -10267,7 +10264,7 @@ func _after_setup_render() -> void:
 
 func _fill_setup_panel_textures(gen: int) -> void:
 	var face_tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.setup_panel_spec(_setup_health, _setup_message), Vector2i(1024, 546))
+		RoomSpecs.setup_panel_spec(_setup_health, _setup_message), Vector2i(1472, 1024))
 	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_face == null:
 		_after_setup_render()
 		return
@@ -10279,15 +10276,14 @@ func _fill_setup_panel_textures(gen: int) -> void:
 	# LIFTED dress (filed for the focus swaps).
 	var dl_busy: bool = _setup_downloader != null and _setup_downloader.is_downloading()
 	var btns: Array = [
-		[_setup_panel_scan_btn, "SCANNING..." if _setup_scanning else "SCAN LIBRARY", _setup_scanning, Vector2i(512, 124)],
-		[_setup_panel_dl_btn, "DOWNLOADING..." if dl_busy else "DOWNLOAD VPS DATABASE", dl_busy, Vector2i(512, 124)],
-		[_setup_panel_wovp_paste_btn, "PASTE KEY", false, Vector2i(512, 124)],
-		[_setup_panel_wovp_test_btn, "TEST KEY", false, Vector2i(512, 124)],
-		[_setup_panel_stars_btn, "STARS: " + _starfield_mode.to_upper(), false, Vector2i(512, 124)],
-		[_setup_panel_wall_btn, "WALL MOTION: " + _wall_motion_mode.to_upper(), false, Vector2i(512, 124)],
-		[_setup_panel_ipdb_btn, "RE-APPLY IPDB DATA", false, Vector2i(512, 124)],
-		[_setup_panel_back_btn, "BACK", true, Vector2i(512, 164)],
-		[_setup_panel_watcher_btn, "PINEMHI WATCHER: " + ("ON" if _pinemhi_manage_watcher else "OFF"), false, Vector2i(1024, 124)],
+		[_setup_panel_scan_btn, "SCANNING..." if _setup_scanning else "SCAN LIBRARY", _setup_scanning, Vector2i(672, 116)],
+		[_setup_panel_dl_btn, "DOWNLOADING..." if dl_busy else "DOWNLOAD VPS DATABASE", dl_busy, Vector2i(672, 116)],
+		[_setup_panel_wovp_paste_btn, "PASTE KEY", false, Vector2i(672, 116)],
+		[_setup_panel_wovp_test_btn, "TEST KEY", false, Vector2i(672, 116)],
+		[_setup_panel_stars_btn, "STARS: " + _starfield_mode.to_upper(), false, Vector2i(1372, 116)],
+		[_setup_panel_ipdb_btn, "RE-APPLY IPDB DATA", false, Vector2i(672, 116)],
+		[_setup_panel_back_btn, "BACK", true, Vector2i(672, 116)],
+		[_setup_panel_watcher_btn, "PINEMHI WATCHER: " + ("ON" if _pinemhi_manage_watcher else "OFF"), false, Vector2i(1372, 116)],
 	]
 	for lifted_pass: bool in [false, true]:
 		for b: Array in btns:
