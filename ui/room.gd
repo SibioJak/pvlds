@@ -742,6 +742,8 @@ var _status_label: Label3D
 var _status_text: String = ""
 var _numbers_label: Label3D  ## READOUT: the counts' new home - small type, centered above the strip bar
 var _numbers_text: String = ""
+var _update_label: Label3D  ## AUTOFIND: the UPDATE AVAILABLE segment - its own label in the room's amber, seated off the numbers line's right edge by _seat_update_segment
+var _update_available: bool = false ## AUTOFIND: Main's standing update state, applied at room entry only (set_update_available) - never injected mid-session
 var _controls_label: Label3D  ## READOUT: the tournie plate's second line (A - PLAY) under the Y headline - stands only in the tournie routine state
 var _plate_grown: bool = false  ## READOUT: the plate's standing layout - false = the shipped low seat; true = the tournie controls seat (grown, headline + second line)
 var _detail: DetailView
@@ -2860,6 +2862,60 @@ func readout_numbers_font() -> int:
 	return _numbers_label.font_size if _numbers_label != null else 0
 
 
+## AUTOFIND: Main applies the standing update state as the
+## room is entered - and only then. The segment never
+## appears mid-session: a feed answer landing while the
+## room stands waits for the next entry (the desk's banner
+## is the at-desk surface, and it follows the same
+## session dismissal).
+func set_update_available(available: bool) -> void:
+	_update_available = available
+	_seat_update_segment()
+
+
+## AUTOFIND: seat + show the update segment. The numbers
+## line is centered, so its text's right edge sits at half
+## its measured width (fallback-font measure x pixel_size
+## - the Label3D probe pinned the drawn width to exactly
+## that); the segment label is left-aligned, so its text
+## starts at its own position. The seat is the numbers
+## right edge plus the " - " the line itself would draw.
+## Called from _refresh_banner (the numbers text's owner)
+## and from set_update_available.
+func _seat_update_segment() -> void:
+	if _update_label == null or _numbers_label == null:
+		return
+	var show: bool = _update_available and _numbers_text != ""
+	_update_label.visible = show
+	if not show:
+		return
+	var font: Font = ThemeDB.fallback_font
+	var text_w: float = font.get_string_size(_numbers_text, HORIZONTAL_ALIGNMENT_LEFT, -1, _numbers_label.font_size).x * _numbers_label.pixel_size
+	var gap_w: float = font.get_string_size(" - ", HORIZONTAL_ALIGNMENT_LEFT, -1, _numbers_label.font_size).x * _numbers_label.pixel_size
+	_update_label.position = Vector3(
+		_numbers_label.position.x + text_w * 0.5 + gap_w,
+		_numbers_label.position.y,
+		_numbers_label.position.z)
+
+
+## Smoke census of the update segment: the applied state,
+## the label's standing, and its seat against the numbers
+## text's measured right edge (adjacency, in metres).
+func readout_update_segment() -> Dictionary:
+	var right_edge: float = 0.0
+	if _numbers_label != null:
+		var font: Font = ThemeDB.fallback_font
+		right_edge = _numbers_label.position.x + font.get_string_size(_numbers_text, HORIZONTAL_ALIGNMENT_LEFT, -1, _numbers_label.font_size).x * _numbers_label.pixel_size * 0.5
+	return {
+		"available": _update_available,
+		"visible": _update_label.visible if _update_label != null else false,
+		"text": _update_label.text if _update_label != null else "",
+		"seat_x": _update_label.position.x if _update_label != null else 0.0,
+		"numbers_right_edge": right_edge,
+		"modulate": _update_label.modulate if _update_label != null else Color(),
+	}
+
+
 func status_plate_text() -> String:
 	return _status_label.text if _status_label != null else ""
 
@@ -4660,6 +4716,23 @@ func _build_status_line() -> void:
 	_numbers_label.modulate = Color(0.78, 0.83, 0.92)
 	_numbers_label.visible = false
 	add_child(_numbers_label)
+	# AUTOFIND: the update segment - a second small label
+	# in the room's amber (NUMBER_POP), left-aligned so its
+	# text starts exactly at its seat; _seat_update_segment
+	# parks that seat off the numbers text's right edge
+	# whenever the banner refresh runs. Hidden unless Main
+	# applied a standing update at this entry.
+	_update_label = Label3D.new()
+	_update_label.text = "UPDATE AVAILABLE"
+	_update_label.pixel_size = 0.0022
+	_update_label.font_size = 20
+	_update_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_update_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_update_label.outline_size = 5
+	_update_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9)
+	_update_label.modulate = RoomSpecs.NUMBER_POP
+	_update_label.visible = false
+	add_child(_update_label)
 	# READOUT (Ruling 2): the tournie controls line's
 	# second line - the headline (Y - SUBMIT A SCORE)
 	# rides the standing _status_label at a grown plate
@@ -5074,6 +5147,9 @@ func _refresh_banner() -> void:
 			_numbers_label.text = nline
 	if _numbers_label != null:
 		_numbers_label.visible = nline != ""
+	# AUTOFIND: the update segment rides the numbers line -
+	# reseated whenever the line is refreshed.
+	_seat_update_segment()
 	# The tournie routine state: no warning stands, so
 	# the freed plate carries this screen's contextual
 	# controls - the Y headline unmissable, A - PLAY on
@@ -11267,6 +11343,11 @@ func _apply_wall_alpha(a: float) -> void:
 			_numbers_label.modulate = Color(0.78, 0.83, 0.92, a)
 			_numbers_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * a)
 			_alpha_write_count += 1
+			# AUTOFIND: the update segment fades with the
+			# numbers line it rides (its amber at the same a).
+			if _update_label != null:
+				_update_label.modulate = Color(RoomSpecs.NUMBER_POP, a)
+				_update_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * a)
 	if _controls_label != null:
 		if nc_all or absf(a - float(_alpha_flat_applied.get("controls", -1.0))) >= 0.002:
 			_alpha_flat_applied["controls"] = a

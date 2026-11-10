@@ -12,6 +12,8 @@ signal wovp_key_saved ## the WoVP key was saved from this desk: Main refreshes t
 signal pinemhi_settings_saved ## NEXTROUND (item 4): the PINemHi folder/toggle was saved from this desk: Main re-reads the bests and re-pushes them to the room
 signal screenshots_settings_saved ## ROOMSUBMIT: the screenshots folder was saved from this desk: Main re-pushes the config's folder to the room, whose submit panel reads its photos from there
 signal ipdb_snapshot_requested ## IPDBFIX: re-apply the bundled IPDB snapshot to the cache (the CARDBACK live fetch is retired - IPDB's site refuses app requests): Main owns the cache and answers on the IPDB status line
+signal update_get_requested(url: String) ## AUTOFIND: the update banner's Get - Main opens the url (a browser is a PC act, and Main owns the update state)
+signal update_later_pressed ## AUTOFIND: the update banner's Later - Main holds the session dismissal (it gates the room's segment too)
 signal wovp_test_requested(api_key: String) ## Test key: Main validates this text against WoVP and answers on the status line
 signal wovp_submit_requested(challenge_id: String, photo_path: String, score_text: String) ## Submit a score (the SUBMIT round): Main runs the two-step WoVP submission and answers on the submit status line. score_text is the SUBMIT2 record field's raw text - Main parses it into the LOCAL log only; it never rides the wire
 
@@ -78,6 +80,17 @@ var _details_label: Label ## DESKEDIT: the folded diagnostics text inside the Sc
 var _browse_buttons: Array[Button] = [] ## DESKCOLOR: every Browse... button (path rows + folder rows) - the picker family
 var _shots_browse_button: Button ## DESKCOLOR: the Screenshots section's Browse... (picker family)
 var _add_folder_button: Button ## DESKCOLOR: Add table folder... (picker family - it opens the picker)
+var config_file_existed: bool = true ## AUTOFIND: Main sets this before setup() - half of the hunt's trigger (the other half is the config's own exe path). Default true: a desk nobody briefed never hunts.
+var _exe_note: Label ## AUTOFIND: the hunt's word under the VPX executable field
+var _folders_note: Label ## AUTOFIND: the hunt's word under the table folder rows
+var _update_banner: PanelContainer ## AUTOFIND: the Update Available banner, directly under the title panel
+var _update_label: Label ## AUTOFIND: the banner's line
+var _update_get_button: Button ## AUTOFIND: the banner's Get (census)
+var _update_later_button: Button ## AUTOFIND: the banner's Later (census)
+var _update_url: String = "" ## AUTOFIND: the standing update's download url (the feed's, held for the Get emit)
+var _version_label: Label ## AUTOFIND: the form's foot - "LaunchPin VR - version 1.0.0"
+var _hunt_done: bool = false ## AUTOFIND: the hunt runs at most once per desk instance
+var _hunt_census: Dictionary = {} ## AUTOFIND: the hunt's result as run (empty = the hunt never ran)
 
 const MAX_FOLDER_ROWS: int = 6
 
@@ -151,6 +164,10 @@ func setup(config: PvldsConfig) -> void:
 	_config = config
 	_build_ui()
 	_fill_from_config()
+	# AUTOFIND: a first-run desk hunts for VPX itself,
+	# once, after the fill (it only ever fills what the
+	# fill left empty - see _apply_hunt).
+	_apply_hunt()
 	# DESKEDIT: both folds start collapsed on EVERY desk
 	# show, not just the first - leaving to the room and
 	# coming back re-folds what was opened.
@@ -264,6 +281,106 @@ func title_dress() -> Dictionary:
 	}
 
 
+## AUTOFIND: the first-run hunt, run once from setup().
+## Trigger (the brief): the desk stands as a first run -
+## no config file existed on disk, or the config's exe
+## path is empty. It never runs over values a user has
+## set: the exe pre-fills only an empty exe field, table
+## folders are added only when the config names none, and
+## NOTHING is saved - the pre-fill is a proposal standing
+## in the fields, and Save & Scan (the standing flow) is
+## what persists it, exactly as if the user had typed it.
+## Test seam: PVLDS_AUTOFIND_ROOTS (";"-separated) replaces
+## WHERE the hunt looks (the Windows drive roots), never
+## WHETHER it runs - the configured trigger above outranks
+## it, so a configured desk is unmoved even on a staged
+## tree. Without the seam, any --pvlds- boot skips the live
+## hunt entirely (every standing smoke stays exactly as it
+## was).
+func _apply_hunt() -> void:
+	if _hunt_done:
+		return
+	_hunt_done = true
+	if config_file_existed and _config.vpx_exe_path != "":
+		return
+	var roots: Array = []
+	var forced_roots: String = OS.get_environment("PVLDS_AUTOFIND_ROOTS")
+	if forced_roots != "":
+		for part: String in forced_roots.split(";"):
+			var r: String = part.strip_edges()
+			if r != "":
+				roots.append(r)
+	else:
+		for arg: String in OS.get_cmdline_user_args():
+			if arg.begins_with("--pvlds-"):
+				return
+		roots = VpxHunt.windows_roots()
+	var res: Dictionary = VpxHunt.hunt(roots)
+	_hunt_census = res
+	if bool(res.get("found", false)):
+		var exe_path: String = str(res.get("exe_path", ""))
+		if _exe_edit.text.strip_edges() == "":
+			_exe_edit.text = exe_path
+		_exe_note.text = "Found Visual Pinball at %s — if you play a different build, Browse for it." % exe_path
+		_exe_note.visible = true
+		var folders: Array = res.get("table_folders", [])
+		if _config.table_folders.is_empty():
+			var fi: int = 0
+			for fv: Variant in folders:
+				var fpath: String = str((fv as Dictionary).get("path", ""))
+				while fi < _folder_edits.size() and _folder_edits[fi].text.strip_edges() != "":
+					fi += 1
+				if fi < _folder_edits.size():
+					_folder_edits[fi].text = fpath
+					fi += 1
+				elif fpath != "":
+					_add_folder_row(fpath)
+					fi = _folder_edits.size()
+		if not folders.is_empty():
+			_folders_note.text = "Found your Tables folder — %d tables in it." % int(res.get("tables_total", 0))
+		else:
+			_folders_note.text = "Found Visual Pinball, but no Tables folder near it — add your table folder(s) below."
+		_folders_note.visible = true
+	else:
+		_exe_note.text = "LaunchPin couldn't find Visual Pinball on this PC. If it's installed, Browse to it above; if not, Visual Pinball is a free download — the LaunchPin VR manual shows where to get it."
+		_exe_note.visible = true
+
+
+## AUTOFIND: Main stands the update banner (it owns the
+## update state - the feed's answer, the dismissal). This
+## desk only shows what it is told and reports presses.
+func show_update_banner(version: String, url: String) -> void:
+	_update_url = url
+	_update_label.text = "Update Available — %s %s is out." % [AppInfo.PRODUCT_NAME, version]
+	_update_banner.visible = true
+
+
+func hide_update_banner() -> void:
+	if _update_banner != null:
+		_update_banner.visible = false
+
+
+## Smoke census of the AUTOFIND surfaces: the hunt's
+## standing (did it run, what stands in the fields and
+## notes), the banner, and the version foot.
+func autofind_census() -> Dictionary:
+	var folder_texts: Array = []
+	for e: LineEdit in _folder_edits:
+		folder_texts.append(e.text)
+	return {
+		"hunt_ran": not _hunt_census.is_empty(),
+		"exe_text": _exe_edit.text if _exe_edit != null else "",
+		"exe_note": _exe_note.text if _exe_note != null else "",
+		"exe_note_visible": _exe_note.visible if _exe_note != null else false,
+		"folder_texts": folder_texts,
+		"folders_note": _folders_note.text if _folders_note != null else "",
+		"folders_note_visible": _folders_note.visible if _folders_note != null else false,
+		"banner_visible": _update_banner.visible if _update_banner != null else false,
+		"banner_text": _update_label.text if _update_label != null else "",
+		"version_text": _version_label.text if _version_label != null else "",
+	}
+
+
 func _build_ui() -> void:
 	var bg: ColorRect = ColorRect.new()
 	# SETUPLOOK: the desk ground is the graphite family's
@@ -331,6 +448,35 @@ func _build_ui() -> void:
 	_title_label.add_theme_font_size_override("font_size", 34)
 	_title_label.add_theme_color_override("font_color", Color(0.96, 0.96, 0.98))
 	_title_box.add_child(_title_label)
+	# AUTOFIND: the Update Available banner - directly
+	# under the title panel, in the amber family, standing
+	# only when Main says a newer LaunchPin VR exists (it
+	# applies and dismisses; this desk just shows it and
+	# reports the button presses). Hidden by default.
+	_update_banner = PanelContainer.new()
+	_update_banner.add_theme_stylebox_override("panel", DeskTheme.section_header_box_family(DeskTheme.FAMILY_AMBER))
+	_update_banner.visible = false
+	var ub_row: HBoxContainer = HBoxContainer.new()
+	ub_row.add_theme_constant_override("separation", 8)
+	_update_banner.add_child(ub_row)
+	_update_label = Label.new()
+	_update_label.add_theme_font_override("font", DeskTheme.FONT_MEDIUM)
+	_update_label.add_theme_font_size_override("font_size", 20)
+	_update_label.add_theme_color_override("font_color", DeskTheme.section_title_tint(DeskTheme.FAMILY_AMBER))
+	_update_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_update_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_update_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	ub_row.add_child(_update_label)
+	_update_get_button = Button.new()
+	_update_get_button.text = "Get the update"
+	DeskTheme.dress_button_family(_update_get_button, DeskTheme.FAMILY_AMBER)
+	_update_get_button.pressed.connect(func() -> void: update_get_requested.emit(_update_url))
+	ub_row.add_child(_update_get_button)
+	_update_later_button = Button.new()
+	_update_later_button.text = "Later"
+	_update_later_button.pressed.connect(func() -> void: update_later_pressed.emit())
+	ub_row.add_child(_update_later_button)
+	vbox.add_child(_update_banner)
 	# DESKHEAD: one sentence - the second ("The headset room
 	# is for playing, not setup.") named a room a first-timer
 	# hasn't seen, the same anxiety DESKEDIT cut from the head.
@@ -340,6 +486,14 @@ func _build_ui() -> void:
 	vbox.add_child(_intro_label)
 
 	_exe_edit = _add_path_row(vbox, "VPX executable", "Browse...", "exe")
+	# AUTOFIND: the hunt's word under the exe field - what
+	# it found, or the plain not-found guidance. Stands
+	# only when the hunt ran (see _apply_hunt).
+	_exe_note = Label.new()
+	_exe_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_exe_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	_exe_note.visible = false
+	vbox.add_child(_exe_note)
 	_db_edit = _add_path_row(vbox, "VPS database (vpsdb.json, optional)", "Browse...", "db")
 	# DESKEDIT: say what the thing IS - a first-timer is
 	# otherwise asked to point at a file he has never heard
@@ -668,6 +822,14 @@ func _build_ui() -> void:
 	_folder_rows.add_theme_constant_override("separation", 8)
 	vbox.add_child(_folder_label())
 	vbox.add_child(_folder_rows)
+	# AUTOFIND: the hunt's word under the folder rows -
+	# the found Tables folder and its size, or the word
+	# that the folders still need pointing at.
+	_folders_note = Label.new()
+	_folders_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_folders_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	_folders_note.visible = false
+	vbox.add_child(_folders_note)
 	var add_folder: Button = Button.new()
 	add_folder.text = "Add table folder..."
 	# DESKCOLOR: Add folder opens the picker, so it wears
@@ -740,6 +902,14 @@ func _build_ui() -> void:
 	_enter_button.disabled = true
 	_enter_button.pressed.connect(func() -> void: enter_room_requested.emit())
 	vbox.add_child(_enter_button)
+
+	# AUTOFIND: the form's foot - the product's name and
+	# version, quiet. One constant, one home (AppInfo);
+	# the update check compares against the same string.
+	_version_label = Label.new()
+	_version_label.text = "%s — version %s" % [AppInfo.PRODUCT_NAME, AppInfo.PRODUCT_VERSION]
+	_version_label.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	vbox.add_child(_version_label)
 
 	_dialog = FileDialog.new()
 	_dialog.access = FileDialog.ACCESS_FILESYSTEM

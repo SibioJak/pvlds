@@ -95,6 +95,12 @@ const WALL_MOTION_MODES: Array[String] = ["stepped"]
 ## still no close-duty setting (close_vpx_on_table_exit is
 ## likewise not read).
 var hold_exit_enabled: bool = true
+## AUTOFIND: the update feed override. "" = the fixed URL in
+## AppInfo; a hand-set value (or the PVLDS_UPDATE_FEED_URL
+## environment variable, which outranks it) points the boot
+## update check somewhere else - a test seam, never edited
+## by the desk.
+var update_feed_url: String = ""
 
 
 static func beside_exe_path() -> String:
@@ -149,6 +155,7 @@ func load_from_disk() -> bool:
 	hold_exit_enabled = bool(d.get("hold_exit_enabled", true))
 	pinemhi_manage_watcher = bool(d.get("pinemhi_manage_watcher", false))
 	screenshots_folder = str(d.get("screenshots_folder", ""))
+	update_feed_url = str(d.get("update_feed_url", ""))
 	# OPTIMIZE: any stored gait coerces to the one gait -
 	# a config written by a shipped build may carry "smooth"
 	# (the old default) and must load as "stepped", never error.
@@ -177,6 +184,7 @@ func save_to_disk() -> bool:
 	d["hold_exit_enabled"] = hold_exit_enabled
 	d["pinemhi_manage_watcher"] = pinemhi_manage_watcher
 	d["screenshots_folder"] = screenshots_folder
+	d["update_feed_url"] = update_feed_url
 	wall_motion_mode = "stepped" ## OPTIMIZE: saves write the one gait, whatever a caller left standing in the var
 	d["wall_motion_mode"] = wall_motion_mode
 	var folders: Array = []

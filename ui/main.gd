@@ -337,6 +337,16 @@ var _smoke_deskcolor: bool = false ## --pvlds-smoke-deskcolor: DESKCOLOR census 
 var _deskcolor_phase: int = 0
 var _deskcolor_wait: int = 0
 var _deskcolor_failures: int = 0
+var _config_file_existed: bool = false ## AUTOFIND: a config FILE stood on disk at boot (load_from_disk's raw answer, captured before any seeding) - the desk hunt's trigger fact, threaded to the desk at its creation
+var _update_info: Dictionary = {} ## AUTOFIND: the standing update ({version, url}) once the feed answers newer; empty = no update stands
+var _update_dismissed: bool = false ## AUTOFIND: Later pressed this session - gates the desk banner and the room's segment alike (dismisses it for this session)
+var _update_http: HTTPRequest = null ## AUTOFIND: the one boot update check (short timeout; any failure is total silence)
+var _smoke_autofind: bool = false ## --pvlds-smoke-autofind: AUTOFIND proof driver (PVLDS_AUTOFIND_MODE picks the leg set)
+var _autofind_mode: String = ""
+var _autofind_phase: int = 0
+var _autofind_wait: int = 0
+var _autofind_failures: int = 0
+var _autofind_feed_stamp: int = 0 ## AUTOFIND smoke: when the desk stood (the feed grace clock for the same/dead modes)
 var _smoke_dpadexit: bool = false ## --pvlds-smoke-dpadexit: a fresh D-pad Right in the room must exit the app
 var _dpadexit_held_leg: bool = false ## --pvlds-smoke-dpadexit-held: the button is pinned from boot; no exit until a witnessed release, then a fresh press exits
 var _dpadexit_smoke_phase: int = 0
@@ -847,6 +857,11 @@ func _ready() -> void:
 		_smoke_deskcenter = true
 	if user_args.has("--pvlds-smoke-deskcolor"):
 		_smoke_deskcolor = true
+	if user_args.has("--pvlds-smoke-autofind"):
+		_smoke_autofind = true
+		_autofind_mode = OS.get_environment("PVLDS_AUTOFIND_MODE")
+		if _autofind_mode == "":
+			_autofind_mode = "hunt"
 	if user_args.has("--pvlds-smoke-dpadexit"):
 		_smoke_dpadexit = true
 	if user_args.has("--pvlds-smoke-dpadexit-held"):
@@ -1237,6 +1252,9 @@ func _ready() -> void:
 	_state = StateStore.new()
 	_state.load_from_disk()
 	var configured: bool = _config.load_from_disk()
+	# AUTOFIND: capture the raw file-existed answer before
+	# any seeding can blur it - the desk's hunt trigger.
+	_config_file_existed = configured
 	if user_args.has("--pvlds-seed-dummy"):
 		_seeded_dummy = true
 		_seed_dummy_config()
@@ -1328,6 +1346,10 @@ func _ready() -> void:
 	_pinemhi_client.fetch_weekly()
 	if _pinemhi2_probe:
 		return
+	# AUTOFIND: the one polite update check (fire-and-forget;
+	# its answer applies to the desk when it lands and to the
+	# room at entry - see the update-check section below).
+	_start_update_check()
 	if configured and _config.is_configured() and not user_args.has("--setup") and not _smoke_desk and not _smoke_submit:
 		# Configured boot: the boot face stands from the first
 		# frame (BOOTFACE: LaunchPin + the scanning line, no
@@ -1517,6 +1539,8 @@ func _process(_delta: float) -> void:
 		_drive_deskcenter_smoke()
 	if _smoke_deskcolor:
 		_drive_deskcolor_smoke()
+	if _smoke_autofind:
+		_drive_autofind_smoke()
 	if _smoke_dpadexit:
 		_drive_dpadexit_smoke()
 	if _smoke_lockout:
@@ -2672,6 +2696,10 @@ func _enter_room() -> void:
 	# routes this entry back to its launching surface (the
 	# record is consumed either way - see _apply_return_origin).
 	_apply_return_origin()
+	# AUTOFIND: the update segment is applied at entry -
+	# only at entry. An answer landing while the room
+	# stands waits for the next one.
+	_room.set_update_available(not _update_info.is_empty() and not _update_dismissed)
 	_room.visible = true
 	if _seated_cam:
 		# Dev hooks only (--pvlds-seated-cam, --pvlds-smoke-nav):
@@ -4095,8 +4123,13 @@ func _show_desk(message: String = "") -> void:
 	if _desk == null:
 		_desk = SetupDesk.new()
 		add_child(_desk)
+		# AUTOFIND: the hunt's trigger fact rides in before
+		# setup() runs it (setup is where the hunt lives).
+		_desk.config_file_existed = _config_file_existed
 		_desk.setup(_config)
 		_desk.enter_room_requested.connect(_enter_room)
+		_desk.update_get_requested.connect(_on_update_get_requested)
+		_desk.update_later_pressed.connect(_on_update_later_pressed)
 		_desk.wovp_key_saved.connect(_on_desk_wovp_key_saved)
 		_desk.wovp_test_requested.connect(_on_desk_wovp_test_requested)
 		_desk.wovp_submit_requested.connect(_on_desk_wovp_submit_requested)
@@ -4120,6 +4153,9 @@ func _show_desk(message: String = "") -> void:
 		_desk.apply_scan_summary(build_scan_summary(), build_scan_details())
 		_desk.apply_missing_b2s(_scanner.missing_b2s_files.size())
 		_desk.apply_unplaced(_scanner.unplaced_files.size())
+	# AUTOFIND: a desk standing after the feed answered
+	# wears the update state as it stands.
+	_apply_update_banner()
 	_desk.visible = true
 
 
@@ -24596,6 +24632,355 @@ func _finish_deskcolor_smoke() -> void:
 		get_tree().quit(1)
 
 
+# -------------------------------------------------- update check (AUTOFIND)
+
+## The feed's address: the test seam first (the AUTOFIND
+## smoke's staged server), then a hand-set config value,
+## then the fixed constant in AppInfo.
+func _update_feed_url() -> String:
+	var env_url: String = OS.get_environment("PVLDS_UPDATE_FEED_URL")
+	if env_url != "":
+		return env_url
+	if _config != null and _config.update_feed_url != "":
+		return _config.update_feed_url
+	return AppInfo.UPDATE_FEED_URL
+
+
+## One polite async check at launch (flat or VR boot),
+## fire-and-forget: a short timeout rides the request, and
+## every failure shape - unreachable, slow, non-200, a body
+## that is not the feed's JSON - is total silence: no
+## notice, no error, no boot delay. Once per launch.
+## Hermetic test boots: any --pvlds- arg skips the check
+## unless the feed env override is set (the smoke's seam,
+## ordered before the guard like DESKCENTER's force).
+func _start_update_check() -> void:
+	if OS.get_environment("PVLDS_UPDATE_FEED_URL") == "":
+		for arg: String in OS.get_cmdline_user_args():
+			if arg.begins_with("--pvlds-"):
+				return
+	_update_http = HTTPRequest.new()
+	# The budget is generous on purpose: it is wall-clock,
+	# and a busy first boot can starve the request's polling
+	# for seconds (this floor's software-rendered boot does
+	# exactly that). A live feed on a real PC answers in
+	# well under a second; the budget only ever bites on a
+	# dead or crawling network, and the check is
+	# fire-and-forget either way - nothing waits on it.
+	_update_http.timeout = 30.0
+	add_child(_update_http)
+	_update_http.request_completed.connect(_on_update_feed_completed)
+	if _update_http.request(_update_feed_url()) != OK:
+		_update_http.queue_free()
+		_update_http = null
+
+
+func _on_update_feed_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	if _update_http != null:
+		_update_http.queue_free()
+		_update_http = null
+	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
+		return
+	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+	if not (parsed is Dictionary):
+		return
+	var d: Dictionary = parsed
+	var version: String = str(d.get("version", "")).strip_edges()
+	var url: String = str(d.get("url", "")).strip_edges()
+	if version == "" or not AppInfo.version_is_newer(version, AppInfo.PRODUCT_VERSION):
+		return
+	_update_info = {"version": version, "url": url}
+	_apply_update_banner()
+
+
+## The standing update state onto the desk, whenever the
+## desk stands or the answer lands: dismissed or absent =
+## no banner; standing = the banner, re-stood on every
+## desk show until the version stops differing (Later is
+## per-launch: the dismissal member dies with the process).
+func _apply_update_banner() -> void:
+	# The room segment is applied at entry (see _enter_room)
+	# - and here too, for the boot whose feed answer lands
+	# after the room is already up: the notice pops when it
+	# arrives, not only at the next entry.
+	if _room != null:
+		_room.set_update_available(not _update_info.is_empty() and not _update_dismissed)
+	if _desk == null:
+		return
+	if _update_info.is_empty() or _update_dismissed:
+		_desk.hide_update_banner()
+	else:
+		_desk.show_update_banner(str(_update_info.get("version", "")), str(_update_info.get("url", "")))
+
+
+func _on_update_get_requested(url: String) -> void:
+	# The download page is a PC act - the default browser
+	# takes it from here.
+	if url != "":
+		OS.shell_open(url)
+
+
+func _on_update_later_pressed() -> void:
+	_update_dismissed = true
+	if _desk != null:
+		_desk.hide_update_banner()
+
+
+# -------------------------------------------------- autofind smoke
+
+## --pvlds-smoke-autofind: the AUTOFIND round's proof.
+## Modes (PVLDS_AUTOFIND_MODE), staged by the runner:
+##   hunt / hunt-plain / hunt-empty / hunt-notables - a
+##     first-run desk (no config anywhere) with
+##     PVLDS_AUTOFIND_ROOTS pointing at a synthetic tree:
+##     the hunt's answer standing in the real fields and
+##     notes (expectations ride PVLDS_AUTOFIND_EXPECT_*).
+##   configured - a config file stands with an exe set:
+##     the same staged roots must NOT move the desk - the
+##     fields stand exactly as configured, no hunt ran.
+##   update-desk - a staged feed answers newer: the banner
+##     stands on the desk; Later dismisses it through a
+##     real mouse click on the real button.
+##   update-room - the feed answers newer before entry: at
+##     room entry the numbers line gains the amber segment.
+##   update-same - the feed answers the app's own version:
+##     nothing anywhere.
+##   update-dead - the feed is unreachable: the boot
+##     completes, the desk stands, total silence.
+## Grabs land in PVLDS_AUTOFIND_GRAB_DIR.
+func _drive_autofind_smoke() -> void:
+	match _autofind_mode:
+		"update-room":
+			_drive_autofind_update_room()
+		"update-desk", "update-same", "update-dead":
+			_drive_autofind_update_desk()
+		_:
+			_drive_autofind_hunt()
+
+
+func _drive_autofind_hunt() -> void:
+	match _autofind_phase:
+		0:
+			if _desk != null and _desk.visible:
+				_autofind_wait += 1
+				if _autofind_wait >= 4:
+					_autofind_hunt_legs()
+					_autofind_grab("autofind_%s.png" % _autofind_mode)
+					_finish_autofind_smoke()
+			else:
+				_autofind_wait += 1
+				if _autofind_wait > 3600:
+					_autofind_fail("hunt: the first-run desk never stood")
+					_finish_autofind_smoke()
+
+
+func _autofind_hunt_legs() -> void:
+	var cen: Dictionary = _desk.autofind_census()
+	var mode: String = _autofind_mode
+	_autofind_expect(str(cen.get("version_text", "")) == "%s — version %s" % [AppInfo.PRODUCT_NAME, AppInfo.PRODUCT_VERSION],
+		"%s: the version foot stands (got '%s')" % [mode, str(cen.get("version_text", ""))])
+	if mode == "configured":
+		_autofind_expect(not bool(cen.get("hunt_ran", true)),
+			"configured: no hunt ran over a configured desk")
+		_autofind_expect(str(cen.get("exe_text", "")) == OS.get_environment("PVLDS_AUTOFIND_EXPECT_EXE"),
+			"configured: the exe field stands exactly as configured (got '%s')" % str(cen.get("exe_text", "")))
+		_autofind_expect(not bool(cen.get("exe_note_visible", true)) and not bool(cen.get("folders_note_visible", true)),
+			"configured: no hunt notes stand")
+		return
+	_autofind_expect(bool(cen.get("hunt_ran", false)), "%s: the hunt ran" % mode)
+	if mode == "hunt-empty":
+		_autofind_expect(str(cen.get("exe_text", "")) == "",
+			"hunt-empty: the exe field stays empty")
+		_autofind_expect(str(cen.get("exe_note", "")).begins_with("LaunchPin couldn't find Visual Pinball"),
+			"hunt-empty: the not-found note stands (got '%s')" % str(cen.get("exe_note", "")).left(60))
+		_autofind_expect(not bool(cen.get("folders_note_visible", true)),
+			"hunt-empty: no tables note stands")
+		return
+	var want_exe: String = OS.get_environment("PVLDS_AUTOFIND_EXPECT_EXE")
+	_autofind_expect(str(cen.get("exe_text", "")) == want_exe,
+		"%s: the exe field pre-fills with the found build (got '%s', want '%s')" % [mode, str(cen.get("exe_text", "")), want_exe])
+	_autofind_expect(str(cen.get("exe_note", "")).begins_with("Found Visual Pinball at "),
+		"%s: the found note stands under the exe field" % mode)
+	var folder_texts: Array = cen.get("folder_texts", [])
+	if mode == "hunt-notables":
+		var any_filled: bool = false
+		for t: Variant in folder_texts:
+			if str(t) != "":
+				any_filled = true
+		_autofind_expect(not any_filled, "hunt-notables: the folder rows stay empty")
+		_autofind_expect(str(cen.get("folders_note", "")).begins_with("Found Visual Pinball, but no Tables folder"),
+			"hunt-notables: the note says the tables folder still needs pointing at")
+		return
+	var want_tables: String = OS.get_environment("PVLDS_AUTOFIND_EXPECT_TABLES")
+	for want: String in want_tables.split(";"):
+		if want != "":
+			_autofind_expect(folder_texts.has(want),
+				"%s: the found tables folder stands in the list (%s)" % [mode, want])
+	_autofind_expect(str(cen.get("folders_note", "")) == "Found your Tables folder — %s tables in it." % OS.get_environment("PVLDS_AUTOFIND_EXPECT_TOTAL"),
+		"%s: the tables note stands with its count (got '%s')" % [mode, str(cen.get("folders_note", ""))])
+
+
+func _drive_autofind_update_desk() -> void:
+	match _autofind_phase:
+		0:
+			if _desk != null and _desk.visible:
+				_autofind_feed_stamp = Time.get_ticks_msec()
+				_autofind_wait = 0
+				_autofind_phase = 1
+			else:
+				_autofind_wait += 1
+				if _autofind_wait > 3600:
+					_autofind_fail("update-desk: the desk never stood")
+					_finish_autofind_smoke()
+		1:
+			# update-desk proceeds the moment the banner
+			# stands; same/dead wait out the feed grace
+			# (the check's 8s timeout + margin - this VM's
+			# software-rendered boot starves the request's
+			# polling for seconds, so the margin is wide)
+			# and then pin the silence.
+			var elapsed: int = Time.get_ticks_msec() - _autofind_feed_stamp
+			if _autofind_mode == "update-desk" and not _update_info.is_empty():
+				_autofind_wait += 1
+				if _autofind_wait >= 4:
+					_autofind_update_desk_legs()
+					_autofind_grab("autofind_update_desk.png")
+					_autofind_wait = 0
+					_autofind_phase = 2
+			elif elapsed > 20000:
+				if _autofind_mode == "update-desk":
+					_autofind_fail("update-desk: the staged feed's newer version never stood")
+					_finish_autofind_smoke()
+				else:
+					_autofind_expect(_update_info.is_empty(),
+						"%s: no update stands" % _autofind_mode)
+					var cen: Dictionary = _desk.autofind_census()
+					_autofind_expect(not bool(cen.get("banner_visible", true)),
+						"%s: no banner stands on the desk" % _autofind_mode)
+					_finish_autofind_smoke()
+		2:
+			# Later, through the real button under a real
+			# (warped) mouse press.
+			var btn: Button = _desk._update_later_button
+			if btn == null:
+				_autofind_fail("update-desk: the Later button is missing")
+				_finish_autofind_smoke()
+				return
+			var centre: Vector2 = btn.get_global_rect().get_center()
+			get_viewport().warp_mouse(centre)
+			var press: InputEventMouseButton = InputEventMouseButton.new()
+			press.button_index = MOUSE_BUTTON_LEFT
+			press.position = centre
+			press.global_position = centre
+			press.pressed = true
+			Input.parse_input_event(press)
+			var release: InputEventMouseButton = InputEventMouseButton.new()
+			release.button_index = MOUSE_BUTTON_LEFT
+			release.position = centre
+			release.global_position = centre
+			release.pressed = false
+			Input.parse_input_event(release)
+			_autofind_wait = 0
+			_autofind_phase = 3
+		3:
+			_autofind_wait += 1
+			if _autofind_wait >= 4:
+				var cen: Dictionary = _desk.autofind_census()
+				_autofind_expect(not bool(cen.get("banner_visible", true)),
+					"update-desk: Later dismisses the banner")
+				_autofind_expect(_update_dismissed,
+					"update-desk: the session dismissal stands in Main")
+				_finish_autofind_smoke()
+
+
+func _autofind_update_desk_legs() -> void:
+	var cen: Dictionary = _desk.autofind_census()
+	_autofind_expect(bool(cen.get("banner_visible", false)),
+		"update-desk: the banner stands on the desk")
+	_autofind_expect(str(cen.get("banner_text", "")).contains("Update Available") and str(cen.get("banner_text", "")).contains(OS.get_environment("PVLDS_AUTOFIND_EXPECT_VERSION")),
+		"update-desk: the banner names the new version (got '%s')" % str(cen.get("banner_text", "")))
+	_autofind_expect(_desk._update_get_button != null and _desk._update_later_button != null,
+		"update-desk: the banner carries its Get and Later buttons")
+
+
+func _drive_autofind_update_room() -> void:
+	match _autofind_phase:
+		0:
+			# The segment stands once the feed answer has
+			# landed AND the room is up - entry applies the
+			# standing state, and a later answer applies on
+			# arrival (see _apply_update_banner), so either
+			# order lands the segment. The waits here are
+			# WALL-CLOCK: at this floor's frame rate (a few
+			# fps under software rendering) frame budgets
+			# mean nothing.
+			if _autofind_feed_stamp == 0:
+				_autofind_feed_stamp = Time.get_ticks_msec()
+			if not _update_info.is_empty():
+				_autofind_phase = 1
+				_autofind_wait = 0
+				_autofind_feed_stamp = Time.get_ticks_msec()
+			elif Time.get_ticks_msec() - _autofind_feed_stamp > 420000:
+				_autofind_fail("update-room: the staged feed never answered newer")
+				_finish_autofind_smoke()
+		1:
+			if _room != null and _room.visible:
+				_autofind_wait += 1
+				if _autofind_wait >= 10:
+					var seg: Dictionary = _room.readout_update_segment()
+					_autofind_expect(bool(seg.get("available", false)),
+						"update-room: the update state was applied at entry")
+					_autofind_expect(bool(seg.get("visible", false)),
+						"update-room: the segment stands")
+					_autofind_expect(str(seg.get("text", "")) == "UPDATE AVAILABLE",
+						"update-room: the segment's words")
+					var gap: float = float(seg.get("seat_x", 0.0)) - float(seg.get("numbers_right_edge", 0.0))
+					_autofind_expect(gap > 0.005 and gap < 0.05,
+						"update-room: the segment seats off the numbers line's right edge (gap %.3f m)" % gap)
+					var mod: Color = seg.get("modulate", Color())
+					_autofind_expect(absf(mod.r - RoomSpecs.NUMBER_POP.r) < 0.02 and absf(mod.g - RoomSpecs.NUMBER_POP.g) < 0.02 and absf(mod.b - RoomSpecs.NUMBER_POP.b) < 0.02,
+						"update-room: the segment wears the room's amber")
+					_autofind_expect(_room.readout_numbers_text() != "" and not _room.readout_numbers_text().contains("UPDATE"),
+						"update-room: the numbers line itself is unchanged (the segment is its own label)")
+					_autofind_grab("autofind_update_room.png")
+					_finish_autofind_smoke()
+			else:
+				_autofind_wait += 1
+				if _autofind_wait > 7200 or Time.get_ticks_msec() - _autofind_feed_stamp > 420000:
+					_autofind_fail("update-room: the room never stood")
+					_finish_autofind_smoke()
+
+
+func _autofind_grab(file_name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_AUTOFIND_GRAB_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	if img != null:
+		img.save_png(dir.path_join(file_name))
+
+
+func _autofind_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - autofind smoke: ", label)
+	else:
+		_autofind_fail(label)
+
+
+func _autofind_fail(label: String) -> void:
+	_autofind_failures += 1
+	printerr("  FAIL - autofind smoke: ", label)
+
+
+func _finish_autofind_smoke() -> void:
+	if _autofind_failures == 0:
+		print("PVLDS AUTOFIND SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS AUTOFIND SMOKE: FAIL (%d)" % _autofind_failures)
+		get_tree().quit(1)
+
+
 # -------------------------------------------------- dpadexit smoke
 
 ## --pvlds-smoke-dpadexit: the room half of the two-rule exit
@@ -28456,6 +28841,90 @@ func _run_core_test() -> void:
 			sm_chip_default = true
 	_expect(not sm_chip_default,
 		"scoremark: the panel spec's default carries no PINemHi chip", failures)
+
+	# --- AUTOFIND: the version compare and the first-run
+	# hunt, pure over a synthetic tree staged under user://
+	# (removed again at the section's end). The tree's shape:
+	# D1 holds a PLAIN build with its Tables beside the
+	# install (the vPinball layout); D2 holds the GL build
+	# with Tables inside it. Roots are listed D1-first, so
+	# the GL preference leg proves the search is name-major,
+	# not root-major.
+	_expect(AppInfo.compare_versions("1.0.0", "1.0.0") == 0,
+		"autofind: equal versions compare equal", failures)
+	_expect(AppInfo.version_is_newer("1.0.1", "1.0.0"),
+		"autofind: a patch bump is newer", failures)
+	_expect(AppInfo.version_is_newer("1.10.0", "1.9.9"),
+		"autofind: parts compare as integers (1.10 > 1.9)", failures)
+	_expect(not AppInfo.version_is_newer("1.0", "1.0.0"),
+		"autofind: a missing part reads as 0 (1.0 == 1.0.0)", failures)
+	_expect(AppInfo.version_is_newer("2", "1.9.9"),
+		"autofind: a major bump over a long tail is newer", failures)
+	_expect(not AppInfo.version_is_newer("0.9.9", "1.0.0"),
+		"autofind: an older version is not newer", failures)
+	var af_base: String = ProjectSettings.globalize_path("user://autofind_core_tree")
+	var af_touch: Callable = func(path: String) -> void:
+		DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+		var fh: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+		if fh != null:
+			fh.close()
+	var af_d1: String = af_base.path_join("D1/vPinball/VisualPinball")
+	var af_d1_tables: String = af_base.path_join("D1/vPinball/Tables")
+	var af_d2: String = af_base.path_join("D2/Visual Pinball")
+	af_touch.call(af_d1.path_join("VPinballX64.exe"))
+	af_touch.call(af_d1_tables.path_join("Alpha.vpx"))
+	af_touch.call(af_d1_tables.path_join("Beta.vpx"))
+	af_touch.call(af_d2.path_join("VPinballX_GL64.exe"))
+	af_touch.call(af_d2.path_join("Tables/Gamma.vpx"))
+	var af_roots: Array = [af_d1, af_d2, af_base.path_join("D3/nothing-here")]
+	var af_all: Dictionary = VpxHunt.hunt(af_roots)
+	_expect(bool(af_all.get("found", false)),
+		"autofind: the hunt finds an install", failures)
+	_expect(str(af_all.get("exe_path", "")) == af_d2.path_join("VPinballX_GL64.exe"),
+		"autofind: the GL build wins across drives (name-major search)", failures)
+	var af_folders: Array = af_all.get("table_folders", [])
+	var af_folder_paths: Array = []
+	for af_fv: Variant in af_folders:
+		af_folder_paths.append(str((af_fv as Dictionary).get("path", "")))
+	_expect(af_folder_paths.size() == 1 and af_folder_paths.has(af_d2.path_join("Tables")),
+		"autofind: the tables hunt anchors at the FOUND install (D2's own Tables only)", failures)
+	_expect(int(af_all.get("tables_total", 0)) == 1,
+		"autofind: the tables total sums the shallow counts", failures)
+	var af_plain: Dictionary = VpxHunt.hunt([af_d1])
+	_expect(str(af_plain.get("exe_path", "")) == af_d1.path_join("VPinballX64.exe"),
+		"autofind: the plain build is found when no GL exists", failures)
+	var af_plain_folders: Array = []
+	for af_pfv: Variant in (af_plain.get("table_folders", []) as Array):
+		af_plain_folders.append(str((af_pfv as Dictionary).get("path", "")))
+	_expect(af_plain_folders.size() == 1 and af_plain_folders.has(af_d1_tables) and int(af_plain.get("tables_total", 0)) == 2,
+		"autofind: the vPinball layout's Tables (beside the install) is taken, with its count", failures)
+	# An exe with only an EMPTY Tables beside it: found,
+	# but no folder is taken (the >=1 .vpx rule).
+	var af_d4: String = af_base.path_join("D4/VPX")
+	af_touch.call(af_d4.path_join("VPinballX.exe"))
+	DirAccess.make_dir_recursive_absolute(af_d4.path_join("Tables"))
+	var af_bare: Dictionary = VpxHunt.hunt([af_d4])
+	_expect(bool(af_bare.get("found", false)) and (af_bare.get("table_folders", []) as Array).is_empty(),
+		"autofind: an empty Tables folder is not taken", failures)
+	var af_none: Dictionary = VpxHunt.hunt([af_base.path_join("D3/nothing-here")])
+	_expect(not bool(af_none.get("found", true)) and str(af_none.get("exe_path", "")) == "",
+		"autofind: an empty tree finds nothing", failures)
+	var af_rm: Callable
+	af_rm = func(path: String) -> void:
+		var d: DirAccess = DirAccess.open(path)
+		if d != null:
+			d.list_dir_begin()
+			var n: String = d.get_next()
+			while n != "":
+				var child: String = path.path_join(n)
+				if d.current_is_dir():
+					af_rm.call(child)
+				else:
+					DirAccess.remove_absolute(child)
+				n = d.get_next()
+			d.list_dir_end()
+		DirAccess.remove_absolute(path)
+	af_rm.call(af_base)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")
