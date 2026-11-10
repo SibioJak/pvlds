@@ -499,15 +499,29 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 	lines.append("Paths and first-time setup are on your PC - run LaunchPin on the desktop.")
 	return {
 		"kind": "banner",
-		"bg": Color(0.05, 0.05, 0.09),
+		# SETUPLOOK: the panel's face wears the strip's own
+		# graphite - the resting gradient ground, machined
+		# edge lines with its own side borders, the standing
+		# accent underline (CardFace's machined_panel
+		# furniture) - and its text stands in the house
+		# display type and the strip's label colours: the
+		# header like a strip stop (bright), the sub in the
+		# resting grey. Words and sizes are unchanged.
+		"machined_panel": true,
+		"grad": STRIP_GRAD_REST,
+		"bg": STRIP_GRAD_REST[2],
+		"accent_bar": true,
+		"display_type": true,
 		"title": "IN-VR SETUP",
 		"title_size": 76,
+		"title_color": STRIP_LABEL_ACCENT,
 		# ENDGAME (Part A): the standing sub carries the
 		# pointer too - it is the one line of the face that
 		# always shows (the body can run long with health
 		# lines and clip; the sub never does).
 		"sub": message if message != "" else "Day-to-day settings, right here in the room. Paths and first-time setup live in FIRST SETUP on your PC.",
 		"sub_size": 38,
+		"sub_color": STRIP_LABEL_REST,
 		"body": "\n".join(lines),
 		"body_size": 34,
 	}

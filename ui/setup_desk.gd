@@ -45,6 +45,7 @@ var _submit_info: Label
 var _submit_photo_button: Button
 var _submit_photo_label: Label
 var _submit_preview: TextureRect
+var _submit_preview_frame: PanelContainer ## SETUPLOOK: the preview's inset frame; stands and hides with the preview
 var _submit_verify_label: Label
 var _submit_button: Button
 var _submit_label: Label
@@ -89,11 +90,16 @@ func title_dress() -> Dictionary:
 
 func _build_ui() -> void:
 	var bg: ColorRect = ColorRect.new()
-	bg.color = Color(0.03, 0.03, 0.05)
+	# SETUPLOOK: the desk ground is the graphite family's
+	# dark stop, and the whole form wears the Machined theme
+	# (DeskTheme) - set on the scroll, so it reaches every
+	# control in the form and nothing outside it.
+	bg.color = DeskTheme.GROUND
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 	var scroll: ScrollContainer = ScrollContainer.new()
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scroll.theme = DeskTheme.build()
 	add_child(scroll)
 	var margin: MarginContainer = MarginContainer.new()
 	margin.custom_minimum_size = Vector2(760, 0)
@@ -107,20 +113,33 @@ func _build_ui() -> void:
 	vbox.add_theme_constant_override("separation", 12)
 	margin.add_child(vbox)
 
+	# SETUPLOOK: the title block stands in a machined header
+	# panel - the desk's name plate, worn like a strip stop
+	# (accent gradient, the standing underline, the title in
+	# the house display type).
+	var title_panel: PanelContainer = PanelContainer.new()
+	title_panel.add_theme_stylebox_override("panel", DeskTheme.title_header_box())
+	vbox.add_child(title_panel)
+	var title_box: VBoxContainer = VBoxContainer.new()
+	title_box.add_theme_constant_override("separation", 4)
+	title_panel.add_child(title_box)
 	_title_label = Label.new()
 	# ENDGAME (Part A): the two setups carry two names. This
 	# desk is FIRST SETUP - the one-time, important initial
 	# setup; the room's panel is IN-VR SETUP.
 	_title_label.text = "FIRST SETUP"
+	_title_label.add_theme_font_override("font", DeskTheme.FONT_MEDIUM)
 	_title_label.add_theme_font_size_override("font_size", 34)
-	vbox.add_child(_title_label)
+	_title_label.add_theme_color_override("font_color", Color(0.96, 0.96, 0.98))
+	title_box.add_child(_title_label)
 	_title_sub_label = Label.new()
 	_title_sub_label.text = "Done once, on your PC, before you play."
-	vbox.add_child(_title_sub_label)
+	title_box.add_child(_title_sub_label)
 	_title_pointer_label = Label.new()
 	_title_pointer_label.text = "Day-to-day settings live in the headset - the IN-VR SETUP panel in the room."
 	_title_pointer_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(_title_pointer_label)
+	_title_pointer_label.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	title_box.add_child(_title_pointer_label)
 	var intro: Label = Label.new()
 	intro.text = "Point LaunchPin at your VPX executable and your table folder(s). The headset room is for playing, not setup."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -160,10 +179,7 @@ func _build_ui() -> void:
 	# config on the spot (no Save & Scan), Test key validates
 	# the field's text and names whose key it is. The field
 	# is masked - it is a secret, and it is never printed.
-	var wovp_title: Label = Label.new()
-	wovp_title.text = "World of Virtual Pinball (WoVP) - the Tournament Room's boards"
-	wovp_title.add_theme_font_size_override("font_size", 20)
-	vbox.add_child(wovp_title)
+	vbox.add_child(_section_header("World of Virtual Pinball (WoVP) - the Tournament Room's boards"))
 	var wovp_intro: Label = Label.new()
 	wovp_intro.text = "Your WoVP API key (from your WoVP profile) shows your live league boards in the Tournament Room. Stored only in the config file on this PC."
 	wovp_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -199,10 +215,7 @@ func _build_ui() -> void:
 	# only a HIGHER score than the one already posted - so
 	# both are read BEFORE anything is sent. Nothing here
 	# gates on the library state: it is shown, never a lock.
-	var submit_title: Label = Label.new()
-	submit_title.text = "Submit a score to WoVP"
-	submit_title.add_theme_font_size_override("font_size", 20)
-	vbox.add_child(submit_title)
+	vbox.add_child(_section_header("Submit a score to WoVP"))
 	var submit_intro: Label = Label.new()
 	submit_intro.text = "Finished a game on a live challenge? Take the photo the league's way (last score, DMD and full playfield in frame), move it to this PC, then pick the challenge and the photo here. The photo carries the score; the league validates it."
 	submit_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -210,6 +223,14 @@ func _build_ui() -> void:
 	_submit_picker = OptionButton.new()
 	_submit_picker.item_selected.connect(_on_submit_challenge_selected)
 	vbox.add_child(_submit_picker)
+	# SETUPLOOK: the picker's dropdown lives outside the
+	# form's theme chain (it is a popup window), so it is
+	# dressed directly, in the same family.
+	var picker_popup: PopupMenu = _submit_picker.get_popup()
+	picker_popup.add_theme_stylebox_override("panel", DeskTheme.popup_panel_box())
+	picker_popup.add_theme_stylebox_override("hovered", DeskTheme.popup_hover_box())
+	picker_popup.add_theme_color_override("font_color", Color(0.87, 0.88, 0.93))
+	picker_popup.add_theme_color_override("font_hovered_color", Color(1, 1, 1))
 	_submit_info = Label.new()
 	_submit_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_submit_info.text = "No WoVP key saved - save your key above first; submissions use the same key."
@@ -233,12 +254,19 @@ func _build_ui() -> void:
 	# here, big enough to read the score in it, and a blank
 	# catch is rejected at the desk by his own eyes before
 	# the submit button is ever used.
+	# SETUPLOOK: the preview sits in a dark inset frame in
+	# the field family - the photo is the content; the frame
+	# is the desk's furniture around it.
+	_submit_preview_frame = PanelContainer.new()
+	_submit_preview_frame.add_theme_stylebox_override("panel", DeskTheme.inset_box())
+	_submit_preview_frame.visible = false
+	vbox.add_child(_submit_preview_frame)
 	_submit_preview = TextureRect.new()
 	_submit_preview.custom_minimum_size = Vector2(520, 390)
 	_submit_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_submit_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_submit_preview.visible = false
-	vbox.add_child(_submit_preview)
+	_submit_preview_frame.add_child(_submit_preview)
 	_submit_verify_label = Label.new()
 	_submit_verify_label.text = "Read the score in this frame before submitting - some tables blink their displays, and a photo caught mid-blink carries no score."
 	_submit_verify_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -257,6 +285,7 @@ func _build_ui() -> void:
 	vbox.add_child(submit_score_row)
 	var submit_score_label: Label = Label.new()
 	submit_score_label.text = "Score in this photo (optional - your record only):"
+	submit_score_label.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
 	submit_score_row.add_child(submit_score_label)
 	_submit_score_edit = LineEdit.new()
 	_submit_score_edit.placeholder_text = "e.g. 16,638,090 - leave empty to skip"
@@ -295,10 +324,7 @@ func _build_ui() -> void:
 	# the PINemHi settings, this is a live setting: Save
 	# writes the config on the spot. No toggle: an unset
 	# folder is the off state, and the panel says so.
-	var shots_title: Label = Label.new()
-	shots_title.text = "Screenshots - the folder your score photos land in"
-	shots_title.add_theme_font_size_override("font_size", 20)
-	vbox.add_child(shots_title)
+	vbox.add_child(_section_header("Screenshots - the folder your score photos land in"))
 	var shots_intro: Label = Label.new()
 	shots_intro.text = "The folder your headset screenshots end up in on this PC. In the Tournament Room, press Y on a challenge card: the newest shots here stand on the submit panel - pick the one that shows your score and send it, headset on. Same key, same send as the desk above."
 	shots_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -338,10 +364,7 @@ func _build_ui() -> void:
 	# the app's open hours - see its label). Like the key,
 	# these are live
 	# settings: Save writes the config on the spot.
-	var pinemhi_title: Label = Label.new()
-	pinemhi_title.text = "PINemHi - your personal bests on the tournament boards"
-	pinemhi_title.add_theme_font_size_override("font_size", 20)
-	vbox.add_child(pinemhi_title)
+	vbox.add_child(_section_header("PINemHi - your personal bests on the tournament boards"))
 	var pinemhi_intro: Label = Label.new()
 	pinemhi_intro.text = "If you use PINemHi, LaunchPin can read its TOP10_Personal files and show your best beneath the league scores on a tournament board. That's all it does by default - it never runs PINemHi or its watcher unless you opt in below. Leave the folder empty to auto-detect the usual install places (D:\\vPinball\\Pinemhi and friends)."
 	pinemhi_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -377,10 +400,7 @@ func _build_ui() -> void:
 	# button re-applies the bundled snapshot, the useful
 	# move after a cache clear; a snapshot refresh rides
 	# a PVLDS update.
-	var ipdb_title: Label = Label.new()
-	ipdb_title.text = "IPDB data - the card backs' second well"
-	ipdb_title.add_theme_font_size_override("font_size", 20)
-	vbox.add_child(ipdb_title)
+	vbox.add_child(_section_header("IPDB data - the card backs' second well"))
 	var ipdb_intro: Label = Label.new()
 	ipdb_intro.text = "Each card's back mixes the database's facts with the Internet Pinball Database's (production run, fun rating, full credits, notable features), each row dotted with its source. The IPDB facts ship bundled as a snapshot and apply automatically; the backs read the saved copy and never go online. Games with no IPDB link in the database show database rows only."
 	ipdb_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -464,16 +484,31 @@ func _build_ui() -> void:
 	add_child(_dialog)
 
 
-func _folder_label() -> Label:
+func _folder_label() -> PanelContainer:
+	return _section_header("Table folders")
+
+
+## SETUPLOOK: a section header bar - the section's name in
+## the house display type on the resting graphite gradient,
+## in the strip segment's manner, instead of a plain bold
+## label. Dress only: the words and the order never move.
+func _section_header(text: String) -> PanelContainer:
+	var p: PanelContainer = PanelContainer.new()
+	p.add_theme_stylebox_override("panel", DeskTheme.section_header_box())
 	var l: Label = Label.new()
-	l.text = "Table folders"
+	l.text = text
+	l.add_theme_font_override("font", DeskTheme.FONT_MEDIUM)
 	l.add_theme_font_size_override("font_size", 20)
-	return l
+	l.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_ACCENT)
+	p.add_child(l)
+	return p
 
 
 func _add_field(parent: VBoxContainer, label_text: String) -> LineEdit:
 	var l: Label = Label.new()
 	l.text = label_text
+	# SETUPLOOK: field labels wear the strip's resting grey.
+	l.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
 	parent.add_child(l)
 	var edit: LineEdit = LineEdit.new()
 	parent.add_child(edit)
@@ -483,6 +518,7 @@ func _add_field(parent: VBoxContainer, label_text: String) -> LineEdit:
 func _add_path_row(parent: VBoxContainer, label_text: String, button_text: String, target: String) -> LineEdit:
 	var l: Label = Label.new()
 	l.text = label_text
+	l.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
 	parent.add_child(l)
 	var row: HBoxContainer = HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
@@ -844,11 +880,13 @@ func _show_submit_preview(path: String) -> void:
 	if img == null or img.is_empty():
 		_submit_preview.texture = null
 		_submit_preview.visible = false
+		_submit_preview_frame.visible = false
 		_submit_verify_label.visible = false
 		_submit_photo_label.text = path.get_file() + " - this file could not be read as an image."
 		return
 	_submit_preview.texture = ImageTexture.create_from_image(img)
 	_submit_preview.visible = true
+	_submit_preview_frame.visible = true
 	_submit_verify_label.visible = true
 
 

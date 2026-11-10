@@ -312,6 +312,11 @@ var _bootface_wait: int = 0
 var _bootface_failures: int = 0
 var _bootface_grabbed: bool = false
 var _bootface_scanner_before: LibraryScanner = null ## DESKEXIT: the scanner standing when SETUP opened - identity proves Enter ran no new scan
+var _smoke_setuplook: bool = false ## --pvlds-smoke-setuplook: SETUPLOOK grab driver (PVLDS_SETUPLOOK_MODE = desk | firstrun | panel)
+var _setuplook_mode: String = "desk"
+var _setuplook_phase: int = 0
+var _setuplook_wait: int = 0
+var _setuplook_failures: int = 0
 var _smoke_dpadexit: bool = false ## --pvlds-smoke-dpadexit: a fresh D-pad Right in the room must exit the app
 var _dpadexit_held_leg: bool = false ## --pvlds-smoke-dpadexit-held: the button is pinned from boot; no exit until a witnessed release, then a fresh press exits
 var _dpadexit_smoke_phase: int = 0
@@ -804,6 +809,11 @@ func _ready() -> void:
 		_bootface_mode = OS.get_environment("PVLDS_BOOTFACE_MODE")
 		if _bootface_mode == "":
 			_bootface_mode = "boot"
+	if user_args.has("--pvlds-smoke-setuplook"):
+		_smoke_setuplook = true
+		_setuplook_mode = OS.get_environment("PVLDS_SETUPLOOK_MODE")
+		if _setuplook_mode == "":
+			_setuplook_mode = "desk"
 	if user_args.has("--pvlds-smoke-dpadexit"):
 		_smoke_dpadexit = true
 	if user_args.has("--pvlds-smoke-dpadexit-held"):
@@ -1395,6 +1405,8 @@ func _process(_delta: float) -> void:
 		_drive_desk_smoke()
 	if _smoke_bootface:
 		_drive_bootface_smoke()
+	if _smoke_setuplook:
+		_drive_setuplook_smoke()
 	if _smoke_dpadexit:
 		_drive_dpadexit_smoke()
 	if _smoke_lockout:
@@ -23397,6 +23409,244 @@ func _finish_bootface_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS BOOTFACE SMOKE: FAIL (%d)" % _bootface_failures)
+		get_tree().quit(1)
+
+
+# -------------------------------------------------- setuplook smoke
+
+## --pvlds-smoke-setuplook: SETUPLOOK's grab driver. The
+## round is dress only, so its proof is rendered frames, not
+## behaviour legs: it drives the real surfaces (the desk
+## through the _show_desk door, the panel through the rail's
+## SETUP stop, like the setup panel smoke) and saves grabs
+## to PVLDS_SETUPLOOK_GRAB_DIR:
+##   desk     - a configured boot: the dressed desk at the
+##              top (paths), mid-scroll (the WoVP section),
+##              the bottom (Enter the Room armed by the
+##              standing scan), and a focus state at the
+##              same scroll (Save & Scan focused, the mouse
+##              over an Open list button).
+##   firstrun - no config anywhere: the first-run desk, top
+##              and bottom - Enter the Room greyed, and
+##              visibly greyed in the new dress.
+##   panel    - the room with the IN-VR SETUP panel standing
+##              in its machined dress (XR forced).
+## PVLDS_SETUPLOOK_MODE picks the mode. The verdict is only
+## that the surfaces stood and the grabs were written.
+func _drive_setuplook_smoke() -> void:
+	match _setuplook_mode:
+		"firstrun":
+			_drive_setuplook_firstrun()
+		"panel":
+			_drive_setuplook_panel()
+		_:
+			_drive_setuplook_desk()
+
+
+func _drive_setuplook_desk() -> void:
+	match _setuplook_phase:
+		0:
+			if _room != null and _room.visible:
+				_show_desk()
+				_setuplook_wait = 0
+				_setuplook_phase = 1
+			else:
+				_setuplook_wait += 1
+				if _setuplook_wait > 7200:
+					_setuplook_fail("desk: the room never stood")
+					_finish_setuplook_smoke()
+		1:
+			_setuplook_wait += 1
+			if _setuplook_wait >= 4:
+				_setuplook_expect(_desk != null and _desk.visible, "desk: the desk stands")
+				_setuplook_expect(_desk._scanned and not _desk._enter_button.disabled,
+					"desk: Enter the Room is armed (the standing scan, DESKEXIT)")
+				_setuplook_grab("setuplook_desk_top.png")
+				_setuplook_scroll_to_label("World of Virtual Pinball (WoVP)")
+				_setuplook_wait = 0
+				_setuplook_phase = 2
+		2:
+			_setuplook_wait += 1
+			if _setuplook_wait >= 4:
+				_setuplook_grab("setuplook_desk_mid.png")
+				_setuplook_scroll_to_bottom()
+				_setuplook_wait = 0
+				_setuplook_phase = 3
+		3:
+			_setuplook_wait += 1
+			if _setuplook_wait >= 4:
+				_setuplook_grab("setuplook_desk_bottom.png")
+				_setuplook_focus_state()
+				_setuplook_wait = 0
+				_setuplook_phase = 4
+		4:
+			_setuplook_wait += 1
+			if _setuplook_wait >= 4:
+				var owner: Control = get_viewport().gui_get_focus_owner()
+				print("  info - setuplook smoke: focus owner at grab: ",
+					owner.text if owner is Button else str(owner))
+				_setuplook_grab("setuplook_desk_focus.png")
+				_finish_setuplook_smoke()
+
+
+func _drive_setuplook_firstrun() -> void:
+	match _setuplook_phase:
+		0:
+			if _desk != null and _desk.visible:
+				_setuplook_wait = 0
+				_setuplook_phase = 1
+			else:
+				_setuplook_wait += 1
+				if _setuplook_wait > 3600:
+					_setuplook_fail("firstrun: the desk never came up")
+					_finish_setuplook_smoke()
+		1:
+			_setuplook_wait += 1
+			if _setuplook_wait >= 4:
+				_setuplook_expect(not _desk._scanned and _desk._enter_button.disabled,
+					"firstrun: Enter the Room is greyed before the first scan")
+				_setuplook_grab("setuplook_firstrun_top.png")
+				_setuplook_scroll_to_bottom()
+				_setuplook_wait = 0
+				_setuplook_phase = 2
+		2:
+			_setuplook_wait += 1
+			if _setuplook_wait >= 4:
+				_setuplook_grab("setuplook_firstrun_bottom.png")
+				_finish_setuplook_smoke()
+
+
+func _drive_setuplook_panel() -> void:
+	match _setuplook_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_room._xr_enabled = true
+				_room._activate(_room.rail_quad("desk"))
+				_setuplook_wait = 0
+				_setuplook_phase = 1
+			else:
+				_setuplook_wait += 1
+				if _setuplook_wait > 3600:
+					_setuplook_fail("panel: the room never came up")
+					_finish_setuplook_smoke()
+		1:
+			_setuplook_wait += 1
+			var face: ClickableQuad = _room.setup_panel_face_quad() if _room != null else null
+			var dressed: bool = face != null and face.current_texture() != null \
+				and face.current_texture().get_size() == Vector2(1024, 546)
+			if dressed and _setuplook_wait >= 8:
+				_setuplook_expect(_room.is_setup_panel_up(), "panel: the SETUP panel stands")
+				_setuplook_grab("setuplook_panel.png")
+				_finish_setuplook_smoke()
+			elif _setuplook_wait > 1200:
+				_setuplook_fail("panel: the panel's face never rendered")
+				_finish_setuplook_smoke()
+
+
+func _setuplook_scroll() -> ScrollContainer:
+	if _desk == null:
+		return null
+	var stack: Array[Node] = [_desk]
+	while not stack.is_empty():
+		var nd: Node = stack.pop_back() as Node
+		if nd is ScrollContainer:
+			return nd as ScrollContainer
+		for ch: Node in nd.get_children():
+			stack.append(ch)
+	return null
+
+
+func _setuplook_scroll_to_label(text_prefix: String) -> void:
+	var sc: ScrollContainer = _setuplook_scroll()
+	if sc == null or _desk == null:
+		return
+	var found: Label = null
+	var stack: Array[Node] = [_desk]
+	while not stack.is_empty() and found == null:
+		var nd: Node = stack.pop_back() as Node
+		var lb: Label = nd as Label
+		if lb != null and lb.text.begins_with(text_prefix):
+			found = lb
+		else:
+			for ch: Node in nd.get_children():
+				stack.append(ch)
+	if found == null:
+		return
+	var target: int = int(found.get_global_position().y - sc.get_global_position().y) + sc.scroll_vertical - 24
+	sc.scroll_vertical = clampi(target, 0, int(sc.get_v_scroll_bar().max_value))
+
+
+func _setuplook_scroll_to_bottom() -> void:
+	var sc: ScrollContainer = _setuplook_scroll()
+	if sc != null:
+		sc.scroll_vertical = int(sc.get_v_scroll_bar().max_value)
+
+
+func _setuplook_scroll_to_top() -> void:
+	var sc: ScrollContainer = _setuplook_scroll()
+	if sc != null:
+		sc.scroll_vertical = 0
+
+
+## The focus-state grab's staging, at the bottom scroll the
+## driver is already holding: keyboard focus on Save & Scan
+## (the lifted focus dress) and the mouse resting over the
+## first Open list (the hover dress), with the armed Enter
+## the Room in frame for contrast.
+func _setuplook_focus_state() -> void:
+	if _desk == null:
+		return
+	var scan_btn: Button = null
+	var list_btn: Button = null
+	var stack: Array[Node] = [_desk]
+	while not stack.is_empty():
+		var nd: Node = stack.pop_back() as Node
+		var b: Button = nd as Button
+		if b != null:
+			if b.text == "Save && Scan":
+				scan_btn = b
+			elif b.text == "Open list" and list_btn == null:
+				list_btn = b
+		for ch: Node in nd.get_children():
+			stack.append(ch)
+	if scan_btn != null:
+		scan_btn.grab_focus()
+	if list_btn != null:
+		var centre: Vector2 = list_btn.get_global_rect().get_center()
+		get_viewport().warp_mouse(centre)
+		var motion: InputEventMouseMotion = InputEventMouseMotion.new()
+		motion.position = centre
+		motion.global_position = centre
+		Input.parse_input_event(motion)
+
+
+func _setuplook_grab(file_name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_SETUPLOOK_GRAB_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	if img != null:
+		img.save_png(dir.path_join(file_name))
+
+
+func _setuplook_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - setuplook smoke: ", label)
+	else:
+		_setuplook_fail(label)
+
+
+func _setuplook_fail(label: String) -> void:
+	_setuplook_failures += 1
+	printerr("  FAIL - setuplook smoke: ", label)
+
+
+func _finish_setuplook_smoke() -> void:
+	if _setuplook_failures == 0:
+		print("PVLDS SETUPLOOK SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS SETUPLOOK SMOKE: FAIL (%d)" % _setuplook_failures)
 		get_tree().quit(1)
 
 

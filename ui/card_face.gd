@@ -41,6 +41,14 @@ extends Control
 ## a capped label ellipsizes its overrun instead of wrapping without
 ## limit and pushing the rest of the card off its texture.
 
+## SETUPLOOK: the house display type (Space Grotesk, the
+## marquee's voice) for a spec that asks for it ("display_type"
+## - today only the SETUP panel's face): the title in Medium,
+## the sub and body in Regular. Preloaded here like the room
+## preloads its own copies for the marquee.
+const DISPLAY_FONT_MEDIUM: Font = preload("res://assets/fonts/SpaceGrotesk-Medium.ttf")
+const DISPLAY_FONT_REGULAR: Font = preload("res://assets/fonts/SpaceGrotesk-Regular.ttf")
+
 const FACE_MARGIN_TOP_PX: int = 22 ## the shared face layout's top margin
 const FACE_MARGIN_BOTTOM_PX: int = 22 ## the shared face layout's bottom margin (a board's footer band takes the bottom over - see apply_spec)
 
@@ -546,7 +554,12 @@ func apply_spec(spec: Dictionary) -> void:
 	# lines, accent underline - plus its own side borders, and
 	# never a seam (it stands alone, not in a bar).
 	var is_mach_btn: bool = kind == "machined_button"
-	var machined: bool = is_strip or is_mach_btn
+	# SETUPLOOK: the SETUP panel's face (a banner spec with
+	# "machined_panel") wears the same furniture as a
+	# machined button - it stands alone like one, so it
+	# carries its own side borders too, and never a seam.
+	var is_mach_panel: bool = kind == "banner" and bool(spec.get("machined_panel", false))
+	var machined: bool = is_strip or is_mach_btn or is_mach_panel
 	_strip_grad_rect.visible = machined
 	_strip_seam_dark.visible = is_strip and bool(spec.get("seam_right", false))
 	_strip_seam_light.visible = _strip_seam_dark.visible
@@ -554,8 +567,8 @@ func apply_spec(spec: Dictionary) -> void:
 	_strip_top_hi.visible = machined
 	_strip_bot_edge.visible = machined
 	_strip_accent_bar.visible = machined and bool(spec.get("accent_bar", false))
-	_btn_edge_l.visible = is_mach_btn
-	_btn_edge_r.visible = is_mach_btn
+	_btn_edge_l.visible = is_mach_btn or is_mach_panel
+	_btn_edge_r.visible = is_mach_btn or is_mach_panel
 	if machined and size.x > 0.0:
 		var grad_cols: Array = spec.get("grad", []) as Array
 		if grad_cols.size() == 4:
@@ -572,7 +585,7 @@ func apply_spec(spec: Dictionary) -> void:
 			_strip_seam_dark.size = Vector2(2.0, size.y)
 			_strip_seam_light.position = Vector2(size.x - 3.0, 0.0)
 			_strip_seam_light.size = Vector2(1.0, size.y)
-		if is_mach_btn:
+		if is_mach_btn or is_mach_panel:
 			_btn_edge_l.position = Vector2(0.0, 0.0)
 			_btn_edge_l.size = Vector2(2.0, size.y)
 			_btn_edge_r.position = Vector2(size.x - 2.0, 0.0)
@@ -720,10 +733,28 @@ func apply_spec(spec: Dictionary) -> void:
 	# every spec (one CardFace serves all renders): a
 	# sub_bold spec wears the heavier font; any other
 	# spec gets the plain theme font back.
+	# SETUPLOOK: a "display_type" spec stands its text in
+	# the house display type - the title in Space Grotesk
+	# Medium, the sub and body in Regular. Asserted and
+	# restored with the same per-spec discipline (title
+	# and body beside the sub), so the type can never
+	# leak into another face. No spec sets sub_bold and
+	# display_type together; sub_bold keeps its path.
+	var display_type: bool = bool(spec.get("display_type", false))
 	if bool(spec.get("sub_bold", false)):
 		_sub_label.add_theme_font_override("font", _sub_font(spec))
+	elif display_type:
+		_sub_label.add_theme_font_override("font", DISPLAY_FONT_REGULAR)
 	elif _sub_label.has_theme_font_override("font"):
 		_sub_label.remove_theme_font_override("font")
+	if display_type:
+		_title_label.add_theme_font_override("font", DISPLAY_FONT_MEDIUM)
+		_body_label.add_theme_font_override("font", DISPLAY_FONT_REGULAR)
+	else:
+		if _title_label.has_theme_font_override("font"):
+			_title_label.remove_theme_font_override("font")
+		if _body_label.has_theme_font_override("font"):
+			_body_label.remove_theme_font_override("font")
 	var sub_font: Font = _sub_font(spec)
 	var sub_px: int = int(spec.get("sub_size", 32))
 	if kind == "board" and size.x > 0.0 and _sub_label.text != "" \
