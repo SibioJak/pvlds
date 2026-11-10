@@ -409,6 +409,13 @@ var _sp_deadline: int = 0
 var _sp_idx: int = -1 ## the Addams challenge's row/panel index in the standing tournament view
 var _sp_saw_checking: bool = false ## the "Checking what WoVP recorded..." line stood before the verdict (polled every frame while waiting)
 var _sp_grab_done: bool = false ## the rendered grab of the reworked panel landed
+var _smoke_readout: bool = false ## --pvlds-smoke-readout (READOUT round): the readout split's smoke - modes in PVLDS_READOUT_SMOKE_MODE: library | tournie | nokey. Library: the numbers stand small above the bar with no filter/sort words anywhere and the low plate stands empty until a transient status is driven. Tournie: the freed plate carries the controls line (Y - SUBMIT A SCORE headline, A - PLAY under it, plate grown), the count stands above the bar, and the board spec carries no hint row. Nokey: the warning stands in its exact words and the hint does not. PVLDS_READOUT_NC=filtertext must fail the library plate legs by name; =nohint the tournie controls legs
+var _ro_mode: String = ""
+var _ro_phase: int = 0
+var _ro_wait: int = 0
+var _ro_failures: int = 0
+var _ro_done: bool = false
+var _ro_deadline: int = 0
 var _sn_phase: int = 0
 var _sn_wait: int = 0
 var _sn_failures: int = 0
@@ -829,6 +836,11 @@ func _ready() -> void:
 		_sp_mode = OS.get_environment("PVLDS_SUBMITPANEL_SMOKE_MODE")
 		if _sp_mode == "":
 			_sp_mode = "pending"
+	if user_args.has("--pvlds-smoke-readout"):
+		_smoke_readout = true
+		_ro_mode = OS.get_environment("PVLDS_READOUT_SMOKE_MODE")
+		if _ro_mode == "":
+			_ro_mode = "library"
 	if user_args.has("--pvlds-smoke-return"):
 		_smoke_return = true
 		_ret_mode = OS.get_environment("PVLDS_RETURN_SMOKE_MODE")
@@ -1026,6 +1038,12 @@ func _ready() -> void:
 	# words and never re-reads the board - so the
 	# submitpanel smoke's read-back legs fail by name.
 	RoomView.debug_submitpanel_nc = OS.get_environment("PVLDS_SUBMITPANEL_NC")
+	# READOUT's negative-control seams (PVLDS_READOUT_NC=
+	# filtertext | nohint): filtertext restores the
+	# pre-READOUT plate line whole, nohint suppresses the
+	# tournie controls line - the readout smoke's named
+	# legs fail under each.
+	RoomView.debug_readout_nc = OS.get_environment("PVLDS_READOUT_NC")
 	# GRADFIX14's adoption negative-control seam (PVLDS_
 	# GF14_NC=oldadopt): restores the pre-fix adoption
 	# behaviour - refresh_library discards the player's
@@ -1370,6 +1388,8 @@ func _process(_delta: float) -> void:
 		_drive_submitnav_smoke()
 	if _smoke_submitpanel:
 		_drive_submitpanel_smoke()
+	if _smoke_readout:
+		_drive_readout_smoke()
 	if _smoke_return:
 		_drive_return_smoke()
 	if _smoke_focusfix:
@@ -16502,26 +16522,25 @@ var _rs_sub: int = 0 ## the reopened walk's sub-stage (happy mode phase 8)
 func _rs_open_legs() -> void:
 	_rs_expect(_room.submit_panel_challenge_id() == RS_ADDAMS_ID,
 		"panel opens: Y opened the submit panel for the focused challenge")
-	# The board's own hint (discoverability): the standing
-	# board's spec carries the command, the library
-	# flip-back's does not (the hint is tournie furniture).
+	# Discoverability (READOUT): the hint's one home is
+	# the tournie plate's controls line now - NO board
+	# spec carries the submit row, standing or flip-back
+	# (it rode the standing board's spec until READOUT;
+	# the readout smoke judges the plate line itself).
 	var addams_ch: WovpChallenge = null
 	for cv: Variant in _wovp_challenges:
 		if (cv as WovpChallenge) != null and (cv as WovpChallenge).challenge_id == RS_ADDAMS_ID:
 			addams_ch = cv as WovpChallenge
 	if addams_ch != null:
-		var hint_rows: Array = (RoomSpecs.tournament_board_spec(addams_ch, true, _wovp_user_id, int(Time.get_unix_time_from_system()), false, {}, true).get("rows", []) as Array)
-		var plain_rows: Array = (RoomSpecs.tournament_board_spec(addams_ch, true, _wovp_user_id, int(Time.get_unix_time_from_system()), false, {}).get("rows", []) as Array)
-		var hint_found: bool = false
-		for hr: Variant in hint_rows:
-			if str((hr as Dictionary).get("text", "")) == "Y - SUBMIT A SCORE":
-				hint_found = true
 		var hint_absent: bool = true
-		for pr: Variant in plain_rows:
-			if str((pr as Dictionary).get("text", "")) == "Y - SUBMIT A SCORE":
-				hint_absent = false
-		_rs_expect(hint_found and hint_absent,
-			"discoverability: the standing board names the command (Y - SUBMIT A SCORE) and the library back does not")
+		for spec_rows: Array in [
+			(RoomSpecs.tournament_board_spec(addams_ch, true, _wovp_user_id, int(Time.get_unix_time_from_system()), false, {}).get("rows", []) as Array),
+			(RoomSpecs.tournament_board_spec(addams_ch, true, _wovp_user_id, int(Time.get_unix_time_from_system())).get("rows", []) as Array)]:
+			for pr: Variant in spec_rows:
+				if str((pr as Dictionary).get("text", "")) == "Y - SUBMIT A SCORE":
+					hint_absent = false
+		_rs_expect(hint_absent,
+			"discoverability: no board spec carries the submit hint row (its one home is the tournie plate)")
 	var spec: Dictionary = _room.submit_face_spec()
 	var body: String = str(spec.get("body", ""))
 	_rs_expect(str(spec.get("title", "")) != "", "case: the panel names the table")
@@ -17178,6 +17197,179 @@ func _sp_finish_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS SUBMITPANEL SMOKE: FAIL (%d)" % _sp_failures)
+		get_tree().quit(1)
+
+
+## READOUT smoke (--pvlds-smoke-readout; the READOUT
+## round). One boot per mode (PVLDS_READOUT_SMOKE_MODE),
+## over the letter-fixture library; the tournie modes run
+## against the WoVP stub, the nokey boot with no key in
+## its config at all. The legs judge the standing surfaces
+## through the room's own reads - the numbers label above
+## the bar, the low plate's two lines, the board spec -
+## and each mode lands a rendered grab for the eye.
+## PVLDS_READOUT_NC=filtertext must fail the library
+## plate legs by name; =nohint the tournie controls legs.
+
+func _ro_expect(ok: bool, label: String) -> void:
+	if ok:
+		print("PVLDS READOUT SMOKE OK: ", label)
+	else:
+		_ro_failures += 1
+		printerr("PVLDS READOUT SMOKE FAIL: ", label)
+
+
+func _ro_library_legs() -> void:
+	var nt: String = _room.readout_numbers_text()
+	_ro_expect(_room.readout_numbers_stand() and nt != "",
+		"numbers at the bar: the counts stand above the strip (got '%s')" % nt)
+	var parts: PackedStringArray = nt.split(" - ")
+	_ro_expect(parts.size() >= 2 and parts[0].ends_with(" files") and parts[1].ends_with(" games"),
+		"numbers at the bar: the line is the files/games counts (got '%s')" % nt)
+	var seat: Vector3 = _room.readout_numbers_seat()
+	_ro_expect(seat.x == 0.0 and seat.y > 0.2825 and _room.readout_numbers_font() <= 22,
+		"numbers at the bar: centered above the bar in small type (seat %s, font %d)" % [str(seat), _room.readout_numbers_font()])
+	_ro_expect(not nt.to_lower().contains("filter") and not nt.to_lower().contains("sort"),
+		"numbers: no filter/sort words ride the numbers line (got '%s')" % nt)
+	var pt: String = _room.status_plate_text()
+	_ro_expect(not pt.to_lower().contains("filter") and not pt.to_lower().contains("sort"),
+		"plate: no filter/sort text rides the plate line (got '%s')" % pt)
+	_ro_expect(pt == "",
+		"plate: the low plate stands empty in the library's routine state (got '%s')" % pt)
+	_ro_expect(_room.status_sub_text() == "",
+		"plate: no second line stands on the library plate")
+
+
+func _ro_library_transient_legs() -> void:
+	# Drive a transient status through the standing note
+	# path: the plate must carry ONLY the note, and clear
+	# with it. (The smoke writes the room's note field
+	# directly - the same field begin_launch writes.)
+	_room._status_note = "Launching Cinder Peak..."
+	_room._refresh_banner()
+	_ro_expect(_room.status_plate_text() == "Launching Cinder Peak...",
+		"plate transient: a transient status stands alone on the plate (got '%s')" % _room.status_plate_text())
+	_ro_expect(_room.readout_numbers_text().contains("games"),
+		"plate transient: the numbers stay at the bar while a status stands (got '%s')" % _room.readout_numbers_text())
+	_room._status_note = ""
+	_room._refresh_banner()
+	_ro_expect(_room.status_plate_text() == "",
+		"plate transient: the plate clears with the status (got '%s')" % _room.status_plate_text())
+
+
+func _ro_tournie_legs() -> void:
+	_ro_expect(_room.status_plate_text() == "Y - SUBMIT A SCORE",
+		"tournie controls line: Y - SUBMIT A SCORE stands on the low plate (got '%s')" % _room.status_plate_text())
+	_ro_expect(_room.status_sub_text() == "A - PLAY",
+		"tournie controls line: A - PLAY stands under the headline (got '%s')" % _room.status_sub_text())
+	var psz: Vector2 = _room.status_plate_size()
+	_ro_expect(psz.y > 0.10,
+		"tournie controls line: the plate grows for the controls line (size %s, shipped height 0.088)" % str(psz))
+	var nt: String = _room.readout_numbers_text()
+	_ro_expect(nt.begins_with("%d live challenges" % _wovp_challenges.size()) and nt.contains("updated"),
+		"tournie numbers: the live count and stamp stand small above the bar (got '%s')" % nt)
+	# One home for the hint: the standing board's spec
+	# carries no submit row any more.
+	var ch0: WovpChallenge = null
+	for cv: Variant in _wovp_challenges:
+		if (cv as WovpChallenge) != null:
+			ch0 = cv as WovpChallenge
+			break
+	if ch0 != null:
+		var rows: Array = (RoomSpecs.tournament_board_spec(ch0, true, _wovp_user_id, int(Time.get_unix_time_from_system())).get("rows", []) as Array)
+		var hint_found: bool = false
+		for r0: Variant in rows:
+			if str((r0 as Dictionary).get("text", "")) == "Y - SUBMIT A SCORE":
+				hint_found = true
+		_ro_expect(not hint_found,
+			"one home: the standing board's spec carries no submit hint row")
+	else:
+		_ro_expect(false, "one home: no challenge stood to read a board spec from")
+
+
+func _ro_nokey_legs() -> void:
+	_ro_expect(_room.status_plate_text() == "Tournament Room - no WoVP key yet (add it in SETUP)",
+		"warning: the no-key warning stands on the plate in its exact words (got '%s')" % _room.status_plate_text())
+	_ro_expect(_room.status_sub_text() == "" and _room.status_plate_text() != "Y - SUBMIT A SCORE",
+		"warning: the controls line does not stand over a warning")
+	_ro_expect(_room.readout_numbers_text() == "",
+		"warning state: no counts stand above the bar (got '%s')" % _room.readout_numbers_text())
+
+
+func _drive_readout_smoke() -> void:
+	if _ro_done:
+		return
+	_ro_wait += 1
+	match _ro_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				if _ro_mode == "library":
+					_ro_library_legs()
+					_ro_phase = 10
+					_ro_wait = 0
+				else:
+					_room._handle_rail("tournament")
+					_ro_expect(_room.tournament_active(), "enter: the TOURNAMENT stop raises the Tournament Room")
+					_ro_deadline = Time.get_ticks_msec() + 45000
+					_ro_phase = 1
+					_ro_wait = 0
+			elif _ro_wait > 3600:
+				_ro_expect(false, "boot: the room never came up")
+				_ro_finish_smoke()
+		1:
+			if _ro_mode == "nokey":
+				if _room.status_plate_text().begins_with("Tournament Room - no WoVP key"):
+					_ro_nokey_legs()
+					_ro_phase = 10
+					_ro_wait = 0
+				elif Time.get_ticks_msec() > _ro_deadline:
+					_ro_expect(false, "warning: the no-key warning never stood (plate '%s')" % _room.status_plate_text())
+					_ro_finish_smoke()
+			else:
+				if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy() and _tournament_boards_all_real():
+					_ro_tournie_legs()
+					_ro_phase = 10
+					_ro_wait = 0
+				elif Time.get_ticks_msec() > _ro_deadline:
+					_ro_expect(false, "boards: the boards never went live against the stub")
+					_ro_finish_smoke()
+		10:
+			# The grab pitches the desk camera down (the
+			# letters smoke's pattern): the low plate rides
+			# at ~42 degrees of depression, below the level
+			# desk frame's bottom edge - pitched -18, the
+			# plate and the numbers above the bar are both
+			# in frame. The level view restores after.
+			if _ro_wait == 1:
+				var rcam: Camera3D = _room._active_camera()
+				if rcam != null:
+					rcam.rotation_degrees = Vector3(-18.0, 0.0, 0.0)
+			if _ro_wait >= 8:
+				match _ro_mode:
+					"library":
+						_grad_save_grab("readout_library.png")
+					"tournie":
+						_grad_save_grab("readout_tournie.png")
+					"nokey":
+						_grad_save_grab("readout_nokey.png")
+				var rcam2: Camera3D = _room._active_camera()
+				if rcam2 != null:
+					rcam2.rotation_degrees = Vector3.ZERO
+				_ro_phase = 11
+				_ro_wait = 0
+		11:
+			if _ro_mode == "library":
+				_ro_library_transient_legs()
+			_ro_finish_smoke()
+
+
+func _ro_finish_smoke() -> void:
+	_ro_done = true
+	if _ro_failures == 0:
+		print("PVLDS READOUT SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS READOUT SMOKE: FAIL (%d)" % _ro_failures)
 		get_tree().quit(1)
 
 

@@ -740,6 +740,10 @@ var _rail: Node3D
 var _status_plate: MeshInstance3D  ## the banner's new home (a plate, not a quad)
 var _status_label: Label3D
 var _status_text: String = ""
+var _numbers_label: Label3D  ## READOUT: the counts' new home - small type, centered above the strip bar
+var _numbers_text: String = ""
+var _controls_label: Label3D  ## READOUT: the tournie plate's second line (A - PLAY) under the Y headline - stands only in the tournie routine state
+var _plate_grown: bool = false  ## READOUT: the plate's standing layout - false = the shipped low seat; true = the tournie controls seat (grown, headline + second line)
 var _detail: DetailView
 var _rig: PointerRig
 var _xr_camera: Camera3D
@@ -1037,6 +1041,16 @@ static var debug_submitnav_nc: String = ""
 ## smoke's read-back legs fail by name. Empty in every
 ## real run.
 static var debug_submitpanel_nc: String = ""
+## Negative-control seam for the READOUT round (the harness
+## env PVLDS_READOUT_NC, set by Main before any room
+## exists): "filtertext" - the pre-READOUT plate line is
+## restored whole (counts + filter/sort words back on the
+## low plate, the numbers label above the bar never
+## stands), so the readout smoke's plate legs fail by
+## name; "nohint" - the tournie routine plate stands
+## empty (the controls line suppressed), so the tournie
+## controls legs fail by name. Empty in every real run.
+static var debug_readout_nc: String = ""
 ## Negative-control seam for GRADFIX14 item 2 (the harness
 ## env PVLDS_GF14_NC, set by Main before any room exists):
 ## "oldadopt" restores the pre-fix adoption behaviour -
@@ -2820,6 +2834,43 @@ func tournament_active() -> bool:
 	return _tournament
 
 
+## READOUT reads for the smoke: the numbers line as it
+## stands above the bar ("" when it does not stand), the
+## plate's standing line and second line, and the
+## geometry the legs judge (the numbers label's seat and
+## type size, the plate's standing size).
+func readout_numbers_text() -> String:
+	return _numbers_label.text if _numbers_label != null else ""
+
+
+func readout_numbers_stand() -> bool:
+	return _numbers_label != null and _numbers_label.visible
+
+
+func readout_numbers_seat() -> Vector3:
+	return _numbers_label.position if _numbers_label != null else Vector3.ZERO
+
+
+func readout_numbers_font() -> int:
+	return _numbers_label.font_size if _numbers_label != null else 0
+
+
+func status_plate_text() -> String:
+	return _status_label.text if _status_label != null else ""
+
+
+func status_sub_text() -> String:
+	if _controls_label == null or not _controls_label.visible:
+		return ""
+	return _controls_label.text
+
+
+func status_plate_size() -> Vector2:
+	if _status_plate != null and _status_plate.mesh is QuadMesh:
+		return (_status_plate.mesh as QuadMesh).size
+	return Vector2.ZERO
+
+
 ## The standing view's rows (the smoke's read of the wall's
 ## own truth): aligned with _visible_games while the
 ## Tournament Room stands, empty otherwise.
@@ -2898,9 +2949,33 @@ func tournament_focused_challenge_id() -> String:
 	return ch.challenge_id if ch != null else ""
 
 
-## The banner while the Tournament Room stands: the boards'
-## provenance in one line - how many, when they landed, and
-## when they are not fresh, exactly that.
+## The Tournament Room's warning line (READOUT): the
+## plate's warning states, in the exact words they have
+## always stood in - a warning outranks every other plate
+## tenant, the controls line included. "" means the
+## routine state stands (boards live, fresh, reachable)
+## and the plate is free for the controls line. The
+## count and the updated stamp are no longer this line's
+## business: they are numbers, and numbers live above the
+## bar now (see _numbers_line).
+func _tournament_warning_line() -> String:
+	if not _wovp_has_key:
+		return "Tournament Room - no WoVP key yet (add it in SETUP)"
+	if _wovp_challenges.is_empty():
+		if _wovp_fetch_error != "" and _wovp_fetched_at == 0:
+			return "Tournament Room - could not reach WoVP"
+		if _wovp_fetched_at == 0:
+			return "Tournament Room - fetching..."
+		return "Tournament Room - no live challenges right now"
+	if _wovp_fetch_error != "":
+		return "Tournament Room - refresh failed, showing the last good boards"
+	if not _wovp_live:
+		return "Tournament Room - saved boards, not yet refreshed"
+	return ""
+
+
+## The pre-READOUT tournie banner, whole - kept only as
+## the PVLDS_READOUT_NC=filtertext seam's restored line.
 func _tournament_banner_line() -> String:
 	if not _wovp_has_key:
 		return "Tournament Room - no WoVP key yet (add it in SETUP)"
@@ -4524,6 +4599,50 @@ func _build_status_line() -> void:
 	_status_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9)
 	_status_label.modulate = Color(0.92, 0.95, 1.0)
 	add_child(_status_label)
+	# READOUT (Ruling 1): the numbers' new home. A small
+	# Label3D centered above the strip bar - the bar's
+	# centre rides _rail_seat_y (0.225) with tile height
+	# RAIL_TILE_H (0.115), so its top edge stands at 0.2825
+	# on the z -1.62 plane; the numbers seat at y 0.325 on
+	# that same plane, in quiet type (font 20 against the
+	# plate's 26): present, never forward - the line Chris
+	# "hardly looks at" stops shouting from the low plate.
+	# Like the plate, it is furniture: not pickable, not
+	# focusable, part of no pick snapshot - a text set is
+	# its whole cost, refreshed inside _refresh_banner.
+	_numbers_label = Label3D.new()
+	_numbers_label.position = Vector3(0.0, 0.325, -1.62)
+	_numbers_label.pixel_size = 0.0022
+	_numbers_label.font_size = 20
+	_numbers_label.width = 900.0
+	_numbers_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_numbers_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_numbers_label.outline_size = 5
+	_numbers_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9)
+	_numbers_label.modulate = Color(0.78, 0.83, 0.92)
+	_numbers_label.visible = false
+	add_child(_numbers_label)
+	# READOUT (Ruling 2): the tournie controls line's
+	# second line - the headline (Y - SUBMIT A SCORE)
+	# rides the standing _status_label at a grown plate
+	# seat (see _apply_plate_layout); this small line
+	# under it names the screen's other unlabelled
+	# command (A - PLAY). It stands only in the tournie
+	# routine state; its seat here is the grown seat, and
+	# _apply_plate_layout owns its visibility.
+	_controls_label = Label3D.new()
+	_controls_label.position = Vector3(0.0, 0.078, -1.288)
+	_controls_label.pixel_size = 0.0022
+	_controls_label.font_size = 19
+	_controls_label.width = 680.0
+	_controls_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_controls_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_controls_label.outline_size = 5
+	_controls_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9)
+	_controls_label.modulate = Color(0.78, 0.83, 0.92)
+	_controls_label.text = "A - PLAY"
+	_controls_label.visible = false
+	add_child(_controls_label)
 
 
 func _build_rail(placeholder: Texture2D) -> void:
@@ -4806,8 +4925,80 @@ func _make_quad(parent: Node3D, action: String, payload: String, tex: Texture2D,
 	return q
 
 
-## The banner's one line: library summary, the empty-filter guard's
-## explanation when it fired, and any transient launch status.
+## How many games in the library are new right now,
+## counted over the scanner's full set (GRADFIX11: net or
+## no net - a standing letter net narrows the wall, never
+## this count).
+func _new_count() -> int:
+	var new_now: int = int(Time.get_unix_time_from_system())
+	var n: int = 0
+	for g: GameEntry in _scanner.games:
+		if g.is_new(new_now):
+			n += 1
+	return n
+
+
+## READOUT (Ruling 1): the numbers line - the only part
+## of the old banner that still stands every frame, in
+## its new home above the bar, small. Filter-type and
+## sort-type text is DELETED outright (the strip's own
+## highlight already shows which filter/sort stands; the
+## line never repeats it). What rides here is
+## information, not dressing: the library's files/games
+## counts, the NEW filter's membership count, a standing
+## letter-net note; in the tournie room, the live
+## challenge count and the updated stamp (freshness is
+## information). Under the filtertext NC the numbers
+## never stand - they are back on the plate with the
+## rest of the restored line.
+func _numbers_line() -> String:
+	if debug_readout_nc == "filtertext":
+		return ""
+	if _tournament:
+		if _wovp_challenges.is_empty():
+			return ""
+		var tline: String = "%d live challenges" % _wovp_challenges.size()
+		if _wovp_fetched_at > 0:
+			tline += " - updated " + WovpTime.format_stamp(_wovp_fetched_at)
+		return tline
+	var line: String = "%d files - %d games" % [
+		_scanner.total_files, _scanner.games.size()]
+	if _filter == "new":
+		line += " - %d new" % _new_count()
+	if _letter_net == "THE":
+		line += " - THE tables"
+	elif _letter_net == "#":
+		line += " - number/symbol titles"
+	return line
+
+
+## READOUT: the low plate's line after the split. In the
+## library it carries ONLY transient status - the
+## empty-filter guard's explanation (_filter_note) and
+## any launch status (_status_note) - and stands EMPTY
+## otherwise. In the tournie room it carries the warning
+## line whenever a warning state applies; the routine
+## state's controls line is seated by _refresh_banner
+## itself (it also drives the plate's grown layout).
+func _plate_line() -> String:
+	if debug_readout_nc == "filtertext":
+		return _banner_line()
+	if _tournament:
+		return _tournament_warning_line()
+	var line: String = ""
+	if _filter_note != "":
+		line = _filter_note
+	if _status_note != "":
+		line += (" - " if line != "" else "") + _status_note
+	return line
+
+
+## The banner's one line, pre-READOUT whole: library
+## summary (counts, filter, sort), the empty-filter
+## guard's explanation when it fired, and any transient
+## launch status. Kept only as the
+## PVLDS_READOUT_NC=filtertext seam's restored line -
+## _plate_line/_numbers_line are the standing split.
 func _banner_line() -> String:
 	if _tournament:
 		return _tournament_banner_line()
@@ -4815,18 +5006,7 @@ func _banner_line() -> String:
 		_scanner.total_files, _scanner.games.size(),
 		str(FILTER_LABELS[_filter]), str(SORT_LABELS[_sort])]
 	if _filter == "new":
-		# GRADFIX11: the NEW banner carries the filter's
-		# whole membership - how many games in the library
-		# are new right now, counted over the scanner's
-		# full set (net or no net: a standing letter net
-		# narrows the wall, never this count) - after the
-		# sort segment, before the letter-net suffix.
-		var new_now: int = int(Time.get_unix_time_from_system())
-		var new_count: int = 0
-		for g: GameEntry in _scanner.games:
-			if g.is_new(new_now):
-				new_count += 1
-		line += " - %d new" % new_count
+		line += " - %d new" % _new_count()
 	if _letter_net == "THE":
 		line += " - THE tables"
 	elif _letter_net == "#":
@@ -4841,12 +5021,29 @@ func _banner_line() -> String:
 ## The status line's refresh: a text set, not a render - the
 ## plate + Label3D carry it now (see _build_status_line), so
 ## a banner change costs nothing and never enters the face
-## caches. The line's CONTENT is unchanged (library summary,
-## view note, status note) - only its carrier moved.
+## caches. READOUT split the refresh into its two homes:
+## the numbers above the bar (_numbers_line) and the
+## plate's own line (_plate_line), plus the tournie
+## routine state's controls line, which is seated here
+## because it also drives the plate's grown layout.
 func _refresh_banner() -> void:
 	if _status_label == null or _scanner == null:
 		return
-	var new_line: String = _banner_line()
+	var nline: String = _numbers_line()
+	if nline != _numbers_text:
+		_numbers_text = nline
+		if _numbers_label != null:
+			_numbers_label.text = nline
+	if _numbers_label != null:
+		_numbers_label.visible = nline != ""
+	# The tournie routine state: no warning stands, so
+	# the freed plate carries this screen's contextual
+	# controls - the Y headline unmissable, A - PLAY on
+	# the small second line. Warnings outrank it always:
+	# any warning line at all and the hint does not stand.
+	var routine: bool = _tournament and debug_readout_nc != "nohint" \
+		and debug_readout_nc != "filtertext" and _tournament_warning_line() == ""
+	var new_line: String = "Y - SUBMIT A SCORE" if routine else _plate_line()
 	if new_line != _status_text:
 		# OPTIMIZE standing-cost cut: the status label's text
 		# is re-assigned only when the line actually changes
@@ -4855,6 +5052,42 @@ func _refresh_banner() -> void:
 		_status_text = new_line
 		_sc_label_reassign += 1 ## OPTIMIZE standing-cost audit (observation only)
 		_status_label.text = _status_text
+	_apply_plate_layout(routine)
+
+
+## READOUT (Ruling 2): the plate's two layouts. SHIPPED:
+## the plate as it has always stood (1.95 x 0.088 at
+## y 0.09, one centred line at font 26). GROWN (tournie
+## routine state only): the plate grows 0.05 taller with
+## its BOTTOM edge pinned - centre y 0.09 -> 0.115, top
+## edge at ~39.4 degrees of depression from the eye
+## against the shipped plate's ~40 - so no label sight
+## line is eaten; the headline takes the upper seat at
+## font 30 and the second line (A - PLAY) stands under
+## it. Every other state (library, any tournie warning)
+## stands at the shipped layout. Idempotent: a layout
+## re-apply costs nothing.
+func _apply_plate_layout(grown: bool) -> void:
+	if _status_plate == null or grown == _plate_grown:
+		return
+	_plate_grown = grown
+	var wide: bool = _console_wide()
+	var base_size: Vector2 = Vector2(2.3, 0.11) if wide else Vector2(1.95, 0.088)
+	if grown:
+		(_status_plate.mesh as QuadMesh).size = base_size + Vector2(0.0, 0.05)
+		_status_plate.position = Vector3(0.0, 0.115, -1.30)
+		_status_label.position = Vector3(0.0, 0.141, -1.288)
+		_status_label.font_size = 30
+		if _controls_label != null:
+			_controls_label.position = Vector3(0.0, 0.078, -1.288)
+			_controls_label.visible = true
+	else:
+		(_status_plate.mesh as QuadMesh).size = base_size
+		_status_plate.position = Vector3(0.0, 0.09, -1.30)
+		_status_label.position = Vector3(0.0, 0.09, -1.288)
+		_status_label.font_size = 30 if wide else 26
+		if _controls_label != null:
+			_controls_label.visible = false
 
 
 ## A rail stop's [label, accent] under the room's current
@@ -7391,8 +7624,7 @@ func _render_tournament_board(idx: int) -> void:
 	var spec: Dictionary = RoomSpecs.tournament_board_spec(
 		ch, bool(row.get("owned", false)), _wovp_user_id, int(Time.get_unix_time_from_system()),
 		bool(row.get("build_owned", false)),
-		_pinemhi_bests.get(PinemhiScores.challenge_key(ch.table_name), {}) as Dictionary,
-		true) ## ROOMSUBMIT: the standing board names its submit command (Y - SUBMIT A SCORE)
+		_pinemhi_bests.get(PinemhiScores.challenge_key(ch.table_name), {}) as Dictionary) ## READOUT: the board no longer names the submit command - the hint's one home is the tournie plate's controls line
 	var bc: Vector2i = _board_coord(idx)
 	var cc: Vector2i = _grid_coord(idx)
 	spec["spine_side"] = "right" if bc.x < cc.x else "left"
@@ -8663,8 +8895,8 @@ func _info_focused_card() -> void:
 		# their cards, nothing needs turning - and the flip
 		# stays refused here: no card turns in tournie,
 		# ever. Y's new business is the panel, which is not
-		# a flip: the board names the command itself
-		# ("Y - SUBMIT A SCORE").
+		# a flip: the tournie plate's controls line names
+		# the command itself ("Y - SUBMIT A SCORE").
 		_open_submit_for_focused()
 		return
 	if _mode != "wall" or _placard_up or _setup_panel_up or _focused == null:
@@ -10026,10 +10258,10 @@ func _fill_setup_panel_textures(gen: int) -> void:
 ## the Tournament Room (its flip is refused there -
 ## GRADFIX7: boards stand open, nothing needs turning) and
 ## its library meaning is "this card's other business",
-## which is exactly what submitting is. The standing board
-## names the command itself ("Y - SUBMIT A SCORE" on every
-## board), because the room has no controls surface to
-## list it on.
+## which is exactly what submitting is. The tournie
+## plate's controls line names the command itself
+## ("Y - SUBMIT A SCORE" - READOUT: the hint's one home;
+## it used to ride every standing board).
 ##
 ## The panel, top to bottom: the case face (the challenge,
 ## its deadline, the library standing, the higher-score
@@ -10937,6 +11169,20 @@ func _apply_wall_alpha(a: float) -> void:
 			_alpha_flat_applied["status"] = a
 			_status_label.modulate = Color(0.92, 0.95, 1.0, a)
 			_status_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * a)
+			_alpha_write_count += 1
+	# READOUT: the numbers label and the tournie controls
+	# line's second label fade with the wall too.
+	if _numbers_label != null:
+		if nc_all or absf(a - float(_alpha_flat_applied.get("numbers", -1.0))) >= 0.002:
+			_alpha_flat_applied["numbers"] = a
+			_numbers_label.modulate = Color(0.78, 0.83, 0.92, a)
+			_numbers_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * a)
+			_alpha_write_count += 1
+	if _controls_label != null:
+		if nc_all or absf(a - float(_alpha_flat_applied.get("controls", -1.0))) >= 0.002:
+			_alpha_flat_applied["controls"] = a
+			_controls_label.modulate = Color(0.78, 0.83, 0.92, a)
+			_controls_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9 * a)
 			_alpha_write_count += 1
 	if nc_all or absf(a - float(_alpha_flat_applied.get("plate", -1.0))) >= 0.002:
 		_alpha_flat_applied["plate"] = a

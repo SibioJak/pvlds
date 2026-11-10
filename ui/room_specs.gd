@@ -649,7 +649,7 @@ static func pinemhi_mark_state(game: GameEntry, personal: Dictionary, best: Dict
 		return PINEMHI_MARK_STRUCK
 	return PINEMHI_MARK_NONE
 
-static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}, submit_hint: bool = false) -> Dictionary:
+static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: String, now_unix: int, build_owned: bool = true, personal_best: Dictionary = {}) -> Dictionary:
 	var rows: Array = []
 	for entry: Variant in ch.board_rows(user_id):
 		var e: Dictionary = entry
@@ -681,18 +681,14 @@ static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: Strin
 				rows.append({"kind": "divider", "text": str(e.get("label", "")), "size": 28, "tone": tone})
 			"note":
 				rows.append({"kind": "note", "text": str(e.get("text", "")), "size": 34})
-	# ROOMSUBMIT: the submit hint - the standing board
-	# itself names the command that opens the submit panel
-	# (Y on the challenge's card), because the room has no
-	# controls surface to list it on and a command that
-	# exists must read where the player can see it. Only
-	# the room's standing-board render passes submit_hint;
-	# the library flip-back's board (wing_spec) and the
-	# spec legs keep the default. The hint stands BELOW the
-	# league rows and ABOVE the PINemHi best: the pinemhi
-	# legs pin the best as the board's LAST row.
-	if submit_hint:
-		rows.append({"kind": "note", "text": "Y - SUBMIT A SCORE", "size": 30})
+	# READOUT: the board carries NO submit hint any more.
+	# The hint's one home is the tournie plate's controls
+	# line (room.gd's _refresh_banner) - it used to ride
+	# here as a note row (ROOMSUBMIT), where it read as
+	# board furniture and never landed; one home, on the
+	# screen's own controls line, is the discoverable
+	# seat. The PINemHi best below stays the board's
+	# LAST row (the pinemhi legs pin it).
 	# NEXTROUND (item 4): the PINemHi personal-best line -
 	# appended BELOW the league rows as a plain note, never
 	# a score row: it is the player's own best from their
