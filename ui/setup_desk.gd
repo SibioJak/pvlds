@@ -774,7 +774,7 @@ func _build_ui() -> void:
 	_pinemhi_check.text = "Show my PINemHi personal bests on tournament boards"
 	vbox.add_child(_pinemhi_check)
 	_pinemhi_manage_check = CheckBox.new()
-	_pinemhi_manage_check.text = "Let PVLDS run the PINemHi watcher while a table is playing"
+	_pinemhi_manage_check.text = "Let LaunchPin run the PINemHi watcher while a table is playing"
 	_pinemhi_manage_check.tooltip_text = "Off (the default): LaunchPin never touches the watcher. On: the watchdog starts pinemhi_rom_monitor.exe when a table starts (if it isn't already running) and closes it shortly after the table exits - or when LaunchPin exits, if that comes first. A watcher already running is left running: LaunchPin only ever closes one it started itself."
 	vbox.add_child(_pinemhi_manage_check)
 	_pinemhi_edit = LineEdit.new()

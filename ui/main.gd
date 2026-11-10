@@ -2248,7 +2248,7 @@ func _on_room_pinemhi_watcher_toggled(on: bool) -> void:
 	_config.pinemhi_manage_watcher = on
 	if _config.save_to_disk():
 		if _room != null:
-			_room.set_setup_panel_message("PINemHi watcher: PVLDS will run the watcher while a table is playing." if on else "PINemHi watcher: PVLDS will not run the watcher.")
+			_room.set_setup_panel_message("PINemHi watcher: LaunchPin will run the watcher while a table is playing." if on else "PINemHi watcher: LaunchPin will not run the watcher.")
 		_refresh_setup_panel_health()
 		return
 	_config.pinemhi_manage_watcher = not on
@@ -2452,7 +2452,7 @@ func _on_desk_wovp_submit_requested(challenge_id: String, photo_path: String, sc
 		_record_submit_outcome(challenge_id, photo_path, length_note)
 		return
 	if _wovp_client == null:
-		_record_submit_outcome(challenge_id, photo_path, "The WoVP client is not running - restart PVLDS.")
+		_record_submit_outcome(challenge_id, photo_path, "The WoVP client is not running - restart LaunchPin.")
 		return
 	var vpx_file: String = ""
 	for rv: Variant in _build_submit_rows():
@@ -2486,7 +2486,7 @@ func _on_room_wovp_submit_requested(challenge_id: String, photo_path: String) ->
 		_record_room_submit_refusal(challenge_id, photo_path, length_note)
 		return
 	if _wovp_client == null:
-		_record_room_submit_refusal(challenge_id, photo_path, "The WoVP client is not running - restart PVLDS.")
+		_record_room_submit_refusal(challenge_id, photo_path, "The WoVP client is not running - restart LaunchPin.")
 		return
 	var vpx_file: String = ""
 	for rv: Variant in _build_submit_rows():

@@ -1316,7 +1316,7 @@ static func banner_spec(line: String) -> Dictionary:
 	return {
 		"kind": "banner",
 		"bg": Color(0.04, 0.04, 0.07),
-		"title": "PVLDS",
+		"title": "LaunchPin",
 		"title_size": 92,
 		"sub": line,
 		"sub_size": 34,
