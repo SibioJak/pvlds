@@ -317,6 +317,11 @@ var _setuplook_mode: String = "desk"
 var _setuplook_phase: int = 0
 var _setuplook_wait: int = 0
 var _setuplook_failures: int = 0
+var _smoke_deskedit: bool = false ## --pvlds-smoke-deskedit: DESKEDIT grab driver (PVLDS_DESKEDIT_MODE = desk | firstrun)
+var _deskedit_mode: String = "desk"
+var _deskedit_phase: int = 0
+var _deskedit_wait: int = 0
+var _deskedit_failures: int = 0
 var _smoke_dpadexit: bool = false ## --pvlds-smoke-dpadexit: a fresh D-pad Right in the room must exit the app
 var _dpadexit_held_leg: bool = false ## --pvlds-smoke-dpadexit-held: the button is pinned from boot; no exit until a witnessed release, then a fresh press exits
 var _dpadexit_smoke_phase: int = 0
@@ -814,6 +819,11 @@ func _ready() -> void:
 		_setuplook_mode = OS.get_environment("PVLDS_SETUPLOOK_MODE")
 		if _setuplook_mode == "":
 			_setuplook_mode = "desk"
+	if user_args.has("--pvlds-smoke-deskedit"):
+		_smoke_deskedit = true
+		_deskedit_mode = OS.get_environment("PVLDS_DESKEDIT_MODE")
+		if _deskedit_mode == "":
+			_deskedit_mode = "desk"
 	if user_args.has("--pvlds-smoke-dpadexit"):
 		_smoke_dpadexit = true
 	if user_args.has("--pvlds-smoke-dpadexit-held"):
@@ -1407,6 +1417,8 @@ func _process(_delta: float) -> void:
 		_drive_bootface_smoke()
 	if _smoke_setuplook:
 		_drive_setuplook_smoke()
+	if _smoke_deskedit:
+		_drive_deskedit_smoke()
 	if _smoke_dpadexit:
 		_drive_dpadexit_smoke()
 	if _smoke_lockout:
@@ -1593,9 +1605,8 @@ func _finish_scan() -> void:
 					b2.first_seen_unix = int(rec.get("first", 0))
 					b2.last_changed_unix = int(rec.get("changed", 0))
 		_state.save_to_disk()
-	var summary: String = build_scan_summary()
 	if _desk != null:
-		_desk.apply_scan_summary(summary)
+		_desk.apply_scan_summary(build_scan_summary(), build_scan_details())
 	# The scan changed the library the submit rows join
 	# against (the SUBMIT round).
 	_push_submit_data()
@@ -2428,6 +2439,12 @@ func _record_submit_outcome(challenge_id: String, photo_path: String, result: St
 
 
 ## Human-readable summary of the last completed scan, for the desk pass.
+## DESKEDIT: the scan summary is built in two parts. This
+## one is what STANDS in the desk's stats area - the answers
+## in plain words: the sample warning when it applies, the
+## files→games headline, and one plain database line. The
+## diagnostics ride build_scan_details() into the desk's
+## Scan details fold.
 func build_scan_summary() -> String:
 	if _scanner == null:
 		return ""
@@ -2440,15 +2457,31 @@ func build_scan_summary() -> String:
 	lines.append("Scanned %d table files in %d folder(s): %d games (%d with multiple builds)." % [
 		s.total_files, _config.table_folders.size(), s.games.size(), s.duplicate_group_count()])
 	if _last_db_ok:
-		lines.append("Database (%s): %d games known. Matched %d of %d builds exactly; %d more by game only." % [
-			_last_db_path, _db.game_count(), s.matched_files, s.total_files, s.game_matched_files])
+		lines.append("Database: %d games known." % _db.game_count())
+	else:
+		lines.append("No database loaded - every game is identified from its file name alone.")
+	return "\n".join(lines)
+
+
+## DESKEDIT: the scan summary's folded half - the workshop
+## numbers, in the same words the single block carried
+## before the split (the one change: the database line's
+## games-known count now stands plainly above the fold, so
+## the folded line carries the path and the matched counts).
+## The desk shows this only inside the Scan details fold.
+func build_scan_details() -> String:
+	if _scanner == null:
+		return ""
+	var s: LibraryScanner = _scanner
+	var lines: Array[String] = []
+	if _last_db_ok:
+		lines.append("Database (%s): matched %d of %d builds exactly; %d more by game only." % [
+			_last_db_path, s.matched_files, s.total_files, s.game_matched_files])
 		var tc: Dictionary = s.match_tier_counts
 		lines.append("Match routes: %d by download slug, %d by title, %d by cleaned title, %d by edition, %d rescued, %d unmatched (file name only)." % [
 			int(tc.get("slug", 0)), int(tc.get("name", 0)), int(tc.get("scrubbed", 0)), int(tc.get("edition", 0)), int(tc.get("rescue", 0)), int(tc.get("local", 0))])
 		if s.inherited_shot_games > 0:
 			lines.append("Author shots: %d game(s) wear a screenshot inherited from another build of the same game - their own build carries none in the database, so the game's shot stands in." % s.inherited_shot_games)
-	else:
-		lines.append("No database loaded - every game is identified from its file name alone.")
 	# Panel art counts a game when art is PROVEN: a side image on
 	# disk, a backglass on disk (the scan's art_covered_games
 	# floor), an extracted cache entry, or an "ok" in the outcome
@@ -3986,7 +4019,7 @@ func _show_desk(message: String = "") -> void:
 	# this door returns (show_message in the launch path), so
 	# it still lands on top of the summary and stands.
 	if _scanner != null and not _scan_active:
-		_desk.apply_scan_summary(build_scan_summary())
+		_desk.apply_scan_summary(build_scan_summary(), build_scan_details())
 		_desk.apply_missing_b2s(_scanner.missing_b2s_files.size())
 		_desk.apply_unplaced(_scanner.unplaced_files.size())
 	_desk.visible = true
@@ -23213,10 +23246,8 @@ func _drive_bootface_smoke() -> void:
 						"firstrun: the boot face never appears")
 					_bootface_expect(str(fdress["title"]) == "FIRST SETUP",
 						"firstrun: the title reads FIRST SETUP (got '%s')" % str(fdress["title"]))
-					_bootface_expect(bool(fdress["sub_visible"]),
-						"firstrun: the 'Done once' line stands")
-					_bootface_expect(bool(fdress["pointer_visible"]),
-						"firstrun: the IN-VR pointer line stands")
+					_bootface_expect(int(fdress["panel_children"]) == 1,
+						"firstrun: the head is the title alone (DESKEDIT: both sub-lines deleted - nothing names a surface the reader hasn't met)")
 					_bootface_expect(not _desk._scanned,
 						"firstrun: no scan stands yet (_scanned is false)")
 					_bootface_expect(_desk._enter_button.disabled,
@@ -23268,8 +23299,8 @@ func _drive_bootface_smoke() -> void:
 					_bootface_expect(_desk.visible, "sample: the desk ends up standing")
 					_bootface_expect(str(sdress["title"]) == "FIRST SETUP",
 						"sample: the standing desk reads FIRST SETUP (got '%s')" % str(sdress["title"]))
-					_bootface_expect(bool(sdress["sub_visible"]) and bool(sdress["pointer_visible"]),
-						"sample: the title block stands complete")
+					_bootface_expect(int(sdress["panel_children"]) == 1,
+						"sample: the standing desk's head is the title alone (DESKEDIT)")
 					_bootface_expect(_desk._stats_label.text.contains("SAMPLE DATABASE"),
 						"sample: the scan summary stands applied on the desk")
 					_bootface_expect(_room == null or not _room.visible,
@@ -23301,8 +23332,8 @@ func _drive_bootface_smoke() -> void:
 				_bootface_expect(_desk.visible, "setup-open: the desk shows")
 				_bootface_expect(str(dress3["title"]) == "FIRST SETUP",
 					"setup-open: the title reads FIRST SETUP (got '%s')" % str(dress3["title"]))
-				_bootface_expect(bool(dress3["sub_visible"]) and bool(dress3["pointer_visible"]),
-					"setup-open: the title block stands complete")
+				_bootface_expect(int(dress3["panel_children"]) == 1,
+					"setup-open: the head is the title alone (DESKEDIT)")
 				# DESKEXIT: the desk opens knowing the boot
 				# scan stands - exit armed, no fresh scan.
 				_bootface_expect(_desk._scanned,
@@ -23647,6 +23678,211 @@ func _finish_setuplook_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS SETUPLOOK SMOKE: FAIL (%d)" % _setuplook_failures)
+		get_tree().quit(1)
+
+
+# -------------------------------------------------- deskedit smoke
+
+## --pvlds-smoke-deskedit: DESKEDIT's census + grab driver.
+## Modes (PVLDS_DESKEDIT_MODE):
+##   firstrun - no config anywhere: the first-run desk. The
+##              census pins the round's five edits at the
+##              head of the form: the title panel holds the
+##              title alone; the VPS note and the herding
+##              note carry the FINAL words; the herding label
+##              is the short one; the Advanced fold starts
+##              collapsed with the args field inside it; no
+##              Scan details fold stands before a scan. Then
+##              Advanced is opened through its real toggle
+##              for a grab, and a hide + re-show must have
+##              re-collapsed it (folds start collapsed on
+##              every desk show).
+##   desk     - a configured library: SETUP opened from the
+##              room through the real _show_desk door. The
+##              standing summary is the short text (headline
+##              + the plain database line, no diagnostics);
+##              the diagnostics sit in the Scan details
+##              fold, standing but collapsed. Grabs: the
+##              desk's bottom with the fold collapsed, then
+##              the fold opened through its real toggle.
+## Grabs land in PVLDS_DESKEDIT_GRAB_DIR.
+func _drive_deskedit_smoke() -> void:
+	if _deskedit_mode == "firstrun":
+		_drive_deskedit_firstrun()
+	else:
+		_drive_deskedit_desk()
+
+
+func _drive_deskedit_firstrun() -> void:
+	match _deskedit_phase:
+		0:
+			if _desk != null and _desk.visible:
+				var dress: Dictionary = _desk.title_dress()
+				var cen: Dictionary = _desk.deskedit_census()
+				_deskedit_expect(str(dress["title"]) == "FIRST SETUP",
+					"firstrun: the title reads FIRST SETUP")
+				_deskedit_expect(int(dress["panel_children"]) == 1,
+					"firstrun: the head panel holds the title alone (both sub-lines deleted)")
+				_deskedit_expect(str(cen["db_note"]).begins_with("The community catalog of VPX tables"),
+					"firstrun: the VPS field carries its explanation line")
+				_deskedit_expect(_desk._herding_check.text == "Focus herding",
+					"firstrun: the herding label is the short one (got '%s')" % _desk._herding_check.text)
+				_deskedit_expect(str(cen["herding_note"]).begins_with("While you play, LaunchPin keeps the game's window in front"),
+					"firstrun: the herding explanation stands under the checkbox")
+				_deskedit_expect(bool(cen["args_in_advanced"]),
+					"firstrun: the Launch arguments field lives inside the Advanced fold")
+				_deskedit_expect(not bool(cen["advanced_expanded"]),
+					"firstrun: the Advanced fold starts collapsed")
+				_deskedit_expect(not _desk._advanced_fold.content.visible,
+					"firstrun: collapsed Advanced content is hidden (out of the keyboard flow)")
+				_deskedit_expect(not bool(cen["details_standing"]),
+					"firstrun: no Scan details fold stands before the first scan")
+				_deskedit_wait = 0
+				_deskedit_phase = 5
+			else:
+				_deskedit_wait += 1
+				if _deskedit_wait > 3600:
+					_deskedit_fail("firstrun: the desk never came up")
+					_finish_deskedit_smoke()
+		5:
+			# The top grab waits a few frames: taken on the
+			# census frame it catches the desk before its
+			# first presented frame (a black grab - the
+			# bootface driver's phase 5 exists for this).
+			_deskedit_wait += 1
+			if _deskedit_wait >= 4:
+				_deskedit_grab("deskedit_firstrun_top.png")
+				# Open Advanced through its real toggle.
+				_desk._advanced_fold.toggle.button_pressed = true
+				_deskedit_scroll_to(_desk._advanced_fold.toggle)
+				_deskedit_wait = 0
+				_deskedit_phase = 1
+		1:
+			_deskedit_wait += 1
+			if _deskedit_wait >= 4:
+				_deskedit_expect(_desk._advanced_fold.is_expanded(),
+					"firstrun: the Advanced toggle opens the fold")
+				_deskedit_expect(_desk._args_edit.visible,
+					"firstrun: the args field stands visible inside the open fold")
+				_deskedit_grab("deskedit_advanced_open.png")
+				_desk.visible = false
+				_deskedit_wait = 0
+				_deskedit_phase = 2
+		2:
+			_deskedit_wait += 1
+			if _deskedit_wait >= 3:
+				_desk.visible = true
+				_deskedit_wait = 0
+				_deskedit_phase = 3
+		3:
+			_deskedit_wait += 1
+			if _deskedit_wait >= 3:
+				_deskedit_expect(not _desk._advanced_fold.is_expanded(),
+					"firstrun: a re-shown desk re-collapses its folds")
+				_finish_deskedit_smoke()
+
+
+func _drive_deskedit_desk() -> void:
+	match _deskedit_phase:
+		0:
+			if _room != null and _room.visible:
+				_show_desk()
+				_deskedit_wait = 0
+				_deskedit_phase = 1
+			else:
+				_deskedit_wait += 1
+				if _deskedit_wait > 7200:
+					_deskedit_fail("desk: the room never stood")
+					_finish_deskedit_smoke()
+		1:
+			_deskedit_wait += 1
+			if _deskedit_wait >= 3:
+				var cen: Dictionary = _desk.deskedit_census()
+				_deskedit_expect(_desk._stats_label.text.begins_with("Scanned"),
+					"desk: the standing summary leads with the headline (got '%s')" % _desk._stats_label.text.left(40))
+				_deskedit_expect(_desk._stats_label.text.contains("Database: "),
+					"desk: the standing summary carries the plain database line")
+				_deskedit_expect(not _desk._stats_label.text.contains("Match routes"),
+					"desk: no diagnostics stand in the stats area (match routes folded)")
+				_deskedit_expect(not _desk._stats_label.text.contains("Panel art"),
+					"desk: no diagnostics stand in the stats area (panel art folded)")
+				_deskedit_expect(bool(cen["details_standing"]),
+					"desk: the Scan details fold stands once a scan's details exist")
+				_deskedit_expect(not bool(cen["details_expanded"]),
+					"desk: the Scan details fold starts collapsed")
+				_deskedit_expect(str(cen["details_text"]).contains("Match routes"),
+					"desk: the match-routes tally lives in the fold")
+				_deskedit_expect(str(cen["details_text"]).contains("Panel art"),
+					"desk: the panel-art line lives in the fold")
+				_deskedit_scroll_to(_desk._details_fold.toggle)
+				_deskedit_wait = 0
+				_deskedit_phase = 2
+		2:
+			_deskedit_wait += 1
+			if _deskedit_wait >= 4:
+				_deskedit_grab("deskedit_desk_bottom.png")
+				# Open Scan details through its real toggle.
+				_desk._details_fold.toggle.button_pressed = true
+				_deskedit_scroll_to(_desk._stats_label)
+				_deskedit_wait = 0
+				_deskedit_phase = 3
+		3:
+			_deskedit_wait += 1
+			if _deskedit_wait >= 4:
+				_deskedit_expect(_desk._details_fold.is_expanded(),
+					"desk: the Scan details toggle opens the fold")
+				_deskedit_grab("deskedit_details_open.png")
+				_finish_deskedit_smoke()
+
+
+func _deskedit_scroll() -> ScrollContainer:
+	if _desk == null:
+		return null
+	var stack: Array[Node] = [_desk]
+	while not stack.is_empty():
+		var nd: Node = stack.pop_back() as Node
+		if nd is ScrollContainer:
+			return nd as ScrollContainer
+		for ch: Node in nd.get_children():
+			stack.append(ch)
+	return null
+
+
+func _deskedit_scroll_to(target: Control) -> void:
+	var sc: ScrollContainer = _deskedit_scroll()
+	if sc == null or target == null:
+		return
+	var y: int = int(target.get_global_position().y - sc.get_global_position().y) + sc.scroll_vertical - 24
+	sc.scroll_vertical = clampi(y, 0, int(sc.get_v_scroll_bar().max_value))
+
+
+func _deskedit_grab(file_name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_DESKEDIT_GRAB_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	if img != null:
+		img.save_png(dir.path_join(file_name))
+
+
+func _deskedit_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - deskedit smoke: ", label)
+	else:
+		_deskedit_fail(label)
+
+
+func _deskedit_fail(label: String) -> void:
+	_deskedit_failures += 1
+	printerr("  FAIL - deskedit smoke: ", label)
+
+
+func _finish_deskedit_smoke() -> void:
+	if _deskedit_failures == 0:
+		print("PVLDS DESKEDIT SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS DESKEDIT SMOKE: FAIL (%d)" % _deskedit_failures)
 		get_tree().quit(1)
 
 
@@ -24078,11 +24314,13 @@ func _on_art_prefetch(games: Array) -> void:
 	_art_warmer.prioritize(typed)
 
 
-## A warm pass drained: refresh the desk's coverage line so the
-## art-cache stat reads current when the player next visits it.
+## A warm pass drained: refresh the desk's summary so the
+## art-cache stat reads current when the player next visits
+## it (DESKEDIT: that stat lives in the Scan details fold
+## now; the two-part apply refreshes it there).
 func _on_art_warm_drained() -> void:
 	if _desk != null and _scanner != null:
-		_desk.apply_scan_summary(build_scan_summary())
+		_desk.apply_scan_summary(build_scan_summary(), build_scan_details())
 
 
 ## --pvlds-smoke-quitwarm: the exit-hang harness driver. Mode

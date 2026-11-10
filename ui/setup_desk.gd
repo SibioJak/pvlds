@@ -63,28 +63,89 @@ var _shots_edit: LineEdit
 var _shots_label: Label
 var _ipdb_label: Label
 var _title_label: Label ## the title block: "FIRST SETUP"
-var _title_sub_label: Label ## "Done once, on your PC, before you play."
-var _title_pointer_label: Label ## the pointer to the IN-VR SETUP panel
+var _title_box: VBoxContainer ## DESKEDIT: the head panel's box - holds the title ALONE (census: title_dress)
+var _advanced_fold: _Fold ## DESKEDIT: the Advanced fold (the Launch arguments template's home)
+var _db_note: Label ## DESKEDIT: the VPS database explanation line under the field
+var _herding_note: Label ## DESKEDIT: the Focus herding explanation line under the checkbox
+var _details_fold: _Fold ## DESKEDIT: the Scan details fold (the scan summary's diagnostics)
+var _details_label: Label ## DESKEDIT: the folded diagnostics text inside the Scan details fold
 
 const MAX_FOLDER_ROWS: int = 6
+
+
+## DESKEDIT: one collapsible desk section - a dressed toggle
+## row (a checkable Button in the theme's button dress, a
+## disclosure marker at its head) over a content box. Starts
+## collapsed; while collapsed the content is hidden, which
+## also keeps it out of the keyboard flow (hidden controls
+## are skipped); expanded, the content joins the flow right
+## after the toggle. Used by Advanced and Scan details.
+class _Fold:
+	var root: VBoxContainer
+	var toggle: Button
+	var content: VBoxContainer
+	var title: String
+
+	func set_expanded(expanded: bool) -> void:
+		toggle.set_pressed_no_signal(expanded)
+		content.visible = expanded
+		toggle.text = ("▾ " if expanded else "▸ ") + title
+
+	func is_expanded() -> bool:
+		return content.visible
 
 
 func setup(config: PvldsConfig) -> void:
 	_config = config
 	_build_ui()
 	_fill_from_config()
+	# DESKEDIT: both folds start collapsed on EVERY desk
+	# show, not just the first - leaving to the room and
+	# coming back re-folds what was opened.
+	visibility_changed.connect(func() -> void:
+		if visible:
+			_reset_folds())
+
+
+func _make_fold(parent: VBoxContainer, title: String) -> _Fold:
+	var f: _Fold = _Fold.new()
+	f.title = title
+	f.root = VBoxContainer.new()
+	f.root.add_theme_constant_override("separation", 8)
+	parent.add_child(f.root)
+	f.toggle = Button.new()
+	f.toggle.toggle_mode = true
+	f.toggle.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	f.toggle.text = "▸ " + title
+	f.toggle.toggled.connect(func(on: bool) -> void: f.set_expanded(on))
+	f.root.add_child(f.toggle)
+	f.content = VBoxContainer.new()
+	f.content.add_theme_constant_override("separation", 8)
+	f.content.visible = false
+	f.root.add_child(f.content)
+	return f
+
+
+func _reset_folds() -> void:
+	if _advanced_fold != null:
+		_advanced_fold.set_expanded(false)
+	if _details_fold != null:
+		_details_fold.set_expanded(false)
 
 
 ## Smoke census of the title block (the BOOTFACE legs). The
 ## desk wears its full FIRST SETUP dress on every show since
 ## BOOTFACE: the boot pass has its own face now, so the desk
 ## only ever stands when it is stood upon for real (BOOTSHELL's
-## two-dress machinery is retired).
+## two-dress machinery is retired). DESKEDIT: the dress is
+## the title ALONE - both sub-lines are deleted (the "Done
+## once" line by Chris's order, the IN-VR pointer because a
+## first-timer hasn't met the room yet), so the census reads
+## the head panel's child count: 1 means the title alone.
 func title_dress() -> Dictionary:
 	return {
 		"title": _title_label.text if _title_label != null else "",
-		"sub_visible": _title_sub_label != null and _title_sub_label.visible,
-		"pointer_visible": _title_pointer_label != null and _title_pointer_label.visible,
+		"panel_children": _title_box.get_child_count() if _title_box != null else 0,
 	}
 
 
@@ -120,26 +181,24 @@ func _build_ui() -> void:
 	var title_panel: PanelContainer = PanelContainer.new()
 	title_panel.add_theme_stylebox_override("panel", DeskTheme.title_header_box())
 	vbox.add_child(title_panel)
-	var title_box: VBoxContainer = VBoxContainer.new()
-	title_box.add_theme_constant_override("separation", 4)
-	title_panel.add_child(title_box)
+	_title_box = VBoxContainer.new()
+	_title_box.add_theme_constant_override("separation", 4)
+	title_panel.add_child(_title_box)
 	_title_label = Label.new()
 	# ENDGAME (Part A): the two setups carry two names. This
 	# desk is FIRST SETUP - the one-time, important initial
 	# setup; the room's panel is IN-VR SETUP.
+	# DESKEDIT: the panel holds the title ALONE. Both
+	# sub-lines are gone - "Done once, on your PC, before you
+	# play." by Chris's order, and the pointer to the IN-VR
+	# panel because a first-time user hasn't seen the room
+	# yet and shouldn't be told about surfaces he hasn't met.
+	# The desk goes straight into the work (the intro below).
 	_title_label.text = "FIRST SETUP"
 	_title_label.add_theme_font_override("font", DeskTheme.FONT_MEDIUM)
 	_title_label.add_theme_font_size_override("font_size", 34)
 	_title_label.add_theme_color_override("font_color", Color(0.96, 0.96, 0.98))
-	title_box.add_child(_title_label)
-	_title_sub_label = Label.new()
-	_title_sub_label.text = "Done once, on your PC, before you play."
-	title_box.add_child(_title_sub_label)
-	_title_pointer_label = Label.new()
-	_title_pointer_label.text = "Day-to-day settings live in the headset - the IN-VR SETUP panel in the room."
-	_title_pointer_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_title_pointer_label.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
-	title_box.add_child(_title_pointer_label)
+	_title_box.add_child(_title_label)
 	var intro: Label = Label.new()
 	intro.text = "Point LaunchPin at your VPX executable and your table folder(s). The headset room is for playing, not setup."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -147,6 +206,14 @@ func _build_ui() -> void:
 
 	_exe_edit = _add_path_row(vbox, "VPX executable", "Browse...", "exe")
 	_db_edit = _add_path_row(vbox, "VPS database (vpsdb.json, optional)", "Browse...", "db")
+	# DESKEDIT: say what the thing IS - a first-timer is
+	# otherwise asked to point at a file he has never heard
+	# of (Chris's wording, FINAL).
+	_db_note = Label.new()
+	_db_note.text = "The community catalog of VPX tables — names, makers, cover art. LaunchPin carries a copy and can download a fresh one below; this field is only for using your own."
+	_db_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_db_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	vbox.add_child(_db_note)
 	var dl_row: HBoxContainer = HBoxContainer.new()
 	dl_row.add_theme_constant_override("separation", 8)
 	vbox.add_child(dl_row)
@@ -165,12 +232,33 @@ func _build_ui() -> void:
 	add_child(_downloader)
 	_downloader.progress.connect(func(text: String) -> void: _dl_label.text = text)
 	_downloader.finished.connect(_on_download_finished)
-	_args_edit = _add_field(vbox, "Launch arguments template ({table} is the table file; quotes group arguments)")
+	# DESKEDIT: the Launch arguments template is buried
+	# under an Advanced fold standing where the field stood
+	# - a technical field a first-timer should not have to
+	# wonder about. The field itself is untouched (same
+	# config key, same collect/save); only Launch Arguments
+	# goes under the fold, nothing else is swept in.
+	_advanced_fold = _make_fold(vbox, "Advanced")
+	_args_edit = _add_field(_advanced_fold.content, "Launch arguments template ({table} is the table file; quotes group arguments)")
+	var args_note: Label = Label.new()
+	args_note.text = "The command line VPX is started with. The default starts the table you picked — change it only if your VPX setup needs special switches."
+	args_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	args_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	_advanced_fold.content.add_child(args_note)
 	_herding_check = CheckBox.new()
-	_herding_check.text = "Focus herding - keep the game window in front during play (uncheck if it ever fights you)"
+	# DESKEDIT: the short label, with the explanation as a
+	# sub-line under it (Chris's wording, FINAL) - the old
+	# one-string label named a mechanism a first-timer
+	# could not be expected to know.
+	_herding_check.text = "Focus herding"
 	_herding_check.tooltip_text = "During the launch settle and during play, the watchdog returns foreground focus to the VPX window when something steals it. It never moves or resizes windows."
 	_herding_check.toggled.connect(func(_on: bool) -> void: _apply_session_settings())
 	vbox.add_child(_herding_check)
+	_herding_note = Label.new()
+	_herding_note.text = "While you play, LaunchPin keeps the game's window in front, so nothing else on your PC can pop over it and break the view in the headset. It's on because a window stealing the game mid-play is the common failure — turn it off only if it fights another program on your machine."
+	_herding_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_herding_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	vbox.add_child(_herding_note)
 
 	# The WoVP section (the Tournament Room round): his
 	# World of Virtual Pinball API key - self-service in his
@@ -440,6 +528,19 @@ func _build_ui() -> void:
 	_stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_stats_label.text = "Not scanned yet."
 	vbox.add_child(_stats_label)
+
+	# DESKEDIT: the scan summary's diagnostics live in a
+	# Scan details fold under the stats area - the standing
+	# area carries the answers (headline + the plain
+	# database line); the workshop numbers wait in the fold
+	# for whoever goes looking. The fold stands only when a
+	# scan's details exist (no empty furniture before the
+	# first scan) and starts collapsed like every fold.
+	_details_fold = _make_fold(vbox, "Scan details")
+	_details_label = Label.new()
+	_details_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_details_fold.content.add_child(_details_label)
+	_details_fold.root.visible = false
 
 	var b2s_row: HBoxContainer = HBoxContainer.new()
 	b2s_row.add_theme_constant_override("separation", 8)
@@ -1002,19 +1103,44 @@ func show_message(text: String) -> void:
 
 ## Live progress text while a scan runs (driven by Main's poll loop).
 ## Also used by the configured-boot route, where the scan starts
-## before the user touches anything.
+## before the user touches anything. A running scan supersedes
+## the last scan's folded details, so the fold clears with the
+## standing text.
 func set_scan_progress(text: String) -> void:
 	_stats_label.text = text
 	_scan_button.disabled = true
 	_enter_button.disabled = true
+	_details_label.text = ""
+	_details_fold.root.visible = false
+	_details_fold.set_expanded(false)
 
 
 ## Final summary when a scan lands; re-arms the form.
-func apply_scan_summary(summary: String) -> void:
+## DESKEDIT: two-part - the standing answers go to the stats
+## area; the diagnostics go to the Scan details fold, which
+## stands iff the scan produced any. Every caller passes
+## both parts (Main's two builders), so the fold never holds
+## a previous scan's numbers under a new summary.
+func apply_scan_summary(summary: String, details: String) -> void:
 	_stats_label.text = summary
+	_details_label.text = details
+	_details_fold.root.visible = details != ""
 	_scanned = summary != ""
 	_enter_button.disabled = not _scanned
 	_scan_button.disabled = false
+
+
+## Smoke census of the DESKEDIT folds and texts.
+func deskedit_census() -> Dictionary:
+	return {
+		"advanced_expanded": _advanced_fold != null and _advanced_fold.is_expanded(),
+		"details_standing": _details_fold != null and _details_fold.root.visible,
+		"details_expanded": _details_fold != null and _details_fold.is_expanded(),
+		"details_text": _details_label.text if _details_label != null else "",
+		"args_in_advanced": _args_edit != null and _advanced_fold != null and _advanced_fold.content.is_ancestor_of(_args_edit),
+		"db_note": _db_note.text if _db_note != null else "",
+		"herding_note": _herding_note.text if _herding_note != null else "",
+	}
 
 
 ## The missing-backglass count from the scan that just landed
