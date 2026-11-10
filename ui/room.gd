@@ -3417,6 +3417,34 @@ func page_count() -> int:
 	return int(ceil(float(_visible_games.size()) / float(PAGE_SIZE)))
 
 
+## SNAPPY: the sort comparators' string work, memoized. The
+## shipped comparators recomputed the sort title, the
+## lowercase title, and the lowercase maker/designer on EVERY
+## comparison (~2 x n log n string builds per sort - the
+## SNAPPY micro-bench measured the name sort at ~5.9 ms for
+## 360 games on the harness box). Every one of those strings
+## is a pure function of an immutable title/maker string, so
+## each is computed once per room and read back. The
+## comparisons themselves - and therefore the wall's standing
+## order, ties included - are byte-identical to the shipped
+## comparators; only the recomputation is gone. (The keyed-
+## sort alternative was measured faster still and REJECTED:
+## on the real VPS db it reorders 165 full ties the shipped
+## comparator resolves its own way - a behaviour change in a
+## frozen round.)
+var _title_key_cache: Dictionary = {} ## title -> sort key
+var _lower_cache: Dictionary = {} ## string -> its lowercase
+
+
+func _lower_of(s: String) -> String:
+	var hit: Variant = _lower_cache.get(s)
+	if hit is String:
+		return hit as String
+	var lowered: String = s.to_lower()
+	_lower_cache[s] = lowered
+	return lowered
+
+
 ## The wall's title key: the sort title (a leading "The "
 ## dropped - LetterIndex), lowercased. Title sort files The
 ## Addams Family under A, which is what makes the alphabet
@@ -3425,7 +3453,12 @@ func page_count() -> int:
 ## games actually start. Every other sort tiebreaks on the
 ## same key, so "the title the wall sorts by" is one notion.
 func _title_key(g: GameEntry) -> String:
-	return LetterIndex.sort_title(g.title).to_lower()
+	var hit: Variant = _title_key_cache.get(g.title)
+	if hit is String:
+		return hit as String
+	var key: String = LetterIndex.sort_title(g.title).to_lower()
+	_title_key_cache[g.title] = key
+	return key
 
 
 func _title_less(a: GameEntry, b: GameEntry) -> bool:
@@ -3433,7 +3466,7 @@ func _title_less(a: GameEntry, b: GameEntry) -> bool:
 	var kb: String = _title_key(b)
 	if ka != kb:
 		return ka < kb
-	return a.title.to_lower() < b.title.to_lower()
+	return _lower_of(a.title) < _lower_of(b.title)
 
 
 func _sort_by_name() -> void:
@@ -3466,13 +3499,13 @@ func _sort_visible() -> void:
 				return _title_less(a, b))
 		"manufacturer":
 			_visible_games.sort_custom(func(a: GameEntry, b: GameEntry) -> bool:
-				if a.manufacturer.to_lower() != b.manufacturer.to_lower():
-					return a.manufacturer.to_lower() < b.manufacturer.to_lower()
+				if _lower_of(a.manufacturer) != _lower_of(b.manufacturer):
+					return _lower_of(a.manufacturer) < _lower_of(b.manufacturer)
 				return _title_less(a, b))
 		"designer":
 			_visible_games.sort_custom(func(a: GameEntry, b: GameEntry) -> bool:
-				var ad: String = a.designers[0].to_lower() if not a.designers.is_empty() else "zzzz"
-				var bd: String = b.designers[0].to_lower() if not b.designers.is_empty() else "zzzz"
+				var ad: String = _lower_of(a.designers[0]) if not a.designers.is_empty() else "zzzz"
+				var bd: String = _lower_of(b.designers[0]) if not b.designers.is_empty() else "zzzz"
 				if ad != bd:
 					return ad < bd
 				return _title_less(a, b))

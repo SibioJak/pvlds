@@ -243,7 +243,14 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 	var b: TableBuild = TableBuild.new()
 	b.file_path = path
 	b.file_name = path.get_file()
-	b.date_unix = int(FileAccess.get_modified_time(path))
+	# SNAPPY: the file's mtime is statted ONCE and serves
+	# both fields below (the shipped code statted the same
+	# path twice for the same value - one syscall per file
+	# per scan, gone; the two fields still hold the file's
+	# own mtime, now from a single read, which is also the
+	# more consistent of the two readings).
+	var file_mtime: int = int(FileAccess.get_modified_time(path))
+	b.date_unix = file_mtime
 	# GRADFIX11 (the NEW filter): the file's raw facts,
 	# recorded beside date_unix because _apply_table_file
 	# may overwrite date_unix with the db's release date -
@@ -256,7 +263,7 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 	# indistinguishable from untouched - which is fine,
 	# because a file identical in those facts IS the same
 	# table for the player's purpose.
-	b.file_mtime = int(FileAccess.get_modified_time(path))
+	b.file_mtime = file_mtime
 	b.file_size = 0
 	var size_probe: FileAccess = FileAccess.open(path, FileAccess.READ)
 	if size_probe != null:

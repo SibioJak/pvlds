@@ -502,6 +502,7 @@ var _land_filter_forced: bool = false
 var _land_warm_held: bool = false
 var _land_rewarm_done: bool = false
 var _smoke_jumpbench: bool = false ## --pvlds-smoke-jumpbench: pick-latency timings at field scale (360-game fixture library)
+var _smoke_snappybench: bool = false ## --pvlds-smoke-snappybench: the SNAPPY round's whole-journey bench (idle frame cost, presses, hold census, flip/detail, tournie + REFRESH against the stub, submit panel over seeded shots, rescan, residency census)
 var _smoke_facecache: bool = false ## --pvlds-smoke-facecache: FACECACHE round - fast stick-tap chains across the full shelf TWICE at field cadence (~320 ms taps), sampling the DRAWN panes mid-chain; pass 1 may only miss never-rendered games with a first render in flight, pass 2 must never miss a cache-resident game and must serve re-entries as swaps, not renders. A favourite round-trip on the focused card sits between the passes. Under PVLDS_OPT_NC=nocache the room's cache never serves and the pass-2 census + counters legs fail by name
 var _smoke_compose: bool = false ## --pvlds-smoke-compose: COMPOSE-AHEAD round - boot on the landing fixture, print the render profile (TextureFactory probe split + residency + cache account), rest until the ahead span stands composed, single-step into it (the stepped-into column must arrive dressed), then tap-chain the full shelf at field cadence sampling every entered column's dress-at-arrival and dress latencies, chain back sampling for blank-after-dressed, and judge the landing census + the cache account (no eviction-forced re-renders on a shelf the raised cap covers). Under PVLDS_COMPOSE_NC=noahead the room never composes ahead and the rest/step/chain arrival legs fail by name
 var _smoke_identity: bool = false ## --pvlds-smoke-identity: IDENTITY round - seats each game of the wart's named set (the manifest at PVLDS_IDENTITY_MANIFEST) in the real room and judges it standing there: the recorded shot is the expected one (build-exact or inherited, donor build named), the face on the card is that shot's cache path, and the drawn pane is not black and tracks the source shot's luminance. A full-viewport grab per game lands in PVLDS_GRAB_DIR
@@ -604,6 +605,26 @@ var _jumpbench_label: String = ""
 var _jumpbench_after: int = -1 ## the phase entered when the in-flight measurement settles
 var _jumpbench_failures: int = 0
 var _jumpbench_boot_msec: int = 0
+var _snappy_phase: int = 0
+var _snappy_wait: int = 0
+var _snappy_t0: int = 0
+var _snappy_frames: int = 0
+var _snappy_label: String = ""
+var _snappy_after: int = -1 ## the phase entered when the in-flight measurement settles
+var _snappy_settle_kind: int = 0 ## 0 wall | 1 fetch seq | 2 flip open | 3 flip closed | 4 detail open | 5 detail closed | 6 panel open | 7 shot changed | 8 scan done
+var _snappy_seq_mark: int = 0
+var _snappy_path_mark: String = ""
+var _snappy_scan_t0: int = 0
+var _snappy_scan_ms: int = -1
+var _snappy_failures: int = 0
+var _snappy_boot_msec: int = 0
+var _snappy_census_left: int = 0 ## frames remaining in the running census (idle / hold)
+var _snappy_census_hold: bool = false ## the running census is the sustained hold (stick fed), not idle
+var _snappy_census_after: int = 0
+var _snappy_census_label: String = ""
+var _snappy_last_frame_usec: int = 0
+var _snappy_frame_deltas: Array[int] = [] ## per-frame wall deltas (ms, float kept as usec/1000 later)
+var _snappy_proc_samples: Array[float] = [] ## Performance.TIME_PROCESS per frame (seconds)
 var _seated_cam: bool = false ## --pvlds-seated-cam: shots/nav run from a seated eye height
 var _smoke_lockout: bool = false ## --pvlds-smoke-lockout: attack the load wait's input lockout mid-flight
 var _lockout_smoke_pending: bool = false ## a launch fired by the lockout smoke is in its wait; _settle_launch prints its verdict
@@ -874,6 +895,9 @@ func _ready() -> void:
 	if user_args.has("--pvlds-smoke-jumpbench"):
 		_smoke_jumpbench = true
 		_jumpbench_boot_msec = Time.get_ticks_msec()
+	if user_args.has("--pvlds-smoke-snappybench"):
+		_smoke_snappybench = true
+		_snappy_boot_msec = Time.get_ticks_msec()
 	# The focus-fix round's negative-control seam (harness
 	# env): "visual" starves the strip quads of visual-state
 	# refreshes (fault 1), "pager" drops the page-travel focus
@@ -1155,7 +1179,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_submitnav or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_loading or _smoke_scoremark or _smoke_pinemhi2 or _smoke_starfield) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _smoke_snappybench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_submitnav or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_loading or _smoke_scoremark or _smoke_pinemhi2 or _smoke_starfield) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1414,6 +1438,8 @@ func _process(_delta: float) -> void:
 		_drive_phantom_smoke()
 	if _smoke_jumpbench:
 		_drive_jumpbench_smoke()
+	if _smoke_snappybench:
+		_drive_snappybench_smoke()
 	if _smoke_quitwarm:
 		_drive_quitwarm_smoke()
 	if _art_bench:
@@ -12399,6 +12425,367 @@ func _finish_jumpbench_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS JUMPBENCH: FAILED (%d)" % _jumpbench_failures)
+		get_tree().quit(1)
+
+
+# -------------------------------------------------- snappy bench
+
+## --pvlds-smoke-snappybench: the SNAPPY round's bench (2026-11-09,
+## Chris: "tighten what you can, make it as snappy as possible" -
+## measure first, optimize what is proven hot, freeze behaviour).
+## The jump bench's field-scale fixture and press-to-settled-wall
+## semantics, widened to the whole journey the brief names: the
+## standing idle frame cost (Performance.TIME_PROCESS + the frame
+## delta census) in both rooms, filter and sort presses, the
+## letter picks and the page turn, a sustained hold's frame census,
+## the card flip out and back, detail open on a stack card, the
+## Tournament Room's entry and REFRESH round trip against the
+## harness's WoVP stub, the submit panel over a seeded photo set
+## with photo paging, a no-change rescan, and the residency /
+## memory census after the full warm pass. As with the jump
+## bench the NUMBERS are the deliverable (SNAPPY lines) and a
+## journey step that lands wrong fails the boot - a broken bench
+## must never masquerade as data.
+func _drive_snappybench_smoke() -> void:
+	_snappy_record_frame()
+	if _snappy_census_left > 0:
+		_snappy_census_left -= 1
+		if _snappy_census_left == 0:
+			if _snappy_census_hold:
+				_input_feed_stick_x(0.0)
+			_snappy_print_census(_snappy_census_label)
+			_snappy_phase = _snappy_census_after
+		return
+	if _snappy_after >= 0:
+		_snappy_wait += 1
+		_snappy_frames += 1
+		if _snappy_settle_kind == 8 and _snappy_scan_ms < 0 and not _scan_active:
+			_snappy_scan_ms = Time.get_ticks_msec() - _snappy_scan_t0
+		if _snappy_settled():
+			if _snappy_settle_kind == 8:
+				printerr("SNAPPY: %s: scan %d ms, settled %d ms (%d frames)" % [
+					_snappy_label, _snappy_scan_ms, Time.get_ticks_msec() - _snappy_t0, _snappy_frames])
+			else:
+				printerr("SNAPPY: %s: %d ms (%d frames)" % [_snappy_label, Time.get_ticks_msec() - _snappy_t0, _snappy_frames])
+			_snappy_phase = _snappy_after
+			_snappy_after = -1
+			_snappy_wait = 0
+		elif _snappy_wait == 1200 and (_snappy_settle_kind == 2 or _snappy_settle_kind == 3):
+			# Bench diagnostic: a flip leg that will not
+			# settle names the standing flip state once, so
+			# the log says why instead of just ending.
+			printerr("SNAPPY DIAG: '%s' unsettled at 1200 frames: flip=%s focused_is_panel=%s" % [
+				_snappy_label, str(_room.flip_state()) if _room != null else "no room",
+				str(_room != null and _room._focused != null and _room._panels.has(_room._focused))])
+		elif _snappy_wait > 3600:
+			_snappy_fail("the measurement '%s' never settled" % _snappy_label)
+			_finish_snappybench_smoke()
+		return
+	match _snappy_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready and not _scan_active \
+					and (_art_warmer == null or _art_warmer.is_idle()):
+				var games: int = _scanner.games.size() if _scanner != null else -1
+				printerr("SNAPPY: library games=%d files=%d warm_drain=%dms boot_settle=%dms" % [
+					games, _scanner.total_files if _scanner != null else -1,
+					_art_warmer.last_pass_msec if _art_warmer != null else -1,
+					Time.get_ticks_msec() - _snappy_boot_msec])
+				if games < 330 or games > 390:
+					_snappy_fail("the bench library holds %d games, not field scale (~360)" % games)
+					_finish_snappybench_smoke()
+					return
+				# Bench diagnostic seam (PVLDS_SNAPPY_START):
+				# begin the journey mid-way - a leg under
+				# investigation can be re-run without the
+				# whole road in front of it. The full run
+				# (env unset) is the bench of record.
+				var start_at: int = int(OS.get_environment("PVLDS_SNAPPY_START"))
+				if start_at > 1:
+					printerr("SNAPPY: starting at phase %d (diagnostic seam)" % start_at)
+					_snappy_phase = start_at
+				else:
+					_snappy_begin_census("idle library", 360, false, 2)
+			else:
+				_snappy_wait += 1
+				if _snappy_wait > 21600:
+					_snappy_fail("the bench room never settled (scan/warm)")
+					_finish_snappybench_smoke()
+		2:
+			_snappy_measure("filter ALL (bench setup)", 0, Callable(self, "_jumpbench_press_all"), 3)
+		3:
+			_snappy_measure("pick S (cold page)", 0, Callable(self, "_jumpbench_press_s"), 4)
+		4:
+			_snappy_measure("pick A (boot page, warm)", 0, Callable(self, "_jumpbench_press_a"), 5)
+		5:
+			_snappy_measure("pick S (warm page)", 0, Callable(self, "_jumpbench_press_s"), 6)
+		6:
+			_snappy_measure("page turn NEXT", 0, Callable(self, "_jumpbench_press_next"), 7)
+		7:
+			_snappy_measure("sort press", 0, Callable(self, "_snappy_press_sort"), 8)
+		8:
+			# Seat focus on the wall first (the sort press
+			# left it on the rail's SORT stop, its standing
+			# landing): the census must walk the WALL - drum
+			# swinging, faces streaming - not the rail.
+			if _room._centre_index >= 0 and _room._centre_index < _room._panels.size():
+				_room._set_focused(_room._panels[_room._centre_index])
+			_input_feed_stick_x(1.0)
+			_snappy_begin_census("hold right (travel census)", 300, true, 9)
+		9:
+			# Park before the flip: the hold census leaves
+			# the drum gliding, and a flip pressed onto a
+			# moving wall is shut by the room's own law
+			# (centre leaves the flipped card). The leg
+			# waits for a truly parked drum, and the wait
+			# is itself a row (travel settle time).
+			_snappy_measure("wall parks after hold travel", 10, Callable(self, "_snappy_press_nothing"), 10)
+		10:
+			_snappy_measure("flip Y (card to back)", 2, Callable(self, "_snappy_press_flip"), 11)
+		11:
+			_snappy_measure("flip Y (back to face)", 3, Callable(self, "_snappy_press_flip"), 12)
+		12:
+			_snappy_measure("detail open", 4, Callable(self, "_snappy_press_detail"), 13)
+		13:
+			_snappy_measure("detail close", 5, Callable(self, "_snappy_press_detail_close"), 14)
+		14:
+			_snappy_measure("tournie entry (boards standing)", 1, Callable(self, "_snappy_press_tournament"), 15)
+		15:
+			_snappy_seq_mark = _wovp_fetch_seq
+			_snappy_measure("tournie REFRESH round trip", 9, Callable(self, "_snappy_press_refresh"), 16)
+		16:
+			_snappy_begin_census("idle tournie", 240, false, 17)
+		17:
+			_snappy_measure("submit panel open (seeded shots)", 6, Callable(self, "_snappy_press_submit"), 18)
+		18:
+			_snappy_path_mark = _room._submit_selected_path
+			_snappy_measure("submit photo page (stick step)", 7, Callable(self, "_snappy_press_shot_step"), 19)
+		19:
+			_room.hide_submit_panel()
+			_snappy_print_memory()
+			_snappy_phase = 20
+		20:
+			_snappy_scan_t0 = Time.get_ticks_msec()
+			_snappy_scan_ms = -1
+			_snappy_measure("rescan (no-change)", 8, Callable(self, "_snappy_press_rescan"), 21)
+		21:
+			_finish_snappybench_smoke()
+
+
+func _snappy_settled() -> bool:
+	match _snappy_settle_kind:
+		0:
+			return _room != null and _room.wall_ready and not _room.page_slide_active()
+		1:
+			# Entry shows the standing boards (the fetch
+			# is REFRESH's business, leg 9): settled when
+			# the Tournament Room stands with its rows up.
+			return _room != null and _room._tournament and _room.wall_ready \
+				and not _room._tournament_rows.is_empty()
+		9:
+			return _room != null and _room._tournament and _room.wall_ready and _wovp_fetch_seq > _snappy_seq_mark
+		10:
+			return _room != null and _room.wall_ready and not _room.page_slide_active() \
+				and not _room._swing_active and _room._step_rest_timer <= 0.0
+		2:
+			if _room == null:
+				return false
+			var st: Dictionary = _room.flip_state()
+			return bool(st.get("active", false)) and float(st.get("t", 0.0)) >= 0.999
+		3:
+			if _room == null:
+				return false
+			var st2: Dictionary = _room.flip_state()
+			return not bool(st2.get("active", true))
+		4:
+			return _room != null and _room._mode == "detail"
+		5:
+			return _room != null and _room._mode == "wall"
+		6:
+			return _room != null and _room._submit_panel_up and _snappy_frames >= 10
+		7:
+			return _room != null and _room._submit_panel_up and _room._submit_selected_path != "" \
+				and _room._submit_selected_path != _snappy_path_mark
+		8:
+			return not _scan_active and _room != null and _room.wall_ready
+	return false
+
+
+func _snappy_measure(label: String, kind: int, press: Callable, after: int) -> void:
+	_snappy_label = label
+	_snappy_settle_kind = kind
+	_snappy_frames = 0
+	_snappy_wait = 0
+	_snappy_t0 = Time.get_ticks_msec()
+	press.call()
+	_snappy_after = after
+
+
+func _snappy_press_sort() -> void:
+	var before: String = _room._sort
+	_room._handle_rail("sort")
+	if _room._sort == before:
+		_snappy_fail("the sort press never cycled the sort")
+
+
+func _snappy_press_nothing() -> void:
+	pass # a measured wait (the park leg): no press at all
+
+
+func _snappy_press_flip() -> void:
+	# The flip's subject is the focused CARD: if focus is
+	# standing on a rail/strip stop (the sort press's landing),
+	# seat it on the centre card first - the player's own DOWN
+	# step, taken by the driver as setup. The flip itself
+	# rides the real Y route.
+	if _room._focused == null or not _room._panels.has(_room._focused):
+		if _room._centre_index >= 0 and _room._centre_index < _room._panels.size():
+			_room._set_focused(_room._panels[_room._centre_index])
+	if _room._focused == null or not _room._panels.has(_room._focused):
+		_snappy_fail("the flip press found no focused card")
+		return
+	_room._info_focused_card()
+
+
+func _snappy_press_detail() -> void:
+	# A stack card (builds > 1) when the wall holds one; the
+	# bench fixture mints one file per game, so its wall never
+	# does - the leg then opens the centre card and says so.
+	# The brief's stack-card case rides the same detail
+	# machinery; the fixture's shape is the only difference.
+	for i: int in range(_room._visible_games.size()):
+		if _room._visible_games[i].builds.size() > 1 and i < _room._panels.size():
+			_room._set_focused(_room._panels[i])
+			_room._open_detail(_room._visible_games[i])
+			return
+	if _room._centre_index >= 0 and _room._centre_index < _room._panels.size() \
+			and _room._centre_index < _room._visible_games.size():
+		printerr("SNAPPY NOTE: the fixture wall holds no stack card - detail opens on the centre card")
+		_room._set_focused(_room._panels[_room._centre_index])
+		_room._open_detail(_room._visible_games[_room._centre_index])
+		return
+	_snappy_fail("no card stands on the bench wall for the detail leg")
+
+
+func _snappy_press_detail_close() -> void:
+	if _room._detail != null:
+		_room._detail.handle_escape()
+
+
+func _snappy_press_tournament() -> void:
+	_room._handle_rail("tournament")
+	if not _room._tournament:
+		_snappy_fail("the tournament press never entered the Tournament Room")
+
+
+func _snappy_press_refresh() -> void:
+	_room._handle_rail("wovp_refresh")
+
+
+func _snappy_press_submit() -> void:
+	for i: int in range(_room._tournament_rows.size()):
+		var row: Dictionary = _room._tournament_rows[i] as Dictionary
+		if str(row.get("kind", "")) == "challenge" and i < _room._panels.size():
+			_room._set_focused(_room._panels[i])
+			_room._info_focused_card() ## Y in the Tournament Room: the panel's own route
+			return
+	_snappy_fail("no challenge row stands in the bench Tournament Room")
+
+
+func _snappy_press_shot_step() -> void:
+	_input_feed_stick_x(1.0)
+	# One step's worth of feed, then release: the panel's
+	# own poll cadence turns the held frames into one step.
+	await get_tree().create_timer(0.35).timeout
+	_input_feed_stick_x(0.0)
+
+
+func _snappy_press_rescan() -> void:
+	_on_setup_panel_scan_requested()
+	if not _scan_active:
+		_snappy_fail("the rescan press never started a scan")
+
+
+## The frame census sampler: one entry per driver call (the
+## product's own _process cadence) - the wall delta between
+## calls and the engine's own account of the last frame's
+## _process time (Performance.TIME_PROCESS, seconds).
+func _snappy_record_frame() -> void:
+	var now: int = Time.get_ticks_usec()
+	if _snappy_last_frame_usec > 0 and _snappy_census_left > 0:
+		_snappy_frame_deltas.append(now - _snappy_last_frame_usec)
+		_snappy_proc_samples.append(Performance.get_monitor(Performance.TIME_PROCESS))
+	_snappy_last_frame_usec = now
+
+
+func _snappy_begin_census(label: String, frames: int, hold: bool, after: int) -> void:
+	_snappy_frame_deltas.clear()
+	_snappy_proc_samples.clear()
+	_snappy_census_label = label
+	_snappy_census_hold = hold
+	_snappy_census_after = after
+	_snappy_census_left = frames
+	_snappy_last_frame_usec = Time.get_ticks_usec()
+
+
+func _snappy_print_census(label: String) -> void:
+	var n: int = _snappy_frame_deltas.size()
+	if n == 0:
+		_snappy_fail("the census '%s' recorded no frames" % label)
+		return
+	var sorted_d: Array[int] = _snappy_frame_deltas.duplicate()
+	sorted_d.sort()
+	var sorted_p: Array[float] = _snappy_proc_samples.duplicate()
+	sorted_p.sort()
+	var sum_p: float = 0.0
+	for v: float in _snappy_proc_samples:
+		sum_p += v
+	var over25: int = 0
+	var over50: int = 0
+	for d: int in _snappy_frame_deltas:
+		if d > 25000:
+			over25 += 1
+		if d > 50000:
+			over50 += 1
+	printerr("SNAPPY CENSUS: %s: frames=%d frame_worst=%.1fms frame_p95=%.1fms over25=%d over50=%d proc_mean=%.0fus proc_p95=%.0fus proc_max=%.0fus" % [
+		label, n,
+		float(sorted_d[sorted_d.size() - 1]) / 1000.0,
+		float(sorted_d[int(float(sorted_d.size()) * 0.95)]) / 1000.0,
+		over25, over50,
+		sum_p / float(n) * 1000000.0,
+		sorted_p[int(float(sorted_p.size()) * 0.95)] * 1000000.0,
+		sorted_p[sorted_p.size() - 1] * 1000000.0])
+
+
+func _snappy_print_memory() -> void:
+	var res: Dictionary = _room.residency_stats() if _room != null else {}
+	printerr("SNAPPY MEMORY: static_mb=%.1f nodes=%d objects=%d faces=%d face_mb=%.1f evictions=%d" % [
+		Performance.get_monitor(Performance.MEMORY_STATIC) / 1048576.0,
+		int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)),
+		int(Performance.get_monitor(Performance.OBJECT_COUNT)),
+		int(res.get("resident_faces", 0)), float(res.get("resident_bytes", 0)) / 1048576.0,
+		int(res.get("evicted_total", 0))])
+	var dec: Dictionary = TextureFactory.art_decode_cache_stats()
+	printerr("SNAPPY DECODECACHE: count=%d mb=%.1f" % [int(dec.get("count", 0)), float(dec.get("bytes", 0)) / 1048576.0])
+	if TextureFactory.probe_enabled:
+		var ops: Array = TextureFactory.probe_stats.keys()
+		ops.sort()
+		for op: Variant in ops:
+			var row: Array = TextureFactory.probe_stats[op] as Array
+			printerr("SNAPPY PROBE: %s count=%d total_ms=%.1f max_ms=%.1f" % [
+				str(op), int(row[0]), float(row[1]) / 1000.0, float(row[2]) / 1000.0])
+
+
+func _snappy_fail(label: String) -> void:
+	_snappy_failures += 1
+	printerr("  FAIL - snappybench: ", label)
+
+
+func _finish_snappybench_smoke() -> void:
+	if _snappy_failures == 0:
+		print("PVLDS SNAPPY: DONE")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS SNAPPY: FAILED (%d)" % _snappy_failures)
 		get_tree().quit(1)
 
 
