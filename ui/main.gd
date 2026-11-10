@@ -1214,6 +1214,11 @@ func _ready() -> void:
 	# it at boot is what popped the "OpenXR was requested but failed
 	# to start" alert on flat launches with no runtime up (M2 papercut
 	# fix). XR initializes lazily in _enter_room via _ensure_xr().
+	# DESKHEAD (item 5): size the flat window from the screen
+	# it launched on - here, before the first surface stands,
+	# while no XR session can exist yet (the apply guards the
+	# rest).
+	_apply_desktop_window_size()
 	_factory = TextureFactory.new()
 	add_child(_factory)
 	_config = PvldsConfig.new()
@@ -1330,6 +1335,70 @@ func _ready() -> void:
 			_show_desk()
 	else:
 		_show_desk()
+
+
+## ------------------------------------------------ window size
+
+## DESKHEAD (item 5): the desktop window opens at screen
+## scale, not at the project's fixed 1280x720 stamp - on a
+## big monitor that stamp is a postage stamp (Chris's field
+## report). The pure half: the rect the window should wear
+## for a primary display with the given usable rect - about
+## 85% of it per dimension, capped at the usable size,
+## centred in it. An unusable rect (the display query
+## failed) answers the fallback: the standing 1280x720 at
+## the position ZERO claim, which the caller reads as "size
+## only - the OS keeps its placement, as today". Pinned by
+## the deskedit census on synthetic rects (large / offset /
+## small / failure).
+const DESKTOP_WINDOW_FALLBACK_SIZE: Vector2i = Vector2i(1280, 720)
+const DESKTOP_WINDOW_FRACTION: float = 0.85
+
+
+static func desktop_window_rect(usable: Rect2i) -> Rect2i:
+	if usable.size.x <= 0 or usable.size.y <= 0:
+		return Rect2i(Vector2i.ZERO, DESKTOP_WINDOW_FALLBACK_SIZE)
+	var size: Vector2i = Vector2i(
+		mini(usable.size.x, int(round(usable.size.x * DESKTOP_WINDOW_FRACTION))),
+		mini(usable.size.y, int(round(usable.size.y * DESKTOP_WINDOW_FRACTION))))
+	var pos: Vector2i = usable.position + Vector2i(
+		(usable.size.x - size.x) / 2, (usable.size.y - size.y) / 2)
+	return Rect2i(pos, size)
+
+
+## Applies desktop_window_rect to the app's window, once, at
+## boot. Flat boots only, by construction and by guard:
+## - Test boots are not user launches: any --pvlds- user arg
+##   (smokes, shots, the core test) skips. The harness
+##   display (1024x768) is smaller than the project window
+##   itself, and the rounds' grabs and legs are pinned at
+##   the standing 1280x720.
+## - Never when an XR session is starting or running: the
+##   monitor mirror's size is not the app's business
+##   mid-headset. _ready runs before any XR exists (it
+##   initializes lazily in _enter_room), so the reads below
+##   are belt and braces over the session-state check.
+## No persistence: every desktop boot applies the same
+## screen-relative default; the user can still drag-resize
+## for the session, as today.
+func _apply_desktop_window_size() -> void:
+	for arg: String in OS.get_cmdline_user_args():
+		if arg.begins_with("--pvlds-"):
+			return
+	if get_viewport().use_xr:
+		return
+	var xri: XRInterface = XRServer.find_interface("OpenXR")
+	if xri != null and xri.is_initialized() and xri.has_method("get_session_state"):
+		# OpenXRInterface.SessionState: READY=2; READY and
+		# beyond is a session starting or running.
+		if int(xri.call("get_session_state")) >= 2:
+			return
+	var usable: Rect2i = DisplayServer.screen_get_usable_rect(DisplayServer.get_primary_screen())
+	var rect: Rect2i = desktop_window_rect(usable)
+	var win: Window = get_window()
+	win.size = rect.size
+	if usable.size.x > 0 and usable.size.y > 0:
+		win.position = rect.position
 
 
 ## Lazy XR init: called only when the room is entered. If no runtime
@@ -1839,7 +1908,7 @@ func _wovp_key_hash() -> int:
 ## plain words - whose it is once a test has resolved it.
 func _wovp_health_line() -> String:
 	if _config == null or _config.wovp_api_key == "":
-		return "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in FIRST SETUP."
+		return "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in Initial Setup."
 	match _wovp_identity_state:
 		"ok":
 			return "WoVP: key saved - it belongs to %s." % _wovp_user_name
@@ -5397,7 +5466,7 @@ func _drive_shot_panelfit() -> void:
 					"matched": 252, "game_matched": 110,
 					"db_ok": true, "db_kind": "sample",
 					"missing": 82, "unplaced": 1,
-					"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in FIRST SETUP.",
+					"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in Initial Setup.",
 					"pinemhi_line": "PINemHi: on, but no PINemHi folder found - set the folder to show your personal bests on tournament boards.",
 					"ipdb_line": "IPDB data: 340 of 344 games",
 					"shots_line": "Screenshots folder: C:\\Users\\cfond\\Pictures\\Virtual Desktop - 128 screenshots on file, newest first in the room.",
@@ -17137,7 +17206,7 @@ func _submit_finish_smoke() -> void:
 ## must ignore.
 
 const RS_ADDAMS_ID: String = "fixture-ch-season-main-w3"
-const RS_UNSET_WORDS: String = "No screenshots folder set yet - set it in FIRST SETUP (Screenshots section); the room reads photos from there."
+const RS_UNSET_WORDS: String = "No screenshots folder set yet - set it in Initial Setup (Screenshots section); the room reads photos from there."
 const RS_EMPTY_WORDS: String = "No screenshots in that folder yet - take the shot in the headset first; it lands there."
 const RS_NOKEY_WORDS: String = "No WoVP key saved - submissions use the same key as the boards. Add it in SETUP."
 
@@ -23481,7 +23550,7 @@ func _finish_desk_smoke() -> void:
 ##              scan lands, the face drops, the room stands;
 ##              SETUP opened from the room (the very _show_desk
 ##              door the room's signal connects to) then stands
-##              the desk in its full FIRST SETUP dress. DESKEXIT:
+##              the desk in its full Initial Setup dress. DESKEXIT:
 ##              the desk opens knowing the boot scan stands -
 ##              Enter the Room armed, the standing summary and
 ##              health lines on it - and pressing Enter through
@@ -23494,7 +23563,7 @@ func _finish_desk_smoke() -> void:
 ##              ends standing in full dress with the scan
 ##              summary applied; the room never stood.
 ##   firstrun - an unconfigured boot: the desk stands in the
-##              full FIRST SETUP dress from the first frame on;
+##              full Initial Setup dress from the first frame on;
 ##              the boot face never appears.
 ## PVLDS_BOOTFACE_GRAB_DIR, when set, receives a rendered grab
 ## of the boot face (boot / sample) or of the stood-upon desk
@@ -23507,8 +23576,8 @@ func _drive_bootface_smoke() -> void:
 					var fdress: Dictionary = _desk.title_dress()
 					_bootface_expect(_boot_face == null,
 						"firstrun: the boot face never appears")
-					_bootface_expect(str(fdress["title"]) == "FIRST SETUP",
-						"firstrun: the title reads FIRST SETUP (got '%s')" % str(fdress["title"]))
+					_bootface_expect(str(fdress["title"]) == "Initial Setup",
+						"firstrun: the title reads Initial Setup (got '%s')" % str(fdress["title"]))
 					_bootface_expect(int(fdress["panel_children"]) == 1,
 						"firstrun: the head is the title alone (DESKEDIT: both sub-lines deleted - nothing names a surface the reader hasn't met)")
 					_bootface_expect(not _desk._scanned,
@@ -23560,8 +23629,8 @@ func _drive_bootface_smoke() -> void:
 					_bootface_expect(_boot_face == null or not _boot_face.visible,
 						"sample: the boot face drops when the auto-enter is cancelled")
 					_bootface_expect(_desk.visible, "sample: the desk ends up standing")
-					_bootface_expect(str(sdress["title"]) == "FIRST SETUP",
-						"sample: the standing desk reads FIRST SETUP (got '%s')" % str(sdress["title"]))
+					_bootface_expect(str(sdress["title"]) == "Initial Setup",
+						"sample: the standing desk reads Initial Setup (got '%s')" % str(sdress["title"]))
 					_bootface_expect(int(sdress["panel_children"]) == 1,
 						"sample: the standing desk's head is the title alone (DESKEDIT)")
 					_bootface_expect(_desk._stats_label.text.contains("SAMPLE DATABASE"),
@@ -23593,8 +23662,8 @@ func _drive_bootface_smoke() -> void:
 				_bootface_expect(not _room.visible,
 					"setup-open: the room hides for the desk (the flat path)")
 				_bootface_expect(_desk.visible, "setup-open: the desk shows")
-				_bootface_expect(str(dress3["title"]) == "FIRST SETUP",
-					"setup-open: the title reads FIRST SETUP (got '%s')" % str(dress3["title"]))
+				_bootface_expect(str(dress3["title"]) == "Initial Setup",
+					"setup-open: the title reads Initial Setup (got '%s')" % str(dress3["title"]))
 				_bootface_expect(int(dress3["panel_children"]) == 1,
 					"setup-open: the head is the title alone (DESKEDIT)")
 				# DESKEXIT: the desk opens knowing the boot
@@ -23960,6 +24029,13 @@ func _finish_setuplook_smoke() -> void:
 ##              for a grab, and a hide + re-show must have
 ##              re-collapsed it (folds start collapsed on
 ##              every desk show).
+## DESKHEAD restated this census to the renamed, shortened
+## desk: the title reads Initial Setup; the intro is pinned
+## as the exact one sentence; the VPS note is pinned whole
+## (it opens with the database's name now); the herding
+## block is pinned as the one line + the green tag; and the
+## window-sizing function is pinned on synthetic usable
+## rects. The run ends on the herding grab.
 ##   desk     - a configured library: SETUP opened from the
 ##              room through the real _show_desk door. The
 ##              standing summary is the short text (headline
@@ -23982,16 +24058,34 @@ func _drive_deskedit_firstrun() -> void:
 			if _desk != null and _desk.visible:
 				var dress: Dictionary = _desk.title_dress()
 				var cen: Dictionary = _desk.deskedit_census()
-				_deskedit_expect(str(dress["title"]) == "FIRST SETUP",
-					"firstrun: the title reads FIRST SETUP")
+				_deskedit_expect(str(dress["title"]) == "Initial Setup",
+					"firstrun: the title reads Initial Setup")
 				_deskedit_expect(int(dress["panel_children"]) == 1,
 					"firstrun: the head panel holds the title alone (both sub-lines deleted)")
-				_deskedit_expect(str(cen["db_note"]).begins_with("The community catalog of VPX tables"),
-					"firstrun: the VPS field carries its explanation line")
+				_deskedit_expect(str(cen["intro"]) == "Point LaunchPin at your VPX executable and your table folder(s).",
+					"firstrun: the intro is the one sentence (got '%s')" % str(cen["intro"]))
+				_deskedit_expect(str(cen["db_note"]) == "The VPS Database is a community catalog of VPX tables — names, makers, cover art. LaunchPin carries a copy and can download a fresh one below; this field is only for using your own.",
+					"firstrun: the VPS line opens with the database's name")
 				_deskedit_expect(_desk._herding_check.text == "Focus herding",
 					"firstrun: the herding label is the short one (got '%s')" % _desk._herding_check.text)
-				_deskedit_expect(str(cen["herding_note"]).begins_with("While you play, LaunchPin keeps the game's window in front"),
-					"firstrun: the herding explanation stands under the checkbox")
+				_deskedit_expect(str(cen["herding_note"]) == "When playing, LaunchPin keeps your game's window in front, so no other programs on your PC will interfere with your VR view.",
+					"firstrun: the herding text is the one line (got '%s')" % str(cen["herding_note"]))
+				_deskedit_expect(str(cen["herding_tag"]) == "— On By Default —",
+					"firstrun: the herding tag stands under the line (got '%s')" % str(cen["herding_tag"]))
+				var tag_col: Color = cen["herding_tag_color"]
+				_deskedit_expect(tag_col.g > tag_col.r + 0.2 and tag_col.g > tag_col.b + 0.2,
+					"firstrun: the herding tag wears a clear green (got %s)" % str(tag_col))
+				# DESKHEAD (item 5): the window-sizing function
+				# on synthetic usable rects - large, taskbar-
+				# offset, small, and the query-failure fallback.
+				_deskedit_expect(desktop_window_rect(Rect2i(0, 0, 2560, 1440)) == Rect2i(192, 108, 2176, 1224),
+					"window size: a 2560x1440 screen gets 85%% centred (got %s)" % str(desktop_window_rect(Rect2i(0, 0, 2560, 1440))))
+				_deskedit_expect(desktop_window_rect(Rect2i(0, 40, 1920, 1040)) == Rect2i(144, 118, 1632, 884),
+					"window size: an offset usable rect centres inside it (got %s)" % str(desktop_window_rect(Rect2i(0, 40, 1920, 1040))))
+				_deskedit_expect(desktop_window_rect(Rect2i(0, 0, 800, 600)) == Rect2i(60, 45, 680, 510),
+					"window size: a small screen scales down by the same rule (got %s)" % str(desktop_window_rect(Rect2i(0, 0, 800, 600))))
+				_deskedit_expect(desktop_window_rect(Rect2i(0, 0, 0, 0)).size == Vector2i(1280, 720),
+					"window size: a failed display query falls back to 1280x720 (got %s)" % str(desktop_window_rect(Rect2i(0, 0, 0, 0))))
 				_deskedit_expect(bool(cen["args_in_advanced"]),
 					"firstrun: the Launch arguments field lives inside the Advanced fold")
 				_deskedit_expect(not bool(cen["advanced_expanded"]),
@@ -24042,6 +24136,16 @@ func _drive_deskedit_firstrun() -> void:
 			if _deskedit_wait >= 3:
 				_deskedit_expect(not _desk._advanced_fold.is_expanded(),
 					"firstrun: a re-shown desk re-collapses its folds")
+				# DESKHEAD: end on the herding grab - the
+				# block scrolled into frame (the one line +
+				# the green tag, nothing more).
+				_deskedit_scroll_to(_desk._herding_check)
+				_deskedit_wait = 0
+				_deskedit_phase = 4
+		4:
+			_deskedit_wait += 1
+			if _deskedit_wait >= 4:
+				_deskedit_grab("deskhead_herding.png")
 				_finish_deskedit_smoke()
 
 

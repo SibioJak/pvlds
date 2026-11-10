@@ -71,7 +71,7 @@ static func list_shots(folder: String, limit: int = 0) -> Array:
 ## the submit panel makes, so every surface agrees.
 static func status_line(cfg: PvldsConfig) -> String:
 	if cfg == null or cfg.screenshots_folder.strip_edges() == "":
-		return "Screenshots folder: not set - set it in FIRST SETUP; the room's score submission reads your photos from there."
+		return "Screenshots folder: not set - set it in Initial Setup; the room's score submission reads your photos from there."
 	var folder: String = cfg.screenshots_folder.strip_edges()
 	var res: Dictionary = scan(folder)
 	if not bool(res.get("exists", false)):
@@ -87,7 +87,7 @@ static func status_line(cfg: PvldsConfig) -> String:
 ## ("ok" names the shelf the thumbs below stand on.)
 static func panel_line(folder: String) -> String:
 	if folder == "":
-		return "No screenshots folder set yet - set it in FIRST SETUP (Screenshots section); the room reads photos from there."
+		return "No screenshots folder set yet - set it in Initial Setup (Screenshots section); the room reads photos from there."
 	var res: Dictionary = scan(folder)
 	if not bool(res.get("exists", false)):
 		return "That screenshots folder is not there right now: %s" % folder

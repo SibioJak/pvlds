@@ -426,7 +426,7 @@ static func letter_spec(label: String, state: String) -> Dictionary:
 ## centered title / sub / body, no band. The caller's message (a
 ## launch failure's reason) rides on top when one is provided.
 static func placard_spec(message: String) -> Dictionary:
-	var body: String = "Finish in FIRST SETUP on your PC, then come back - or go back to the room now with BACK below."
+	var body: String = "Finish in Initial Setup on your PC, then come back - or go back to the room now with BACK below."
 	if message != "":
 		body = message + "\n\n" + body
 	return {
@@ -435,9 +435,11 @@ static func placard_spec(message: String) -> Dictionary:
 		# ENDGAME (Part A): the placard stands in the room FOR
 		# the desk, so it wears the desk's name - FIRST SETUP
 		# (the two setups carry two names; see setup_panel_spec).
-		"title": "FIRST SETUP",
+		# DESKHEAD: the desk is renamed - Initial Setup now,
+		# here and in the body/sub that name it.
+		"title": "Initial Setup",
 		"title_size": 84,
-		"sub": "First Setup is open on your desktop",
+		"sub": "Initial Setup is open on your desktop",
 		"sub_size": 42,
 		"body": body,
 		"body_size": 36,
@@ -502,7 +504,8 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 	# ENDGAME (Part A): the pointer line - the two setups
 	# carry two names, and each surface names where the
 	# other lives. This panel is IN-VR SETUP; paths and
-	# first-time setup are the desk's (FIRST SETUP).
+	# first-time setup are the desk's (Initial Setup since
+	# DESKHEAD). The line itself names no surface - untouched.
 	lines.append("Paths and first-time setup are on your PC - run LaunchPin on the desktop.")
 	return {
 		"kind": "banner",
@@ -531,7 +534,10 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 		# pointer too - it is the one line of the face that
 		# always shows (the body can run long with health
 		# lines and clip; the sub never does).
-		"sub": message if message != "" else "Day-to-day settings, right here in the room. Paths and first-time setup live in FIRST SETUP on your PC.",
+		# DESKHEAD: the standing sub names the desk - the name
+		# follows the rename (Initial Setup); the panel's own
+		# name above does not move.
+		"sub": message if message != "" else "Day-to-day settings, right here in the room. Paths and first-time setup live in Initial Setup on your PC.",
 		"sub_size": 38,
 		"sub_color": STRIP_LABEL_REST,
 		"body": "\n".join(lines),

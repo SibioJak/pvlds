@@ -62,11 +62,17 @@ var _pinemhi_label: Label
 var _shots_edit: LineEdit
 var _shots_label: Label
 var _ipdb_label: Label
-var _title_label: Label ## the title block: "FIRST SETUP"
+var _title_label: Label ## the title block: "Initial Setup" (DESKHEAD: renamed from FIRST SETUP)
 var _title_box: VBoxContainer ## DESKEDIT: the head panel's box - holds the title ALONE (census: title_dress)
 var _advanced_fold: _Fold ## DESKEDIT: the Advanced fold (the Launch arguments template's home)
 var _db_note: Label ## DESKEDIT: the VPS database explanation line under the field
-var _herding_note: Label ## DESKEDIT: the Focus herding explanation line under the checkbox
+var _intro_label: Label ## DESKHEAD: the one-sentence intro under the head (census: deskedit_census)
+var _herding_note: Label ## DESKEDIT: the Focus herding explanation line under the checkbox (DESKHEAD: one line)
+var _herding_tag: Label ## DESKHEAD: the green "- On By Default -" tag under the herding line
+
+## DESKHEAD: the herding tag's green - a clear green against
+## the desk's dark ground, in the note labels' own dress.
+const HERDING_TAG_GREEN: Color = Color(0.4, 0.9, 0.5)
 var _details_fold: _Fold ## DESKEDIT: the Scan details fold (the scan summary's diagnostics)
 var _details_label: Label ## DESKEDIT: the folded diagnostics text inside the Scan details fold
 
@@ -134,7 +140,7 @@ func _reset_folds() -> void:
 
 
 ## Smoke census of the title block (the BOOTFACE legs). The
-## desk wears its full FIRST SETUP dress on every show since
+## desk wears its full Initial Setup dress on every show since
 ## BOOTFACE: the boot pass has its own face now, so the desk
 ## only ever stands when it is stood upon for real (BOOTSHELL's
 ## two-dress machinery is retired). DESKEDIT: the dress is
@@ -186,7 +192,7 @@ func _build_ui() -> void:
 	title_panel.add_child(_title_box)
 	_title_label = Label.new()
 	# ENDGAME (Part A): the two setups carry two names. This
-	# desk is FIRST SETUP - the one-time, important initial
+	# desk is Initial Setup - the one-time, important initial
 	# setup; the room's panel is IN-VR SETUP.
 	# DESKEDIT: the panel holds the title ALONE. Both
 	# sub-lines are gone - "Done once, on your PC, before you
@@ -194,23 +200,31 @@ func _build_ui() -> void:
 	# panel because a first-time user hasn't seen the room
 	# yet and shouldn't be told about surfaces he hasn't met.
 	# The desk goes straight into the work (the intro below).
-	_title_label.text = "FIRST SETUP"
+	# DESKHEAD: the desk is renamed - FIRST SETUP is Initial
+	# Setup now (Chris's wording), here and everywhere the
+	# name stands (the placard, the guidance lines).
+	_title_label.text = "Initial Setup"
 	_title_label.add_theme_font_override("font", DeskTheme.FONT_MEDIUM)
 	_title_label.add_theme_font_size_override("font_size", 34)
 	_title_label.add_theme_color_override("font_color", Color(0.96, 0.96, 0.98))
 	_title_box.add_child(_title_label)
-	var intro: Label = Label.new()
-	intro.text = "Point LaunchPin at your VPX executable and your table folder(s). The headset room is for playing, not setup."
-	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(intro)
+	# DESKHEAD: one sentence - the second ("The headset room
+	# is for playing, not setup.") named a room a first-timer
+	# hasn't seen, the same anxiety DESKEDIT cut from the head.
+	_intro_label = Label.new()
+	_intro_label.text = "Point LaunchPin at your VPX executable and your table folder(s)."
+	_intro_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(_intro_label)
 
 	_exe_edit = _add_path_row(vbox, "VPX executable", "Browse...", "exe")
 	_db_edit = _add_path_row(vbox, "VPS database (vpsdb.json, optional)", "Browse...", "db")
 	# DESKEDIT: say what the thing IS - a first-timer is
 	# otherwise asked to point at a file he has never heard
 	# of (Chris's wording, FINAL).
+	# DESKHEAD: the line opens by NAMING the thing - "The
+	# VPS Database is a community catalog..." (Chris's edit).
 	_db_note = Label.new()
-	_db_note.text = "The community catalog of VPX tables — names, makers, cover art. LaunchPin carries a copy and can download a fresh one below; this field is only for using your own."
+	_db_note.text = "The VPS Database is a community catalog of VPX tables — names, makers, cover art. LaunchPin carries a copy and can download a fresh one below; this field is only for using your own."
 	_db_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_db_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
 	vbox.add_child(_db_note)
@@ -255,10 +269,18 @@ func _build_ui() -> void:
 	_herding_check.toggled.connect(func(_on: bool) -> void: _apply_session_settings())
 	vbox.add_child(_herding_check)
 	_herding_note = Label.new()
-	_herding_note.text = "While you play, LaunchPin keeps the game's window in front, so nothing else on your PC can pop over it and break the view in the headset. It's on because a window stealing the game mid-play is the common failure — turn it off only if it fights another program on your machine."
+	# DESKHEAD: the DESKEDIT paragraph is replaced whole -
+	# one line, then the green tag below, and nothing else
+	# (Chris's wording, FINAL; the why belongs to the manual).
+	_herding_note.text = "When playing, LaunchPin keeps your game's window in front, so no other programs on your PC will interfere with your VR view."
 	_herding_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_herding_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
 	vbox.add_child(_herding_note)
+	_herding_tag = Label.new()
+	_herding_tag.text = "— On By Default —"
+	_herding_tag.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_herding_tag.add_theme_color_override("font_color", HERDING_TAG_GREEN)
+	vbox.add_child(_herding_tag)
 
 	# The WoVP section (the Tournament Room round): his
 	# World of Virtual Pinball API key - self-service in his
@@ -1140,6 +1162,11 @@ func deskedit_census() -> Dictionary:
 		"args_in_advanced": _args_edit != null and _advanced_fold != null and _advanced_fold.content.is_ancestor_of(_args_edit),
 		"db_note": _db_note.text if _db_note != null else "",
 		"herding_note": _herding_note.text if _herding_note != null else "",
+		# DESKHEAD: the intro's exact sentence and the green
+		# tag (its words + the colour it actually wears).
+		"intro": _intro_label.text if _intro_label != null else "",
+		"herding_tag": _herding_tag.text if _herding_tag != null else "",
+		"herding_tag_color": _herding_tag.get_theme_color("font_color") if _herding_tag != null else Color.BLACK,
 	}
 
 
