@@ -893,7 +893,10 @@ static func clear_tex() -> Texture2D:
 ## "visual" starves the strip quads of visual-state refreshes
 ## (fault 1's shape), "pager" drops the page-travel focus
 ## landing (fault 2's shape), "letterland" restores the
-## letter picks' first-card landing (the focus law's shape),
+## 2026-10-27 stay-on-the-slot letter-pick landing (the
+## INTENT round's NC: INTENT narrowed that law to browsing
+## and strip presses, so restoring it whole is INTENT's
+## fault shape),
 ## "striporder" permutes the strip's walk order away from
 ## its drawn order (the strip-order fix's shape),
 ## "greyanchors" computes the strip's bumper anchors over
@@ -1380,7 +1383,7 @@ var _pinemhi2_fetched_at: int = 0 ## unix time the standing weekly boards landed
 var _pinemhi2_live: bool = false ## the standing weekly boards came from a fetch this session (false = the disk cache's)
 var _pinemhi2_fetch_error: String = "" ## the last weekly fetch's failure, in words, when it failed
 var _pinemhi2_player_name: String = "" ## his PINemHi registration name (from his own TOP10_Personal files, via Main) - the weekly boards accent his row by exact match
-var _centre_index: int = 0 ## the shelf index the drum is centred on: the popped card's index in _visible_games (the pop target and the power-on follow it; it is NOT the pad focus - focus may sit on the rail or the strip while the drum stays centred where browsing left it, and a letter pick swings the drum without moving the focus: the focus law)
+var _centre_index: int = 0 ## the shelf index the drum is centred on: the popped card's index in _visible_games (the pop target and the power-on follow it; it is NOT the pad focus - focus may sit on the rail or the strip while the drum stays centred where browsing left it; a letter pick both swings the drum AND lands focus on the centred card: the INTENT law at _jump_to_letter)
 var _columns: int = 1 ## the standing view's column count: ceil(visible / 3 bands)
 var _swing_to: float = 0.0 ## drum yaw the live swing is heading to (the centred column's angle)
 var _swing_duration: float = 0.2 ## the live swing's calibrated length (grows with the column travel; the spring's stiffness derives from it)
@@ -5333,18 +5336,23 @@ func _apply_strip_textures(presence: Dictionary) -> void:
 ## slots are not pickable and never reach here; the
 ## no-such-letter landing below is defensive only.
 ##
-## THE FOCUS LAW (Chris, 2026-10-27, reversing this round's
-## first landing in the field): PICKS MOVE THE WALL, NEVER
-## THE FOCUS. A letter pick used to land focus on the page's
-## first card; from the strip that reads as a theft - the
-## player is pulled off the bar and has to climb back down
-## for the next letter. So every pick lands on the slot that
-## was pressed (see _land_after_letter_pick) - the same rule
-## the rail's stops won in the 2026-10-25 round and page
-## travel in the focus-fix round: a press lands on the stop
-## that was activated, and the letter slot IS the activated
-## stop. Do not re-litigate this in a later round without
-## the player's word.
+## THE FOCUS LAW for letter picks (INTENT, Chris's ruling
+## 2026-11-09, the player's word this round's brief carries):
+## a letter pick is a deliberate commitment - "in this case
+## you've clicked the letter with intent" - so after ANY pick
+## from the letter row (A-Z, THE, #, and a net-exit pick made
+## from the letter row) focus LANDS ON THE WALL, on the card
+## the wall centres on for that pick. Go down to the letters,
+## hit T, and you're standing on the T games - focus on the
+## wall, card lit, no tap-tap-tap climb. Power follows focus,
+## so the landed card powers on. This REVERSES the 2026-10-27
+## law ("picks move the wall, never the focus", commit
+## 0370411) for letter picks only. The old law is NARROWED,
+## not deleted: it still governs browsing (the drum's centre
+## and the focus stay independent while walking and paging
+## the wall) and strip presses (the filter/sort/pager family
+## keep focus on the pressed stop - the pager law stands
+## untouched). Only the letter row's picks changed landing.
 func _jump_to_letter(key: String) -> void:
 	_failed_game_id = ""
 	_status_note = ""
@@ -5359,7 +5367,7 @@ func _jump_to_letter(key: String) -> void:
 		_recompute_visible()
 		_rebuild_wall()
 		_persist_view()
-		_land_after_letter_pick(key, _panels[0] if not _panels.is_empty() else null)
+		_land_after_letter_pick(key, _panels[_centre_index] if _centre_index >= 0 and _centre_index < _panels.size() else null)
 		return
 	_letter_net = ""
 	_recompute_visible()
@@ -5375,34 +5383,39 @@ func _jump_to_letter(key: String) -> void:
 		return
 	# The drum swings to the letter's first game (the letter
 	# round's whole point: position the shelf at the letter);
-	# focus stays on the pressed slot (the focus law below).
-	# The rebuild stands because the pick forces the name
-	# sort - if the standing sort was another, the shelf's
-	# order itself changed and the cards must re-seat.
+	# focus lands on that card (the INTENT law above). The
+	# rebuild stands because the pick forces the name sort -
+	# if the standing sort was another, the shelf's order
+	# itself changed and the cards must re-seat.
 	_rebuild_wall()
 	_set_centre(idx)
 	_persist_view()
 	_land_after_letter_pick(key, _panels[idx] if idx < _panels.size() else null)
 
 
-## The letter pick's focus landing - the one place the focus
-## law above is decided. Focus takes the pressed slot (the
-## strip is persistent furniture, so the quad is the same
-## instance the rebuild re-dressed); the wall moved, the
-## player did not. When the slot is somehow not a live focus
-## stop (a defensive path - greyed slots never reach the
-## jump), focus stays wherever the rebuild left it. The NC
-## value "letterland" restores the letter round's original
-## first-card landing for the harness, so the smoke's
-## focus-law legs fail by name against it.
-func _land_after_letter_pick(key: String, nc_fallback: ClickableQuad) -> void:
+## The letter pick's focus landing - the one place the
+## INTENT law above is decided. Focus takes the WALL: the
+## card the wall centres on for this pick, which the caller
+## passes (an ordinary letter's first game; a net's centred
+## first card - read AFTER the rebuild, so the empty-net
+## fallback's list is what stands when the net came up
+## empty). When no target stands (the defensive no-such-
+## letter path), the landing falls back to the wall's
+## standing centred card - focus never lands on nothing.
+## The NC value "letterland" restores the 2026-10-27
+## stay-on-the-pressed-slot landing (the narrowed old law,
+## whole) for the harness, so the smoke's INTENT legs fail
+## by name against it.
+func _land_after_letter_pick(key: String, target_panel: ClickableQuad) -> void:
 	if debug_focus_nc == "letterland":
-		if nc_fallback != null:
-			_set_focused(nc_fallback)
+		var sq_nc: ClickableQuad = _strip_quads.get(key) as ClickableQuad
+		if sq_nc != null and _focusables.has(sq_nc):
+			_set_focused(sq_nc)
 		return
-	var sq: ClickableQuad = _strip_quads.get(key) as ClickableQuad
-	if sq != null and _focusables.has(sq):
-		_set_focused(sq)
+	if target_panel != null and _focusables.has(target_panel):
+		_set_focused(target_panel)
+		return
+	_land_on_wall_card()
 
 
 ## The panel face cache's LRU read: a hit returns
@@ -12595,8 +12608,10 @@ func _panel_in_column(col: int, pref_band: int) -> int:
 
 
 ## THE VERTICAL WALL LAW (GRADFIX13 item 4 - the mirror of
-## the standing focus law "picks move the wall, never the
-## focus"): a purely vertical focus change between the rail
+## the browsing half of the focus law "picks move the wall,
+## never the focus", which INTENT (2026-11-09) narrowed to
+## browsing and strip presses): a purely vertical focus
+## change between the rail
 ## and the card rows - either direction - NEVER changes the
 ## drum's seated column. Chris's field report: "when down
 ## in filter bar, and you bump straight up to table rows,

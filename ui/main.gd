@@ -355,6 +355,8 @@ var _letters_smoke_wait: int = 0
 var _letters_smoke_failures: int = 0
 var _letters_step: int = 0 ## the focus-fix legs' sub-state (strip visual grab, pager turns)
 var _letters_focus_key: String = "" ## the strip slot the entry walk landed on
+var _letters_intent_started: bool = false ## INTENT: phase 5's real-input legs run once, async
+var _letters_intent_done: bool = false ## INTENT: the async legs have reported (pass or fail)
 var _smoke_bootfocus: bool = false ## --pvlds-smoke-bootfocus: the boot-focused (last-played) card renders fully with NO input
 var _smoke_cardback: bool = false ## --pvlds-smoke-cardback: CARDBACK round - flips each card of the 3-game fixture library and judges the Spec Sheet backs off the rendered rows: both wells dotted, the disagreement standing as two rows, the db-only game clean. IPDBFIX: the facts arrive via the boot seed from the bundled snapshot (the harness seeds NO facts, or a poisoned 403 cache); the seed legs witness it
 var _cb_phase: int = 0
@@ -11211,7 +11213,10 @@ func _nav_leg_favorites_async() -> void:
 ## "Theatre of Magic" rides along as the control: "The" is
 ## not a word of its own in it, so it is no THE member and
 ## files under T. Every pick rides the pad path (focus the
-## slot, press A) - the route a player's A takes.
+## slot, press A) - the route a player's A takes. INTENT
+## (2026-11-09) restated the landing legs to the new law - a
+## pick lands focus on the wall's centred card - and phase 5
+## drives that law with real Input events through the poll.
 func _drive_letters_smoke() -> void:
 	match _letters_smoke_phase:
 		0:
@@ -11294,50 +11299,29 @@ func _drive_letters_smoke() -> void:
 				_letters_smoke_wait = 0
 				_letters_smoke_phase = 5
 		5:
-			# The focus-law grab legs (Chris, 2026-10-27: picks
-			# move the wall, never the focus): pick W, let its
-			# wall settle, and focus must STILL be on the W
-			# slot - proven in the rendered pixels, not just
-			# the state. Then walk the row onto # for its own
-			# rendered proof.
-			if _letters_step == 0:
-				_letters_pick("W")
-				# GRADFIX6: console pass 2 lowered the strip
-				# (centre 0.0825 -> 0.045, slot height 0.100
-				# -> 0.085) clear out of the level desk frame,
-				# so every strip grab from here on pitches the
-				# desk camera down to the strip it judges -
-				# the phase-3 pattern, threshold unchanged -
-				# and the level view restores after each grab.
-				var pcam_w: Camera3D = _room._active_camera()
-				if pcam_w != null:
-					pcam_w.rotation_degrees = Vector3(-18.0, 0.0, 0.0)
-				_letters_step = 1
+			# The INTENT legs (Chris, 2026-11-09: "in this
+			# case you've clicked the letter with intent"):
+			# a letter pick LANDS focus on the wall. Driven
+			# async by real Input events through the room's
+			# poll (see _letters_intent_legs_async); this
+			# phase only starts them once and waits. The old
+			# phase-5 walk legs (pick W, focus stays on W,
+			# walk the row) pinned the reversed 2026-10-27
+			# law; the strip's walk/clamp coverage lives on
+			# in phase 1's full-strip walks and phase 7's
+			# user route, unchanged.
+			if not _letters_intent_started:
+				_letters_intent_started = true
 				_letters_smoke_wait = 0
+				_letters_intent_legs_async()
+			elif _letters_intent_done:
+				_letters_step = 0
+				_letters_smoke_wait = 0
+				_letters_smoke_phase = 6
 			else:
 				_letters_smoke_wait += 1
-				if _room.wall_ready and _letters_smoke_wait >= 6:
-					_letters_expect(_letters_key_of(_room.focused_quad()) == "W",
-						"focus law: focus is still on W after its pick's wall settled (got '%s')" % _letters_key_of(_room.focused_quad()))
-					var blue_w: int = _letters_grab_ring("W", "pick_focus_w.png")
-					var rcam_w: Camera3D = _room._active_camera()
-					if rcam_w != null:
-						rcam_w.rotation_degrees = Vector3.ZERO
-					_letters_expect(blue_w >= 6,
-						"focus law: the rendered frame shows the focus frame around 'W' after its pick (%d frame-blue band samples)" % blue_w)
-					for i: int in range(30):
-						_room._move_focus(Vector2(-1.0, 0.0))
-					_letters_expect(_letters_key_of(_room.focused_quad()) == "A",
-						"focus law: the post-pick walk left holds at A, the strip's first slot (got '%s')" % _letters_key_of(_room.focused_quad()))
-					for i: int in range(30):
-						_room._move_focus(Vector2(1.0, 0.0))
-					_letters_expect(_letters_key_of(_room.focused_quad()) == "#",
-						"focus law: the walk right across the strip holds at #, its far end (got '%s')" % _letters_key_of(_room.focused_quad()))
-					_letters_step = 0
-					_letters_smoke_wait = 0
-					_letters_smoke_phase = 6
-				elif _letters_smoke_wait > 3600:
-					_letters_smoke_fail("focus law: the W pick's wall never settled for the grab")
+				if _letters_smoke_wait > 7200:
+					_letters_smoke_fail("intent: the real-input legs never finished")
 					_finish_letters_smoke()
 		6:
 			_letters_smoke_wait += 1
@@ -11351,11 +11335,11 @@ func _drive_letters_smoke() -> void:
 				if rcam_h != null:
 					rcam_h.rotation_degrees = Vector3.ZERO
 				_letters_expect(blue_h >= 6,
-					"focus law: the rendered frame shows the focus frame around '#' after the walk (%d frame-blue band samples)" % blue_h)
+					"strip grab: the rendered frame shows the focus frame around '#' (%d frame-blue band samples)" % blue_h)
 				_letters_smoke_wait = 0
 				_letters_smoke_phase = 7
 			elif _letters_smoke_wait > 3600:
-				_letters_smoke_fail("focus law: the # grab never came due")
+				_letters_smoke_fail("strip grab: the # grab never came due")
 				_finish_letters_smoke()
 		7:
 			# The user's exact route (the strip-order fix,
@@ -11830,8 +11814,8 @@ func _letters_leg_jump() -> void:
 	_letters_pick("W")
 	_letters_expect(_room._sort == "name", "jump: picking a letter quietly switches to title sort")
 	_letters_expect(_room._page == 1, "jump: W lands on the second page (got page %d)" % _room._page)
-	_letters_expect(_room.focused_quad() == _room.letter_quad("W"),
-		"focus law: picking W keeps focus on the W slot (got key '%s')" % _letters_key_of(_room.focused_quad()))
+	_letters_expect(_room.focused_quad() == _room._panels[_room.centre_index()],
+		"intent: picking W lands focus on the wall's centred card (got key '%s')" % _letters_key_of(_room.focused_quad()))
 	_letters_expect(_room._panels.size() > 1 and _room.centre_index() < _room._panels.size()
 		and _room._panels[_room.centre_index()].payload == "LJRH3fKk",
 		"jump: the wall W's pick built shows White Water")
@@ -11843,10 +11827,10 @@ func _letters_leg_jump() -> void:
 	## is Funhouse whether or not the pick landed.)
 	_letters_expect(_room.active_letter_net() == "", "jump: a letter pick stands in no net")
 	_letters_pick("F")
-	_letters_expect(_room._page == 0 and _room.focused_quad() == _room.letter_quad("F")
+	_letters_expect(_room._page == 0 and _room.focused_quad() == _room._panels[_room.centre_index()]
 		and _room._panels.size() > 3 and _room.centre_index() == 3
 		and _room._panels[_room.centre_index()].payload == "O1-qbuxg",
-		"focus law: F's pick keeps focus on F, and the wall shows Funhouse")
+		"intent: picking F lands focus on the wall's centred card, and the wall shows Funhouse")
 
 
 func _letters_leg_the_net() -> void:
@@ -11863,16 +11847,16 @@ func _letters_leg_the_net() -> void:
 	var expected: Array[String] = ["The Addams Family", "The Getaway - High Speed II", "The Shadow", "The Simpsons Pinball Party"]
 	_letters_expect(_letters_visible_titles() == expected,
 		"THE net: exactly the canonical-The games, sorted by the word after The (got %s)" % str(_letters_visible_titles()))
-	_letters_expect(_room._page == 0 and _room.focused_quad() == _room.letter_quad("THE"),
-		"focus law: picking THE keeps focus on the THE slot")
+	_letters_expect(_room._page == 0 and _room.focused_quad() == _room._panels[_room.centre_index()],
+		"intent: picking THE lands focus on the net's centred first card")
 	# The net property: the members never left their letters -
 	# picking A exits the net and the wall stands on the very
 	# game the net was showing, filed under its own letter.
 	_letters_pick("A")
 	_letters_expect(_room.active_letter_net() == "", "THE net: picking a letter exits the net")
-	_letters_expect(_room.focused_quad() == _room.letter_quad("A")
+	_letters_expect(_room.focused_quad() == _room._panels[_room.centre_index()]
 		and _room._panels.size() > 1 and _room._panels[1].payload == "aT_GONvw",
-		"canonical-The: picking A exits to the wall where The Addams Family files under A, focus on the A slot")
+		"canonical-The: picking A exits to the wall where The Addams Family files under A, focus on the wall's centred card")
 	# A rail sort press leaves the net too.
 	_letters_pick("THE")
 	_room._handle_rail("sort")
@@ -11883,15 +11867,140 @@ func _letters_leg_the_net() -> void:
 func _letters_leg_number_net() -> void:
 	_letters_pick("#")
 	_letters_expect(_room.active_letter_net() == "#", "# net: the net view stands")
-	_letters_expect(_room.focused_quad() == _room.letter_quad("#"),
-		"focus law: picking # keeps focus on the # slot")
+	_letters_expect(_room.focused_quad() == _room._panels[_room.centre_index()],
+		"intent: picking # lands focus on the net's centred card")
 	var expected: Array[String] = ["8 Ball"]
 	_letters_expect(_letters_visible_titles() == expected,
 		"# net: exactly the non-letter starters (got %s)" % str(_letters_visible_titles()))
 	_letters_pick("F")
-	_letters_expect(_room.active_letter_net() == "" and _room.focused_quad() == _room.letter_quad("F")
+	_letters_expect(_room.active_letter_net() == "" and _room.focused_quad() == _room._panels[_room.centre_index()]
 		and _room._panels.size() > 3 and _room._panels[3].payload == "O1-qbuxg",
-		"# net: picking a letter exits at that letter (focus on F, the wall shows Funhouse)")
+		"# net: picking a letter exits at that letter (focus on the wall's centred card, the wall shows Funhouse)")
+
+
+## ---------------------------------------------------------------
+## The INTENT legs (phase 5, async): the new landing law driven
+## the player's way. Focus seating between picks (_set_focused)
+## is SETUP, the input smoke's sanctioned pattern; every PICK
+## rides a real InputEventJoypadButton A press through the
+## Input singleton into the room's real _process poll - never a
+## direct _a_press / _jump_to_letter call. Under
+## PVLDS_FOCUS_NC=letterland the room restores the 2026-10-27
+## stay-on-the-slot landing and these legs fail by name.
+func _letters_wait_frames(n: int) -> void:
+	for i: int in range(n):
+		await get_tree().process_frame
+
+
+func _letters_wait_wall() -> void:
+	var n: int = 0
+	while n < 900 and (not _room.wall_ready or _room.page_slide_active()):
+		await get_tree().process_frame
+		n += 1
+	await _letters_wait_frames(12)
+
+
+## Seat the slot (setup), press A for real, let the wall settle.
+func _letters_intent_pick(key: String) -> void:
+	_room._set_focused(_room.letter_quad(key))
+	await _letters_wait_frames(2)
+	await _nav_feed_button(JOY_BUTTON_A)
+	await _letters_wait_wall()
+
+
+func _letters_intent_centre_title() -> String:
+	if _room.centre_index() < 0 or _room.centre_index() >= _room._visible_games.size():
+		return ""
+	return _room._visible_games[_room.centre_index()].title
+
+
+func _letters_intent_legs_async() -> void:
+	# A known wall: the ALL filter (the rail route - its focus
+	# law is the strip family's and is not judged here).
+	_room._handle_rail("filter:all")
+	await _letters_wait_wall()
+	# -- T pick: focus lands on the wall's centred card, and
+	# the DRAWN focus is that card (the rendered grab). --
+	await _letters_intent_pick("T")
+	_letters_expect(_letters_intent_centre_title() == "Tales of the Arabian Nights",
+		"intent: picking T centres the wall on the first T game (got '%s')" % _letters_intent_centre_title())
+	_letters_expect(_room.focused_quad() == _room._panels[_room.centre_index()],
+		"intent: picking T lands focus on the wall's centred card")
+	var centre_panel: ClickableQuad = _room._panels[_room.centre_index()]
+	_letters_expect(centre_panel != null and centre_panel.highlight_visible(),
+		"intent: the centred card's highlight frame is flagged showing after the T pick")
+	await _letters_wait_frames(30) ## the pop/spring settle: the grab judges the standing frame
+	_letters_expect(_room.focused_quad() == centre_panel,
+		"intent: focus is still on the centred card in the standing frame after the T pick")
+	await RenderingServer.frame_post_draw
+	var img: Image = get_viewport().get_texture().get_image()
+	var dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if dir != "":
+		img.save_png(dir.path_join("intent_t_centre.png"))
+	# The drawn half, in the wall's own visual language: a
+	# library card's visible frame is the room's frame quad -
+	# AMBER on the centred card, dark on the rest (the quad's
+	# blue frame is shrunk under it by design, see
+	# RoomView._make_card_nodes). So the rendered proof is
+	# the amber centre frame around the very card the state
+	# calls focused: state and drawing name the same card.
+	var amber_t: int = _letters_ring_amber_count(img, centre_panel, centre_panel.quad_size())
+	_letters_expect(amber_t >= 6,
+		"intent: the rendered frame shows the amber centre frame around the centred card after the T pick (%d amber band samples)" % amber_t)
+	# -- THE pick: focus lands on the net's centred first card. --
+	await _letters_intent_pick("THE")
+	_letters_expect(_room.active_letter_net() == "THE" and _letters_intent_centre_title() == "The Addams Family",
+		"intent: picking THE stands the net on its first card (got '%s')" % _letters_intent_centre_title())
+	_letters_expect(_room.focused_quad() == _room._panels[_room.centre_index()],
+		"intent: picking THE lands focus on the net's centred first card")
+	# -- Net-exit pick: A from inside the net lands on the wall. --
+	await _letters_intent_pick("A")
+	_letters_expect(_room.active_letter_net() == "" and _letters_intent_centre_title() == "The Addams Family",
+		"intent: picking A from inside the THE net exits to A on the wall (got '%s')" % _letters_intent_centre_title())
+	_letters_expect(_room.focused_quad() == _room._panels[_room.centre_index()],
+		"intent: the net-exit pick lands focus on the wall's centred card")
+	# -- # pick: focus lands on the net's centred card. --
+	await _letters_intent_pick("#")
+	_letters_expect(_room.active_letter_net() == "#" and _letters_intent_centre_title() == "8 Ball",
+		"intent: picking # stands the net on 8 Ball (got '%s')" % _letters_intent_centre_title())
+	_letters_expect(_room.focused_quad() == _room._panels[_room.centre_index()],
+		"intent: picking # lands focus on the net's centred card")
+	# -- Out of the # net at F, back on the plain wall. --
+	await _letters_intent_pick("F")
+	_letters_expect(_room.active_letter_net() == "" and _letters_intent_centre_title() == "Funhouse",
+		"intent: picking F from inside the # net exits to Funhouse on the wall (got '%s')" % _letters_intent_centre_title())
+	_letters_expect(_room.focused_quad() == _room._panels[_room.centre_index()],
+		"intent: the # net-exit pick lands focus on the wall's centred card")
+	# -- Empty-net pick: under FAVORITES (Funhouse + White
+	# Water) the THE net holds nothing. The slot is greyed, so
+	# real navigation cannot focus it - the branch is
+	# defensive; the leg seats the slot as SETUP and the pick
+	# still rides the real A press. The net lifts, the full
+	# filtered list stands, and focus lands on ITS centred
+	# card - never on nothing. --
+	for g: GameEntry in _scanner.games:
+		if g.title == "Funhouse" or g.title == "White Water":
+			_room._store.set_favorite(g.game_id, true)
+	_room._handle_rail("filter:favorites")
+	await _letters_wait_wall()
+	await _letters_intent_pick("THE")
+	_letters_expect(_room.active_letter_net() == "" and _room._filter_note == "THE view is empty here - showing the full list",
+		"intent: the empty-net pick lifts the net and says so (note '%s')" % _room._filter_note)
+	var fallback_titles: Array[String] = ["Funhouse", "White Water"]
+	_letters_expect(_letters_visible_titles() == fallback_titles and _letters_intent_centre_title() == "Funhouse",
+		"intent: the empty-net fallback stands the full filtered list, Funhouse centred (got %s)" % str(_letters_visible_titles()))
+	_letters_expect(_room.focused_quad() == _room._panels[_room.centre_index()],
+		"intent: the empty-net pick lands focus on the fallback list's centred card")
+	# -- Restore the plain wall for the phases behind us, and
+	# seat # for phase 6's rendered strip grab (setup). --
+	for g: GameEntry in _scanner.games:
+		if g.title == "Funhouse" or g.title == "White Water":
+			_room._store.set_favorite(g.game_id, false)
+	_room._handle_rail("filter:all")
+	await _letters_wait_wall()
+	_room._set_focused(_room.letter_quad("#"))
+	await _letters_wait_frames(4)
+	_letters_intent_done = true
 
 
 ## THE VERTICAL WALL LAW on the strip's own route
@@ -12014,6 +12123,47 @@ func _letters_is_frame_blue(img: Image, x: int, y: int) -> bool:
 	var px: Color = img.get_pixel(x, y)
 	# ClickableQuad.FOCUS_COLOR (0.35, 0.75, 1.0), unshaded.
 	return px.b > 0.8 and px.g > 0.55 and px.r < 0.6 and px.b > px.r + 0.25
+
+
+func _letters_is_frame_amber(img: Image, x: int, y: int) -> bool:
+	if x < 0 or y < 0 or x >= img.get_width() or y >= img.get_height():
+		return false
+	var px: Color = img.get_pixel(x, y)
+	# RoomView's centre frame colour (1.0, 0.66, 0.16), unshaded.
+	return px.r > 0.8 and px.g > 0.45 and px.g < 0.8 and px.b < 0.35
+
+
+## The amber twin of the ring counter below: same band (the
+## face's edge out to ~7% beyond it), counting centre-frame
+## amber. A library card's maker band is blue, never amber,
+## so the band is clean for this colour.
+func _letters_ring_amber_count(img: Image, quad: ClickableQuad, size: Vector2) -> int:
+	var cam: Camera3D = get_viewport().get_camera_3d()
+	if cam == null:
+		return 0
+	var half: Vector2 = size * 0.5
+	var pts: Array[Vector2] = []
+	for c: Vector2 in [Vector2(-half.x, -half.y), Vector2(half.x, -half.y), Vector2(-half.x, half.y), Vector2(half.x, half.y)]:
+		pts.append(cam.unproject_position(quad.global_transform * Vector3(c.x, c.y, 0.0)))
+	var mn: Vector2 = pts[0]
+	var mx: Vector2 = pts[0]
+	for p: Vector2 in pts:
+		mn = mn.min(p)
+		mx = mx.max(p)
+	var inner: Rect2 = Rect2(mn, mx - mn).grow_individual(-2.0, -2.0, -2.0, -2.0)
+	var outer: Rect2 = Rect2(mn, mx - mn)
+	outer = outer.grow_individual(outer.size.x * 0.075, outer.size.y * 0.075, outer.size.x * 0.075, outer.size.y * 0.075)
+	var count: int = 0
+	var x: int = int(outer.position.x)
+	while x < int(outer.position.x + outer.size.x):
+		var y: int = int(outer.position.y)
+		while y < int(outer.position.y + outer.size.y):
+			if not inner.has_point(Vector2(float(x), float(y))):
+				if _letters_is_frame_amber(img, x, y):
+					count += 1
+			y += 1
+		x += 1
+	return count
 
 
 func _letters_ring_blue_count(img: Image, quad: ClickableQuad, size: Vector2) -> int:
