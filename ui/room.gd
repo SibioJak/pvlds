@@ -1273,6 +1273,9 @@ var _setup_panel_wall_btn: ClickableQuad = null ## WALL MOTION: STEPPED - the pa
 var _setup_panel_back_btn: ClickableQuad = null
 var _setup_panel_ipdb_btn: ClickableQuad = null ## CARDBACK/IPDBFIX: RE-APPLY IPDB DATA - Main re-applies the bundled snapshot, the panel's mirror of the desk's button
 var _setup_panel_watcher_btn: ClickableQuad = null ## PINEMHI2 (Part B): PINEMHI WATCHER: ON/OFF - the watcher-management dial, a full-width row under BACK's row (the panel's PINemHi presence is its face line; the dial stands beside it in the button stack)
+var _setup_btn_tex: Dictionary = {} ## ENDGAME (Part B): panel button quad -> [rest_tex, lifted_tex] - both dresses rendered at fill time, swapped on focus (the strip's discipline: the material change must never wait on a render)
+var _setup_btn_home: Dictionary = {} ## ENDGAME (Part B): panel button quad -> its built position; the focused button lifts toward the eye off this home
+const SETUP_BTN_LIFT: float = 0.02 ## ENDGAME (Part B): the focused panel button's bevel-lift toward the eye (the strip sections lift 0.032 off a wider bar; a button is a smaller piece of furniture)
 var _pinemhi_manage_watcher: bool = false ## the dial's standing value, pushed by Main from the config (set_pinemhi_manage_watcher); a press flips it here and reports via pinemhi_watcher_toggled - Main owns the save
 var _setup_panel_up: bool = false
 var _setup_panel_gen: int = 0
@@ -7906,6 +7909,43 @@ func _set_focused(q: ClickableQuad) -> void:
 	# disagree with the frame the player sees.
 	if _submit_panel_up and q != null and _submit_thumb_quads.has(q):
 		_submit_show_shot(q.payload)
+	# ENDGAME (Part B): on the SETUP panel, focus is dressed,
+	# not framed - the focused button wears the lifted
+	# gradient and stands a step toward the eye; every other
+	# button rests. Same one-door discipline as the submit
+	# panel's shot above: every focus move passes through
+	# here, so the dress can never disagree with the focus.
+	if _setup_panel_up:
+		_apply_setup_panel_button_dress()
+
+
+## ENDGAME (Part B): swap the panel buttons' dresses to
+## match the standing focus - lifted texture + physical
+## lift for the focused button, resting texture + home
+## seat for the rest. Textures for both dresses were
+## rendered at fill time (see _fill_setup_button), so a
+## focus move costs two swaps and two seat writes, never
+## a render. A button whose fill has not landed yet keeps
+## whatever it wears; the fill applies the focus-correct
+## dress when it lands.
+func _apply_setup_panel_button_dress() -> void:
+	for bq: ClickableQuad in [_setup_panel_scan_btn, _setup_panel_dl_btn,
+			_setup_panel_wovp_paste_btn, _setup_panel_wovp_test_btn,
+			_setup_panel_stars_btn, _setup_panel_wall_btn,
+			_setup_panel_ipdb_btn, _setup_panel_back_btn, _setup_panel_watcher_btn]:
+		if bq == null:
+			continue
+		var lifted: bool = bq == _focused
+		var pair: Array = _setup_btn_tex.get(bq, []) as Array
+		if pair.size() == 2:
+			var want: Texture2D = pair[1] if lifted else pair[0]
+			if want != null and bq.current_texture() != want:
+				bq.set_texture(want)
+		if _setup_btn_home.has(bq):
+			var home: Vector3 = _setup_btn_home[bq] as Vector3
+			var seat: Vector3 = home + Vector3(0.0, 0.0, SETUP_BTN_LIFT if lifted else 0.0)
+			if bq.position != seat:
+				bq.position = seat
 
 
 func _refresh_quad_states() -> void:
@@ -9934,6 +9974,8 @@ func clear_setup_panel() -> void:
 		_setup_panel_ipdb_btn = null
 		_setup_panel_watcher_btn = null
 		_setup_panel_back_btn = null
+		_setup_btn_tex.clear()
+		_setup_btn_home.clear()
 	_restore_room_pick_states()
 	_set_focused(null)
 	_refresh_focusables()
@@ -10172,6 +10214,18 @@ func _build_setup_panel() -> void:
 	_setup_panel_watcher_btn.setup("setup_setting_pinemhi_watcher", "", placeholder, Vector2(1.41, 0.16))
 	_setup_panel_watcher_btn.position = Vector3(0.0, -1.28, 0.0)
 	_setup_panel.add_child(_setup_panel_watcher_btn)
+	# ENDGAME (Part B): the panel's buttons wear the machined
+	# dress - their focus read is the bevel-lift (lifted
+	# gradient + a step toward the eye), not the frame, so
+	# the frame is suppressed on every button (the strip's
+	# law: the lift IS the highlight). Homes are recorded
+	# here, at build, for the lift to rise off.
+	for bq: ClickableQuad in [_setup_panel_scan_btn, _setup_panel_dl_btn,
+			_setup_panel_wovp_paste_btn, _setup_panel_wovp_test_btn,
+			_setup_panel_stars_btn, _setup_panel_wall_btn,
+			_setup_panel_ipdb_btn, _setup_panel_back_btn, _setup_panel_watcher_btn]:
+		bq.suppress_frame = true
+		_setup_btn_home[bq] = bq.position
 	if _setup_downloader == null:
 		_setup_downloader = VpsDownloader.new()
 		add_child(_setup_downloader)
@@ -10218,62 +10272,55 @@ func _fill_setup_panel_textures(gen: int) -> void:
 		_after_setup_render()
 		return
 	_setup_panel_face.set_texture(face_tex)
-	var scan_tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.button_spec("SCANNING..." if _setup_scanning else "SCAN LIBRARY", _setup_scanning), Vector2i(512, 124))
-	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_scan_btn == null:
-		_after_setup_render()
-		return
-	_setup_panel_scan_btn.set_texture(scan_tex)
+	# ENDGAME (Part B): the buttons fill through
+	# _fill_setup_button in TWO passes - every button's
+	# RESTING dress first (the panel is fully dressed at
+	# the fill's standing pace), then every button's
+	# LIFTED dress (filed for the focus swaps).
 	var dl_busy: bool = _setup_downloader != null and _setup_downloader.is_downloading()
-	var dl_tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.button_spec("DOWNLOADING..." if dl_busy else "DOWNLOAD VPS DATABASE", dl_busy), Vector2i(512, 124))
-	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_dl_btn == null:
-		_after_setup_render()
-		return
-	_setup_panel_dl_btn.set_texture(dl_tex)
-	var paste_tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.button_spec("PASTE KEY", false), Vector2i(512, 124))
-	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_wovp_paste_btn == null:
-		_after_setup_render()
-		return
-	_setup_panel_wovp_paste_btn.set_texture(paste_tex)
-	var test_tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.button_spec("TEST KEY", false), Vector2i(512, 124))
-	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_wovp_test_btn == null:
-		_after_setup_render()
-		return
-	_setup_panel_wovp_test_btn.set_texture(test_tex)
-	var stars_tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.button_spec("STARS: " + _starfield_mode.to_upper(), false), Vector2i(512, 124))
-	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_stars_btn == null:
-		_after_setup_render()
-		return
-	_setup_panel_stars_btn.set_texture(stars_tex)
-	var wall_tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.button_spec("WALL MOTION: " + _wall_motion_mode.to_upper(), false), Vector2i(512, 124))
-	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_wall_btn == null:
-		_after_setup_render()
-		return
-	_setup_panel_wall_btn.set_texture(wall_tex)
-	var ipdb_tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.button_spec("RE-APPLY IPDB DATA", false), Vector2i(512, 124))
-	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_ipdb_btn == null:
-		_after_setup_render()
-		return
-	_setup_panel_ipdb_btn.set_texture(ipdb_tex)
-	var back_tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.button_spec("BACK", true), Vector2i(512, 164))
-	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_back_btn == null:
-		_after_setup_render()
-		return
-	_setup_panel_back_btn.set_texture(back_tex)
-	var watcher_tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.button_spec("PINEMHI WATCHER: " + ("ON" if _pinemhi_manage_watcher else "OFF"), false), Vector2i(1024, 124))
-	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_watcher_btn == null:
-		_after_setup_render()
-		return
-	_setup_panel_watcher_btn.set_texture(watcher_tex)
+	var btns: Array = [
+		[_setup_panel_scan_btn, "SCANNING..." if _setup_scanning else "SCAN LIBRARY", _setup_scanning, Vector2i(512, 124)],
+		[_setup_panel_dl_btn, "DOWNLOADING..." if dl_busy else "DOWNLOAD VPS DATABASE", dl_busy, Vector2i(512, 124)],
+		[_setup_panel_wovp_paste_btn, "PASTE KEY", false, Vector2i(512, 124)],
+		[_setup_panel_wovp_test_btn, "TEST KEY", false, Vector2i(512, 124)],
+		[_setup_panel_stars_btn, "STARS: " + _starfield_mode.to_upper(), false, Vector2i(512, 124)],
+		[_setup_panel_wall_btn, "WALL MOTION: " + _wall_motion_mode.to_upper(), false, Vector2i(512, 124)],
+		[_setup_panel_ipdb_btn, "RE-APPLY IPDB DATA", false, Vector2i(512, 124)],
+		[_setup_panel_back_btn, "BACK", true, Vector2i(512, 164)],
+		[_setup_panel_watcher_btn, "PINEMHI WATCHER: " + ("ON" if _pinemhi_manage_watcher else "OFF"), false, Vector2i(1024, 124)],
+	]
+	for lifted_pass: bool in [false, true]:
+		for b: Array in btns:
+			if not await _fill_setup_button(gen, b[0], b[1], b[2], b[3], lifted_pass):
+				_after_setup_render()
+				return
 	_after_setup_render()
+
+
+## ENDGAME (Part B): one panel button's fill - renders
+## ONE dress (rest or lifted) at the button's standing
+## size, files it in the button's pair, and seats the
+## focus-correct dress the pair can offer (see
+## _apply_setup_panel_button_dress). Returns false when
+## the fill went stale mid-render (generation moved,
+## panel closed) - the caller stops, as the fill has.
+func _fill_setup_button(gen: int, quad: ClickableQuad, text: String, accent: bool, px: Vector2i, lifted_variant: bool) -> bool:
+	if quad == null:
+		return true
+	var tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.panel_button_spec(text, accent, lifted_variant), px)
+	if gen != _setup_panel_gen or not _setup_panel_up:
+		return false
+	var pair: Array = (_setup_btn_tex.get(quad, [null, null]) as Array).duplicate()
+	if pair.size() != 2:
+		pair = [null, null]
+	pair[1 if lifted_variant else 0] = tex
+	_setup_btn_tex[quad] = pair
+	if quad == _focused and pair[1] != null:
+		quad.set_texture(pair[1])
+	elif pair[0] != null:
+		quad.set_texture(pair[0])
+	return true
 
 
 # ------------------------------------------------------- submit panel

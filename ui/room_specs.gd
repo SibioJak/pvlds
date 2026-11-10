@@ -307,6 +307,39 @@ static func button_spec(text: String, accent: bool) -> Dictionary:
 	}
 
 
+## ENDGAME (Part B): the SETUP panel's buttons in the house
+## language - the Machined Strip's graphite, worn as
+## standalone furniture (CardFace's machined_button kind:
+## the strip's gradient + edge lines + its own side
+## borders). Resting: the bar's resting gradient and label
+## grey. Accent (BACK, and a busy SCANNING.../DOWNLOADING...):
+## the accent gradient, brighter label, the standing view's
+## underline. Lifted (the focused button): the lifted
+## gradient and white label - the strip's focus read, no
+## frame. Same labels, same sizes as button_spec; dress only.
+static func panel_button_spec(text: String, accent: bool, lifted: bool) -> Dictionary:
+	var grad: Array[Color] = STRIP_GRAD_REST
+	if lifted:
+		grad = STRIP_GRAD_LIFTED
+	elif accent:
+		grad = STRIP_GRAD_ACCENT
+	var fg: Color = STRIP_LABEL_REST
+	if lifted:
+		fg = Color(1.0, 1.0, 1.0)
+	elif accent:
+		fg = STRIP_LABEL_ACCENT
+	return {
+		"kind": "machined_button",
+		"bg": grad[2],
+		"grad": grad,
+		"title": text,
+		"title_size": 40,
+		"title_color": fg,
+		"accent_bar": accent and not lifted,
+		"lifted": lifted,
+	}
+
+
 ## ---- The machined strip (GRADFIX14 item 1, Chris's pick
 ## from the strip mocks: "Machined Strip - nice and crisp",
 ## colour GRAPHITE). One continuous brushed-gunmetal bar
@@ -386,15 +419,18 @@ static func letter_spec(label: String, state: String) -> Dictionary:
 ## centered title / sub / body, no band. The caller's message (a
 ## launch failure's reason) rides on top when one is provided.
 static func placard_spec(message: String) -> Dictionary:
-	var body: String = "Finish on the desktop, then come back - or go back to the room now with BACK below."
+	var body: String = "Finish in FIRST SETUP on your PC, then come back - or go back to the room now with BACK below."
 	if message != "":
 		body = message + "\n\n" + body
 	return {
 		"kind": "banner",
 		"bg": Color(0.05, 0.05, 0.09),
-		"title": "SETUP",
+		# ENDGAME (Part A): the placard stands in the room FOR
+		# the desk, so it wears the desk's name - FIRST SETUP
+		# (the two setups carry two names; see setup_panel_spec).
+		"title": "FIRST SETUP",
 		"title_size": 84,
-		"sub": "Setup is open on your desktop",
+		"sub": "First Setup is open on your desktop",
 		"sub_size": 42,
 		"body": body,
 		"body_size": 36,
@@ -456,12 +492,21 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 	# reads photos from it, and this line says from where).
 	if health.has("shots_line"):
 		lines.append(str(health["shots_line"]))
+	# ENDGAME (Part A): the pointer line - the two setups
+	# carry two names, and each surface names where the
+	# other lives. This panel is IN-VR SETUP; paths and
+	# first-time setup are the desk's (FIRST SETUP).
+	lines.append("Paths and first-time setup are on your PC - run LaunchPin on the desktop.")
 	return {
 		"kind": "banner",
 		"bg": Color(0.05, 0.05, 0.09),
-		"title": "SETUP",
+		"title": "IN-VR SETUP",
 		"title_size": 76,
-		"sub": message if message != "" else "Scan the library and fetch the database - right here, no desktop trip.",
+		# ENDGAME (Part A): the standing sub carries the
+		# pointer too - it is the one line of the face that
+		# always shows (the body can run long with health
+		# lines and clip; the sub never does).
+		"sub": message if message != "" else "Day-to-day settings, right here in the room. Paths and first-time setup live in FIRST SETUP on your PC.",
 		"sub_size": 38,
 		"body": "\n".join(lines),
 		"body_size": 34,
@@ -504,7 +549,7 @@ static func submit_panel_spec(ch: WovpChallenge, owned: bool, build_owned: bool,
 	if user_id != "":
 		lines.append(ch.posted_note(user_id))
 	else:
-		lines.append("Whose key this is isn't resolved yet - Test key names it, and the posted-score warning needs it.")
+		lines.append("Key owner unknown - TEST KEY names it (the posted-score warning needs it).")
 	if shots_line != "":
 		lines.append(shots_line)
 	return {
@@ -724,8 +769,8 @@ static func tournament_board_spec(ch: WovpChallenge, owned: bool, user_id: Strin
 		"title_size": 46,
 		"title_max_lines": 1,
 		"sub": sub,
-		"sub_size": 28, ## LOADING (item 3): the deadline line one size up (was 26) ...
-		"sub_bold": true, ## ... and one weight heavier (CardFace renders the embolden; the shimmer fix)
+		"sub_size": 30, ## LOADING (item 3): one size up (was 26), then ENDGAME (Part D): one more (was 28) ...
+		"sub_bold": true, ## ... and heavier still (CardFace renders the embolden; the shimmer fix)
 		"sub_max_lines": 1,
 		"sub_color": sub_color,
 		"chips": chips,
@@ -845,7 +890,7 @@ static func pinemhi_weekly_board_spec(contest: Dictionary, player_name: String, 
 		"title_size": 46,
 		"title_max_lines": 1,
 		"sub": _pinemhi_window_sub(str(contest.get("window_start", "")), str(contest.get("window_end", ""))),
-		"sub_size": 28, ## LOADING (item 3): the window line takes the deadline line's treatment (was 26)
+		"sub_size": 30, ## LOADING (item 3) + ENDGAME (Part D): the window line takes the deadline line's treatment (was 26, then 28)
 		"sub_bold": true,
 		"sub_max_lines": 1,
 		"chips": [],

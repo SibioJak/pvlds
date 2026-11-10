@@ -379,7 +379,7 @@ var _sm_failures: int = 0
 var _sm_done: bool = false
 var _sm_judged: bool = false ## a judge coroutine is in flight (its legs land in _sm_failures when it sets this back)
 var _pm1_samples: Array = []
-var _smoke_loading: bool = false ## --pvlds-smoke-loading: LOADING round - one boot judges all three items. (3) The tournie boards' deadline line: RoomSpecs' two board specs carry sub_size 28 + sub_bold. (2) The rail's working set: the library strip stands whole (11 sections), the Tournament Room's strip stands at exactly TOURNAMENT / REFRESH / SETUP / EXIT with the focus walk across the four (drawn focus == real focus at every step), and the B-door round trip restores the library strip. (1) The env-named target (PVLDS_LOADING_TARGET) launches through the real launch door and the SETTLED marquee is judged geometrically off the labels' rendered AABBs: contents exact, every label one line tall, consecutive labels' spans disjoint with clearance, no line wider than the marquee's 2.30 m cap. Grabs land in PVLDS_LOADING_GRAB_DIR
+var _smoke_loading: bool = false ## --pvlds-smoke-loading: LOADING round - one boot judges all three items. (3) The tournie boards' deadline line: RoomSpecs' two board specs carry sub_size 30 + sub_bold (LOADING stood them at 28; ENDGAME Part D raised them). (2) The rail's working set: the library strip stands whole (11 sections), the Tournament Room's strip stands at exactly TOURNAMENT / REFRESH / SETUP / EXIT with the focus walk across the four (drawn focus == real focus at every step), and the B-door round trip restores the library strip. (1) The env-named target (PVLDS_LOADING_TARGET) launches through the real launch door and the SETTLED marquee is judged geometrically off the labels' rendered AABBs: contents exact, every label one line tall, consecutive labels' spans disjoint with clearance, no line wider than the marquee's 2.30 m cap. Grabs land in PVLDS_LOADING_GRAB_DIR
 var _ld_phase: int = 0
 var _ld_wait: int = 0
 var _ld_failures: int = 0
@@ -1775,7 +1775,7 @@ func _wovp_key_hash() -> int:
 ## plain words - whose it is once a test has resolved it.
 func _wovp_health_line() -> String:
 	if _config == null or _config.wovp_api_key == "":
-		return "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it on the desktop desk."
+		return "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in FIRST SETUP."
 	match _wovp_identity_state:
 		"ok":
 			return "WoVP: key saved - it belongs to %s." % _wovp_user_name
@@ -2395,7 +2395,7 @@ func build_scan_summary() -> String:
 	var lines: Array[String] = []
 	if _last_db_kind == "sample":
 		lines.append("!! SAMPLE DATABASE ACTIVE !!")
-		lines.append("The bundled database is 10 invented games that exist to test PVLDS itself - it cannot identify real tables. Use 'Download VPS database' above to fetch the real VPS database; until then tables are identified from file names only (no VR tags, designers, or known builds).")
+		lines.append("The bundled database is 10 invented games for testing LaunchPin itself - it cannot identify real tables. Use 'Download VPS database' above to fetch the real one; until then tables are identified from file names only (no VR tags, designers, or known builds).")
 		lines.append("The room stays closed until a real database is in place - download it above, then Save & Scan.")
 	lines.append("Scanned %d table files in %d folder(s): %d games (%d with multiple builds)." % [
 		s.total_files, _config.table_folders.size(), s.games.size(), s.duplicate_group_count()])
@@ -2406,7 +2406,7 @@ func build_scan_summary() -> String:
 		lines.append("Match routes: %d by download slug, %d by title, %d by cleaned title, %d by edition, %d rescued, %d unmatched (file name only)." % [
 			int(tc.get("slug", 0)), int(tc.get("name", 0)), int(tc.get("scrubbed", 0)), int(tc.get("edition", 0)), int(tc.get("rescue", 0)), int(tc.get("local", 0))])
 		if s.inherited_shot_games > 0:
-			lines.append("Author shots: %d game(s) wear a screenshot inherited from another build of the same game - their own build carries none in the database, so the game's shot stands in (flagged in the telemetry as inherited)." % s.inherited_shot_games)
+			lines.append("Author shots: %d game(s) wear a screenshot inherited from another build of the same game - their own build carries none in the database, so the game's shot stands in." % s.inherited_shot_games)
 	else:
 		lines.append("No database loaded - every game is identified from its file name alone.")
 	# Panel art counts a game when art is PROVEN: a side image on
@@ -2431,11 +2431,11 @@ func build_scan_summary() -> String:
 		lines.append("Art cache: %d of %d art images are extracted and ready instantly; the rest pre-extract in the background while you browse." % [cov.x, cov.y])
 	var health: Dictionary = ArtWarmer.art_health(s.games)
 	if int(health["total"]) > 0:
-		lines.append("Backglass health (from the art cache's outcome index): %d extracted OK, %d no image in file, %d failed to read or parse, %d not tried yet." % [
+		lines.append("Backglass health: %d extracted OK, %d no image in file, %d failed to read or parse, %d not tried yet." % [
 			int(health["ok"]), int(health["no_image"]), int(health["failed"]), int(health["untried"])])
 	var ehealth: Dictionary = ArtWarmer.embedded_health(s.games)
 	if int(ehealth["total"]) > 0:
-		lines.append("Embedded art health (images inside the .vpx files, from the art cache's outcome index): %d extracted OK, %d no image in file, %d in a legacy format, %d failed to read or parse, %d not tried yet." % [
+		lines.append("Embedded art health (images inside the .vpx files): %d extracted OK, %d no image in file, %d in a legacy format, %d failed to read or parse, %d not tried yet." % [
 			int(ehealth["ok"]), int(ehealth["no_image"]), int(ehealth["legacy"]), int(ehealth["failed"]), int(ehealth["untried"])])
 	var unknown: Array[String] = []
 	for g: GameEntry in s.games:
@@ -16311,13 +16311,13 @@ func _ld_judge_specs() -> void:
 	ch.type_code = WovpChallenge.TYPE_SEASON
 	ch.end_unix = now_unix + 3 * 24 * 3600
 	var spec: Dictionary = RoomSpecs.tournament_board_spec(ch, true, "", now_unix)
-	_ld_expect(int(spec.get("sub_size", 0)) == 28 and bool(spec.get("sub_bold", false)),
-		"LOADING deadline: the WoVP board's deadline line stands one size up and one weight heavier (sub_size=%s, sub_bold=%s)" % [str(spec.get("sub_size", -1)), str(spec.get("sub_bold", false))])
+	_ld_expect(int(spec.get("sub_size", 0)) == 30 and bool(spec.get("sub_bold", false)),
+		"ENDGAME deadline: the WoVP board's deadline line stands at the ENDGAME treatment - sub_size 30 (LOADING stood it at 28) with the heavier embolden (sub_size=%s, sub_bold=%s)" % [str(spec.get("sub_size", -1)), str(spec.get("sub_bold", false))])
 	var wspec: Dictionary = RoomSpecs.pinemhi_weekly_board_spec(
 		{"id": "main", "table": "Rolling Stones", "window_start": "2026-11-01 22:00:04", "window_end": "2026-11-08 22:00:04", "rows": []},
 		"", 0, true)
-	_ld_expect(int(wspec.get("sub_size", 0)) == 28 and bool(wspec.get("sub_bold", false)),
-		"LOADING deadline: the weekly board's window line carries the same treatment (sub_size=%s, sub_bold=%s)" % [str(wspec.get("sub_size", -1)), str(wspec.get("sub_bold", false))])
+	_ld_expect(int(wspec.get("sub_size", 0)) == 30 and bool(wspec.get("sub_bold", false)),
+		"ENDGAME deadline: the weekly board's window line carries the same treatment (sub_size=%s, sub_bold=%s)" % [str(wspec.get("sub_size", -1)), str(wspec.get("sub_bold", false))])
 
 
 func _ld_judge_tournie_strip() -> void:
@@ -16754,7 +16754,7 @@ func _submit_finish_smoke() -> void:
 ## must ignore.
 
 const RS_ADDAMS_ID: String = "fixture-ch-season-main-w3"
-const RS_UNSET_WORDS: String = "No screenshots folder set yet - set it on the desktop desk (Screenshots section); the room reads photos from there."
+const RS_UNSET_WORDS: String = "No screenshots folder set yet - set it in FIRST SETUP (Screenshots section); the room reads photos from there."
 const RS_EMPTY_WORDS: String = "No screenshots in that folder yet - take the shot in the headset first; it lands there."
 const RS_NOKEY_WORDS: String = "No WoVP key saved - submissions use the same key as the boards. Add it in SETUP."
 

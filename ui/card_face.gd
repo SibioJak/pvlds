@@ -114,6 +114,8 @@ var _strip_top_edge: ColorRect ## strip_section kind: the bar's border line alon
 var _strip_top_hi: ColorRect ## strip_section kind: the machined highlight just under the top edge (brighter on a lifted section)
 var _strip_bot_edge: ColorRect ## strip_section kind: the bar's dark bottom edge (a lifted section's cast shade pools here)
 var _strip_accent_bar: ColorRect ## strip_section kind: the standing view's light underline (accent sections at rest)
+var _btn_edge_l: ColorRect ## machined_button kind (ENDGAME Part B): the button's left border line (the strip furniture's side edge)
+var _btn_edge_r: ColorRect ## machined_button kind: the button's right border line
 var _margin: MarginContainer
 var _vbox: VBoxContainer
 var _band_panel: PanelContainer
@@ -195,6 +197,19 @@ func _init() -> void:
 	_strip_accent_bar.color = Color(0.85, 0.87, 0.92, 0.9)
 	_strip_accent_bar.visible = false
 	add_child(_strip_accent_bar)
+	# ENDGAME (Part B): the SETUP panel's buttons wear the
+	# strip's material as standalone furniture - the same
+	# gradient and edge lines, plus a border line down each
+	# side (a section borrows the bar's continuity; a button
+	# stands alone, so it carries its own frame).
+	_btn_edge_l = ColorRect.new()
+	_btn_edge_l.color = Color8(76, 81, 90)
+	_btn_edge_l.visible = false
+	add_child(_btn_edge_l)
+	_btn_edge_r = ColorRect.new()
+	_btn_edge_r.color = Color8(76, 81, 90)
+	_btn_edge_r.visible = false
+	add_child(_btn_edge_r)
 
 	_art_rect = TextureRect.new()
 	_art_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -492,7 +507,7 @@ func apply_spec(spec: Dictionary) -> void:
 	# Re-asserted on every spec, like the margins above -
 	# one CardFace serves all renders, so the centring can
 	# never leak into a top-anchored kind (or out of one).
-	_vbox.alignment = BoxContainer.ALIGNMENT_CENTER if kind == "button" or kind == "banner" or kind == "strip_section" else BoxContainer.ALIGNMENT_BEGIN
+	_vbox.alignment = BoxContainer.ALIGNMENT_CENTER if kind == "button" or kind == "banner" or kind == "strip_section" or kind == "machined_button" else BoxContainer.ALIGNMENT_BEGIN
 	var bg: Color = _color_of(spec, "bg", Color(0.05, 0.05, 0.09))
 	var band: Color = _color_of(spec, "band", Color(0.25, 0.25, 0.38))
 	# GRADFIX15 (item 1): a board face is FRAMELESS - no
@@ -526,14 +541,22 @@ func apply_spec(spec: Dictionary) -> void:
 	# brightens its top highlight and pools shade at its
 	# bottom edge (its cast shadow on the bar it rose from).
 	var is_strip: bool = kind == "strip_section"
-	_strip_grad_rect.visible = is_strip
+	# ENDGAME (Part B): a machined_button face wears the same
+	# furniture as a strip section - gradient, top/bottom edge
+	# lines, accent underline - plus its own side borders, and
+	# never a seam (it stands alone, not in a bar).
+	var is_mach_btn: bool = kind == "machined_button"
+	var machined: bool = is_strip or is_mach_btn
+	_strip_grad_rect.visible = machined
 	_strip_seam_dark.visible = is_strip and bool(spec.get("seam_right", false))
 	_strip_seam_light.visible = _strip_seam_dark.visible
-	_strip_top_edge.visible = is_strip
-	_strip_top_hi.visible = is_strip
-	_strip_bot_edge.visible = is_strip
-	_strip_accent_bar.visible = is_strip and bool(spec.get("accent_bar", false))
-	if is_strip and size.x > 0.0:
+	_strip_top_edge.visible = machined
+	_strip_top_hi.visible = machined
+	_strip_bot_edge.visible = machined
+	_strip_accent_bar.visible = machined and bool(spec.get("accent_bar", false))
+	_btn_edge_l.visible = is_mach_btn
+	_btn_edge_r.visible = is_mach_btn
+	if machined and size.x > 0.0:
 		var grad_cols: Array = spec.get("grad", []) as Array
 		if grad_cols.size() == 4:
 			var g: Gradient = Gradient.new()
@@ -544,10 +567,16 @@ func apply_spec(spec: Dictionary) -> void:
 			g.colors = cols
 			_strip_grad_tex.gradient = g
 		var lifted_s: bool = bool(spec.get("lifted", false))
-		_strip_seam_dark.position = Vector2(size.x - 2.0, 0.0)
-		_strip_seam_dark.size = Vector2(2.0, size.y)
-		_strip_seam_light.position = Vector2(size.x - 3.0, 0.0)
-		_strip_seam_light.size = Vector2(1.0, size.y)
+		if is_strip:
+			_strip_seam_dark.position = Vector2(size.x - 2.0, 0.0)
+			_strip_seam_dark.size = Vector2(2.0, size.y)
+			_strip_seam_light.position = Vector2(size.x - 3.0, 0.0)
+			_strip_seam_light.size = Vector2(1.0, size.y)
+		if is_mach_btn:
+			_btn_edge_l.position = Vector2(0.0, 0.0)
+			_btn_edge_l.size = Vector2(2.0, size.y)
+			_btn_edge_r.position = Vector2(size.x - 2.0, 0.0)
+			_btn_edge_r.size = Vector2(2.0, size.y)
 		_strip_top_edge.position = Vector2(0.0, 0.0)
 		_strip_top_edge.size = Vector2(size.x, 2.0)
 		_strip_top_hi.position = Vector2(0.0, 2.0)
@@ -645,7 +674,7 @@ func apply_spec(spec: Dictionary) -> void:
 				band_px = maxi(18, int(floor(float(band_px) * avail / need)))
 		_band_label.add_theme_font_size_override("font_size", band_px)
 
-	var centered: bool = kind == "button" or kind == "banner" or kind == "board" or kind == "strip_section"
+	var centered: bool = kind == "button" or kind == "banner" or kind == "board" or kind == "strip_section" or kind == "machined_button"
 	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
 	_sub_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
 	_body_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
@@ -931,7 +960,10 @@ func _sub_font(spec: Dictionary) -> Font:
 		return base
 	var bold: FontVariation = FontVariation.new()
 	bold.base_font = base
-	bold.variation_embolden = 0.2
+	# ENDGAME (Part D): a touch more weight on the same
+	# line (LOADING stood it at 0.2) - the deadline's
+	# strokes were still thin at headset resolution.
+	bold.variation_embolden = 0.32
 	return bold
 
 

@@ -92,11 +92,21 @@ func _build_ui() -> void:
 	margin.add_child(vbox)
 
 	var title: Label = Label.new()
-	title.text = "PVLDS - first-run setup"
+	# ENDGAME (Part A): the two setups carry two names. This
+	# desk is FIRST SETUP - the one-time, important initial
+	# setup; the room's panel is IN-VR SETUP.
+	title.text = "FIRST SETUP"
 	title.add_theme_font_size_override("font_size", 34)
 	vbox.add_child(title)
+	var title_sub: Label = Label.new()
+	title_sub.text = "Done once, on your PC, before you play."
+	vbox.add_child(title_sub)
+	var title_pointer: Label = Label.new()
+	title_pointer.text = "Day-to-day settings live in the headset - the IN-VR SETUP panel in the room."
+	title_pointer.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(title_pointer)
 	var intro: Label = Label.new()
-	intro.text = "Point the launcher at your VPX executable and your table folder(s). This is desk work on purpose - the room in the headset is only for playing."
+	intro.text = "Point LaunchPin at your VPX executable and your table folder(s). The headset room is for playing, not setup."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(intro)
 
@@ -122,8 +132,8 @@ func _build_ui() -> void:
 	_downloader.finished.connect(_on_download_finished)
 	_args_edit = _add_field(vbox, "Launch arguments template ({table} is the table file; quotes group arguments)")
 	_herding_check = CheckBox.new()
-	_herding_check.text = "Focus herding - the watchdog keeps the game window in front during play (uncheck if it ever fights you)"
-	_herding_check.tooltip_text = "Design section 3 amendment: during the launch settle and during play, the watchdog returns foreground focus to the VPX window when something steals it. It never moves or resizes windows."
+	_herding_check.text = "Focus herding - keep the game window in front during play (uncheck if it ever fights you)"
+	_herding_check.tooltip_text = "During the launch settle and during play, the watchdog returns foreground focus to the VPX window when something steals it. It never moves or resizes windows."
 	_herding_check.toggled.connect(func(_on: bool) -> void: _apply_session_settings())
 	vbox.add_child(_herding_check)
 
@@ -139,7 +149,7 @@ func _build_ui() -> void:
 	wovp_title.add_theme_font_size_override("font_size", 20)
 	vbox.add_child(wovp_title)
 	var wovp_intro: Label = Label.new()
-	wovp_intro.text = "Your WoVP API key (in your WoVP profile) lets PVLDS show your live league boards in the Tournament Room. It is stored only in the config file on this PC."
+	wovp_intro.text = "Your WoVP API key (from your WoVP profile) shows your live league boards in the Tournament Room. Stored only in the config file on this PC."
 	wovp_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(wovp_intro)
 	_wovp_edit = LineEdit.new()
@@ -178,7 +188,7 @@ func _build_ui() -> void:
 	submit_title.add_theme_font_size_override("font_size", 20)
 	vbox.add_child(submit_title)
 	var submit_intro: Label = Label.new()
-	submit_intro.text = "Finished a game on a live challenge? Take the photo the league's way (last score, DMD and full playfield in frame), move it to this PC, then pick the challenge and the photo here. The photo carries the score - PVLDS sends it with your key, and the league validates it."
+	submit_intro.text = "Finished a game on a live challenge? Take the photo the league's way (last score, DMD and full playfield in frame), move it to this PC, then pick the challenge and the photo here. The photo carries the score; the league validates it."
 	submit_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(submit_intro)
 	_submit_picker = OptionButton.new()
@@ -274,7 +284,7 @@ func _build_ui() -> void:
 	shots_title.add_theme_font_size_override("font_size", 20)
 	vbox.add_child(shots_title)
 	var shots_intro: Label = Label.new()
-	shots_intro.text = "Point this at the folder your headset screenshots end up in on this PC. In the Tournament Room, press Y on a challenge card and the newest shots in this folder stand on the submit panel - pick the one that shows your score and send it, headset on. Submitting from the room uses the same WoVP key and the same two-step send as the desk above."
+	shots_intro.text = "The folder your headset screenshots end up in on this PC. In the Tournament Room, press Y on a challenge card: the newest shots here stand on the submit panel - pick the one that shows your score and send it, headset on. Same key, same send as the desk above."
 	shots_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(shots_intro)
 	var shots_row: HBoxContainer = HBoxContainer.new()
@@ -317,7 +327,7 @@ func _build_ui() -> void:
 	pinemhi_title.add_theme_font_size_override("font_size", 20)
 	vbox.add_child(pinemhi_title)
 	var pinemhi_intro: Label = Label.new()
-	pinemhi_intro.text = "If you use PINemHi, PVLDS can read its TOP10_Personal leaderboard files and show your own best beneath the league scores on a tournament board. Reading the files is all PVLDS does by default - it does not run PINemHi or its watcher unless you opt in with the watcher checkbox below. Leave the folder empty to auto-detect the usual install places (D:\\vPinball\\Pinemhi and friends)."
+	pinemhi_intro.text = "If you use PINemHi, LaunchPin can read its TOP10_Personal files and show your best beneath the league scores on a tournament board. That's all it does by default - it never runs PINemHi or its watcher unless you opt in below. Leave the folder empty to auto-detect the usual install places (D:\\vPinball\\Pinemhi and friends)."
 	pinemhi_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(pinemhi_intro)
 	_pinemhi_check = CheckBox.new()
@@ -325,7 +335,7 @@ func _build_ui() -> void:
 	vbox.add_child(_pinemhi_check)
 	_pinemhi_manage_check = CheckBox.new()
 	_pinemhi_manage_check.text = "Let PVLDS run the PINemHi watcher while a table is playing"
-	_pinemhi_manage_check.tooltip_text = "Off (the default): PVLDS never touches the watcher process. On: the watchdog starts pinemhi_rom_monitor.exe when a table starts if it is not already running, and closes it shortly after the table exits (or when PVLDS exits, if that comes first). A watcher that was already running before is left running - PVLDS only ever closes one it started itself."
+	_pinemhi_manage_check.tooltip_text = "Off (the default): LaunchPin never touches the watcher. On: the watchdog starts pinemhi_rom_monitor.exe when a table starts (if it isn't already running) and closes it shortly after the table exits - or when LaunchPin exits, if that comes first. A watcher already running is left running: LaunchPin only ever closes one it started itself."
 	vbox.add_child(_pinemhi_manage_check)
 	_pinemhi_edit = LineEdit.new()
 	_pinemhi_edit.placeholder_text = "PINemHi folder - empty = auto-detect"
@@ -356,7 +366,7 @@ func _build_ui() -> void:
 	ipdb_title.add_theme_font_size_override("font_size", 20)
 	vbox.add_child(ipdb_title)
 	var ipdb_intro: Label = Label.new()
-	ipdb_intro.text = "The Spec Sheet on each card's back mixes the database's own facts with the Internet Pinball Database's (production run, fun rating, full credits, notable features), each row dotted with its source. The IPDB facts ship bundled with PVLDS as a snapshot and are applied automatically; the backs read the saved cache and never go online. Games the database carries no IPDB link for show database rows only."
+	ipdb_intro.text = "Each card's back mixes the database's facts with the Internet Pinball Database's (production run, fun rating, full credits, notable features), each row dotted with its source. The IPDB facts ship bundled as a snapshot and apply automatically; the backs read the saved copy and never go online. Games with no IPDB link in the database show database rows only."
 	ipdb_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(ipdb_intro)
 	var ipdb_row: HBoxContainer = HBoxContainer.new()
@@ -625,7 +635,7 @@ func _apply_session_settings() -> void:
 	_fill_session_widgets()
 	_filling_from_config = false
 	if _stats_label != null:
-		_stats_label.text = "That session setting could NOT be saved - the config file is not writable, so the switch has not taken effect and has been put back as it was. Fix the config file, then flip it again."
+		_stats_label.text = "That setting could NOT be saved - the config file is not writable, so the switch was put back as it was. Fix the config file, then flip it again."
 
 
 ## Save key: the live apply, on the herding pattern - the
