@@ -18029,8 +18029,8 @@ func _ro_library_transient_legs() -> void:
 func _ro_tournie_legs() -> void:
 	_ro_expect(_room.status_plate_text() == "Y - SUBMIT A SCORE",
 		"tournie controls line: Y - SUBMIT A SCORE stands on the low plate (got '%s')" % _room.status_plate_text())
-	_ro_expect(_room.status_sub_text() == "A - PLAY",
-		"tournie controls line: A - PLAY stands under the headline (got '%s')" % _room.status_sub_text())
+	_ro_expect(_room.status_sub_text() == "A - PLAY · X - MY SUBMISSIONS",
+		"tournie controls line: A - PLAY · X - MY SUBMISSIONS stands under the headline (got '%s')" % _room.status_sub_text())
 	var psz: Vector2 = _room.status_plate_size()
 	_ro_expect(psz.y > 0.10,
 		"tournie controls line: the plate grows for the controls line (size %s, shipped height 0.088)" % str(psz))
@@ -20895,6 +20895,8 @@ func _pinemhi2_spec_has_note(spec: Dictionary, text: String) -> bool:
 ## his-row legs fail by name).
 func _drive_tournament_smoke() -> void:
 	match _tournament_smoke_mode:
+		"submissions":
+			_drive_tournament_submissions()
 		"pinemhi":
 			_drive_tournament_pinemhi()
 		"nokey":
@@ -20921,6 +20923,103 @@ func _drive_tournament_smoke() -> void:
 ## carry the best; clearing the bests re-renders it away
 ## and a re-push restores it. PVLDS_PINEMHI_NC=nobest drops
 ## the line in the spec - the spec legs fail by name.
+## submissions mode (CHECKLIST): the receipt book's new
+## home. The desk's list is deleted; the records feed a
+## panel in the Tournament Room, raised by a REAL X press
+## through the room's poll. Legs: the empty state reads
+## plainly on a fresh log; seeded entries (the same
+## append the live outcome path writes) reach the room
+## through Main's own push and stand on the panel's face
+## - mixed statuses, the recorded score grouped, newest
+## first; B closes the panel back onto the TOURNAMENT
+## stop, still in the Tournament Room.
+func _drive_tournament_submissions() -> void:
+	match _tournament_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_room._handle_rail("tournament")
+				_tournament_expect(_room.tournament_active(), "submissions: the TOURNAMENT stop raises the Tournament Room")
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 45000
+				_tournament_smoke_phase = 1
+			else:
+				_tournament_smoke_wait += 1
+				if _tournament_smoke_wait > 3600:
+					_tournament_fail("submissions: the room never came up")
+					_finish_tournament_smoke()
+		1:
+			_rs_inject(JOY_BUTTON_X, true)
+			_tournament_smoke_phase = 2
+		2:
+			_rs_inject(JOY_BUTTON_X, false)
+			if _room.is_submissions_panel_up():
+				var spec: Dictionary = _room.submissions_face_spec()
+				_tournament_expect(str(spec.get("body", "")) == "No submissions yet - scores you submit from the Tournament Room stand here.",
+					"submissions: an empty log reads plainly on the panel (got '%s')" % str(spec.get("body", "")))
+				_tournament_expect(_room.submission_lines().is_empty(),
+					"submissions: the room holds no lines before any submission")
+				_rs_inject(JOY_BUTTON_B, true)
+				_tournament_smoke_phase = 3
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("submissions: X never raised the panel")
+				_finish_tournament_smoke()
+		3:
+			_rs_inject(JOY_BUTTON_B, false)
+			if not _room.is_submissions_panel_up():
+				_tournament_expect(_room.tournament_active(),
+					"submissions: B closes the panel back into the Tournament Room")
+				_tournament_expect(_room.focused_quad() == _room.rail_quad("tournament"),
+					"submissions: the landing is the rail's TOURNAMENT stop")
+				# Seed the log the way the live outcome path
+				# writes it, then feed the room through
+				# Main's own push.
+				var now: int = int(Time.get_unix_time_from_system())
+				WovpClient.append_submission_log({"time": now - 10800, "challenge_id": "fixture-ch-season-main-w3", "challenge": "The Addams Family - Season Challenge", "photo": "shot_a.jpg", "result": "Submitted - awaiting validation"})
+				WovpClient.append_submission_log({"time": now - 7200, "challenge_id": "seeded-earlier", "challenge": "Seeded Earlier Challenge", "photo": "shot_b.jpg", "recorded_score": 7654321, "result": "Approved"})
+				WovpClient.append_submission_log({"time": now - 3600, "challenge_id": "refused-one", "challenge": "Refused One Challenge", "photo": "shot_c.jpg", "result": "Refused - the photo could not be read"})
+				_push_submission_history()
+				var lines: Array = _room.submission_lines()
+				_tournament_expect(lines.size() == 3,
+					"submissions: the room holds the log's three entries (got %d)" % lines.size())
+				if lines.size() == 3:
+					_tournament_expect(str(lines[0]).contains("Refused One Challenge") and str(lines[0]).contains("Refused"),
+						"submissions: newest first - the refused entry leads (got '%s')" % str(lines[0]))
+					_tournament_expect(str(lines[1]).contains("Seeded Earlier Challenge") and str(lines[1]).contains("7,654,321") and str(lines[1]).contains("Approved"),
+						"submissions: the recorded score rides its line, grouped (got '%s')" % str(lines[1]))
+					_tournament_expect(str(lines[2]).contains("Submitted - awaiting validation"),
+						"submissions: the awaiting entry stands in the standing words (got '%s')" % str(lines[2]))
+				_rs_inject(JOY_BUTTON_X, true)
+				_tournament_smoke_phase = 4
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("submissions: B never closed the panel")
+				_finish_tournament_smoke()
+		4:
+			_rs_inject(JOY_BUTTON_X, false)
+			var face: ClickableQuad = _room.submissions_panel_face_quad()
+			if _room.is_submissions_panel_up() and face != null and face.current_texture() != null and face.current_texture().get_width() == 1472:
+				var body: String = str(_room.submissions_face_spec().get("body", ""))
+				_tournament_expect(body.contains("Refused - the photo could not be read") and body.contains("Approved") and body.contains("Submitted - awaiting validation"),
+					"submissions: the face carries all three standings")
+				_tournament_expect(str(_room.submissions_face_spec().get("title", "")) == "MY SUBMISSIONS",
+					"submissions: the face is titled MY SUBMISSIONS")
+				var img: Image = get_viewport().get_texture().get_image()
+				if img != null:
+					img.save_png(OS.get_environment("PVLDS_GRAB_DIR").path_join("submissions_panel.png"))
+				_rs_inject(JOY_BUTTON_B, true)
+				_tournament_smoke_phase = 5
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("submissions: the seeded panel never rendered")
+				_finish_tournament_smoke()
+		5:
+			_rs_inject(JOY_BUTTON_B, false)
+			if not _room.is_submissions_panel_up():
+				_tournament_expect(_room.tournament_active(),
+					"submissions: the panel closes back into the Tournament Room")
+				_finish_tournament_smoke()
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("submissions: the seeded panel never closed")
+				_finish_tournament_smoke()
+
+
 func _drive_tournament_pinemhi() -> void:
 	match _tournament_smoke_phase:
 		0:
@@ -23234,7 +23333,7 @@ func _drive_desk_smoke() -> void:
 				_desk._wovp_save_button.pressed.emit()
 				var wovp_after: PvldsConfig = PvldsConfig.new()
 				_desk_expect(wovp_after.load_from_disk() and wovp_after.wovp_api_key == "PVLDS-WOVP-SENTINEL-KEY-00000001",
-					"wovp: Save key writes the key to the config FILE immediately, no Save & Scan")
+					"wovp: Save key writes the key to the config FILE immediately (no full save)")
 				_desk_expect(_desk._wovp_label.text.contains("saved"),
 					"wovp: the desk says the key saved, in words")
 				if OS.has_environment("PVLDS_WOVP_BASE_URL"):
@@ -23363,7 +23462,7 @@ func _drive_bootface_smoke() -> void:
 					_bootface_expect(not _desk._scanned,
 						"firstrun: no scan stands yet (_scanned is false)")
 					_bootface_expect(_desk._enter_button.disabled,
-						"firstrun: Enter the Room stays greyed until the desk's first scan")
+						"firstrun: Enter LaunchPin VR stays greyed until the desk's first scan")
 					_bootface_wait = 0
 					_bootface_phase = 3
 				else:
@@ -23451,7 +23550,7 @@ func _drive_bootface_smoke() -> void:
 				_bootface_expect(_desk._scanned,
 					"setup-open: the desk knows the standing scan (_scanned)")
 				_bootface_expect(not _desk._enter_button.disabled,
-					"setup-open: Enter the Room is armed on open")
+					"setup-open: Enter LaunchPin VR is armed on open")
 				_bootface_expect(_desk._stats_label.text.begins_with("Scanned"),
 					"setup-open: the stats line carries the standing summary (got '%s')" % _desk._stats_label.text.left(40))
 				_bootface_expect(not _desk._b2s_label.text.contains("not scanned yet"),
@@ -23472,7 +23571,7 @@ func _drive_bootface_smoke() -> void:
 			_bootface_wait += 1
 			if _room != null and _room.visible and _desk != null and not _desk.visible:
 				_bootface_expect(not _scan_active,
-					"enter: no scan is running after Enter the Room")
+					"enter: no scan is running after Enter LaunchPin VR")
 				_bootface_expect(_scanner == _bootface_scanner_before,
 					"enter: the same scanner stands - no new scan ran")
 				# Re-open SETUP: the standing trio re-applies
@@ -23481,7 +23580,7 @@ func _drive_bootface_smoke() -> void:
 				_bootface_wait = 0
 				_bootface_phase = 6
 			elif _bootface_wait > 7200:
-				_bootface_fail("enter: the room never stood after Enter the Room")
+				_bootface_fail("enter: the room never stood after Enter LaunchPin VR")
 				_finish_bootface_smoke()
 		6:
 			_bootface_wait += 1
@@ -23492,9 +23591,9 @@ func _drive_bootface_smoke() -> void:
 					"reopen: the exit is still armed (the standing summary re-applied)")
 				_desk._on_save_and_scan()
 				_bootface_expect(_scan_active,
-					"desk scan: Save & Scan starts the scan")
+					"desk scan: Save Options and Scan for Tables starts the scan")
 				_bootface_expect(_desk._enter_button.disabled,
-					"desk scan: Enter the Room disables while the scan runs")
+					"desk scan: Enter LaunchPin VR disables while the scan runs")
 				_bootface_expect(not _desk._scanned,
 					"desk scan: the desk waits on its own scan again")
 				_bootface_wait = 0
@@ -23503,7 +23602,7 @@ func _drive_bootface_smoke() -> void:
 			_bootface_wait += 1
 			if not _scan_active and _desk != null and _desk._scanned:
 				_bootface_expect(not _desk._enter_button.disabled,
-					"desk scan: Enter the Room re-arms when the summary lands")
+					"desk scan: Enter LaunchPin VR re-arms when the summary lands")
 				_finish_bootface_smoke()
 			elif _bootface_wait > 7200:
 				_bootface_fail("desk scan: the desk scan never landed")
@@ -23838,6 +23937,7 @@ func _drive_deskedit_firstrun() -> void:
 			if _desk != null and _desk.visible:
 				var dress: Dictionary = _desk.title_dress()
 				var cen: Dictionary = _desk.deskedit_census()
+				var chk: Dictionary = _desk.checklist_census()
 				_deskedit_expect(str(dress["title"]) == "Initial Setup",
 					"firstrun: the title reads Initial Setup")
 				_deskedit_expect(int(dress["panel_children"]) == 1,
@@ -23868,12 +23968,42 @@ func _drive_deskedit_firstrun() -> void:
 					"window size: a failed display query falls back to 1280x720 (got %s)" % str(desktop_window_rect(Rect2i(0, 0, 0, 0))))
 				_deskedit_expect(bool(cen["args_in_advanced"]),
 					"firstrun: the Launch arguments field lives inside the Advanced fold")
-				_deskedit_expect(not bool(cen["advanced_expanded"]),
-					"firstrun: the Advanced fold starts collapsed")
-				_deskedit_expect(not _desk._advanced_fold.content.visible,
-					"firstrun: collapsed Advanced content is hidden (out of the keyboard flow)")
 				_deskedit_expect(not bool(cen["details_standing"]),
 					"firstrun: no Scan details fold stands before the first scan")
+				# CHECKLIST: the first-run desk walks the
+				# checklist - step 1 open, the rest slim bars.
+				_deskedit_expect(bool(chk["mode_checklist"]),
+					"checklist: a first-run desk stands in checklist mode")
+				_deskedit_expect(int(chk["open_step"]) == 0,
+					"checklist: step 1 stands open first (got %d)" % int(chk["open_step"]))
+				_deskedit_expect((chk["contents_visible"] as Array) == [true, false, false, false],
+					"checklist: only step 1's content stands (got %s)" % str(chk["contents_visible"]))
+				var bars: Array = chk["bars"] as Array
+				_deskedit_expect(bars.size() == 4 and str((bars[0] as Dictionary)["text"]) == "1. Initial Setup"
+					and str((bars[1] as Dictionary)["text"]) == "2. High Score Setup (optional)"
+					and str((bars[2] as Dictionary)["text"]) == "3. Art (optional)"
+					and str((bars[3] as Dictionary)["text"]) == "4. Advanced (optional)",
+					"checklist: the four step bars read in order (got %s)" % str(bars))
+				_deskedit_expect(bool((bars[0] as Dictionary)["visible"]) and bool((bars[3] as Dictionary)["visible"]),
+					"checklist: the step bars stand in checklist mode")
+				_deskedit_expect(bool(chk["folders_in_step1"]),
+					"checklist: the table folders live inside step 1, under the VPX block")
+				_deskedit_expect(bool(chk["wovp_in_step2"]) and bool(chk["shots_in_step2"]) and bool(chk["pinemhi_in_step2"]),
+					"checklist: High Score Setup holds the WoVP, screenshots and PINemHi blocks")
+				_deskedit_expect(bool(chk["db_in_step3"]) and bool(chk["note_before_download"]) and bool(chk["download_before_field"]),
+					"checklist: Art reads explanation, then Download, then the own-copy field")
+				_deskedit_expect(bool(chk["args_in_step4"]),
+					"checklist: the Launch arguments live in step 4 (Advanced)")
+				_deskedit_expect(not bool(chk["advanced_toggle_visible"]),
+					"checklist: in step 4 the Advanced fold's own toggle hides - the step is the fold")
+				_deskedit_expect(bool(cen["advanced_expanded"]),
+					"checklist: the Advanced fold stands open inside its step")
+				_deskedit_expect(str(chk["scan_text"]) == "Save Options and Scan for Tables",
+					"checklist: the scan button carries its new full name (got '%s')" % str(chk["scan_text"]))
+				_deskedit_expect(str(chk["enter_text"]) == "Enter LaunchPin VR",
+					"checklist: the door is named for the product (got '%s')" % str(chk["enter_text"]))
+				_deskedit_expect(bool(chk["enter_disabled"]) and not bool(chk["enter_dressed"]),
+					"checklist: Enter stands unarmed and undressed before the first scan")
 				_deskedit_wait = 0
 				_deskedit_phase = 5
 			else:
@@ -23886,36 +24016,112 @@ func _drive_deskedit_firstrun() -> void:
 			# census frame it catches the desk before its
 			# first presented frame (a black grab - the
 			# bootface driver's phase 5 exists for this).
+			# CHECKLIST proof (a): step 1 open, the rest bars.
 			_deskedit_wait += 1
 			if _deskedit_wait >= 4:
 				_deskedit_grab("deskedit_firstrun_top.png")
-				# Open Advanced through its real toggle.
-				_desk._advanced_fold.toggle.button_pressed = true
-				_deskedit_scroll_to(_desk._advanced_fold.toggle)
+				_deskedit_scroll_to(_desk._step_bars[2])
 				_deskedit_wait = 0
 				_deskedit_phase = 1
 		1:
+			# CHECKLIST proof (e): a REAL mouse click on a
+			# later step's bar opens that step directly -
+			# the guide never gates (the DESKCENTER pattern:
+			# warp to the control's global centre, synthetic
+			# press/release through the input singleton).
+			_deskedit_wait += 1
+			if _deskedit_wait >= 3:
+				_deskedit_click(_desk._step_bars[2])
+				_deskedit_wait = 0
+				_deskedit_phase = 6
+		6:
 			_deskedit_wait += 1
 			if _deskedit_wait >= 4:
-				_deskedit_expect(_desk._advanced_fold.is_expanded(),
-					"firstrun: the Advanced toggle opens the fold")
-				_deskedit_expect(_desk._args_edit.visible,
-					"firstrun: the args field stands visible inside the open fold")
-				_deskedit_grab("deskedit_advanced_open.png")
+				var chk6: Dictionary = _desk.checklist_census()
+				_deskedit_expect(int(chk6["open_step"]) == 2,
+					"checklist: the real click opened step 3 directly (got %d)" % int(chk6["open_step"]))
+				_deskedit_expect((chk6["contents_visible"] as Array) == [false, false, true, false],
+					"checklist: only step 3's content stands after the click")
+				_deskedit_grab("deskedit_checklist_step3.png")
+				_deskedit_scroll_to(_desk._step_bars[0])
+				_deskedit_wait = 0
+				_deskedit_phase = 7
+		7:
+			_deskedit_wait += 1
+			if _deskedit_wait >= 3:
+				_deskedit_click(_desk._step_bars[0])
+				_deskedit_wait = 0
+				_deskedit_phase = 8
+		8:
+			_deskedit_wait += 1
+			if _deskedit_wait >= 4:
+				var chk8: Dictionary = _desk.checklist_census()
+				_deskedit_expect(int(chk8["open_step"]) == 0,
+					"checklist: clicking step 1's bar reopens step 1")
+				# A real scan against a fixture folder the
+				# driver plants in user:// - the scan button's
+				# own press, the summary landing through Main.
+				var tdir: String = ProjectSettings.globalize_path("user://checklist_tables")
+				DirAccess.make_dir_recursive_absolute(tdir)
+				for fname: String in ["Checklist One.vpx", "Checklist Two.vpx"]:
+					var f: FileAccess = FileAccess.open(tdir.path_join(fname), FileAccess.WRITE)
+					if f != null:
+						f.store_string("checklist fixture")
+						f.close()
+				_desk._folder_edits[0].text = tdir
+				_desk._scan_button.pressed.emit()
+				_deskedit_wait = 0
+				_deskedit_phase = 9
+		9:
+			# CHECKLIST proof (b): the landed scan finishes
+			# step 1 (bar checked, step folded) and the walk
+			# opens step 2.
+			_deskedit_wait += 1
+			if not _scan_active and _desk != null and _desk._scanned:
+				var chk9: Dictionary = _desk.checklist_census()
+				_deskedit_expect((chk9["done"] as Array) == [true, false, false, false],
+					"checklist: the landed scan marks step 1 done (got %s)" % str(chk9["done"]))
+				var bars9: Array = chk9["bars"] as Array
+				_deskedit_expect(str((bars9[0] as Dictionary)["text"]) == "1. Initial Setup  ✓",
+					"checklist: step 1's bar gains the check (got '%s')" % str((bars9[0] as Dictionary)["text"]))
+				_deskedit_expect(int(chk9["open_step"]) == 1,
+					"checklist: the walk opens step 2 after the scan (got %d)" % int(chk9["open_step"]))
+				_deskedit_expect((chk9["contents_visible"] as Array) == [false, true, false, false],
+					"checklist: step 1 folds away, step 2 stands")
+				_deskedit_expect(not bool(chk9["enter_disabled"]) and bool(chk9["enter_dressed"]),
+					"checklist: Enter stands armed in the confirm green after the scan")
+				_deskedit_grab("deskedit_checklist_step2.png")
 				_desk.visible = false
 				_deskedit_wait = 0
-				_deskedit_phase = 2
-		2:
+				_deskedit_phase = 10
+			elif _deskedit_wait > 7200:
+				_deskedit_fail("checklist: the fixture scan never landed")
+				_finish_deskedit_smoke()
+		10:
 			_deskedit_wait += 1
 			if _deskedit_wait >= 3:
 				_desk.visible = true
 				_deskedit_wait = 0
-				_deskedit_phase = 3
-		3:
+				_deskedit_phase = 11
+		11:
+			# The setup the scan just saved makes this stand
+			# a CONFIGURED one: the full desk, every section
+			# standing, the folds back under their toggles
+			# (and re-collapsed by the re-show).
 			_deskedit_wait += 1
 			if _deskedit_wait >= 3:
+				var chk11: Dictionary = _desk.checklist_census()
+				_deskedit_expect(not bool(chk11["mode_checklist"]),
+					"checklist: a desk re-stood after a successful setup is the FULL desk")
+				_deskedit_expect((chk11["contents_visible"] as Array) == [true, true, true, true],
+					"checklist: the full desk stands every step's content")
+				var bars11: Array = chk11["bars"] as Array
+				_deskedit_expect(not bool((bars11[0] as Dictionary)["visible"]),
+					"checklist: the step bars hide in the full desk")
+				_deskedit_expect(bool(chk11["advanced_toggle_visible"]),
+					"checklist: the Advanced fold's toggle stands in the full desk")
 				_deskedit_expect(not _desk._advanced_fold.is_expanded(),
-					"firstrun: a re-shown desk re-collapses its folds")
+					"firstrun: a re-shown desk re-collapses its folds (the full desk's fold law)")
 				# DESKHEAD: end on the herding grab - the
 				# block scrolled into frame (the one line +
 				# the green tag, nothing more).
@@ -23961,6 +24167,22 @@ func _drive_deskedit_desk() -> void:
 					"desk: the match-routes tally lives in the fold")
 				_deskedit_expect(str(cen["details_text"]).contains("Panel art"),
 					"desk: the panel-art line lives in the fold")
+				# CHECKLIST proof (c): a configured stand is
+				# the FULL desk - the regroup stands (folders
+				# in step 1's home under the VPX block), no
+				# bars, and the foot wears its new labels
+				# with Enter armed in the confirm green.
+				var chkd: Dictionary = _desk.checklist_census()
+				_deskedit_expect(not bool(chkd["mode_checklist"]),
+					"desk: a configured stand is the full desk, not the checklist")
+				_deskedit_expect((chkd["contents_visible"] as Array) == [true, true, true, true],
+					"desk: every section stands in the full desk")
+				_deskedit_expect(bool(chkd["folders_in_step1"]),
+					"desk: the table folders stand under the VPX block in the full desk too")
+				_deskedit_expect(str(chkd["scan_text"]) == "Save Options and Scan for Tables",
+					"desk: the scan button carries its new full name")
+				_deskedit_expect(str(chkd["enter_text"]) == "Enter LaunchPin VR" and not bool(chkd["enter_disabled"]) and bool(chkd["enter_dressed"]),
+					"desk: Enter LaunchPin VR stands armed in the confirm green on a configured stand")
 				_deskedit_scroll_to(_desk._details_fold.toggle)
 				_deskedit_wait = 0
 				_deskedit_phase = 2
@@ -23979,6 +24201,15 @@ func _drive_deskedit_desk() -> void:
 				_deskedit_expect(_desk._details_fold.is_expanded(),
 					"desk: the Scan details toggle opens the fold")
 				_deskedit_grab("deskedit_details_open.png")
+				_deskedit_scroll_to(_desk._enter_button)
+				_deskedit_wait = 0
+				_deskedit_phase = 4
+		4:
+			_deskedit_wait += 1
+			if _deskedit_wait >= 4:
+				# CHECKLIST proof (c)'s foot: the renamed
+				# door, green, at the desk's foot.
+				_deskedit_grab("deskedit_desk_foot.png")
 				_finish_deskedit_smoke()
 
 
@@ -24001,6 +24232,30 @@ func _deskedit_scroll_to(target: Control) -> void:
 		return
 	var y: int = int(target.get_global_position().y - sc.get_global_position().y) + sc.scroll_vertical - 24
 	sc.scroll_vertical = clampi(y, 0, int(sc.get_v_scroll_bar().max_value))
+
+
+## CHECKLIST proof (e)'s hand: a real mouse click on a
+## control - warp to its global centre, synthetic
+## press/release through the input singleton (the
+## DESKCENTER pattern). The click lands through Godot's
+## own GUI input path, exactly as a player's would.
+func _deskedit_click(target: Control) -> void:
+	if target == null:
+		return
+	var centre: Vector2 = target.get_global_rect().get_center()
+	get_viewport().warp_mouse(centre)
+	var press: InputEventMouseButton = InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.position = centre
+	press.global_position = centre
+	Input.parse_input_event(press)
+	var release: InputEventMouseButton = InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	release.position = centre
+	release.global_position = centre
+	Input.parse_input_event(release)
 
 
 func _deskedit_grab(file_name: String) -> void:
@@ -24211,31 +24466,24 @@ func _drive_deskcolor_smoke() -> void:
 			_deskcolor_wait += 1
 			if _deskcolor_wait >= 4:
 				_deskcolor_grab("deskcolor_wovp.png")
-				_deskcolor_scroll_to(_desk._submit_button)
+				_deskcolor_scroll_to(_desk._find_header("Screenshots - the folder your score photos land in"))
 				_deskcolor_wait = 0
 				_deskcolor_phase = 4
 		4:
 			_deskcolor_wait += 1
 			if _deskcolor_wait >= 4:
-				_deskcolor_grab("deskcolor_submit.png")
-				_deskcolor_scroll_to(_desk._find_header("Screenshots - the folder your score photos land in"))
+				_deskcolor_grab("deskcolor_shots.png")
+				_deskcolor_scroll_to(_desk._find_header("PINemHi - your personal bests on the tournament boards"))
 				_deskcolor_wait = 0
 				_deskcolor_phase = 5
 		5:
 			_deskcolor_wait += 1
 			if _deskcolor_wait >= 4:
-				_deskcolor_grab("deskcolor_shots.png")
-				_deskcolor_scroll_to(_desk._find_header("PINemHi - your personal bests on the tournament boards"))
-				_deskcolor_wait = 0
-				_deskcolor_phase = 6
-		6:
-			_deskcolor_wait += 1
-			if _deskcolor_wait >= 4:
 				_deskcolor_grab("deskcolor_pinemhi.png")
 				_deskcolor_scroll_to(_desk._find_header("Table folders"))
 				_deskcolor_wait = 0
-				_deskcolor_phase = 7
-		7:
+				_deskcolor_phase = 6
+		6:
 			_deskcolor_wait += 1
 			if _deskcolor_wait >= 4:
 				_deskcolor_grab("deskcolor_bottom.png")
@@ -24250,8 +24498,15 @@ func _deskcolor_census_legs() -> void:
 	# IPDB bar's plain middle is the graphite reference).
 	var plain_hdr_mid: Color = (cen["hdr_ipdb"] as Dictionary)["mid"]
 	_deskcolor_expect_header(cen["hdr_wovp"], DeskTheme.FAMILY_WOVP, plain_hdr_mid, "WoVP boards header")
-	_deskcolor_expect_header(cen["hdr_submit"], DeskTheme.FAMILY_WOVP, plain_hdr_mid, "Submit header")
 	_deskcolor_expect_header(cen["hdr_shots"], DeskTheme.FAMILY_WOVP, plain_hdr_mid, "Screenshots header")
+	# CHECKLIST: the High Score Setup heading over them is
+	# a PLAIN bar (the IPDB pattern) - it groups the score
+	# families without joining one.
+	var hs: Dictionary = cen["hdr_highscore"]
+	_deskcolor_expect(bool(hs["found"]), "High Score Setup header: found")
+	_deskcolor_expect(not _deskcolor_near_any_family(hs["bar"]), "High Score Setup header: no family colour on its bar row")
+	_deskcolor_expect((hs["tint"] as Color).is_equal_approx(RoomSpecs.STRIP_LABEL_ACCENT),
+		"High Score Setup header: the title keeps the plain accent tint")
 	_deskcolor_expect_header(cen["hdr_pinemhi"], DeskTheme.FAMILY_PINEMHI, plain_hdr_mid, "PINemHi header")
 	_deskcolor_expect_header(cen["hdr_folders"], DeskTheme.FAMILY_AMBER, plain_hdr_mid, "Table folders header")
 	# The IPDB header stands in NO family.
@@ -24269,10 +24524,12 @@ func _deskcolor_census_legs() -> void:
 	_deskcolor_expect_button(cen["download"], DeskTheme.FAMILY_PICKER, plain_mid, "Download VPS database")
 	_deskcolor_expect_button(cen["save_key"], DeskTheme.FAMILY_CONFIRM, plain_mid, "Save key")
 	_deskcolor_expect_button(cen["test_key"], DeskTheme.FAMILY_CONFIRM, plain_mid, "Test key")
-	_deskcolor_expect_button(cen["choose_photo"], DeskTheme.FAMILY_AMBER, plain_mid, "Choose photo")
-	_deskcolor_expect_button(cen["submit_score"], DeskTheme.FAMILY_AMBER, plain_mid, "Submit score")
+	# CHECKLIST: Enter, armed on this configured stand,
+	# wears the confirm green (its unarmed dress is plain -
+	# the deskedit checklist legs carry that side).
+	_deskcolor_expect_button(cen["enter"], DeskTheme.FAMILY_CONFIRM, plain_mid, "Enter LaunchPin VR (armed)")
 	# The rest of the desk carries NO family colour.
-	for key: String in ["scan", "enter", "open_b2s", "open_unplaced", "shots_save", "pinemhi_save", "ipdb_apply", "advanced_toggle", "details_toggle"]:
+	for key: String in ["scan", "open_b2s", "open_unplaced", "shots_save", "pinemhi_save", "ipdb_apply", "advanced_toggle", "details_toggle"]:
 		_deskcolor_expect_plain(cen[key], key)
 
 
