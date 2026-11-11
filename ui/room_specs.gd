@@ -545,6 +545,40 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 	}
 
 
+## CHECKLIST: the submissions panel's face - the receipt
+## book reborn in the Tournament Room (the desk's list,
+## moved): Main composes the lines from the local
+## submission log (date - challenge - his recorded score
+## when the entry carries one - the outcome, in the
+## standing words), newest first, at most eight. The face
+## wears the SETUP panel's banner dress (machined
+## graphite, display type, accent title); an empty log
+## reads plainly instead of standing blank.
+static func submissions_panel_spec(lines: Array) -> Dictionary:
+	var body: String = "No submissions yet - scores you submit from the Tournament Room stand here."
+	if not lines.is_empty():
+		var strs: Array[String] = []
+		for lv: Variant in lines:
+			strs.append(str(lv))
+		body = "\n".join(strs)
+	return {
+		"kind": "banner",
+		"machined_panel": true,
+		"grad": STRIP_GRAD_REST,
+		"bg": STRIP_GRAD_REST[2],
+		"accent_bar": true,
+		"display_type": true,
+		"title": "MY SUBMISSIONS",
+		"title_size": 76,
+		"title_color": STRIP_LABEL_ACCENT,
+		"sub": "Your recent submissions, newest first.",
+		"sub_size": 38,
+		"sub_color": STRIP_LABEL_REST,
+		"body": body,
+		"body_size": 34,
+	}
+
+
 ## ROOMSUBMIT: the submit panel's face - one challenge's
 ## case in plain lines, in the SETUP panel's banner family
 ## (the room's operations-panel grammar): the table's name

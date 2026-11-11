@@ -1333,6 +1333,25 @@ var _setup_downloader: VpsDownloader = null ## the panel's handle on the shared 
 var _setup_render_in_flight: bool = false ## a panel render is awaiting the factory (the factory takes one render at a time)
 var _setup_render_pending: bool = false ## state changed mid-render or inside the progress throttle: render again after
 var _setup_render_msec: int = 0 ## when the last panel render started (the progress throttle's clock)
+## CHECKLIST: the submissions panel - the receipt book
+## reborn in the Tournament Room (the desk's recent-
+## submissions list, moved here): Main feeds the composed
+## lines (set_submission_lines); X in the Tournament Room
+## raises the panel. The SETUP panel's grammar throughout:
+## its seat, its face measure, one BACK button, the modal
+## discipline (snapshot / inert / restore, focus confined,
+## generation-guarded renders, freed on close).
+var _submissions_panel: Node3D = null ## the panel's holder; in the tree only while the panel stands
+var _submissions_face: ClickableQuad = null
+var _submissions_back_btn: ClickableQuad = null
+var _submissions_panel_up: bool = false
+var _submissions_gen: int = 0
+var _submissions_render_in_flight: bool = false
+var _submissions_render_pending: bool = false
+var _submissions_render_msec: int = 0
+var _submissions_btn_tex: Dictionary = {} ## back button quad -> [rest_tex, lifted_tex] (the SETUP panel's dress discipline)
+var _submissions_btn_home: Dictionary = {} ## back button quad -> its built position (the focus lift's home)
+var _submission_lines: Array = [] ## Main's composed receipt lines, newest first (at most eight); the panel's whole content
 var _pending_library: LibraryScanner = null ## a scan that landed while the SETUP panel stands: held, and adopted ONCE when the panel closes (see adopt_library)
 var _pick_snapshot: Dictionary = {} ## ClickableQuad -> pick_enabled, taken as the placard rises
 var _rail_quads: Dictionary = {} ## key -> ClickableQuad
@@ -4751,7 +4770,7 @@ func _build_status_line() -> void:
 	_controls_label.outline_size = 5
 	_controls_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9)
 	_controls_label.modulate = Color(0.78, 0.83, 0.92)
-	_controls_label.text = "A - PLAY"
+	_controls_label.text = "A - PLAY · X - MY SUBMISSIONS"
 	_controls_label.visible = false
 	add_child(_controls_label)
 
@@ -7941,6 +7960,11 @@ func _refresh_focusables() -> void:
 			_focusables.append(_submit_send_btn)
 		if _submit_back_btn != null:
 			_focusables.append(_submit_back_btn)
+	elif _submissions_panel_up:
+		# CHECKLIST: the submissions panel owns the room
+		# while it stands - its one stop is BACK.
+		if _submissions_back_btn != null:
+			_focusables.append(_submissions_back_btn)
 	elif _mode == "detail" and _detail != null:
 		_focusables = _detail.get_clickables()
 	else:
@@ -7990,6 +8014,10 @@ func _set_focused(q: ClickableQuad) -> void:
 	# here, so the dress can never disagree with the focus.
 	if _setup_panel_up:
 		_apply_setup_panel_button_dress()
+	# CHECKLIST: the submissions panel's button is dressed
+	# the same way, through the same one door.
+	if _submissions_panel_up:
+		_apply_submissions_button_dress()
 
 
 ## ENDGAME (Part B): swap the panel buttons' dresses to
@@ -8085,6 +8113,11 @@ func _refresh_quad_states() -> void:
 		all.append(_submit_send_btn)
 	if _submit_back_btn != null:
 		all.append(_submit_back_btn)
+	# CHECKLIST: the submissions panel's stops, same rule.
+	if _submissions_face != null:
+		all.append(_submissions_face)
+	if _submissions_back_btn != null:
+		all.append(_submissions_back_btn)
 	for q: ClickableQuad in all:
 		q.set_visual_state(q == hovered, q == _focused)
 	# GRADFIX17 telemetry: this sweep walks every quad in
@@ -8927,6 +8960,13 @@ func _activate(quad: ClickableQuad) -> void:
 				quad.pulse()
 				hide_submit_panel()
 		return
+	if _submissions_panel_up:
+		# CHECKLIST: while the submissions panel stands,
+		# its one stop is the room - the same lock.
+		if quad.action_id == "submissions_back":
+			quad.pulse()
+			hide_submissions_panel()
+		return
 	if _placard_up:
 		# While the placard stands, everything else is inert. The
 		# pick flags already say so for the pointer; this is the
@@ -9200,6 +9240,23 @@ func _page_travel_landing(key: String, after_swap: Callable) -> Callable:
 	if debug_focus_nc == "pager":
 		return Callable()
 	return Callable(self, "_land_on_rail_stop").bind(key)
+
+
+## CHECKLIST: X's one door. In the library X is the
+## favourite toggle (below); in the Tournament Room X
+## raises the submissions panel - the receipt book that
+## used to stand on the desk. The pick is by room, never
+## by focus: the Tournament Room carries no favourites
+## (the toggle refuses there), and the library carries
+## no submissions. While any panel or the placard owns
+## the room, X does nothing at all.
+func _x_press() -> void:
+	if _submissions_panel_up or _submit_panel_up or _setup_panel_up or _placard_up:
+		return
+	if _tournament:
+		show_submissions_panel()
+	else:
+		_toggle_focused_favorite()
 
 
 ## X on the pad (and KEY_X on the keyboard): toggle the
@@ -10864,6 +10921,234 @@ func submit_face_spec() -> Dictionary:
 		_wovp_user_id, int(Time.get_unix_time_from_system()), _submit_status, _submit_shots_line)
 
 
+# ------------------------------------------------------- submissions panel
+
+## CHECKLIST: the receipt book, reborn where it is used.
+## The desk carried his recent submissions as a list
+## under its submit form; the form is gone (nobody
+## submits from the desk - the room's panel is the one
+## submission surface) and the list moves here: a panel
+## in the Tournament Room, raised by X - the pad's
+## "this room's other business" key, free here exactly
+## as Y was (favourites are a library act; X is inert in
+## the Tournament Room today). Main composes the lines
+## from the same local log the desk read; the records
+## store does not move, and the panel writes nothing.
+##
+## The mount is the SETUP panel's, whole: its seat, its
+## face measure, its modal discipline - pick
+## snapshot/inert/restore, focus confined to the panel's
+## stops (here: the one BACK button), generation-guarded
+## factory renders, B / D-pad Right as BACK (never an
+## exit), freed on close, never parked.
+
+## Main's feed: the receipt lines, composed from the
+## local log. Stored standing (a panel opened later is
+## already fed); a panel standing now re-renders.
+func set_submission_lines(lines: Array) -> void:
+	_submission_lines = lines.duplicate()
+	if _submissions_panel_up:
+		_request_submissions_render(true)
+
+
+func submission_lines() -> Array:
+	return _submission_lines.duplicate()
+
+
+## The spec the face renders from (the smoke's content
+## read, like submit_face_spec).
+func submissions_face_spec() -> Dictionary:
+	return RoomSpecs.submissions_panel_spec(_submission_lines)
+
+
+func show_submissions_panel() -> void:
+	if _submissions_panel == null:
+		_build_submissions_panel()
+	if not _submissions_panel_up:
+		_pick_snapshot.clear()
+		for q: ClickableQuad in _room_pickables():
+			_pick_snapshot[q] = q.pick_enabled
+		_submissions_panel_up = true
+		add_child(_submissions_panel)
+		ClickableQuad.face_point(_submissions_panel, EYE)
+		_inert_room_quads()
+	_refresh_focusables()
+	_set_focused(_submissions_back_btn)
+	_request_submissions_render(true)
+
+
+## The panel's BACK: tear it down, hand the room back,
+## and land on the rail's TOURNAMENT stop - the room the
+## panel serves (the SETUP panel's landing pattern: the
+## stop that owns the surface).
+func hide_submissions_panel() -> void:
+	if not _submissions_panel_up:
+		return
+	clear_submissions_panel()
+	_land_on_rail_stop("tournament")
+
+
+## Silent teardown for Main's own routes (a fresh room
+## entry): no landing - Main is already driving.
+func clear_submissions_panel() -> void:
+	if not _submissions_panel_up:
+		return
+	_submissions_panel_up = false
+	_submissions_gen += 1
+	if _submissions_panel != null:
+		# Freed, not parked - the panels' rule: parked
+		# holders orphan their meshes at renderer
+		# teardown.
+		if _submissions_panel.get_parent() != null:
+			remove_child(_submissions_panel)
+		_submissions_panel.queue_free()
+		_submissions_panel = null
+		_submissions_face = null
+		_submissions_back_btn = null
+		_submissions_btn_tex.clear()
+		_submissions_btn_home.clear()
+	_restore_room_pick_states()
+	_set_focused(null)
+	_refresh_focusables()
+
+
+## Panel queries (Main's feeds and the smokes read the
+## panel the way the other smokes read their subjects).
+func is_submissions_panel_up() -> bool:
+	return _submissions_panel_up
+
+
+func submissions_panel_holder() -> Node3D:
+	return _submissions_panel
+
+
+func submissions_panel_face_quad() -> ClickableQuad:
+	return _submissions_face
+
+
+func submissions_panel_back_quad() -> ClickableQuad:
+	return _submissions_back_btn
+
+
+func _build_submissions_panel() -> void:
+	_submissions_panel = Node3D.new()
+	_submissions_panel.name = "SubmissionsPanel"
+	# The SETUP panel's seat and face measure (PANELFIT):
+	# front and centre at reading distance, the face
+	# 2.16x1.505 at the standing texture density, and one
+	# full-width BACK row seated under it.
+	_submissions_panel.position = Vector3(0.0, 1.32, -2.35)
+	var placeholder: Texture2D = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
+	_submissions_face = ClickableQuad.new()
+	_submissions_face.setup("submissions_panel_face", "", placeholder, Vector2(2.16, 1.505))
+	_submissions_face.position = Vector3(0.0, 0.8925, 0.0)
+	_submissions_face.pick_enabled = false
+	_submissions_panel.add_child(_submissions_face)
+	_submissions_back_btn = ClickableQuad.new()
+	_submissions_back_btn.setup("submissions_back", "", placeholder, Vector2(2.01, 0.17))
+	_submissions_back_btn.position = Vector3(0.0, 0.0, 0.0)
+	_submissions_panel.add_child(_submissions_back_btn)
+	# ENDGAME (Part B): the button wears the machined
+	# dress - its focus read is the bevel-lift, not the
+	# frame, so the frame is suppressed and the home is
+	# recorded for the lift to rise off.
+	_submissions_back_btn.suppress_frame = true
+	_submissions_btn_home[_submissions_back_btn] = _submissions_back_btn.position
+	# No face_point here: the holder is oriented in
+	# show_submissions_panel, once it is inside the tree
+	# (the placard's lesson).
+
+
+## Panel textures - face plus the one button - render
+## from the standing lines, generation-guarded like the
+## SETUP panel's: renders serialize through the shared
+## factory, a lines change during a render marks
+## pending, and the follow-up runs when the live one
+## lands.
+func _request_submissions_render(immediate: bool) -> void:
+	if not _submissions_panel_up:
+		return
+	if _submissions_render_in_flight or (not immediate and Time.get_ticks_msec() - _submissions_render_msec < 250):
+		_submissions_render_pending = true
+		return
+	_submissions_render_pending = false
+	_submissions_render_in_flight = true
+	_submissions_render_msec = Time.get_ticks_msec()
+	_submissions_gen += 1
+	_fill_submissions_textures(_submissions_gen)
+
+
+func _after_submissions_render() -> void:
+	_submissions_render_in_flight = false
+	if _submissions_render_pending and _submissions_panel_up:
+		_submissions_render_pending = false
+		_submissions_render_in_flight = true
+		_submissions_render_msec = Time.get_ticks_msec()
+		_submissions_gen += 1
+		_fill_submissions_textures(_submissions_gen)
+
+
+func _fill_submissions_textures(gen: int) -> void:
+	var face_tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.submissions_panel_spec(_submission_lines), Vector2i(1472, 1024))
+	if gen != _submissions_gen or not _submissions_panel_up or _submissions_face == null:
+		_after_submissions_render()
+		return
+	_submissions_face.set_texture(face_tex)
+	# The button fills in two passes (the SETUP panel's
+	# discipline): the RESTING dress, then the LIFTED one.
+	for lifted_pass: bool in [false, true]:
+		if not await _fill_submissions_button(gen, lifted_pass):
+			_after_submissions_render()
+			return
+	_after_submissions_render()
+
+
+## One dress of the BACK button (the SETUP panel's
+## _fill_setup_button, one-button form): renders it,
+## files it in the button's pair, and seats the
+## focus-correct dress the pair can offer. Returns false
+## when the fill went stale mid-render.
+func _fill_submissions_button(gen: int, lifted_variant: bool) -> bool:
+	if _submissions_back_btn == null:
+		return true
+	var tex: Texture2D = await _factory.render_texture(
+		RoomSpecs.panel_button_spec("BACK", true, lifted_variant), Vector2i(1372, 116))
+	if gen != _submissions_gen or not _submissions_panel_up:
+		return false
+	var pair: Array = (_submissions_btn_tex.get(_submissions_back_btn, [null, null]) as Array).duplicate()
+	if pair.size() != 2:
+		pair = [null, null]
+	pair[1 if lifted_variant else 0] = tex
+	_submissions_btn_tex[_submissions_back_btn] = pair
+	if _submissions_back_btn == _focused and pair[1] != null:
+		_submissions_back_btn.set_texture(pair[1])
+	elif pair[0] != null:
+		_submissions_back_btn.set_texture(pair[0])
+	return true
+
+
+## The BACK button's dress follows the focus (the SETUP
+## panel's _apply_setup_panel_button_dress, one-button
+## form): lifted texture + a step toward the eye while
+## focused, resting texture + home seat otherwise.
+func _apply_submissions_button_dress() -> void:
+	var bq: ClickableQuad = _submissions_back_btn
+	if bq == null:
+		return
+	var lifted: bool = bq == _focused
+	var pair: Array = _submissions_btn_tex.get(bq, []) as Array
+	if pair.size() == 2:
+		var want: Texture2D = pair[1] if lifted else pair[0]
+		if want != null and bq.current_texture() != want:
+			bq.set_texture(want)
+	if _submissions_btn_home.has(bq):
+		var home: Vector3 = _submissions_btn_home[bq] as Vector3
+		var seat: Vector3 = home + Vector3(0.0, 0.0, SETUP_BTN_LIFT if lifted else 0.0)
+		if bq.position != seat:
+			bq.position = seat
+
+
 ## Panel textures - face plus the two buttons - render
 ## from current state, generation-guarded like the SETUP
 ## panel's: renders serialize through the shared factory,
@@ -12173,7 +12458,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_Y:
 				_info_focused_card() ## keyboard parity with the pad's Y (see _process)
 			KEY_X:
-				_toggle_focused_favorite() ## keyboard parity with the pad's X (see _process)
+				_x_press() ## keyboard parity with the pad's X (see _process)
 			KEY_ENTER, KEY_KP_ENTER, KEY_SPACE:
 				_a_press() ## keyboard parity with the pad's A (see _process)
 			KEY_ESCAPE:
@@ -12475,6 +12760,8 @@ func _process(delta: float) -> void:
 			_detail.handle_escape()
 		elif _submit_panel_up:
 			hide_submit_panel() ## B is BACK on the submit panel - it never exits the tournament from behind the panel
+		elif _submissions_panel_up:
+			hide_submissions_panel() ## B is BACK on the submissions panel too
 		elif _setup_panel_up:
 			hide_setup_panel() ## B is BACK on the SETUP panel too
 		elif _tournament and _mode == "wall" and debug_b_nc != "nobexit":
@@ -12513,7 +12800,7 @@ func _process(delta: float) -> void:
 	# _toggle_focused_favorite.
 	var x_now: bool = Input.is_joy_button_pressed(0, JOY_BUTTON_X)
 	if x_now and not _joy_prev_x and not deaf:
-		_toggle_focused_favorite()
+		_x_press() ## CHECKLIST: X's door - favourite in the library, the submissions panel in the Tournament Room
 	_joy_prev_x = x_now
 	# Bumpers (LB/RB): the unified travel grammar's step
 	# (GRADFIX14 item 3): wall focus = page travel, the
@@ -12568,6 +12855,8 @@ func _process(delta: float) -> void:
 	if right_now and not _joy_prev_right and _joy_right_armed and not deaf:
 		if _submit_panel_up:
 			hide_submit_panel() ## on the submit panel D-pad Right is BACK - it never exits
+		elif _submissions_panel_up:
+			hide_submissions_panel() ## on the submissions panel D-pad Right is BACK too
 		elif _setup_panel_up:
 			hide_setup_panel() ## on the SETUP panel the BACK button goes back - it never exits
 		elif not _placard_up:

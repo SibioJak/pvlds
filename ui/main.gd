@@ -194,9 +194,6 @@ var _ipdb_pushed_size: int = -1 ## BACKTRIM: the facts content last handed to th
 var _ipdb_pushed_hash: int = 0
 var _ipdb_seeded: int = 0 ## IPDBFIX: games that gained facts at the last bundled-snapshot seed (boot or a SETUP re-apply) - the smoke's seed witness
 var _wovp_user_id: String = "" ## whose key is saved (validate's answer, or the cache's when its key hash matches)
-var _pending_recorded_score: int = 0 ## SUBMIT2: the desk record field's parsed value for the in-flight submission - consumed by _record_submit_outcome into the LOCAL log only, never sent
-var _pending_recorded_junk: bool = false ## SUBMIT2: the record field held non-numeric junk for the in-flight submission - the send still happens; one plain line rides the outcome words
-var _submit_origin: String = "desk" ## ROOMSUBMIT: which surface the in-flight submission came from ("desk" | "room") - the verdict routes back to its surface (the room's panel gets its words through set_wovp_submit_result); the log and the desk history take every attempt either way
 var _wovp_user_name: String = ""
 var _wovp_identity_key_hash: int = 0 ## the hash of the key _wovp_user_id was resolved for
 var _wovp_identity_state: String = "untested" ## "untested" | "ok" | "failed" - this session's last validation outcome
@@ -428,13 +425,6 @@ var _ld_phase: int = 0
 var _ld_wait: int = 0
 var _ld_failures: int = 0
 var _ld_done: bool = false
-var _smoke_submit: bool = false ## --pvlds-smoke-submit (SUBMIT round): the desk-stay submission smoke - scans the letter library, fetches the stub's boards, drives the desk's REAL submit section (picker, warning, photo attach, submit press) and reads the stub's request log as the wire's witness. Modes in PVLDS_SUBMIT_SMOKE_MODE: happy | noscore | badphoto | nothigher | shortkey | recorded | junk (SUBMIT2: the record field filled / filled with junk; PVLDS_SUBMIT_SCORE_TEXT carries the text, PVLDS_SUBMIT2_NC=wireleak must fail the wire-law leg by name)
-var _submit_mode: String = ""
-var _submit_phase: int = 0
-var _submit_wait: int = 0
-var _submit_failures: int = 0
-var _submit_scan_kicked: bool = false
-var _submit_done: bool = false
 var _smoke_roomsubmit: bool = false ## --pvlds-smoke-roomsubmit (ROOMSUBMIT round): the in-room submission smoke - enters the Tournament Room against the stub, seats the Addams challenge, opens the submit panel with REAL pad presses through the room's poll (Y opens, A sends, B / D-pad Right back out), and judges the panel standing: case + warning lines, the fixture shots newest-first, the focused shot large (texture means), rendered grabs, the wire through the stub's log, the local log without recorded_score. Modes in PVLDS_ROOMSUBMIT_SMOKE_MODE: happy | nothigher | unset | empty | nokey. The SUBMIT NC seams double as this smoke's: PVLDS_SUBMIT_NC=nowarn must fail the "warning posted" leg by name, noupload the "wire order" leg
 var _rs_mode: String = ""
 var _rs_phase: int = 0
@@ -914,11 +904,6 @@ func _ready() -> void:
 		_smoke_starfield = true
 	if user_args.has("--pvlds-smoke-scoremark"):
 		_smoke_scoremark = true
-	if user_args.has("--pvlds-smoke-submit"):
-		_smoke_submit = true
-		_submit_mode = OS.get_environment("PVLDS_SUBMIT_SMOKE_MODE")
-		if _submit_mode == "":
-			_submit_mode = "happy"
 	if user_args.has("--pvlds-smoke-roomsubmit"):
 		_smoke_roomsubmit = true
 		_rs_mode = OS.get_environment("PVLDS_ROOMSUBMIT_SMOKE_MODE")
@@ -1350,7 +1335,7 @@ func _ready() -> void:
 	# its answer applies to the desk when it lands and to the
 	# room at entry - see the update-check section below).
 	_start_update_check()
-	if configured and _config.is_configured() and not user_args.has("--setup") and not _smoke_desk and not _smoke_submit:
+	if configured and _config.is_configured() and not user_args.has("--setup") and not _smoke_desk:
 		# Configured boot: the boot face stands from the first
 		# frame (BOOTFACE: LaunchPin + the scanning line, no
 		# setup form - the desk is not even created) and the
@@ -1575,8 +1560,6 @@ func _process(_delta: float) -> void:
 		_drive_starfield_smoke()
 	if _smoke_scoremark:
 		_drive_scoremark_smoke()
-	if _smoke_submit:
-		_drive_submit_smoke()
 	if _smoke_roomsubmit:
 		_drive_roomsubmit_smoke()
 	if _smoke_submitnav:
@@ -1965,12 +1948,15 @@ func _refresh_setup_panel_health() -> void:
 ## Push the standing WoVP truth to the room (its banner,
 ## boards, and state panels render exactly this).
 func _push_wovp_data() -> void:
-	# The desk's submit rows ride every boards change too
-	# (the SUBMIT round) - they are not the room's data, so
-	# they push before the room's early return.
+	# CHECKLIST: the receipt book's lines ride every
+	# boards change too - they are the room's panel data,
+	# pushed before and after the room's early return so
+	# a room created later still gets fed at entry (the
+	# _enter_room path calls this push).
 	_push_submit_data()
 	if _room == null:
 		return
+	_room.set_submission_lines(_submission_history_lines())
 	_room.set_wovp_data({
 		"has_key": _config != null and _config.wovp_api_key != "",
 		"user_id": _wovp_user_id,
@@ -2316,18 +2302,16 @@ func _on_desk_wovp_test_requested(api_key: String) -> void:
 
 
 # ------------------------------------------------------------
-# Score submission (the SUBMIT round): Main's half of the
-# desk's submit section - the picker rows, the two-step
-# call, the local log, and the boards refresh a success
-# triggers.
+# Score submission: the challenge rows (the room SEND's
+# vpx-file join), the two-step call, the local log, and
+# the boards refresh a success triggers.
 
-## The desk's picker rows: one per live challenge, carrying
-## everything the section shows before a submission is
-## spent - the library's standing (the room's own join,
-## mirrored below) and the posted-score warning. Rebuilt
-## via _push_submit_data on every boards / identity / scan
-## change, so the picker never offers a dead challenge or
-## a stale warning.
+## The challenge rows: one per live challenge, carrying
+## the library's standing (the room's own join, mirrored
+## below) and the posted-score warning. The room's SEND
+## reads the vpx file from these; rebuilt on every call
+## from the standing challenges, so a dead challenge is
+## never offered.
 func _build_submit_rows() -> Array:
 	var rows: Array = []
 	var now_unix: int = int(Time.get_unix_time_from_system())
@@ -2388,20 +2372,25 @@ func _submit_build_owned(game: GameEntry, ch: WovpChallenge) -> bool:
 
 
 func _push_submit_data() -> void:
-	if _desk != null:
-		_desk.set_wovp_submit_data(_build_submit_rows(), _config != null and _config.wovp_api_key != "")
+	# CHECKLIST: the desk's picker half is gone with the
+	# form - what remains of this push is the receipt
+	# book's feed to the Tournament Room's panel.
 	_push_submission_history()
 
 
-## The receipt book's lines for the desk (SUBMIT2): the
-## local log read back, newest first, at most eight -
-## date, challenge, his recorded score when he typed one
+## The receipt book's lines (SUBMIT2, reborn in the
+## Tournament Room by CHECKLIST): the local log read
+## back, newest first, at most eight - date, challenge,
+## his recorded score when the entry carries one
 ## (grouped the pinball way), the outcome. Built here,
-## like every string the desk renders: the desk shows,
+## like every string the room renders: the room shows,
 ## Main composes.
 func _push_submission_history() -> void:
-	if _desk == null:
-		return
+	if _room != null:
+		_room.set_submission_lines(_submission_history_lines())
+
+
+func _submission_history_lines() -> Array:
 	var entries: Array = WovpClient.load_submission_log()
 	var lines: Array[String] = []
 	var i: int = entries.size() - 1
@@ -2414,7 +2403,7 @@ func _push_submission_history() -> void:
 		parts.append(str(e.get("result", "")))
 		lines.append(" - ".join(parts))
 		i -= 1
-	_desk.set_wovp_submission_history(lines)
+	return lines
 
 
 ## A log entry's date, in the player's own timezone
@@ -2426,58 +2415,18 @@ static func _history_date(unix: int) -> String:
 	return "%04d-%02d-%02d" % [int(dt.get("year", 0)), int(dt.get("month", 0)), int(dt.get("day", 0))]
 
 
-## The desk's Submit: the local refusals speak first (no
-## key; a key WoVP would refuse on shape - nothing is sent
-## for either), then the client's two-step transaction runs
-## and its signal carries the verdict. The metadata's rom
-## ships "" - no ROM name is known anywhere in PVLDS (the
-## scanner and the db carry none), and the contract takes
-## the file name as the identity that matters.
-func _on_desk_wovp_submit_requested(challenge_id: String, photo_path: String, score_text: String = "") -> void:
-	_submit_origin = "desk"
-	# SUBMIT2: the record field is parsed ONCE, here - its
-	# value is parked for the log entry whichever way the
-	# attempt lands, and junk is remembered for one plain
-	# line in the outcome words. Neither ever rides the
-	# wire: the client gets the parsed value only so the
-	# wireleak NC has a seam (see WovpClient.submit_score).
-	var parsed_rec: Dictionary = WovpClient.parse_recorded_score(score_text)
-	_pending_recorded_score = int(parsed_rec.get("value", 0))
-	_pending_recorded_junk = bool(parsed_rec.get("junk", false))
-	if _config == null or _config.wovp_api_key == "":
-		_record_submit_outcome(challenge_id, photo_path, "No WoVP key saved - save your key above first; submissions use the same key.")
-		return
-	var length_note: String = WovpClient.key_length_note(_config.wovp_api_key)
-	if length_note != "":
-		_record_submit_outcome(challenge_id, photo_path, length_note)
-		return
-	if _wovp_client == null:
-		_record_submit_outcome(challenge_id, photo_path, "The WoVP client is not running - restart LaunchPin.")
-		return
-	var vpx_file: String = ""
-	for rv: Variant in _build_submit_rows():
-		var row: Dictionary = rv as Dictionary
-		if str(row.get("challenge_id", "")) == challenge_id:
-			vpx_file = str(row.get("vpx_file", ""))
-			break
-	_wovp_client.submit_score(_config.wovp_api_key, challenge_id, photo_path, vpx_file, "", _pending_recorded_score)
-
-
-## ROOMSUBMIT: the room's SEND - the same transaction the
-## desk runs, from the panel standing in the Tournament
-## Room. The differences are the surface's own, and they
-## are deliberate: no record field (the typed score stays
-## desk-only, so the parked value is 0 and the log entry
-## carries no recorded_score), room-shaped refusal words
-## where the desk's point at the desk ("save your key
-## above first"), and the verdict routed back to the
-## panel as well as to the log (see _on_wovp_submit_finished).
-## Everything else - the 32-char pre-check, the two-step
-## client call, the log, the boards refresh - is shared.
+## ROOMSUBMIT: the room's SEND - the product's one
+## submission transaction, run from the panel standing in
+## the Tournament Room (the desk's form is gone since
+## CHECKLIST; the room panel was always the surface a
+## player actually stands at). No record field: the log
+## entry carries no recorded_score. Refusals speak in
+## room-shaped words, and the verdict routes back to the
+## panel as well as to the log (see
+## _on_wovp_submit_finished). The 32-char pre-check, the
+## two-step client call, the log, and the boards refresh
+## are this function's whole machinery.
 func _on_room_wovp_submit_requested(challenge_id: String, photo_path: String) -> void:
-	_submit_origin = "room"
-	_pending_recorded_score = 0
-	_pending_recorded_junk = false
 	if _config == null or _config.wovp_api_key == "":
 		_record_room_submit_refusal(challenge_id, photo_path, "No WoVP key saved - submissions use the same key as the boards. Add it in SETUP.")
 		return
@@ -2516,9 +2465,8 @@ func _record_room_submit_refusal(challenge_id: String, photo_path: String, resul
 ## from there.
 func _on_wovp_submit_finished(ok: bool, message: String, challenge_id: String, photo_name: String) -> void:
 	_record_submit_outcome(challenge_id, "", message, photo_name)
-	if _submit_origin == "room" and _room != null:
+	if _room != null:
 		_room.set_wovp_submit_result(ok, message, challenge_id)
-	_submit_origin = "desk"
 	if ok:
 		_wovp_fetch_boards()
 
@@ -2527,20 +2475,13 @@ func _on_wovp_submit_finished(ok: bool, message: String, challenge_id: String, p
 ## the local refusals alike: the desk's status line and
 ## the local submission log both take the same words.
 func _record_submit_outcome(challenge_id: String, photo_path: String, result: String, photo_name: String = "") -> void:
-	# SUBMIT2: the parked record is consumed exactly once,
-	# here - the value joins the log entry (never the
-	# wire), and junk earns one plain line on the desk's
-	# status (the logged result keeps the verdict's own
-	# words, unadorned).
-	var recorded: int = _pending_recorded_score
-	var junk: bool = _pending_recorded_junk
-	_pending_recorded_score = 0
-	_pending_recorded_junk = false
-	var status: String = result
-	if junk:
-		status += " The score you typed could not be read as a number, so it was not recorded."
-	if _desk != null:
-		_desk.set_wovp_submit_status(status)
+	# CHECKLIST: the outcome lands in the local log, and
+	# the log's reader (the Tournament Room's submissions
+	# panel) is re-fed - there is no desk surface anymore.
+	# (SUBMIT2's typed record died with the desk form: the
+	# room's send never carried one, and the log entries
+	# written in that era keep theirs - the panel prints
+	# a recorded score when an entry has one.)
 	var challenge_name: String = challenge_id
 	for cv: Variant in _wovp_challenges:
 		var ch: WovpChallenge = cv as WovpChallenge
@@ -2554,8 +2495,6 @@ func _record_submit_outcome(challenge_id: String, photo_path: String, result: St
 		"photo": photo_name if photo_name != "" else photo_path.get_file(),
 		"result": result,
 	}
-	if recorded > 0:
-		entry["recorded_score"] = recorded
 	WovpClient.append_submission_log(entry)
 	_push_submission_history()
 
@@ -2575,7 +2514,7 @@ func build_scan_summary() -> String:
 	if _last_db_kind == "sample":
 		lines.append("!! SAMPLE DATABASE ACTIVE !!")
 		lines.append("The bundled database is 10 invented games for testing LaunchPin itself - it cannot identify real tables. Use 'Download VPS database' above to fetch the real one; until then tables are identified from file names only (no VR tags, designers, or known builds).")
-		lines.append("The room stays closed until a real database is in place - download it above, then Save & Scan.")
+		lines.append("The room stays closed until a real database is in place - download it above, then Save Options and Scan for Tables.")
 	lines.append("Scanned %d table files in %d folder(s): %d games (%d with multiple builds)." % [
 		s.total_files, _config.table_folders.size(), s.games.size(), s.duplicate_group_count()])
 	if _last_db_ok:
@@ -2686,6 +2625,7 @@ func _enter_room() -> void:
 		_room.clear_setup_placard()
 		_room.clear_setup_panel()
 		_room.clear_submit_panel()
+		_room.clear_submissions_panel()
 	# The SETUP panel's health rows start from the last scan's
 	# numbers, whichever route built the room.
 	_room.set_setup_health(_setup_panel_health())
@@ -4132,7 +4072,6 @@ func _show_desk(message: String = "") -> void:
 		_desk.update_later_pressed.connect(_on_update_later_pressed)
 		_desk.wovp_key_saved.connect(_on_desk_wovp_key_saved)
 		_desk.wovp_test_requested.connect(_on_desk_wovp_test_requested)
-		_desk.wovp_submit_requested.connect(_on_desk_wovp_submit_requested)
 		_desk.pinemhi_settings_saved.connect(_push_wovp_data)
 		_desk.screenshots_settings_saved.connect(_push_wovp_data)
 		_desk.ipdb_snapshot_requested.connect(_apply_ipdb_snapshot)
@@ -17005,27 +16944,10 @@ func _finish_loading_smoke() -> void:
 ## phase 5 fails by name. (The CARDBACK-era NOTRIM
 ## variant is retired: its surface - the trimmed grid -
 ## no longer exists.)
-## ------------------------------------------------------------
-## Submit smoke (--pvlds-smoke-submit; the SUBMIT round).
-## A desk-stay boot: scan the letter library, fetch the
-## stub's boards, then drive the desk's REAL submit
-## section - the picker, the warning, the photo attach via
-## the real dialog handler, the real submit press - and
-## read the stub's request log as the wire's witness.
-## Modes (PVLDS_SUBMIT_SMOKE_MODE): happy (the full
-## transaction), noscore (the stub's baduser variant: the
-## warning's open door), badphoto (the envelope refuses),
-## nothigher (the submit refuses with words), shortkey
-## (a 5-character key: refused locally, nothing sent).
-
-func _submit_expect(ok: bool, label: String) -> void:
-	if ok:
-		print("PVLDS SUBMIT SMOKE OK: ", label)
-	else:
-		_submit_failures += 1
-		printerr("PVLDS SUBMIT SMOKE FAIL: ", label)
-
-
+## The WoVP stub's request log, parsed - the wire's
+## witness for the roomsubmit and submitpanel smokes
+## (it was the desk submit smoke's helper first; the
+## desk driver retired with the form, the witness stays).
 func _submit_stub_lines() -> Array:
 	var path: String = OS.get_environment("PVLDS_WOVP_STUB_LOG")
 	var out: Array = []
@@ -17042,200 +16964,6 @@ func _submit_stub_lines() -> Array:
 		if parsed is Dictionary:
 			out.append(parsed)
 	return out
-
-
-func _submit_select(challenge_id: String) -> bool:
-	for i: int in range(_desk._submit_rows.size()):
-		if str((_desk._submit_rows[i] as Dictionary).get("challenge_id", "")) == challenge_id:
-			_desk._submit_picker.selected = i
-			_desk._on_submit_challenge_selected(i)
-			return true
-	return false
-
-
-func _drive_submit_smoke() -> void:
-	if _submit_done:
-		return
-	_submit_wait += 1
-	match _submit_phase:
-		0:
-			if _desk == null:
-				if _submit_wait > 3600:
-					_submit_expect(false, "boot: the desk never stood")
-					_submit_finish_smoke()
-				return
-			if _submit_mode == "shortkey":
-				_submit_phase = 10
-				return
-			if not _submit_scan_kicked:
-				_submit_scan_kicked = true
-				start_scan()
-				return
-			if _scan_active:
-				return
-			_wovp_fetch_boards()
-			_submit_phase = 1
-			_submit_wait = 0
-		1:
-			if _desk._submit_rows.size() < 5:
-				if _submit_wait > 7200:
-					_submit_expect(false, "rows: the boards never reached the picker")
-					_submit_finish_smoke()
-				return
-			_submit_run_form_legs()
-			_submit_phase = 2
-			_submit_wait = 0
-		2:
-			var verdict: String = _desk._submit_label.text
-			if verdict == "" or verdict == "Submitting...":
-				if _submit_wait > 7200:
-					_submit_expect(false, "verdict: the submission never answered")
-					_submit_finish_smoke()
-				return
-			_submit_run_verdict_legs(verdict)
-			_submit_finish_smoke()
-		10:
-			# shortkey: no fetch at all - Main's own handler
-			# with the mode's short key must refuse in words
-			# before anything is sent.
-			_on_desk_wovp_submit_requested("fixture-ch-season-main-w3", OS.get_environment("PVLDS_SUBMIT_PHOTO"))
-			_submit_run_verdict_legs(_desk._submit_label.text)
-			_submit_finish_smoke()
-
-
-func _submit_run_form_legs() -> void:
-	_submit_expect(_desk._submit_rows.size() == 5, "picker: all five live challenges stand")
-	_submit_expect(_submit_select("fixture-ch-season-main-w3"), "picker: the Addams challenge selects")
-	# On this fixture his Addams scan resolves to the game
-	# only (no build-level match), so the room's own join
-	# calls it a different build - the section must say so,
-	# and the metadata's file name then honestly ships "".
-	_submit_expect(_desk._submit_info.text.contains("Different build in your library."), "library state: his Addams is a different build and says so")
-	if _submit_mode == "noscore":
-		_submit_expect(_desk._submit_info.text.contains("No score posted yet - any finished game counts."), "warning none: the open door stands when he has no score")
-	else:
-		_submit_expect(_desk._submit_info.text.contains("Your posted score: 24,531,070") and _desk._submit_info.text.contains("beats it"), "warning posted: his posted score is named before anything is sent")
-	_submit_expect(_submit_select("fixture-ch-season-acdc-w3"), "picker: the AC/DC challenge selects")
-	_submit_expect(_desk._submit_info.text.contains("Not in your library."), "library state: a table he does not own says so")
-	_submit_expect(_submit_select("fixture-ch-season-main-w3"), "picker: back to the Addams challenge")
-	# The photo attach, through the desk's real dialog
-	# handler: the name of the chosen file is what shows -
-	# and the frame itself stands on the desk (the verify
-	# step: a display caught mid-blink is rejected by his
-	# eyes here, not by an admin later).
-	_submit_expect(_desk._submit_preview.texture == null and not _desk._submit_preview.visible, "photo preview: nothing stands before a photo is chosen")
-	var photo: String = OS.get_environment("PVLDS_SUBMIT_PHOTO")
-	_desk._dialog_target = "photo"
-	_desk._on_dialog_file(photo)
-	_submit_expect(_desk._submit_photo_label.text == photo.get_file() and _desk._submit_photo_path == photo, "photo name: the chosen file's name shows")
-	_submit_expect(_desk._submit_preview.texture != null and _desk._submit_preview.visible and _desk._submit_verify_label.visible, "photo preview: the chosen photo stands on the desk to be read")
-	# SUBMIT2 modes: the record field is filled through
-	# the real LineEdit before the press, and in recorded
-	# mode the receipt book is seeded with two older
-	# attempts so the history legs can read them back
-	# standing beside the fresh one.
-	if _submit_mode == "recorded" or _submit_mode == "junk":
-		_desk._submit_score_edit.text = OS.get_environment("PVLDS_SUBMIT_SCORE_TEXT")
-	if _submit_mode == "recorded":
-		WovpClient.append_submission_log({"time": 1762300000, "challenge_id": "seed-earlier", "challenge": "Seeded Earlier Challenge", "photo": "old-shot.jpg", "result": "Submitted - awaiting validation.", "recorded_score": 7654321})
-		WovpClient.append_submission_log({"time": 1762400000, "challenge_id": "seed-plain", "challenge": "Seeded Plain Challenge", "photo": "old-shot2.jpg", "result": "WoVP refused the photo: too dark"})
-	_desk._on_submit_pressed()
-
-
-func _submit_run_verdict_legs(verdict: String) -> void:
-	match _submit_mode:
-		"happy", "noscore":
-			_submit_expect(verdict.contains("Submitted - awaiting validation."), "success words: Submitted - awaiting validation")
-			if _submit_mode == "happy":
-				var lines: Array = _submit_stub_lines()
-				var photo_idx: int = -1
-				var submit_idx: int = -1
-				var body: Dictionary = {}
-				for i: int in range(lines.size()):
-					var p: String = str((lines[i] as Dictionary).get("path", ""))
-					if p.ends_with("/scores/submit-photo") and photo_idx < 0:
-						photo_idx = i
-					if p.ends_with("/scores/submit"):
-						submit_idx = i
-						var sb: Variant = (lines[i] as Dictionary).get("submit_body", {})
-						if sb is Dictionary:
-							body = sb
-				_submit_expect(photo_idx >= 0 and submit_idx > photo_idx, "happy path: the photo went up before the submit")
-				var meta: Dictionary = body.get("metadata", {}) as Dictionary
-				_submit_expect(int(body.get("score", -1)) == 0, "submit body: the score is the literal 0 stub")
-				_submit_expect(str(body.get("challengeId", "")) == "fixture-ch-season-main-w3", "submit body: the challenge binds")
-				_submit_expect(meta.has("pvlds-version") and not meta.has("vpin-studio-version"), "submit body: the metadata is honest to PVLDS")
-				_submit_expect(int(body.get("playingPlatform", -1)) == WovpClient.SUBMIT_PLATFORM and int(meta.get("platform", -2)) == WovpClient.SUBMIT_PLATFORM, "submit body: one platform slot in both fields")
-				var promised: String = "<no row>"
-				for rv2: Variant in _desk._submit_rows:
-					if str((rv2 as Dictionary).get("challenge_id", "")) == "fixture-ch-season-main-w3":
-						promised = str((rv2 as Dictionary).get("vpx_file", ""))
-				_submit_expect(str(meta.get("vpx-file", "")) == promised, "submit body: the file name the section promised is the one sent")
-				var logged: bool = false
-				for ev: Variant in WovpClient.load_submission_log():
-					var e: Dictionary = ev as Dictionary
-					if str(e.get("challenge_id", "")) == "fixture-ch-season-main-w3" and str(e.get("result", "")).contains("awaiting validation"):
-						logged = true
-				_submit_expect(logged, "submission log: the attempt stands in the local log")
-		"recorded":
-			_submit_expect(verdict.contains("Submitted - awaiting validation."), "success words: Submitted - awaiting validation")
-			_submit_expect(not verdict.contains("could not be read as a number"), "record field: a clean number earns no complaint")
-			var rec_body: Dictionary = {}
-			var rec_line: String = ""
-			for lv2: Variant in _submit_stub_lines():
-				var ld: Dictionary = lv2 as Dictionary
-				if str(ld.get("path", "")).ends_with("/scores/submit"):
-					rec_line = JSON.stringify(ld)
-					var sbv: Variant = ld.get("submit_body", {})
-					if sbv is Dictionary:
-						rec_body = sbv
-			_submit_expect(int(rec_body.get("score", -1)) == 0 and not rec_line.contains("16638090"),
-				"wire law: the typed score never reaches the payload - the body keeps its 0 stub and no field carries the number")
-			var rec_logged: int = -1
-			for ev2: Variant in WovpClient.load_submission_log():
-				var e2: Dictionary = ev2 as Dictionary
-				if str(e2.get("challenge_id", "")) == "fixture-ch-season-main-w3":
-					rec_logged = int(e2.get("recorded_score", -1))
-			_submit_expect(rec_logged == 16638090, "submission log: the typed score stands in the local log as recorded_score")
-			_submit_expect(_desk._submit_history_label.visible and _desk._submit_history_label.text.contains("Seeded Earlier Challenge") and _desk._submit_history_label.text.contains("7,654,321"),
-				"recent submissions: a seeded older attempt reads back with its recorded score, grouped")
-			_submit_expect(_desk._submit_history_label.text.split("\n")[0].contains("16,638,090"),
-				"recent submissions: the fresh attempt stands first, its recorded score beside it")
-		"junk":
-			_submit_expect(verdict.contains("Submitted - awaiting validation."), "success words: Submitted - awaiting validation")
-			_submit_expect(verdict.contains("could not be read as a number, so it was not recorded."),
-				"record field: junk is answered in plain words - ignored, never blocking")
-			var junk_clean: bool = true
-			for ev3: Variant in WovpClient.load_submission_log():
-				if (ev3 as Dictionary).has("recorded_score"):
-					junk_clean = false
-			_submit_expect(junk_clean, "submission log: junk leaves no recorded score behind")
-		"badphoto":
-			_submit_expect(verdict.contains("STUB-PHOTO-REFUSED"), "errors abort: the envelope's words reach the player")
-			var saw_submit: bool = false
-			for lv: Variant in _submit_stub_lines():
-				if str((lv as Dictionary).get("path", "")).ends_with("/scores/submit"):
-					saw_submit = true
-			_submit_expect(not saw_submit, "errors abort: the submit was never sent")
-		"nothigher":
-			_submit_expect(verdict.contains("WOVP-STUB-NOT-HIGHER"), "server words: a non-200 refusal reaches the player in the server's words")
-		"shortkey":
-			_submit_expect(verdict.contains("characters"), "key shape: a short key is refused in words before anything is sent")
-			var saw_any: bool = false
-			for lv: Variant in _submit_stub_lines():
-				if str((lv as Dictionary).get("path", "")).contains("/scores/"):
-					saw_any = true
-			_submit_expect(not saw_any, "key shape: nothing was sent")
-
-
-func _submit_finish_smoke() -> void:
-	_submit_done = true
-	if _submit_failures == 0:
-		print("PVLDS SUBMIT SMOKE: PASS")
-		get_tree().quit(0)
-	else:
-		printerr("PVLDS SUBMIT SMOKE: FAIL (%d)" % _submit_failures)
-		get_tree().quit(1)
 
 
 ## Roomsubmit smoke (--pvlds-smoke-roomsubmit; the
