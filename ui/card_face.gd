@@ -1515,12 +1515,22 @@ func _pop_numbers(text: String, col: Color) -> String:
 
 ## PANEL112 (item 2): one section band of the SETUP panel's
 ## face: a soft-tint PanelContainer carrying a small quiet
-## header and the section's lines. The lines render in a
-## rich label dressed exactly like the body's rich twin -
-## the standing size, the standing ink, the display type
-## when the spec wears it, and the numbers popped in the
-## spec's own "body_number_color" - so sectioning changes
-## the grouping and nothing else about the words.
+## header and the section's lines. The lines render in rich
+## labels dressed exactly like the body's rich twin - the
+## standing size, the standing ink, the display type when
+## the spec wears it, and the numbers popped in the spec's
+## own "body_number_color" - so sectioning changes the
+## grouping and nothing else about the words.
+## PANEL112 follow-up (Chris's field note on the shipped
+## face): the lines stand LEFT-aligned, one label per
+## logical line - centred wrapping made a wrapped line and
+## a fresh line indistinguishable and stranded single words
+## mid-band ("Setup." alone). Left-aligned, a wrap hugs the
+## margin and reads as one block; and the stack's
+## separation (12) falls BETWEEN logical lines only, so a
+## paragraph break stands visibly taller than a wrap break
+## (a wrap steps by the font's own line height inside its
+## label). The header keeps the face's centred dress.
 func _make_section(sd: Dictionary, body_px: int, display_type: bool, pop_col: Variant, centered: bool) -> PanelContainer:
 	var pc: PanelContainer = PanelContainer.new()
 	var sb: StyleBoxFlat = StyleBoxFlat.new()
@@ -1531,12 +1541,17 @@ func _make_section(sd: Dictionary, body_px: int, display_type: bool, pop_col: Va
 	sb.corner_radius_bottom_right = 10
 	sb.content_margin_left = 22
 	sb.content_margin_right = 22
-	sb.content_margin_top = 12
-	sb.content_margin_bottom = 14
+	# PANEL112 follow-up: the bands' vertical padding trims
+	# 12/14 -> 8/10 - the paragraph separation the same note
+	# added costs ~90 px on the worst-case census, and the
+	# trim buys the footer's bottom margin back without
+	# touching the words, the size, or the new gaps.
+	sb.content_margin_top = 8
+	sb.content_margin_bottom = 10
 	pc.add_theme_stylebox_override("panel", sb)
 	pc.set_meta("section_header", str(sd.get("header", "")))
 	var vb: VBoxContainer = VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 5)
+	vb.add_theme_constant_override("separation", 12)
 	pc.add_child(vb)
 	var head: Label = Label.new()
 	head.text = str(sd.get("header", ""))
@@ -1546,30 +1561,29 @@ func _make_section(sd: Dictionary, body_px: int, display_type: bool, pop_col: Va
 	if display_type:
 		head.add_theme_font_override("font", DISPLAY_FONT_MEDIUM)
 	vb.add_child(head)
-	var rich: RichTextLabel = RichTextLabel.new()
-	rich.bbcode_enabled = true
-	rich.fit_content = true
-	rich.scroll_active = false
-	rich.selection_enabled = false
-	rich.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	rich.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	rich.add_theme_font_size_override("normal_font_size", body_px)
-	rich.add_theme_color_override("default_color", Color(0.85, 0.86, 0.92))
-	if display_type:
-		rich.add_theme_font_override("normal_font", DISPLAY_FONT_REGULAR)
 	var strs: Array[String] = []
 	var raw_lines: Variant = sd.get("lines", [])
 	if raw_lines is Array:
 		for lv: Variant in (raw_lines as Array):
 			strs.append(str(lv))
-	var text: String = "\n".join(strs)
-	if pop_col is Color:
-		text = _pop_numbers(text, pop_col as Color)
-	if centered:
-		text = "[center]" + text + "[/center]"
-	rich.text = text
-	rich.set_meta("logical_lines", strs.size())
-	vb.add_child(rich)
+	pc.set_meta("logical_lines", strs.size())
+	for line_text: String in strs:
+		var rich: RichTextLabel = RichTextLabel.new()
+		rich.bbcode_enabled = true
+		rich.fit_content = true
+		rich.scroll_active = false
+		rich.selection_enabled = false
+		rich.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		rich.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		rich.add_theme_font_size_override("normal_font_size", body_px)
+		rich.add_theme_color_override("default_color", Color(0.85, 0.86, 0.92))
+		if display_type:
+			rich.add_theme_font_override("normal_font", DISPLAY_FONT_REGULAR)
+		var text: String = line_text
+		if pop_col is Color:
+			text = _pop_numbers(text, pop_col as Color)
+		rich.text = text
+		vb.add_child(rich)
 	return pc
 
 
@@ -1582,6 +1596,11 @@ func _make_section(sd: Dictionary, body_px: int, display_type: bool, pop_col: Va
 ## prove every standing line rendered inside the canvas -
 ## fit by the layout's own numbers, not by assumption.
 ## Empty when the standing spec is not sectioned.
+## PANEL112 follow-up: a section's body is one label per
+## logical line (see _make_section), so the wrapped count
+## sums the line labels' own wrapped counts and the
+## logical count is the label count the band was built
+## with (the band's own meta).
 func section_metrics() -> Dictionary:
 	if not _sections_box.visible or _sections_box.get_child_count() == 0:
 		return {}
@@ -1590,15 +1609,18 @@ func section_metrics() -> Dictionary:
 		var pc: PanelContainer = pcv as PanelContainer
 		if pc == null:
 			continue
-		var rich: RichTextLabel = null
+		var wrapped: int = 0
 		var vb: VBoxContainer = pc.get_child(0) as VBoxContainer
-		if vb != null and vb.get_child_count() >= 2:
-			rich = vb.get_child(1) as RichTextLabel
+		if vb != null:
+			for k: int in range(1, vb.get_child_count()):
+				var rl: RichTextLabel = vb.get_child(k) as RichTextLabel
+				if rl != null:
+					wrapped += rl.get_line_count()
 		secs.append({
 			"header": str(pc.get_meta("section_header", "")),
 			"rect": pc.get_global_rect(),
-			"wrapped_lines": rich.get_line_count() if rich != null else 0,
-			"logical_lines": int(rich.get_meta("logical_lines", 0)) if rich != null else 0,
+			"wrapped_lines": wrapped,
+			"logical_lines": int(pc.get_meta("logical_lines", 0)),
 		})
 	var out: Dictionary = {"sections": secs, "face_size": size}
 	if _footer_label.visible:
