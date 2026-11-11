@@ -18,6 +18,7 @@ extends Node
 var _viewport: SubViewport
 var _face: CardFace
 var _render_in_flight: bool = false ## the serialization queue's lock: one capture at a time, ever
+var last_section_metrics: Dictionary = {} ## PANEL112: CardFace.section_metrics() captured with the latest render (see _render_now's tail) - the room reads it for its panel face before the button fills land
 var _race_armed: bool = false ## WART smoke seam: poison this render's first capture (see render_texture)
 
 ## GRADFIX16 (item 2) art probe: per-operation timing census
@@ -310,6 +311,12 @@ func _render_now(spec: Dictionary, px_size: Vector2i) -> Texture2D:
 	var created: Texture2D = ImageTexture.create_from_image(img)
 	if probe_enabled:
 		probe_note("render_create_texture", Time.get_ticks_usec() - probe_t)
+	# PANEL112 (item 2): the sectioned body's layout record,
+	# captured with THIS render (the face still wears the
+	# spec just captured - the room snapshots it the moment
+	# its panel-face render lands, before the button fills
+	# overwrite the face). Empty for every unsectioned spec.
+	last_section_metrics = _face.section_metrics()
 	return created
 
 

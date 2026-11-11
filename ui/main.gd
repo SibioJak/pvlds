@@ -302,6 +302,13 @@ var _shot_panelfit_pushed: bool = false
 var _shot_panelfit_tex_before: Texture2D = null ## the face texture instance standing when the census was pushed - the judged render must be a later instance
 var _shot_panelfit_last_tex: Texture2D = null ## the latest post-push face texture instance - it must stand unchanged to be judged
 var _shot_panelfit_settled: int = 0 ## frames the current face texture instance has stood unchanged
+var _shot_panel112_path: String = "" ## --pvlds-shot-panel112 P MODE: PANEL112's eyeball renders - the sectioned face at no-scan-yet (noscan) and with a message riding the sub (message)
+var _shot_panel112_mode: String = ""
+var _shot_panel112_phase: int = -1
+var _shot_panel112_frames: int = 0
+var _shot_panel112_tex_before: Texture2D = null
+var _shot_panel112_last_tex: Texture2D = null
+var _shot_panel112_settled: int = 0
 var _smoke_scanwall: bool = false ## --pvlds-smoke-scanwall: GRADFIX14 item 2 - mid-session scans WITH library changes, across the panel / early-close / desk / tournament routes
 var _scanwall_phase: int = 0
 var _scanwall_wait: int = 0
@@ -829,6 +836,11 @@ func _ready() -> void:
 	if shot_pf_idx >= 0 and shot_pf_idx + 1 < user_args.size():
 		_shot_panelfit_path = user_args[shot_pf_idx + 1]
 		_shot_panelfit_phase = 0
+	var shot_p112_idx: int = user_args.find("--pvlds-shot-panel112")
+	if shot_p112_idx >= 0 and shot_p112_idx + 2 < user_args.size():
+		_shot_panel112_path = user_args[shot_p112_idx + 1]
+		_shot_panel112_mode = user_args[shot_p112_idx + 2]
+		_shot_panel112_phase = 0
 	if user_args.has("--pvlds-smoke-desk"):
 		_smoke_desk = true
 	if user_args.has("--pvlds-smoke-bootface"):
@@ -1515,6 +1527,8 @@ func _process(_delta: float) -> void:
 		_drive_shot_setup_panel()
 	if _shot_panelfit_phase >= 0:
 		_drive_shot_panelfit()
+	if _shot_panel112_phase >= 0:
+		_drive_shot_panel112()
 	if _smoke_desk:
 		_drive_desk_smoke()
 	if _smoke_bootface:
@@ -4442,7 +4456,7 @@ func _drive_setup_panel_smoke() -> void:
 			_setup_panel_smoke_wait += 1
 			var face: ClickableQuad = _room.setup_panel_face_quad() if _room != null else null
 			var dressed: bool = face != null and face.current_texture() != null \
-				and face.current_texture().get_size() == Vector2(1472, 1024)
+				and face.current_texture().get_size() == Vector2(RoomSpecs.SETUP_PANEL_FACE_PX)
 			if _setup_panel_smoke_wait >= 3 and dressed:
 				_setup_panel_surface_assertions()
 				_setup_panel_smoke_wait = 0
@@ -4499,7 +4513,7 @@ func _drive_setup_panel_smoke() -> void:
 				_setup_panel_expect(not _setup_panel_smoke_orphan_highlight(),
 					"scan leg: no highlight frame shows without a visible quad behind it (no invisible highlighted buttons)")
 				_setup_panel_expect(_room.setup_panel_face_quad().current_texture() != null
-					and _room.setup_panel_face_quad().current_texture().get_size() == Vector2(1472, 1024),
+					and _room.setup_panel_face_quad().current_texture().get_size() == Vector2(RoomSpecs.SETUP_PANEL_FACE_PX),
 					"scan leg: the panel's face wears its own texture (not a wall texture)")
 				_setup_panel_expect(_room.setup_panel_scan_quad().current_texture() != null
 					and _room.setup_panel_scan_quad().current_texture().get_size() == Vector2(672, 116),
@@ -4856,6 +4870,32 @@ func _setup_panel_surface_assertions() -> void:
 	var health: Dictionary = _room.setup_panel_health()
 	_setup_panel_expect(int(health.get("files", -1)) == _scanner.total_files,
 		"XR setup: the panel opens knowing the last scan's numbers")
+	# PANEL112 (item 2): the sectioned face on this real
+	# render - three sections in order (LIBRARY / SCORES /
+	# DATA), every standing line rendered (the layout's own
+	# record), and each band's tint painted inside its rect.
+	var mets112: Dictionary = _room.setup_panel_face_metrics()
+	var secs112: Array = mets112.get("sections", []) as Array
+	_setup_panel_expect(secs112.size() == 3,
+		"PANEL112: the panel face carries three sections (got %d)" % secs112.size())
+	if secs112.size() == 3:
+		var heads112: Array[String] = ["LIBRARY", "SCORES", "DATA"]
+		var tints112: Array[Color] = [RoomSpecs.SETUP_TINT_LIBRARY, RoomSpecs.SETUP_TINT_SCORES, RoomSpecs.SETUP_TINT_DATA]
+		var face_tex112: Texture2D = _room.setup_panel_face_quad().current_texture()
+		var prev_end112: float = -1.0
+		for si112: int in range(3):
+			var sd112: Dictionary = secs112[si112] as Dictionary
+			var srect112: Rect2 = sd112.get("rect", Rect2()) as Rect2
+			_setup_panel_expect(str(sd112.get("header", "")) == heads112[si112],
+				"PANEL112: section %d is %s" % [si112, heads112[si112]])
+			_setup_panel_expect(int(sd112.get("logical_lines", 0)) > 0
+				and int(sd112.get("wrapped_lines", 0)) >= int(sd112.get("logical_lines", 0)),
+				"PANEL112: %s rendered every standing line" % heads112[si112])
+			_setup_panel_expect(srect112.position.y >= prev_end112,
+				"PANEL112: the %s band stands below the one before it" % heads112[si112])
+			prev_end112 = srect112.end.y
+			_setup_panel_expect(face_tex112 != null and _panel112_band_painted(face_tex112, srect112, tints112[si112]),
+				"PANEL112: the %s band's tint is painted in the render" % heads112[si112])
 	var inert: bool = true
 	for q: ClickableQuad in _room._panels:
 		if q.pick_enabled:
@@ -5387,7 +5427,7 @@ func _drive_shot_setup_panel() -> void:
 			_shot_setup_panel_frames += 1
 			var face: ClickableQuad = _room.setup_panel_face_quad()
 			var dressed: bool = face != null and face.current_texture() != null \
-				and face.current_texture().get_size() == Vector2(1472, 1024)
+				and face.current_texture().get_size() == Vector2(RoomSpecs.SETUP_PANEL_FACE_PX)
 			if _shot_setup_panel_after_scan and not _shot_setup_panel_scanned:
 				# The after-scan variant (the after-scan strays'
 				# framing): fire SCAN through the panel, wait
@@ -5487,8 +5527,9 @@ func _drive_shot_panelfit() -> void:
 			if _shot_panelfit_settled >= 10:
 				var fails: Array[String] = []
 				var tex: Texture2D = face.current_texture()
-				if tex.get_size() != Vector2(1472, 1024):
-					fails.append("the face texture is %s, not the PANELFIT canvas" % str(tex.get_size()))
+				var canvas: Vector2i = RoomSpecs.SETUP_PANEL_FACE_PX
+				if tex.get_size() != Vector2(canvas):
+					fails.append("the face texture is %s, not the PANEL112 canvas" % str(tex.get_size()))
 				var census: Vector2i = _panelfit_amber_census(tex)
 				if census.x < 1200:
 					fails.append("numbers pop: only %d amber digit pixels in the body band (the census carries ~30 digit glyphs)" % census.x)
@@ -5497,20 +5538,96 @@ func _drive_shot_panelfit() -> void:
 				var span: Vector2i = _panelfit_content_span(tex)
 				if span.x < 14:
 					fails.append("fit: content ink starts at row %d - the top margin is gone" % span.x)
-				if span.y > 1024 - 24:
+				if span.y > canvas.y - 24:
 					fails.append("fit: content ink ends at row %d - the bottom margin is gone (the stack clips)" % span.y)
+				# PANEL112 (item 2): the sectioned face,
+				# judged on the layout's own record plus the
+				# rendered pixels (the shared section legs).
+				for sf: String in _panel112_section_fails(tex, [4, 3, 2], canvas.y):
+					fails.append(sf)
 				var path: String = _shot_panelfit_path
 				_shot_panelfit_phase = -1
 				var err: Error = _save_shot_png(path)
 				if err != OK:
 					fails.append("the grab failed to save (err %d)" % err)
 				if fails.is_empty():
-					print("PVLDS PANELFIT SHOT: PASS - ", path, " (amber body px=", census.x, ", content rows ", span.x, "..", span.y, " of 1024)")
+					print("PVLDS PANELFIT SHOT: PASS - ", path, " (amber body px=", census.x, ", content rows ", span.x, "..", span.y, " of ", canvas.y, ")")
 					get_tree().quit(0)
 				else:
 					for f: String in fails:
 						printerr("PVLDS PANELFIT SHOT: FAIL - ", f)
 					get_tree().quit(1)
+
+
+## PANEL112 (item 2): the sectioned face's shared legs,
+## judged on the layout's own record plus the rendered
+## pixels: three sections in order (LIBRARY / SCORES /
+## DATA), every standing line rendered (wrapped >= logical
+## per section, against the caller's expected census),
+## every band and the footer inside the canvas (no clip,
+## by the layout's numbers), and each band's tint actually
+## painted inside its rect. Returns the failure lines
+## (empty = the face stands as designed).
+func _panel112_section_fails(tex: Texture2D, want_logical: Array, canvas_h: int) -> Array[String]:
+	var fails: Array[String] = []
+	var mets: Dictionary = _room.setup_panel_face_metrics()
+	var secs: Array = mets.get("sections", []) as Array
+	if secs.size() != 3:
+		fails.append("sections: the layout record carries %d sections, not 3" % secs.size())
+		return fails
+	var want_heads: Array[String] = ["LIBRARY", "SCORES", "DATA"]
+	var want_tints: Array[Color] = [RoomSpecs.SETUP_TINT_LIBRARY, RoomSpecs.SETUP_TINT_SCORES, RoomSpecs.SETUP_TINT_DATA]
+	var prev_end: float = -1.0
+	for si: int in range(3):
+		var sd: Dictionary = secs[si] as Dictionary
+		if str(sd.get("header", "")) != want_heads[si]:
+			fails.append("sections: section %d is '%s', not %s" % [si, str(sd.get("header", "")), want_heads[si]])
+		if int(sd.get("logical_lines", 0)) != int(want_logical[si]):
+			fails.append("sections: %s carries %d logical lines, not %d" % [want_heads[si], int(sd.get("logical_lines", 0)), int(want_logical[si])])
+		if int(sd.get("wrapped_lines", 0)) < int(sd.get("logical_lines", 0)):
+			fails.append("sections: %s wrapped to %d rows for %d lines - a line never rendered" % [want_heads[si], int(sd.get("wrapped_lines", 0)), int(sd.get("logical_lines", 0))])
+		var srect: Rect2 = sd.get("rect", Rect2()) as Rect2
+		if srect.position.y < 0.0 or srect.end.y > float(canvas_h):
+			fails.append("sections: the %s band (rows %.0f..%.0f) leaves the canvas - clipped" % [want_heads[si], srect.position.y, srect.end.y])
+		if srect.position.y < prev_end:
+			fails.append("sections: the %s band starts at row %.0f, above the previous band's end %.0f - out of order" % [want_heads[si], srect.position.y, prev_end])
+		prev_end = srect.end.y
+		if not _panel112_band_painted(tex, srect, want_tints[si]):
+			fails.append("sections: the %s band's tint is not painted inside its rect %s" % [want_heads[si], str(srect)])
+	var frect: Rect2 = mets.get("footer_rect", Rect2()) as Rect2
+	if frect.size.y <= 0.0 or frect.end.y > float(canvas_h) or int(mets.get("footer_lines", 0)) < 1:
+		fails.append("sections: the footer is missing or clipped (rect %s, lines %d)" % [str(frect), int(mets.get("footer_lines", 0))])
+	return fails
+
+
+## PANEL112 (item 2): is a section band's tint actually
+## painted inside its layout rect? The sample points ride
+## the band's padding frame (the side insets and the rows
+## just inside the top/bottom edges), where nothing but
+## the band's own fill can stand - text never reaches
+## there, and the face's graphite gradient behind the band
+## is covered by it. 8 points, >= 7 must carry the tint
+## (one may sit on the band's rounded corner).
+func _panel112_band_painted(tex: Texture2D, rect: Rect2, tint: Color) -> bool:
+	var img: Image = tex.get_image()
+	if img == null or rect.size.x < 40.0 or rect.size.y < 30.0:
+		return false
+	var pts: Array[Vector2] = [
+		Vector2(rect.position.x + 8.0, rect.position.y + 6.0),
+		Vector2(rect.position.x + 8.0, rect.get_center().y),
+		Vector2(rect.position.x + 8.0, rect.end.y - 7.0),
+		Vector2(rect.end.x - 8.0, rect.position.y + 6.0),
+		Vector2(rect.end.x - 8.0, rect.get_center().y),
+		Vector2(rect.end.x - 8.0, rect.end.y - 7.0),
+		Vector2(rect.get_center().x, rect.position.y + 6.0),
+		Vector2(rect.get_center().x, rect.end.y - 7.0),
+	]
+	var hits: int = 0
+	for pt: Vector2 in pts:
+		var px: Color = img.get_pixelv(Vector2i(pt))
+		if absf(px.r - tint.r) < 0.045 and absf(px.g - tint.g) < 0.045 and absf(px.b - tint.b) < 0.045:
+			hits += 1
+	return hits >= 7
 
 
 ## PANELFIT (item 2): the amber ink census on a face
@@ -5564,6 +5681,116 @@ func _panelfit_content_span(tex: Texture2D) -> Vector2i:
 				first = y
 			last = y
 	return Vector2i(first, last)
+
+
+# ------------------------------------------------ panel112 shot
+
+## --pvlds-shot-panel112 P MODE: PANEL112's eyeball renders
+## of the sectioned SETUP panel face. MODE noscan pushes
+## Main's unscanned health shape (the standing lines, no
+## scan block - LIBRARY stands with its one line); MODE
+## message pushes the PANELFIT worst-case census with a
+## real download outcome riding the sub. The judged legs
+## are the shared section legs plus the ink span (and, for
+## message, the numbers-pop census); the grab is saved for
+## the eyeball pass.
+func _drive_shot_panel112() -> void:
+	match _shot_panel112_phase:
+		0:
+			if _room == null or not _room.visible or not _room.wall_ready:
+				return
+			_room._xr_enabled = true
+			_room._activate(_room.rail_quad("desk"))
+			_shot_panel112_phase = 1
+		1:
+			if _room == null or not _room.is_setup_panel_up():
+				return
+			_shot_panel112_frames += 1
+			if _shot_panel112_frames > 3600:
+				printerr("PVLDS PANEL112 SHOT: FAIL - the render never landed")
+				get_tree().quit(1)
+				return
+			var face: ClickableQuad = _room.setup_panel_face_quad()
+			if face == null or face.current_texture() == null:
+				return
+			# Push the mode's state whenever the room's
+			# standing state is not already it (Main
+			# re-pushes the real health over a push when its
+			# own events land - the panelfit driver's
+			# discipline: only a render of the mode's own
+			# state, settled, is judged).
+			var is_msg: bool = _shot_panel112_mode == "message"
+			var mine: bool = false
+			if is_msg:
+				mine = int(_room.setup_panel_health().get("files", -1)) == 363 \
+					and _room.setup_panel_message().begins_with("VPS database downloaded")
+			else:
+				mine = not _room.setup_panel_health().has("files") \
+					and _room.setup_panel_message() == ""
+			if not mine:
+				_shot_panel112_tex_before = face.current_texture()
+				_shot_panel112_last_tex = null
+				_shot_panel112_settled = 0
+				if is_msg:
+					_room.set_setup_health({
+						"files": 363, "games": 344,
+						"matched": 252, "game_matched": 110,
+						"db_ok": true, "db_kind": "sample",
+						"missing": 82, "unplaced": 1,
+						"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in Initial Setup.",
+						"pinemhi_line": "PINemHi: on, but no PINemHi folder found - set the folder to show your personal bests on tournament boards.",
+						"ipdb_line": "IPDB data: 340 of 344 games",
+						"shots_line": "Screenshots folder: C:\\Users\\cfond\\Pictures\\Virtual Desktop - 128 screenshots on file, newest first in the room.",
+					})
+					_room.set_setup_panel_message("VPS database downloaded (5.2 MB). It will be used by the next scan.")
+				else:
+					_room.set_setup_health({
+						"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in Initial Setup.",
+						"pinemhi_line": "PINemHi: on, but no PINemHi folder found - set the folder to show your personal bests on tournament boards.",
+						"ipdb_line": "IPDB data: 340 of 344 games",
+						"shots_line": "Screenshots folder: C:\\Users\\cfond\\Pictures\\Virtual Desktop - 128 screenshots on file, newest first in the room.",
+					})
+					_room.set_setup_panel_message("")
+				return
+			var cur_tex: Texture2D = face.current_texture()
+			if cur_tex == _shot_panel112_tex_before or _room._setup_render_in_flight or _room._setup_render_pending:
+				_shot_panel112_settled = 0
+			elif cur_tex != _shot_panel112_last_tex:
+				_shot_panel112_last_tex = cur_tex
+				_shot_panel112_settled = 0
+			else:
+				_shot_panel112_settled += 1
+			if _shot_panel112_settled >= 10:
+				var fails: Array[String] = []
+				var tex: Texture2D = face.current_texture()
+				var canvas: Vector2i = RoomSpecs.SETUP_PANEL_FACE_PX
+				if tex.get_size() != Vector2(canvas):
+					fails.append("the face texture is %s, not the PANEL112 canvas" % str(tex.get_size()))
+				var span: Vector2i = _panelfit_content_span(tex)
+				if span.x < 14:
+					fails.append("fit: content ink starts at row %d - the top margin is gone" % span.x)
+				if span.y > canvas.y - 24:
+					fails.append("fit: content ink ends at row %d - the bottom margin is gone (the stack clips)" % span.y)
+				for sf: String in _panel112_section_fails(tex, [4, 3, 2] if is_msg else [1, 3, 1], canvas.y):
+					fails.append(sf)
+				if is_msg:
+					var census: Vector2i = _panelfit_amber_census(tex)
+					if census.x < 1200:
+						fails.append("numbers pop: only %d amber digit pixels in the body band" % census.x)
+					if census.y > 0:
+						fails.append("numbers pop: %d amber pixels above the body band (the colour leaked into title/sub)" % census.y)
+				var path: String = _shot_panel112_path
+				_shot_panel112_phase = -1
+				var err: Error = _save_shot_png(path)
+				if err != OK:
+					fails.append("the grab failed to save (err %d)" % err)
+				if fails.is_empty():
+					print("PVLDS PANEL112 SHOT (", _shot_panel112_mode, "): PASS - ", path, " (content rows ", span.x, "..", span.y, " of ", canvas.y, ")")
+					get_tree().quit(0)
+				else:
+					for f: String in fails:
+						printerr("PVLDS PANEL112 SHOT: FAIL - ", f)
+					get_tree().quit(1)
 
 
 # --------------------------------------------------- grad smoke
@@ -23803,7 +24030,7 @@ func _drive_setuplook_panel() -> void:
 			_setuplook_wait += 1
 			var face: ClickableQuad = _room.setup_panel_face_quad() if _room != null else null
 			var dressed: bool = face != null and face.current_texture() != null \
-				and face.current_texture().get_size() == Vector2(1472, 1024)
+				and face.current_texture().get_size() == Vector2(RoomSpecs.SETUP_PANEL_FACE_PX)
 			if dressed and _setuplook_wait >= 8:
 				_setuplook_expect(_room.is_setup_panel_up(), "panel: the SETUP panel stands")
 				_setuplook_grab("setuplook_panel.png")
@@ -27630,6 +27857,73 @@ func _run_core_test() -> void:
 		"PANELFIT: the placard spec carries no numbers-pop key (the colour cannot leak)", failures)
 	_expect(not RoomSpecs.banner_spec("LOADING").has("body_number_color"),
 		"PANELFIT: the loading banner spec carries no numbers-pop key", failures)
+	# PANEL112 (item 2): the SETUP panel spec groups its
+	# lines into LIBRARY / SCORES / DATA, in that order -
+	# the pre-PANELFIT words, line for line, regrouped (the
+	# SAMPLE note and the IPDB line ride in DATA; the
+	# screenshots line rides in SCORES) - with the pointer
+	# line as the footer and the full text still on "body".
+	var p112_health: Dictionary = {
+		"files": 363, "games": 344, "matched": 252, "game_matched": 110,
+		"db_ok": true, "db_kind": "sample", "missing": 82, "unplaced": 1,
+		"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in Initial Setup.",
+		"pinemhi_line": "PINemHi: on, but no PINemHi folder found - set the folder to show your personal bests on tournament boards.",
+		"ipdb_line": "IPDB data: 340 of 344 games",
+		"shots_line": "Screenshots folder: C:\\Users\\cfond\\Pictures\\Virtual Desktop - 128 screenshots on file, newest first in the room.",
+	}
+	var p112_spec: Dictionary = RoomSpecs.setup_panel_spec(p112_health, "")
+	var p112_secs: Array = p112_spec.get("body_sections", []) as Array
+	_expect(p112_secs.size() == 3,
+		"PANEL112: the census spec carries three sections (got %d)" % p112_secs.size(), failures)
+	if p112_secs.size() == 3:
+		var p112_want: Array = [
+			["LIBRARY", ["363 table files - 344 games",
+				"Database matched 252 of 363 builds (110 more by game only)",
+				"Missing backglass: 82 table files have no .directb2s beside them. The list is missing_b2s.txt in the app data folder.",
+				"Files I couldn't place: 1 table files match no database game. The list is unplaced_files.txt in the app data folder."]],
+			["SCORES", ["WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in Initial Setup.",
+				"PINemHi: on, but no PINemHi folder found - set the folder to show your personal bests on tournament boards.",
+				"Screenshots folder: C:\\Users\\cfond\\Pictures\\Virtual Desktop - 128 screenshots on file, newest first in the room."]],
+			["DATA", ["That database is the bundled SAMPLE - it cannot identify real tables. Download the VPS database below.",
+				"IPDB data: 340 of 344 games"]],
+		]
+		for p112_i: int in range(3):
+			var p112_sd: Dictionary = p112_secs[p112_i] as Dictionary
+			_expect(str(p112_sd.get("header", "")) == str(p112_want[p112_i][0]),
+				"PANEL112: section %d is %s" % [p112_i, str(p112_want[p112_i][0])], failures)
+			var p112_got: Array = p112_sd.get("lines", []) as Array
+			var p112_exp: Array = p112_want[p112_i][1] as Array
+			var p112_same: bool = p112_got.size() == p112_exp.size()
+			if p112_same:
+				for p112_j: int in range(p112_exp.size()):
+					if str(p112_got[p112_j]) != str(p112_exp[p112_j]):
+						p112_same = false
+			_expect(p112_same,
+				"PANEL112: %s carries its standing lines, word for word" % str(p112_want[p112_i][0]), failures)
+	_expect(str(p112_spec.get("footer", "")) == "Paths and first-time setup are on your PC - run LaunchPin on the desktop.",
+		"PANEL112: the pointer line stands as the spec's footer", failures)
+	_expect(str(p112_spec.get("body", "")).begins_with("363 table files - 344 games")
+		and str(p112_spec.get("body", "")).ends_with("Paths and first-time setup are on your PC - run LaunchPin on the desktop."),
+		"PANEL112: the spec's body still carries every line in display order", failures)
+	# PANEL112: the not-scanned-yet face - LIBRARY stands
+	# alone with its one line when no other line exists,
+	# and all three sections stand on Main's unscanned
+	# health shape (the standing lines, no scan block).
+	var p112_bare: Dictionary = RoomSpecs.setup_panel_spec({}, "")
+	var p112_bare_secs: Array = p112_bare.get("body_sections", []) as Array
+	_expect(p112_bare_secs.size() == 1
+		and str((p112_bare_secs[0] as Dictionary).get("header", "")) == "LIBRARY"
+		and str(((p112_bare_secs[0] as Dictionary).get("lines", []) as Array)[0]) == "Not scanned yet - press SCAN LIBRARY below.",
+		"PANEL112: an empty health stands LIBRARY alone with the not-scanned line", failures)
+	var p112_unscanned: Dictionary = RoomSpecs.setup_panel_spec({
+		"wovp_line": "WoVP: no key saved.", "pinemhi_line": "PINemHi: off.",
+		"ipdb_line": "IPDB data: 340 of 344 games", "shots_line": "Screenshots folder: none set."}, "")
+	var p112_un_secs: Array = p112_unscanned.get("body_sections", []) as Array
+	_expect(p112_un_secs.size() == 3
+		and str((p112_un_secs[0] as Dictionary).get("header", "")) == "LIBRARY"
+		and str((p112_un_secs[1] as Dictionary).get("header", "")) == "SCORES"
+		and str((p112_un_secs[2] as Dictionary).get("header", "")) == "DATA",
+		"PANEL112: Main's unscanned health stands all three sections", failures)
 	var mt_pr: GameEntry = mt_scan.game_by_id("fx-panic-room")
 	_expect(mt_pr != null and mt_pr.builds.size() == 1, "matcher fixture: Panic Room holds its file", failures)
 	if mt_pr != null:
@@ -28926,6 +29220,12 @@ func _run_core_test() -> void:
 		"autofind: a major bump over a long tail is newer", failures)
 	_expect(not AppInfo.version_is_newer("0.9.9", "1.0.0"),
 		"autofind: an older version is not newer", failures)
+	# PANEL112 (item 1): the compiled-in feed default is the
+	# PUBLIC releases repo's version.json - the private
+	# source repo's raw file would 404 for the shipped
+	# checker, so this constant is the whole ballgame.
+	_expect(AppInfo.UPDATE_FEED_URL == "https://raw.githubusercontent.com/SibioJak/launchpin-vr/main/version.json",
+		"PANEL112: the compiled-in update feed is the public releases repo's version.json (got %s)" % AppInfo.UPDATE_FEED_URL, failures)
 	var af_base: String = ProjectSettings.globalize_path("user://autofind_core_tree")
 	var af_touch: Callable = func(path: String) -> void:
 		DirAccess.make_dir_recursive_absolute(path.get_base_dir())

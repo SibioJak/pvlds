@@ -132,6 +132,8 @@ var _title_label: Label
 var _sub_label: Label
 var _body_label: Label
 var _body_rich: RichTextLabel ## PANELFIT: the body label's rich twin - stands only for a spec carrying "body_number_color" (its numbers coloured); hidden for every other spec, asserted per spec like display_type
+var _sections_box: VBoxContainer ## PANEL112: the SETUP panel's sectioned body - one tinted band per spec section (header + rich lines), rebuilt per spec like the chips; stands only for a spec carrying "body_sections" (today only the SETUP panel's), hidden for every other spec
+var _footer_label: Label ## PANEL112: the sectioned face's quiet footer line (the SETUP panel's pointer line), standing under the bands, unbanded; same per-spec discipline as _sections_box
 var _chips_row: HBoxContainer
 var _rows_box: VBoxContainer ## the board kind's stacked rows (score / divider / note)
 var _top_spacer: Control ## board kind (GRADFIX8): the centring spacer above the band - shares the face's spare height with _footer_spacer so the content block centres (see apply_spec)
@@ -350,6 +352,22 @@ func _init() -> void:
 	_body_rich.add_theme_color_override("default_color", Color(0.85, 0.86, 0.92))
 	_body_rich.visible = false
 	_vbox.add_child(_body_rich)
+
+	# PANEL112: the sectioned body and its footer, built
+	# beside the body labels and hidden - they stand only
+	# while a spec carries "body_sections" (see apply_spec),
+	# mirroring the rich twin's wrap and ink so the swap
+	# changes the grouping, never the words or the type.
+	_sections_box = VBoxContainer.new()
+	_sections_box.add_theme_constant_override("separation", 16)
+	_sections_box.visible = false
+	_vbox.add_child(_sections_box)
+
+	_footer_label = Label.new()
+	_footer_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_footer_label.add_theme_color_override("font_color", Color(0.70, 0.73, 0.82))
+	_footer_label.visible = false
+	_vbox.add_child(_footer_label)
 
 	_chips_row = HBoxContainer.new()
 	_chips_row.add_theme_constant_override("separation", 10)
@@ -819,8 +837,17 @@ func apply_spec(spec: Dictionary) -> void:
 	# sets both (the panel sets no body cap - its canvas is
 	# budgeted for its census, see PANELFIT's STATUS).
 	var pop_col: Variant = spec.get("body_number_color", null)
-	var pop: bool = pop_col is Color and body_text != ""
-	_body_label.visible = body_text != "" and not pop
+	# PANEL112 (item 2): a spec carrying "body_sections"
+	# (today only the SETUP panel's) renders its body as
+	# tinted section bands INSTEAD of the single body block:
+	# both body labels stand down and the sections box +
+	# footer (rebuilt below, beside the chips) carry the
+	# words. No key, no sections - every other face renders
+	# exactly as before.
+	var sections_v: Variant = spec.get("body_sections", null)
+	var sectioned: bool = sections_v is Array and not (sections_v as Array).is_empty()
+	var pop: bool = pop_col is Color and body_text != "" and not sectioned
+	_body_label.visible = body_text != "" and not pop and not sectioned
 	_body_rich.visible = pop
 	if pop:
 		if display_type:
@@ -840,6 +867,38 @@ func apply_spec(spec: Dictionary) -> void:
 	_discipline_label(_title_label, int(spec.get("title_max_lines", 0)))
 	_discipline_label(_sub_label, int(spec.get("sub_max_lines", 0)))
 	_discipline_label(_body_label, int(spec.get("body_max_lines", 0)))
+
+	# PANEL112 (item 2): the section bands, rebuilt per spec
+	# like the chips (one CardFace serves every render, so
+	# nothing may leak from a previous face into this one).
+	# Each band: a PanelContainer in the section's soft tint,
+	# a small quiet header, and the section's lines in a rich
+	# label wearing the body's own dress - same size, same
+	# ink, the numbers popped by the spec's own
+	# "body_number_color" when it carries one.
+	for child: Node in _sections_box.get_children():
+		_sections_box.remove_child(child)
+		child.queue_free()
+	_sections_box.visible = sectioned
+	if sectioned:
+		for sv: Variant in (sections_v as Array):
+			if sv is Dictionary:
+				_sections_box.add_child(_make_section(sv as Dictionary, body_px, display_type,
+					pop_col if pop_col is Color else null, centered))
+	# The sectioned face's footer: the spec's "footer" line
+	# under the bands, unbanded, in a quieter ink than the
+	# body - the pointer line, present on every sectioned
+	# render and on no other face.
+	var footer_text: String = str(spec.get("footer", "")) if sectioned else ""
+	_footer_label.visible = footer_text != ""
+	if _footer_label.visible:
+		_footer_label.text = footer_text
+		_footer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
+		_footer_label.add_theme_font_size_override("font_size", body_px)
+		if display_type:
+			_footer_label.add_theme_font_override("font", DISPLAY_FONT_REGULAR)
+		elif _footer_label.has_theme_font_override("font"):
+			_footer_label.remove_theme_font_override("font")
 
 	for child: Node in _chips_row.get_children():
 		_chips_row.remove_child(child)
@@ -1451,6 +1510,100 @@ func _pop_numbers(text: String, col: Color) -> String:
 		else:
 			out += c
 			i += 1
+	return out
+
+
+## PANEL112 (item 2): one section band of the SETUP panel's
+## face: a soft-tint PanelContainer carrying a small quiet
+## header and the section's lines. The lines render in a
+## rich label dressed exactly like the body's rich twin -
+## the standing size, the standing ink, the display type
+## when the spec wears it, and the numbers popped in the
+## spec's own "body_number_color" - so sectioning changes
+## the grouping and nothing else about the words.
+func _make_section(sd: Dictionary, body_px: int, display_type: bool, pop_col: Variant, centered: bool) -> PanelContainer:
+	var pc: PanelContainer = PanelContainer.new()
+	var sb: StyleBoxFlat = StyleBoxFlat.new()
+	sb.bg_color = _color_of(sd, "tint", Color(0.10, 0.11, 0.14))
+	sb.corner_radius_top_left = 10
+	sb.corner_radius_top_right = 10
+	sb.corner_radius_bottom_left = 10
+	sb.corner_radius_bottom_right = 10
+	sb.content_margin_left = 22
+	sb.content_margin_right = 22
+	sb.content_margin_top = 12
+	sb.content_margin_bottom = 14
+	pc.add_theme_stylebox_override("panel", sb)
+	pc.set_meta("section_header", str(sd.get("header", "")))
+	var vb: VBoxContainer = VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 5)
+	pc.add_child(vb)
+	var head: Label = Label.new()
+	head.text = str(sd.get("header", ""))
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
+	head.add_theme_font_size_override("font_size", 24)
+	head.add_theme_color_override("font_color", _color_of(sd, "header_color", Color(0.72, 0.75, 0.82)))
+	if display_type:
+		head.add_theme_font_override("font", DISPLAY_FONT_MEDIUM)
+	vb.add_child(head)
+	var rich: RichTextLabel = RichTextLabel.new()
+	rich.bbcode_enabled = true
+	rich.fit_content = true
+	rich.scroll_active = false
+	rich.selection_enabled = false
+	rich.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rich.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rich.add_theme_font_size_override("normal_font_size", body_px)
+	rich.add_theme_color_override("default_color", Color(0.85, 0.86, 0.92))
+	if display_type:
+		rich.add_theme_font_override("normal_font", DISPLAY_FONT_REGULAR)
+	var strs: Array[String] = []
+	var raw_lines: Variant = sd.get("lines", [])
+	if raw_lines is Array:
+		for lv: Variant in (raw_lines as Array):
+			strs.append(str(lv))
+	var text: String = "\n".join(strs)
+	if pop_col is Color:
+		text = _pop_numbers(text, pop_col as Color)
+	if centered:
+		text = "[center]" + text + "[/center]"
+	rich.text = text
+	rich.set_meta("logical_lines", strs.size())
+	vb.add_child(rich)
+	return pc
+
+
+## PANEL112 (item 2): the sectioned body's layout record -
+## per section: its header, its band rect (canvas
+## coordinates), and its body's wrapped line count against
+## its logical line count; plus the footer's rect and line
+## count when it stands. The panel proof legs read it
+## (through the TextureFactory's per-render capture) to
+## prove every standing line rendered inside the canvas -
+## fit by the layout's own numbers, not by assumption.
+## Empty when the standing spec is not sectioned.
+func section_metrics() -> Dictionary:
+	if not _sections_box.visible or _sections_box.get_child_count() == 0:
+		return {}
+	var secs: Array = []
+	for pcv: Node in _sections_box.get_children():
+		var pc: PanelContainer = pcv as PanelContainer
+		if pc == null:
+			continue
+		var rich: RichTextLabel = null
+		var vb: VBoxContainer = pc.get_child(0) as VBoxContainer
+		if vb != null and vb.get_child_count() >= 2:
+			rich = vb.get_child(1) as RichTextLabel
+		secs.append({
+			"header": str(pc.get_meta("section_header", "")),
+			"rect": pc.get_global_rect(),
+			"wrapped_lines": rich.get_line_count() if rich != null else 0,
+			"logical_lines": int(rich.get_meta("logical_lines", 0)) if rich != null else 0,
+		})
+	var out: Dictionary = {"sections": secs, "face_size": size}
+	if _footer_label.visible:
+		out["footer_rect"] = _footer_label.get_global_rect()
+		out["footer_lines"] = _footer_label.get_line_count()
 	return out
 
 

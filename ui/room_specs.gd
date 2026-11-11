@@ -367,6 +367,30 @@ const STRIP_LABEL_ACCENT: Color = Color8(216, 221, 232)
 ## catch the eye before the words around them are read.
 const NUMBER_POP: Color = Color(1.0, 0.66, 0.16)
 
+## PANEL112 (item 2): the SETUP panel face's three section
+## bands - soft, dark washes in the desk's family tints
+## (DESKCOLOR: slate / steel blue / amber), quiet enough to
+## sit on the graphite ground without shouting. Each band
+## carries a small header in its family's lightened ink.
+## Chris (2026-11-11): the panel's text was "all mashed
+## together, hard on the eyes" - the sections, the air
+## between them, and these washes are the separation.
+const SETUP_TINT_LIBRARY: Color = Color(0.148, 0.163, 0.196)
+const SETUP_TINT_SCORES: Color = Color(0.108, 0.168, 0.238)
+const SETUP_TINT_DATA: Color = Color(0.208, 0.156, 0.074)
+const SETUP_HEAD_LIBRARY: Color = Color(0.64, 0.69, 0.78)
+const SETUP_HEAD_SCORES: Color = Color(0.56, 0.71, 0.90)
+const SETUP_HEAD_DATA: Color = Color(0.95, 0.74, 0.36)
+
+## PANEL112 (item 2): the SETUP panel face's canvas. The
+## sectioned body's fit law (the brief): the worst-case
+## census fits at the standing body size or the face grows
+## UP - 1024 px held the mashed block (rows 61..966) but
+## not three banded sections, so the canvas is 1280 tall
+## and the face 1.88125 m (the PANELFIT height scaled by
+## the canvas ratio, the standing ~681 px/m density kept).
+const SETUP_PANEL_FACE_PX: Vector2i = Vector2i(1472, 1280)
+
 
 ## One section of the machined strip: its label on the bar's
 ## own graphite, an etched seam at its right edge (every
@@ -454,59 +478,87 @@ static func placard_spec(message: String) -> Dictionary:
 ## one fact per line - the panel's whole job is to be read at
 ## a glance in the headset.
 static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
-	var lines: Array[String] = []
+	# PANEL112 (item 2): the body stands in THREE SECTIONS -
+	# LIBRARY (the scan's health), SCORES (the WoVP / PINemHi
+	# / screenshots lines), DATA (the SAMPLE note, the IPDB
+	# coverage) - each on its own soft tint band with air
+	# between, and the pointer line as a quiet footer under
+	# them. The words are the pre-PANEL112 words, line for
+	# line; only the grouping (and the DATA section taking
+	# the SAMPLE note and the IPDB line) is new. CardFace
+	# renders "body_sections" on its panel-only path; "body"
+	# still carries every line in display order for any
+	# reader that wants the words without the dress.
+	var lib_lines: Array[String] = []
+	var score_lines: Array[String] = []
+	var data_lines: Array[String] = []
 	if not health.has("files"):
-		lines.append("Not scanned yet - press SCAN LIBRARY below.")
+		lib_lines.append("Not scanned yet - press SCAN LIBRARY below.")
 	else:
 		var files: int = int(health.get("files", 0))
-		lines.append("%d table files - %d games" % [files, int(health.get("games", 0))])
+		lib_lines.append("%d table files - %d games" % [files, int(health.get("games", 0))])
 		if bool(health.get("db_ok", false)):
 			var matched_line: String = "Database matched %d of %d builds" % [int(health.get("matched", 0)), files]
 			var by_game: int = int(health.get("game_matched", 0))
 			if by_game > 0:
 				matched_line += " (%d more by game only)" % by_game
-			lines.append(matched_line)
+			lib_lines.append(matched_line)
 		else:
-			lines.append("No database loaded - games are named from their file names alone.")
+			lib_lines.append("No database loaded - games are named from their file names alone.")
 		if str(health.get("db_kind", "")) == "sample":
-			lines.append("That database is the bundled SAMPLE - it cannot identify real tables. Download the VPS database below.")
+			data_lines.append("That database is the bundled SAMPLE - it cannot identify real tables. Download the VPS database below.")
 		var missing: int = int(health.get("missing", 0))
 		if missing > 0:
-			lines.append("Missing backglass: %d table files have no .directb2s beside them. The list is missing_b2s.txt in the app data folder." % missing)
+			lib_lines.append("Missing backglass: %d table files have no .directb2s beside them. The list is missing_b2s.txt in the app data folder." % missing)
 		else:
-			lines.append("Missing backglass: none - every table file has a .directb2s beside it.")
+			lib_lines.append("Missing backglass: none - every table file has a .directb2s beside it.")
 		var unplaced: int = int(health.get("unplaced", 0))
 		if unplaced > 0:
-			lines.append("Files I couldn't place: %d table files match no database game. The list is unplaced_files.txt in the app data folder." % unplaced)
+			lib_lines.append("Files I couldn't place: %d table files match no database game. The list is unplaced_files.txt in the app data folder." % unplaced)
 		else:
-			lines.append("Files I couldn't place: none - every table file matched a database game.")
+			lib_lines.append("Files I couldn't place: none - every table file matched a database game.")
 	# The WoVP line (the Tournament Room round): Main composes
 	# it in _setup_panel_health from the config + the last
 	# validation - whose key is saved here, in plain words.
 	if health.has("wovp_line"):
-		lines.append(str(health["wovp_line"]))
+		score_lines.append(str(health["wovp_line"]))
 	# NEXTROUND (item 4): the PINemHi line rides beside the
 	# WoVP line - Main composes it from the same read that
 	# feeds the boards, so the panel and the boards agree.
 	if health.has("pinemhi_line"):
-		lines.append(str(health["pinemhi_line"]))
-	# CARDBACK: the IPDB coverage line rides beside the
-	# PINemHi line - Main composes it from the cache, so the
-	# panel, the desk, and the backs all agree on the count.
-	if health.has("ipdb_line"):
-		lines.append(str(health["ipdb_line"]))
+		score_lines.append(str(health["pinemhi_line"]))
 	# ROOMSUBMIT: the screenshots-folder line rides beside
-	# the IPDB line - information parity with the desk (the
-	# folder is SET on the desk; the room's submit panel
-	# reads photos from it, and this line says from where).
+	# the PINemHi line in SCORES - information parity with
+	# the desk (the folder is SET on the desk; the room's
+	# submit panel reads photos from it, and this line says
+	# from where).
 	if health.has("shots_line"):
-		lines.append(str(health["shots_line"]))
+		score_lines.append(str(health["shots_line"]))
+	# CARDBACK: the IPDB coverage line - Main composes it
+	# from the cache, so the panel, the desk, and the backs
+	# all agree on the count. PANEL112 seats it in DATA,
+	# under the SAMPLE note when that stands.
+	if health.has("ipdb_line"):
+		data_lines.append(str(health["ipdb_line"]))
 	# ENDGAME (Part A): the pointer line - the two setups
 	# carry two names, and each surface names where the
 	# other lives. This panel is IN-VR SETUP; paths and
 	# first-time setup are the desk's (Initial Setup since
 	# DESKHEAD). The line itself names no surface - untouched.
-	lines.append("Paths and first-time setup are on your PC - run LaunchPin on the desktop.")
+	# PANEL112: it stands as the face's quiet footer, unbanded.
+	var footer_line: String = "Paths and first-time setup are on your PC - run LaunchPin on the desktop."
+	var sections: Array = []
+	if not lib_lines.is_empty():
+		sections.append({"header": "LIBRARY", "tint": SETUP_TINT_LIBRARY, "header_color": SETUP_HEAD_LIBRARY, "lines": lib_lines})
+	if not score_lines.is_empty():
+		sections.append({"header": "SCORES", "tint": SETUP_TINT_SCORES, "header_color": SETUP_HEAD_SCORES, "lines": score_lines})
+	if not data_lines.is_empty():
+		sections.append({"header": "DATA", "tint": SETUP_TINT_DATA, "header_color": SETUP_HEAD_DATA, "lines": data_lines})
+	var lines: Array[String] = []
+	lines.append_array(lib_lines)
+	lines.append_array(score_lines)
+	lines.append_array(data_lines)
+	lines.append(footer_line)
 	return {
 		"kind": "banner",
 		# SETUPLOOK: the panel's face wears the strip's own
@@ -542,6 +594,11 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 		"sub_color": STRIP_LABEL_REST,
 		"body": "\n".join(lines),
 		"body_size": 34,
+		# PANEL112 (item 2): the sectioned body - CardFace's
+		# panel-only path renders these bands and stands the
+		# footer under them in place of the single body block.
+		"body_sections": sections,
+		"footer": footer_line,
 	}
 
 

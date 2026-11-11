@@ -9,8 +9,13 @@ extends RefCounted
 ## real home - the constant is one line to move.
 
 const PRODUCT_NAME: String = "LaunchPin VR"
-const PRODUCT_VERSION: String = "1.1.1"
-const UPDATE_FEED_URL: String = "https://raw.githubusercontent.com/SibioJak/pvlds/master/version.json"
+const PRODUCT_VERSION: String = "1.1.2"
+## PANEL112 (item 1): the feed's home is the PUBLIC releases
+## repo (SibioJak/launchpin-vr) - the source repo stays
+## private (Chris's ruling), and a private repo's raw file
+## would 404 for the shipped checker anyway. The releases
+## repo carries version.json at its root on its main branch.
+const UPDATE_FEED_URL: String = "https://raw.githubusercontent.com/SibioJak/launchpin-vr/main/version.json"
 
 
 ## Dotted-int compare: -1 when a < b, 0 when equal, 1 when

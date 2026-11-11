@@ -1328,6 +1328,7 @@ var _rb_next_fetch_msec: int = 0 ## when the next room-asked fetch is due (0 = n
 var _wovp_fetch_seq: int = 0 ## Main's fetch sequence, pushed with the boards (see set_wovp_data): bumped on every challenges fetch completion, so a NEW fetch is told from a re-push of the same boards (fetched_at is second-granular and cannot)
 var _setup_health: Dictionary = {} ## the last completed scan's numbers, fed by Main (see set_setup_health)
 var _setup_message: String = "" ## the panel's message line: the last action's outcome, in plain words
+var _setup_face_metrics: Dictionary = {} ## PANEL112: the section layout record of the face render last adopted (CardFace.section_metrics via the factory's capture) - the proof legs read it
 var _setup_scanning: bool = false ## a scan Main started for the panel is running (its progress feeds the message line)
 var _setup_downloader: VpsDownloader = null ## the panel's handle on the shared download service (created with the panel, kept for the room's life)
 var _setup_render_in_flight: bool = false ## a panel render is awaiting the factory (the factory takes one render at a time)
@@ -10199,6 +10200,12 @@ func setup_panel_health() -> Dictionary:
 	return _setup_health
 
 
+## PANEL112: the adopted face render's section layout
+## record (headers, band rects, wrapped vs logical lines).
+func setup_panel_face_metrics() -> Dictionary:
+	return _setup_face_metrics
+
+
 ## The last completed scan's numbers (Main feeds these on
 ## every scan landing, panel or not): the face renders its
 ## health rows from them, so a panel opened later already
@@ -10273,11 +10280,17 @@ func _build_setup_panel() -> void:
 	# world y 0.255) clears the numbers line and the strip
 	# below it. Stack: face +0.14..+1.645, rows at 0.0 /
 	# -0.245 / -0.49 / -0.735 / -0.98.
+	# PANEL112 (item 2): the face grows UP to hold the
+	# sectioned body at the standing body size - the fit
+	# law's own term. The bottom stays at local +0.14 (the
+	# stack below it, seat included, does not move an inch);
+	# the top rises to +2.021 and the canvas to
+	# RoomSpecs.SETUP_PANEL_FACE_PX at the same density.
 	_setup_panel.position = Vector3(0.0, 1.32, -2.35)
 	var placeholder: Texture2D = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
 	_setup_panel_face = ClickableQuad.new()
-	_setup_panel_face.setup("setup_panel_face", "", placeholder, Vector2(2.16, 1.505))
-	_setup_panel_face.position = Vector3(0.0, 0.8925, 0.0)
+	_setup_panel_face.setup("setup_panel_face", "", placeholder, Vector2(2.16, 1.88125))
+	_setup_panel_face.position = Vector3(0.0, 1.0806, 0.0)
 	_setup_panel_face.pick_enabled = false
 	_setup_panel.add_child(_setup_panel_face)
 	_setup_panel_scan_btn = ClickableQuad.new()
@@ -10397,10 +10410,14 @@ func _after_setup_render() -> void:
 
 func _fill_setup_panel_textures(gen: int) -> void:
 	var face_tex: Texture2D = await _factory.render_texture(
-		RoomSpecs.setup_panel_spec(_setup_health, _setup_message), Vector2i(1472, 1024))
+		RoomSpecs.setup_panel_spec(_setup_health, _setup_message), RoomSpecs.SETUP_PANEL_FACE_PX)
 	if gen != _setup_panel_gen or not _setup_panel_up or _setup_panel_face == null:
 		_after_setup_render()
 		return
+	# PANEL112: this render's section layout record, read
+	# before the button fills below overwrite the factory's
+	# face - it pairs with the texture just adopted.
+	_setup_face_metrics = _factory.last_section_metrics
 	_setup_panel_face.set_texture(face_tex)
 	# ENDGAME (Part B): the buttons fill through
 	# _fill_setup_button in TWO passes - every button's
