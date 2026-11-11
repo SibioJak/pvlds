@@ -21001,14 +21001,39 @@ func _drive_tournament_submissions() -> void:
 					"submissions: the face carries all three standings")
 				_tournament_expect(str(_room.submissions_face_spec().get("title", "")) == "MY SUBMISSIONS",
 					"submissions: the face is titled MY SUBMISSIONS")
+				# The grab waits a dozen frames past the
+				# texture landing - the viewport image in
+				# the landing tick is the frame BEFORE the
+				# swap presented (the first grab caught the
+				# placeholder's blank slab).
+				_tournament_smoke_wait = 0
+				_tournament_smoke_phase = 6
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("submissions: the seeded panel never rendered")
+				_finish_tournament_smoke()
+		6:
+			_tournament_smoke_wait += 1
+			if _tournament_smoke_wait >= 12:
+				var face6: ClickableQuad = _room.submissions_panel_face_quad()
+				var fimg: Image = face6.current_texture().get_image() if face6 != null and face6.current_texture() != null else null
+				var ink: float = 0.0
+				if fimg != null:
+					var sx: int = maxi(1, fimg.get_width() / 48)
+					var sy: int = maxi(1, fimg.get_height() / 32)
+					var gy: int = 0
+					while gy < fimg.get_height():
+						var gx: int = 0
+						while gx < fimg.get_width():
+							ink = maxf(ink, fimg.get_pixel(gx, gy).get_luminance())
+							gx += sx
+						gy += sy
+				_tournament_expect(ink > 0.5,
+					"submissions: the face texture carries ink (brightest sample %.2f - title and lines, not the placeholder's blank)" % ink)
 				var img: Image = get_viewport().get_texture().get_image()
 				if img != null:
 					img.save_png(OS.get_environment("PVLDS_GRAB_DIR").path_join("submissions_panel.png"))
 				_rs_inject(JOY_BUTTON_B, true)
 				_tournament_smoke_phase = 5
-			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
-				_tournament_fail("submissions: the seeded panel never rendered")
-				_finish_tournament_smoke()
 		5:
 			_rs_inject(JOY_BUTTON_B, false)
 			if not _room.is_submissions_panel_up():
@@ -24365,27 +24390,25 @@ func _drive_deskcenter_smoke() -> void:
 				_deskcenter_phase = 3
 				_deskcenter_wait = 0
 		3:
-			# A real press under the scale: click the
-			# Advanced fold's toggle at its global centre
-			# (the deskedit driver's warp pattern).
-			var toggle: Button = _desk._advanced_fold.toggle
-			var centre: Vector2 = toggle.get_global_rect().get_center()
-			get_viewport().warp_mouse(centre)
-			var press: InputEventMouseButton = InputEventMouseButton.new()
-			press.button_index = MOUSE_BUTTON_LEFT
-			press.pressed = true
-			press.position = centre
-			press.global_position = centre
-			Input.parse_input_event(press)
-			var release: InputEventMouseButton = InputEventMouseButton.new()
-			release.button_index = MOUSE_BUTTON_LEFT
-			release.pressed = false
-			release.position = centre
-			release.global_position = centre
-			Input.parse_input_event(release)
+			# Scroll the Advanced fold's toggle into view
+			# first (CHECKLIST restatement: the fold now
+			# lives in step 4, at the foot of the page -
+			# in HEAD it stood near the top, in reach of
+			# an unscrolled click). The leg's point is the
+			# real click under scale, not the reach.
+			_deskedit_scroll_to(_desk._advanced_fold.toggle)
 			_deskcenter_wait = 0
 			_deskcenter_phase = 4
 		4:
+			_deskcenter_wait += 1
+			if _deskcenter_wait >= 4:
+				# A real press under the scale: click the
+				# toggle at its global centre (the deskedit
+				# driver's warp pattern).
+				_deskedit_click(_desk._advanced_fold.toggle)
+				_deskcenter_wait = 0
+				_deskcenter_phase = 5
+		5:
 			_deskcenter_wait += 1
 			if _deskcenter_wait >= 4:
 				_deskcenter_expect(_desk._advanced_fold.is_expanded(),
