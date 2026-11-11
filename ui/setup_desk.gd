@@ -15,7 +15,6 @@ signal ipdb_snapshot_requested ## IPDBFIX: re-apply the bundled IPDB snapshot to
 signal update_get_requested(url: String) ## AUTOFIND: the update banner's Get - Main opens the url (a browser is a PC act, and Main owns the update state)
 signal update_later_pressed ## AUTOFIND: the update banner's Later - Main holds the session dismissal (it gates the room's segment too)
 signal wovp_test_requested(api_key: String) ## Test key: Main validates this text against WoVP and answers on the status line
-signal wovp_submit_requested(challenge_id: String, photo_path: String, score_text: String) ## Submit a score (the SUBMIT round): Main runs the two-step WoVP submission and answers on the submit status line. score_text is the SUBMIT2 record field's raw text - Main parses it into the LOCAL log only; it never rides the wire
 
 var _config: PvldsConfig
 var _filling_from_config: bool = false ## true while _fill_from_config sets widget state (its signal emissions are not user flips)
@@ -33,7 +32,7 @@ var _unplaced_label: Label
 var _unplaced_button: Button
 var _enter_button: Button
 var _dialog: FileDialog
-var _dialog_target: String = "" ## "exe" | "db" | "photo" | "folder:<index>"
+var _dialog_target: String = "" ## "exe" | "db" | "shots" | "folder:<index>"
 var _scanned: bool = false
 var _dl_button: Button
 var _dl_label: Label
@@ -42,21 +41,6 @@ var _wovp_edit: LineEdit
 var _wovp_save_button: Button
 var _wovp_test_button: Button
 var _wovp_label: Label
-var _submit_picker: OptionButton
-var _submit_info: Label
-var _submit_photo_button: Button
-var _submit_photo_label: Label
-var _submit_preview: TextureRect
-var _submit_preview_frame: PanelContainer ## SETUPLOOK: the preview's inset frame; stands and hides with the preview
-var _submit_verify_label: Label
-var _submit_button: Button
-var _submit_label: Label
-var _submit_score_edit: LineEdit ## SUBMIT2: the optional score-record field - his notebook, never sent
-var _submit_history_title: Label ## SUBMIT2: "Your recent submissions" - stands only when the log has entries
-var _submit_history_label: Label ## SUBMIT2: Main-built lines from the local submission log, newest first
-var _submit_rows: Array = [] ## Main's submit rows (set_wovp_submit_data): one Dictionary per live challenge
-var _submit_photo_path: String = "" ## the chosen score photo (filesystem path); only its name is ever shown or logged
-var _submit_has_key: bool = false
 var _pinemhi_edit: LineEdit
 var _pinemhi_check: CheckBox
 var _pinemhi_manage_check: CheckBox ## PINEMHI2 (Part B): the watcher-management toggle - saved with the PINemHi section's Save, read by the watchdog via the contract mirror
@@ -91,6 +75,20 @@ var _update_url: String = "" ## AUTOFIND: the standing update's download url (th
 var _version_label: Label ## AUTOFIND: the form's foot - "LaunchPin VR - version 1.0.0"
 var _hunt_done: bool = false ## AUTOFIND: the hunt runs at most once per desk instance
 var _hunt_census: Dictionary = {} ## AUTOFIND: the hunt's result as run (empty = the hunt never ran)
+
+## CHECKLIST: the first-run guided checklist's machinery -
+## four step shells (a slim bar over a content box) that
+## stand in both of the desk's modes. In checklist mode
+## the bars show, one step's content stands open, and a
+## finished step's bar gains a check; in the full desk
+## the bars hide and every content stands.
+const STEP_NAMES: Array[String] = ["Initial Setup", "High Score Setup", "Art", "Advanced"]
+var _step_bars: Array[Button] = []
+var _step_contents: Array[VBoxContainer] = []
+var _step_skips: Array[Button] = []
+var _step_done: Array[bool] = [false, false, false, false]
+var _step_open: int = 0 ## the open step's index; -1 = none open (after the last skip)
+var _checklist_mode: bool = false
 
 const MAX_FOLDER_ROWS: int = 6
 
@@ -171,9 +169,14 @@ func setup(config: PvldsConfig) -> void:
 	# DESKEDIT: both folds start collapsed on EVERY desk
 	# show, not just the first - leaving to the room and
 	# coming back re-folds what was opened.
+	# CHECKLIST: the mode is re-judged on every show too -
+	# a desk stood unconfigured walks the checklist; after
+	# a successful setup the same desk stands full.
 	visibility_changed.connect(func() -> void:
 		if visible:
-			_reset_folds())
+			_reset_folds()
+			_refresh_desk_mode())
+	_refresh_desk_mode()
 	# DESKCENTER: the form centres and scales with the
 	# window - now, and live on every window resize.
 	_hook_window_layout()
@@ -288,7 +291,7 @@ func title_dress() -> Dictionary:
 ## set: the exe pre-fills only an empty exe field, table
 ## folders are added only when the config names none, and
 ## NOTHING is saved - the pre-fill is a proposal standing
-## in the fields, and Save & Scan (the standing flow) is
+## in the fields, and the save-and-scan flow is
 ## what persists it, exactly as if the user had typed it.
 ## Test seam: PVLDS_AUTOFIND_ROOTS (";"-separated) replaces
 ## WHERE the hunt looks (the Windows drive roots), never
@@ -485,7 +488,50 @@ func _build_ui() -> void:
 	_intro_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(_intro_label)
 
-	_exe_edit = _add_path_row(vbox, "VPX executable", "Browse...", "exe")
+	# CHECKLIST: the desk's four steps. The shells stand in
+	# both presentations - one desk, two modes. In the FULL
+	# desk the step bars hide and every step's content
+	# stands in column order (the desk as it always read);
+	# on a FIRST RUN the desk walks a guided checklist:
+	# each step's slim bar stands, only the open step's
+	# content shows, and a finished step's bar gains a
+	# check. _refresh_desk_mode owns which presentation
+	# stands; any bar opens its step at any time - the
+	# checklist guides, it never gates (only the scan
+	# gates Enter, as it always has).
+	for i: int in range(STEP_NAMES.size()):
+		var bar: Button = Button.new()
+		bar.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		bar.add_theme_font_override("font", DeskTheme.FONT_MEDIUM)
+		bar.add_theme_font_size_override("font_size", 20)
+		bar.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_ACCENT)
+		bar.add_theme_color_override("font_hover_color", RoomSpecs.STRIP_LABEL_ACCENT)
+		bar.add_theme_color_override("font_pressed_color", RoomSpecs.STRIP_LABEL_ACCENT)
+		bar.add_theme_stylebox_override("normal", DeskTheme.section_header_box())
+		bar.add_theme_stylebox_override("hover", DeskTheme.section_header_box())
+		bar.add_theme_stylebox_override("pressed", DeskTheme.section_header_box())
+		bar.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+		bar.visible = false
+		bar.pressed.connect(_on_step_bar_pressed.bind(i))
+		vbox.add_child(bar)
+		_step_bars.append(bar)
+		var step_content: VBoxContainer = VBoxContainer.new()
+		step_content.add_theme_constant_override("separation", 12)
+		vbox.add_child(step_content)
+		_step_contents.append(step_content)
+	_refresh_step_bars()
+	var step1: VBoxContainer = _step_contents[0]
+	var step2: VBoxContainer = _step_contents[1]
+	var step3: VBoxContainer = _step_contents[2]
+	var step4: VBoxContainer = _step_contents[3]
+
+	# -- Step 1: Initial Setup. The VPX executable, the
+	# table folders the intro sentence promises, and the
+	# scan that reads them. The folders stand directly
+	# under the VPX block in BOTH modes (CHECKLIST item 2:
+	# the regroup is permanent - they used to stand at the
+	# desk's far end, far from the sentence naming them).
+	_exe_edit = _add_path_row(step1, "VPX executable", "Browse...", "exe")
 	# AUTOFIND: the hunt's word under the exe field - what
 	# it found, or the plain not-found guidance. Stands
 	# only when the hunt ran (see _apply_hunt).
@@ -493,94 +539,117 @@ func _build_ui() -> void:
 	_exe_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_exe_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
 	_exe_note.visible = false
-	vbox.add_child(_exe_note)
-	_db_edit = _add_path_row(vbox, "VPS database (vpsdb.json, optional)", "Browse...", "db")
-	# DESKEDIT: say what the thing IS - a first-timer is
-	# otherwise asked to point at a file he has never heard
-	# of (Chris's wording, FINAL).
-	# DESKHEAD: the line opens by NAMING the thing - "The
-	# VPS Database is a community catalog..." (Chris's edit).
-	_db_note = Label.new()
-	_db_note.text = "The VPS Database is a community catalog of VPX tables — names, makers, cover art. LaunchPin carries a copy and can download a fresh one below; this field is only for using your own."
-	_db_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_db_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
-	vbox.add_child(_db_note)
-	var dl_row: HBoxContainer = HBoxContainer.new()
-	dl_row.add_theme_constant_override("separation", 8)
-	vbox.add_child(dl_row)
-	_dl_button = Button.new()
-	_dl_button.text = "Download VPS database"
-	# DESKCOLOR: Download rides with the picker family -
-	# it is a get-the-file button.
-	DeskTheme.dress_button_family(_dl_button, DeskTheme.FAMILY_PICKER)
-	_dl_button.pressed.connect(_on_download_pressed)
-	dl_row.add_child(_dl_button)
-	_dl_label = Label.new()
-	_dl_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_dl_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	dl_row.add_child(_dl_label)
-	# The download itself is the shared service (core/vps_downloader.gd)
-	# - the room's SETUP panel runs the same one. This desk only owns
-	# its button, its label, and its success tail ("next Save & Scan").
-	_downloader = VpsDownloader.new()
-	add_child(_downloader)
-	_downloader.progress.connect(func(text: String) -> void: _dl_label.text = text)
-	_downloader.finished.connect(_on_download_finished)
-	# DESKEDIT: the Launch arguments template is buried
-	# under an Advanced fold standing where the field stood
-	# - a technical field a first-timer should not have to
-	# wonder about. The field itself is untouched (same
-	# config key, same collect/save); only Launch Arguments
-	# goes under the fold, nothing else is swept in.
-	_advanced_fold = _make_fold(vbox, "Advanced")
-	_args_edit = _add_field(_advanced_fold.content, "Launch arguments template ({table} is the table file; quotes group arguments)")
-	var args_note: Label = Label.new()
-	args_note.text = "The command line VPX is started with. The default starts the table you picked — change it only if your VPX setup needs special switches."
-	args_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	args_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
-	_advanced_fold.content.add_child(args_note)
-	_herding_check = CheckBox.new()
-	# DESKEDIT: the short label, with the explanation as a
-	# sub-line under it (Chris's wording, FINAL) - the old
-	# one-string label named a mechanism a first-timer
-	# could not be expected to know.
-	_herding_check.text = "Focus herding"
-	_herding_check.tooltip_text = "During the launch settle and during play, the watchdog returns foreground focus to the VPX window when something steals it. It never moves or resizes windows."
-	_herding_check.toggled.connect(func(_on: bool) -> void: _apply_session_settings())
-	vbox.add_child(_herding_check)
-	_herding_note = Label.new()
-	# DESKHEAD: the DESKEDIT paragraph is replaced whole -
-	# one line, then the green tag below, and nothing else
-	# (Chris's wording, FINAL; the why belongs to the manual).
-	_herding_note.text = "When playing, LaunchPin keeps your game's window in front, so no other programs on your PC will interfere with your VR view."
-	_herding_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_herding_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
-	vbox.add_child(_herding_note)
-	_herding_tag = Label.new()
-	_herding_tag.text = "— On By Default —"
-	_herding_tag.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_herding_tag.add_theme_color_override("font_color", HERDING_TAG_GREEN)
-	vbox.add_child(_herding_tag)
+	step1.add_child(_exe_note)
+	_folder_rows = VBoxContainer.new()
+	_folder_rows.add_theme_constant_override("separation", 8)
+	step1.add_child(_folder_label())
+	step1.add_child(_folder_rows)
+	# AUTOFIND: the hunt's word under the folder rows -
+	# the found Tables folder and its size, or the word
+	# that the folders still need pointing at.
+	_folders_note = Label.new()
+	_folders_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_folders_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	_folders_note.visible = false
+	step1.add_child(_folders_note)
+	var add_folder: Button = Button.new()
+	add_folder.text = "Add table folder..."
+	# DESKCOLOR: Add folder opens the picker, so it wears
+	# the picker slate too.
+	DeskTheme.dress_button_family(add_folder, DeskTheme.FAMILY_PICKER)
+	_add_folder_button = add_folder
+	add_folder.pressed.connect(_on_add_folder_row)
+	step1.add_child(add_folder)
 
+	var dummy_button: Button = Button.new()
+	dummy_button.text = "Use the bundled dummy library (invented tables, for judging the flow)"
+	dummy_button.pressed.connect(_on_use_dummy)
+	step1.add_child(dummy_button)
+
+	_scan_button = Button.new()
+	# CHECKLIST: the action renamed to say the whole job -
+	# it saves every option on the desk, then scans.
+	_scan_button.text = "Save Options and Scan for Tables"
+	_scan_button.pressed.connect(_on_save_and_scan)
+	step1.add_child(_scan_button)
+
+	_stats_label = Label.new()
+	_stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_stats_label.text = "Not scanned yet."
+	step1.add_child(_stats_label)
+
+	# DESKEDIT: the scan summary's diagnostics live in a
+	# Scan details fold under the stats area - the standing
+	# area carries the answers (headline + the plain
+	# database line); the workshop numbers wait in the fold
+	# for whoever goes looking. The fold stands only when a
+	# scan's details exist (no empty furniture before the
+	# first scan) and starts collapsed like every fold.
+	_details_fold = _make_fold(step1, "Scan details")
+	_details_label = Label.new()
+	_details_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_details_fold.content.add_child(_details_label)
+	_details_fold.root.visible = false
+
+	var b2s_row: HBoxContainer = HBoxContainer.new()
+	b2s_row.add_theme_constant_override("separation", 8)
+	step1.add_child(b2s_row)
+	_b2s_label = Label.new()
+	_b2s_label.text = "Missing backglass: not scanned yet - the list is written on every scan."
+	_b2s_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_b2s_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	b2s_row.add_child(_b2s_label)
+	_b2s_button = Button.new()
+	_b2s_button.text = "Open list"
+	_b2s_button.disabled = true
+	_b2s_button.tooltip_text = "Open missing_b2s.txt - the table files with no backglass - from the app data folder"
+	_b2s_button.pressed.connect(_on_open_b2s_list)
+	b2s_row.add_child(_b2s_button)
+
+	var unplaced_row: HBoxContainer = HBoxContainer.new()
+	unplaced_row.add_theme_constant_override("separation", 8)
+	step1.add_child(unplaced_row)
+	_unplaced_label = Label.new()
+	_unplaced_label.text = "Files I couldn't place: not scanned yet - the list is written on every scan."
+	_unplaced_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_unplaced_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	unplaced_row.add_child(_unplaced_label)
+	_unplaced_button = Button.new()
+	_unplaced_button.text = "Open list"
+	_unplaced_button.disabled = true
+	_unplaced_button.tooltip_text = "Open unplaced_files.txt - the table files that match no database game - from the app data folder"
+	_unplaced_button.pressed.connect(_on_open_unplaced_list)
+	unplaced_row.add_child(_unplaced_button)
+
+	# -- Step 2: High Score Setup. The WoVP boards block,
+	# the screenshots folder, and the PINemHi block under
+	# one heading - everything that feeds the high-score
+	# surfaces, gathered (CHECKLIST item 4). The old
+	# headings stand as sub-headings below it and keep
+	# their DESKCOLOR families.
+	step2.add_child(_section_header("High Score Setup"))
 	# The WoVP section (the Tournament Room round): his
 	# World of Virtual Pinball API key - self-service in his
 	# WoVP profile, pasted here once. Like the session
-	# switch, the key is a live setting: Save key writes the
-	# config on the spot (no Save & Scan), Test key validates
-	# the field's text and names whose key it is. The field
-	# is masked - it is a secret, and it is never printed.
-	vbox.add_child(_section_header("World of Virtual Pinball (WoVP) - the Tournament Room's boards", DeskTheme.FAMILY_WOVP))
+	# switch, the key is a live setting: Save key writes
+	# the config on the spot (no full save), Test key
+	# validates the field's text and names whose key it
+	# is. The field is masked - it is a secret, and it is
+	# never printed.
+	step2.add_child(_section_header("World of Virtual Pinball (WoVP) - the Tournament Room's boards", DeskTheme.FAMILY_WOVP))
 	var wovp_intro: Label = Label.new()
-	wovp_intro.text = "Your WoVP API key (from your WoVP profile) shows your live league boards in the Tournament Room. Stored only in the config file on this PC."
+	# CHECKLIST: the key directions, telling a first-timer
+	# where the key actually lives (the brief's wording).
+	wovp_intro.text = "Your WoVP API key shows your live league boards in the Tournament Room. Get your key from WoVP: open your profile page and look under Settings. Stored only in the config file on this PC."
 	wovp_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(wovp_intro)
+	step2.add_child(wovp_intro)
 	_wovp_edit = LineEdit.new()
 	_wovp_edit.secret = true
 	_wovp_edit.placeholder_text = "Paste your WoVP API key here"
-	vbox.add_child(_wovp_edit)
+	step2.add_child(_wovp_edit)
 	var wovp_row: HBoxContainer = HBoxContainer.new()
 	wovp_row.add_theme_constant_override("separation", 8)
-	vbox.add_child(wovp_row)
+	step2.add_child(wovp_row)
 	_wovp_save_button = Button.new()
 	_wovp_save_button.text = "Save key"
 	# DESKCOLOR: the key pair wears the confirm green.
@@ -596,122 +665,13 @@ func _build_ui() -> void:
 	_wovp_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_wovp_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	wovp_row.add_child(_wovp_label)
-
-	# The score submission section (the SUBMIT round): the
-	# desk half of the WoVP write side. Pick a live
-	# challenge, attach the score photo (taken the league's
-	# own way - the Quest camera method - and moved to this
-	# PC), and submit: Main runs the two-step call and the
-	# verdict lands on the status line. The rows Main pushes
-	# (set_wovp_submit_data) carry the challenge's library
-	# state and the standing warning - the league accepts
-	# only a HIGHER score than the one already posted - so
-	# both are read BEFORE anything is sent. Nothing here
-	# gates on the library state: it is shown, never a lock.
-	vbox.add_child(_section_header("Submit a score to WoVP", DeskTheme.FAMILY_WOVP))
-	var submit_intro: Label = Label.new()
-	submit_intro.text = "Finished a game on a live challenge? Take the photo the league's way (last score, DMD and full playfield in frame), move it to this PC, then pick the challenge and the photo here. The photo carries the score; the league validates it."
-	submit_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(submit_intro)
-	_submit_picker = OptionButton.new()
-	_submit_picker.item_selected.connect(_on_submit_challenge_selected)
-	vbox.add_child(_submit_picker)
-	# SETUPLOOK: the picker's dropdown lives outside the
-	# form's theme chain (it is a popup window), so it is
-	# dressed directly, in the same family.
-	var picker_popup: PopupMenu = _submit_picker.get_popup()
-	picker_popup.add_theme_stylebox_override("panel", DeskTheme.popup_panel_box())
-	picker_popup.add_theme_stylebox_override("hovered", DeskTheme.popup_hover_box())
-	picker_popup.add_theme_color_override("font_color", Color(0.87, 0.88, 0.93))
-	picker_popup.add_theme_color_override("font_hovered_color", Color(1, 1, 1))
-	_submit_info = Label.new()
-	_submit_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_submit_info.text = "No WoVP key saved - save your key above first; submissions use the same key."
-	vbox.add_child(_submit_info)
-	var submit_photo_row: HBoxContainer = HBoxContainer.new()
-	submit_photo_row.add_theme_constant_override("separation", 8)
-	vbox.add_child(submit_photo_row)
-	_submit_photo_button = Button.new()
-	_submit_photo_button.text = "Choose photo..."
-	# DESKCOLOR: the photo pair wears the amber - the
-	# photo IS the submission.
-	DeskTheme.dress_button_family(_submit_photo_button, DeskTheme.FAMILY_AMBER)
-	_submit_photo_button.pressed.connect(func() -> void: _open_dialog_for("photo"))
-	submit_photo_row.add_child(_submit_photo_button)
-	_submit_photo_label = Label.new()
-	_submit_photo_label.text = "No photo chosen yet."
-	_submit_photo_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_submit_photo_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	submit_photo_row.add_child(_submit_photo_label)
-	# The verify step (Chris's field note, 2026-11-06): the
-	# pick is not done when the file is named. Some tables
-	# blink their score displays by design - Bad Cats gave
-	# him 1 readable frame in 5 - so the chosen frame stands
-	# here, big enough to read the score in it, and a blank
-	# catch is rejected at the desk by his own eyes before
-	# the submit button is ever used.
-	# SETUPLOOK: the preview sits in a dark inset frame in
-	# the field family - the photo is the content; the frame
-	# is the desk's furniture around it.
-	_submit_preview_frame = PanelContainer.new()
-	_submit_preview_frame.add_theme_stylebox_override("panel", DeskTheme.inset_box())
-	_submit_preview_frame.visible = false
-	vbox.add_child(_submit_preview_frame)
-	_submit_preview = TextureRect.new()
-	_submit_preview.custom_minimum_size = Vector2(520, 390)
-	_submit_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_submit_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_submit_preview.visible = false
-	_submit_preview_frame.add_child(_submit_preview)
-	_submit_verify_label = Label.new()
-	_submit_verify_label.text = "Read the score in this frame before submitting - some tables blink their displays, and a photo caught mid-blink carries no score."
-	_submit_verify_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_submit_verify_label.visible = false
-	vbox.add_child(_submit_verify_label)
-	# SUBMIT2: the score-record field. What he types is
-	# his own notebook - it lands in the local submission
-	# log beside the attempt and NOWHERE else: the league
-	# reads the score off the photo, and the payload keeps
-	# its 0 stub. Its one job is memory: the league's own
-	# History page is otherwise the only place a submitted
-	# score can be looked back up, and a blind (Knockout)
-	# round shows nobody's number anywhere.
-	var submit_score_row: HBoxContainer = HBoxContainer.new()
-	submit_score_row.add_theme_constant_override("separation", 8)
-	vbox.add_child(submit_score_row)
-	var submit_score_label: Label = Label.new()
-	submit_score_label.text = "Score in this photo (optional - your record only):"
-	submit_score_label.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
-	submit_score_row.add_child(submit_score_label)
-	_submit_score_edit = LineEdit.new()
-	_submit_score_edit.placeholder_text = "e.g. 16,638,090 - leave empty to skip"
-	_submit_score_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	submit_score_row.add_child(_submit_score_edit)
-	var submit_row: HBoxContainer = HBoxContainer.new()
-	submit_row.add_theme_constant_override("separation", 8)
-	vbox.add_child(submit_row)
-	_submit_button = Button.new()
-	_submit_button.text = "Submit score"
-	DeskTheme.dress_button_family(_submit_button, DeskTheme.FAMILY_AMBER)
-	_submit_button.pressed.connect(_on_submit_pressed)
-	submit_row.add_child(_submit_button)
-	_submit_label = Label.new()
-	_submit_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_submit_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	submit_row.add_child(_submit_label)
-	# SUBMIT2: the receipt book, on the desk - his recent
-	# submissions read back from the local log (Main builds
-	# the lines: date, challenge, his recorded score when
-	# he typed one, the outcome). Stands only when the log
-	# has entries: no empty furniture.
-	_submit_history_title = Label.new()
-	_submit_history_title.text = "Your recent submissions"
-	_submit_history_title.visible = false
-	vbox.add_child(_submit_history_title)
-	_submit_history_label = Label.new()
-	_submit_history_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_submit_history_label.visible = false
-	vbox.add_child(_submit_history_label)
+	# CHECKLIST: the desk's Submit-a-score form and its
+	# recent-submissions list are GONE from the desk -
+	# nobody submits from this screen (the Tournament
+	# Room's panel is the one submission surface), and
+	# the receipt book is reborn as a panel in the
+	# Tournament Room itself. The records store (the
+	# local submission log) does not move.
 
 	# The Screenshots section (ROOMSUBMIT): the folder his
 	# headset score screenshots land in. The in-room submit
@@ -721,14 +681,15 @@ func _build_ui() -> void:
 	# the PINemHi settings, this is a live setting: Save
 	# writes the config on the spot. No toggle: an unset
 	# folder is the off state, and the panel says so.
-	vbox.add_child(_section_header("Screenshots - the folder your score photos land in", DeskTheme.FAMILY_WOVP))
+	step2.add_child(_section_header("Screenshots - the folder your score photos land in", DeskTheme.FAMILY_WOVP))
 	var shots_intro: Label = Label.new()
-	shots_intro.text = "The folder your headset screenshots end up in on this PC. In the Tournament Room, press Y on a challenge card: the newest shots here stand on the submit panel - pick the one that shows your score and send it, headset on. Same key, same send as the desk above."
+	# CHECKLIST: Chris's own words for what this folder is.
+	shots_intro.text = "Please select the folder your VR headset screenshots appear on PC. Submit screenshots in Tournament Room while in VR."
 	shots_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(shots_intro)
+	step2.add_child(shots_intro)
 	var shots_row: HBoxContainer = HBoxContainer.new()
 	shots_row.add_theme_constant_override("separation", 8)
-	vbox.add_child(shots_row)
+	step2.add_child(shots_row)
 	_shots_edit = LineEdit.new()
 	_shots_edit.placeholder_text = "Screenshots folder - where your headset shots land"
 	_shots_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -743,7 +704,7 @@ func _build_ui() -> void:
 	shots_row.add_child(shots_browse)
 	var shots_save_row: HBoxContainer = HBoxContainer.new()
 	shots_save_row.add_theme_constant_override("separation", 8)
-	vbox.add_child(shots_save_row)
+	step2.add_child(shots_save_row)
 	var shots_save: Button = Button.new()
 	shots_save.text = "Save screenshots folder"
 	shots_save.pressed.connect(_on_shots_save_pressed)
@@ -763,26 +724,26 @@ func _build_ui() -> void:
 	# lets PVLDS run PINemHi's watcher while a table is
 	# playing (WATCHERLIFE: its life is the session's, never
 	# the app's open hours - see its label). Like the key,
-	# these are live
-	# settings: Save writes the config on the spot.
-	vbox.add_child(_section_header("PINemHi - your personal bests on the tournament boards", DeskTheme.FAMILY_PINEMHI))
+	# these are live settings: Save writes the config on
+	# the spot.
+	step2.add_child(_section_header("PINemHi - your personal bests on the tournament boards", DeskTheme.FAMILY_PINEMHI))
 	var pinemhi_intro: Label = Label.new()
 	pinemhi_intro.text = "If you use PINemHi, LaunchPin can read its TOP10_Personal files and show your best beneath the league scores on a tournament board. That's all it does by default - it never runs PINemHi or its watcher unless you opt in below. Leave the folder empty to auto-detect the usual install places (D:\\vPinball\\Pinemhi and friends)."
 	pinemhi_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(pinemhi_intro)
+	step2.add_child(pinemhi_intro)
 	_pinemhi_check = CheckBox.new()
 	_pinemhi_check.text = "Show my PINemHi personal bests on tournament boards"
-	vbox.add_child(_pinemhi_check)
+	step2.add_child(_pinemhi_check)
 	_pinemhi_manage_check = CheckBox.new()
 	_pinemhi_manage_check.text = "Let LaunchPin run the PINemHi watcher while a table is playing"
 	_pinemhi_manage_check.tooltip_text = "Off (the default): LaunchPin never touches the watcher. On: the watchdog starts pinemhi_rom_monitor.exe when a table starts (if it isn't already running) and closes it shortly after the table exits - or when LaunchPin exits, if that comes first. A watcher already running is left running: LaunchPin only ever closes one it started itself."
-	vbox.add_child(_pinemhi_manage_check)
+	step2.add_child(_pinemhi_manage_check)
 	_pinemhi_edit = LineEdit.new()
 	_pinemhi_edit.placeholder_text = "PINemHi folder - empty = auto-detect"
-	vbox.add_child(_pinemhi_edit)
+	step2.add_child(_pinemhi_edit)
 	var pinemhi_row: HBoxContainer = HBoxContainer.new()
 	pinemhi_row.add_theme_constant_override("separation", 8)
-	vbox.add_child(pinemhi_row)
+	step2.add_child(pinemhi_row)
 	var pinemhi_save: Button = Button.new()
 	pinemhi_save.text = "Save PINemHi settings"
 	pinemhi_save.pressed.connect(_on_pinemhi_save_pressed)
@@ -791,6 +752,50 @@ func _build_ui() -> void:
 	_pinemhi_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_pinemhi_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	pinemhi_row.add_child(_pinemhi_label)
+
+	# -- Step 3: Art. The VPS database block, inverted
+	# (CHECKLIST item 3): the standing explanation first,
+	# then the Download as the primary action, then the
+	# field for a player's own copy. The bundled copy
+	# covers scanning, so nothing here blocks; the
+	# download is offered, never silent. The IPDB block
+	# rides the same step - it is the library's other
+	# well of facts and art.
+	# DESKEDIT: say what the thing IS - a first-timer is
+	# otherwise asked to point at a file he has never heard
+	# of (Chris's wording, FINAL).
+	# DESKHEAD: the line opens by NAMING the thing - "The
+	# VPS Database is a community catalog..." (Chris's edit).
+	_db_note = Label.new()
+	_db_note.text = "The VPS Database is a community catalog of VPX tables — names, makers, cover art. LaunchPin carries a copy and can download a fresh one below; this field is only for using your own."
+	_db_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_db_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	step3.add_child(_db_note)
+	var dl_row: HBoxContainer = HBoxContainer.new()
+	dl_row.add_theme_constant_override("separation", 8)
+	step3.add_child(dl_row)
+	_dl_button = Button.new()
+	_dl_button.text = "Download VPS database"
+	# DESKCOLOR: Download rides with the picker family -
+	# it is a get-the-file button.
+	DeskTheme.dress_button_family(_dl_button, DeskTheme.FAMILY_PICKER)
+	_dl_button.pressed.connect(_on_download_pressed)
+	dl_row.add_child(_dl_button)
+	_dl_label = Label.new()
+	_dl_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_dl_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	dl_row.add_child(_dl_label)
+	# The download itself is the shared service (core/vps_downloader.gd)
+	# - the room's SETUP panel runs the same one. This desk only owns
+	# its button, its label, and its success tail (the next scan).
+	_downloader = VpsDownloader.new()
+	add_child(_downloader)
+	_downloader.progress.connect(func(text: String) -> void: _dl_label.text = text)
+	_downloader.finished.connect(_on_download_finished)
+	# CHECKLIST: the own-copy path, labelled as exactly
+	# that - the exception under the download, not the
+	# front door.
+	_db_edit = _add_path_row(step3, "Only for using your own copy instead:", "Browse...", "db")
 
 	# The IPDB section (CARDBACK, reshaped by IPDBFIX):
 	# the card backs' second well. The facts ship BUNDLED
@@ -801,14 +806,14 @@ func _build_ui() -> void:
 	# button re-applies the bundled snapshot, the useful
 	# move after a cache clear; a snapshot refresh rides
 	# a PVLDS update.
-	vbox.add_child(_section_header("IPDB data - the card backs' second well"))
+	step3.add_child(_section_header("IPDB data - the card backs' second well"))
 	var ipdb_intro: Label = Label.new()
 	ipdb_intro.text = "Each card's back mixes the database's facts with the Internet Pinball Database's (production run, fun rating, full credits, notable features), each row dotted with its source. The IPDB facts ship bundled as a snapshot and apply automatically; the backs read the saved copy and never go online. Games with no IPDB link in the database show database rows only."
 	ipdb_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(ipdb_intro)
+	step3.add_child(ipdb_intro)
 	var ipdb_row: HBoxContainer = HBoxContainer.new()
 	ipdb_row.add_theme_constant_override("separation", 8)
-	vbox.add_child(ipdb_row)
+	step3.add_child(ipdb_row)
 	var ipdb_apply: Button = Button.new()
 	ipdb_apply.text = "Re-apply bundled IPDB data"
 	ipdb_apply.pressed.connect(func() -> void: ipdb_snapshot_requested.emit())
@@ -818,87 +823,65 @@ func _build_ui() -> void:
 	_ipdb_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_ipdb_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	ipdb_row.add_child(_ipdb_label)
-	_folder_rows = VBoxContainer.new()
-	_folder_rows.add_theme_constant_override("separation", 8)
-	vbox.add_child(_folder_label())
-	vbox.add_child(_folder_rows)
-	# AUTOFIND: the hunt's word under the folder rows -
-	# the found Tables folder and its size, or the word
-	# that the folders still need pointing at.
-	_folders_note = Label.new()
-	_folders_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_folders_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
-	_folders_note.visible = false
-	vbox.add_child(_folders_note)
-	var add_folder: Button = Button.new()
-	add_folder.text = "Add table folder..."
-	# DESKCOLOR: Add folder opens the picker, so it wears
-	# the picker slate too.
-	DeskTheme.dress_button_family(add_folder, DeskTheme.FAMILY_PICKER)
-	_add_folder_button = add_folder
-	add_folder.pressed.connect(_on_add_folder_row)
-	vbox.add_child(add_folder)
 
-	var dummy_button: Button = Button.new()
-	dummy_button.text = "Use the bundled dummy library (invented tables, for judging the flow)"
-	dummy_button.pressed.connect(_on_use_dummy)
-	vbox.add_child(dummy_button)
+	# -- Step 4: Advanced. The Launch Arguments fold and
+	# Focus Herding. In the FULL desk the fold behaves as
+	# it always has (collapsed at every show, its toggle
+	# standing); in checklist mode the step IS the fold:
+	# its toggle hides and the fold stands open (see
+	# _refresh_desk_mode).
+	# DESKEDIT: the Launch arguments template is buried
+	# under an Advanced fold standing where the field stood
+	# - a technical field a first-timer should not have to
+	# wonder about. The field itself is untouched (same
+	# config key, same collect/save); only Launch Arguments
+	# goes under the fold, nothing else is swept in.
+	_advanced_fold = _make_fold(step4, "Advanced")
+	_args_edit = _add_field(_advanced_fold.content, "Launch arguments template ({table} is the table file; quotes group arguments)")
+	var args_note: Label = Label.new()
+	args_note.text = "The command line VPX is started with. The default starts the table you picked — change it only if your VPX setup needs special switches."
+	args_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	args_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	_advanced_fold.content.add_child(args_note)
+	_herding_check = CheckBox.new()
+	# DESKEDIT: the short label, with the explanation as a
+	# sub-line under it (Chris's wording, FINAL) - the old
+	# one-string label named a mechanism a first-timer
+	# could not be expected to know.
+	_herding_check.text = "Focus herding"
+	_herding_check.tooltip_text = "During the launch settle and during play, the watchdog returns foreground focus to the VPX window when something steals it. It never moves or resizes windows."
+	_herding_check.toggled.connect(func(_on: bool) -> void: _apply_session_settings())
+	step4.add_child(_herding_check)
+	_herding_note = Label.new()
+	# DESKHEAD: the DESKEDIT paragraph is replaced whole -
+	# one line, then the green tag below, and nothing else
+	# (Chris's wording, FINAL; the why belongs to the manual).
+	_herding_note.text = "When playing, LaunchPin keeps your game's window in front, so no other programs on your PC will interfere with your VR view."
+	_herding_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_herding_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	step4.add_child(_herding_note)
+	_herding_tag = Label.new()
+	_herding_tag.text = "— On By Default —"
+	_herding_tag.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_herding_tag.add_theme_color_override("font_color", HERDING_TAG_GREEN)
+	step4.add_child(_herding_tag)
 
-	_scan_button = Button.new()
-	_scan_button.text = "Save && Scan"
-	_scan_button.pressed.connect(_on_save_and_scan)
-	vbox.add_child(_scan_button)
+	# CHECKLIST: the optional steps' way out, at each
+	# step's foot - "Skip for now", shown only in checklist
+	# mode. Skipping marks the step done and opens the
+	# next; it costs nothing and nags never.
+	for i: int in range(1, STEP_NAMES.size()):
+		var skip: Button = Button.new()
+		skip.text = "Skip for now"
+		skip.visible = false
+		skip.pressed.connect(_on_skip_step_pressed.bind(i))
+		_step_contents[i].add_child(skip)
+		_step_skips.append(skip)
 
-	_stats_label = Label.new()
-	_stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_stats_label.text = "Not scanned yet."
-	vbox.add_child(_stats_label)
-
-	# DESKEDIT: the scan summary's diagnostics live in a
-	# Scan details fold under the stats area - the standing
-	# area carries the answers (headline + the plain
-	# database line); the workshop numbers wait in the fold
-	# for whoever goes looking. The fold stands only when a
-	# scan's details exist (no empty furniture before the
-	# first scan) and starts collapsed like every fold.
-	_details_fold = _make_fold(vbox, "Scan details")
-	_details_label = Label.new()
-	_details_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_details_fold.content.add_child(_details_label)
-	_details_fold.root.visible = false
-
-	var b2s_row: HBoxContainer = HBoxContainer.new()
-	b2s_row.add_theme_constant_override("separation", 8)
-	vbox.add_child(b2s_row)
-	_b2s_label = Label.new()
-	_b2s_label.text = "Missing backglass: not scanned yet - the list is written on every scan."
-	_b2s_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_b2s_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	b2s_row.add_child(_b2s_label)
-	_b2s_button = Button.new()
-	_b2s_button.text = "Open list"
-	_b2s_button.disabled = true
-	_b2s_button.tooltip_text = "Open missing_b2s.txt - the table files with no backglass - from the app data folder"
-	_b2s_button.pressed.connect(_on_open_b2s_list)
-	b2s_row.add_child(_b2s_button)
-
-	var unplaced_row: HBoxContainer = HBoxContainer.new()
-	unplaced_row.add_theme_constant_override("separation", 8)
-	vbox.add_child(unplaced_row)
-	_unplaced_label = Label.new()
-	_unplaced_label.text = "Files I couldn't place: not scanned yet - the list is written on every scan."
-	_unplaced_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_unplaced_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	unplaced_row.add_child(_unplaced_label)
-	_unplaced_button = Button.new()
-	_unplaced_button.text = "Open list"
-	_unplaced_button.disabled = true
-	_unplaced_button.tooltip_text = "Open unplaced_files.txt - the table files that match no database game - from the app data folder"
-	_unplaced_button.pressed.connect(_on_open_unplaced_list)
-	unplaced_row.add_child(_unplaced_button)
-
+	# The foot stands outside the steps in both modes.
 	_enter_button = Button.new()
-	_enter_button.text = "Enter the Room"
+	# CHECKLIST: the door renamed for the product it opens.
+	_enter_button.text = "Enter LaunchPin VR"
 	_enter_button.disabled = true
 	_enter_button.pressed.connect(func() -> void: enter_room_requested.emit())
 	vbox.add_child(_enter_button)
@@ -1016,10 +999,6 @@ func _open_dialog_for(target: String) -> void:
 		_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 		_dialog.filters = PackedStringArray(["*.json ; vpsdb.json"])
 		_dialog.title = "Find a cached vpsdb.json (optional)"
-	elif target == "photo":
-		_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-		_dialog.filters = PackedStringArray(["*.jpg, *.jpeg, *.png ; Score photos"])
-		_dialog.title = "Choose the score photo (last score - DMD and full playfield in frame)"
 	elif target == "shots":
 		_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
 		_dialog.title = "Pick the folder your headset screenshots land in"
@@ -1044,10 +1023,6 @@ func _on_dialog_file(path: String) -> void:
 		_exe_edit.text = path
 	elif _dialog_target == "db":
 		_db_edit.text = path
-	elif _dialog_target == "photo":
-		_submit_photo_path = path
-		_submit_photo_label.text = path.get_file()
-		_show_submit_preview(path)
 
 
 func _on_dialog_dir(path: String) -> void:
@@ -1128,7 +1103,7 @@ func _collect_session_settings() -> void:
 ## field and save, no scan, no other side effects. Everything
 ## else on this desk (paths, template, folders) stays on the
 ## Save & Scan model, so half-typed text never half-saves.
-## (Before this, the switches were only read on Save & Scan, so a
+## (Before this, the switches were only read at save-and-scan, so a
 ## flip followed by Enter the Room silently did nothing - Chris's
 ## isolation test, 2026-10-21.) A failed save restores the config
 ## and the widget to exactly what they were and says so in the
@@ -1140,6 +1115,7 @@ func _apply_session_settings() -> void:
 	var prev_herding: bool = _config.focus_herding
 	_collect_session_settings()
 	if _config.save_to_disk():
+		_mark_step_done(3)
 		return
 	_config.focus_herding = prev_herding
 	_filling_from_config = true
@@ -1171,6 +1147,7 @@ func _on_wovp_save_pressed() -> void:
 			var length_note: String = WovpClient.key_length_note(_config.wovp_api_key)
 			if length_note != "":
 				_wovp_label.text += " " + length_note
+		_mark_step_done(1)
 		wovp_key_saved.emit()
 		return
 	_config.wovp_api_key = prev
@@ -1204,151 +1181,6 @@ func set_wovp_status(text: String) -> void:
 	_wovp_label.text = text
 
 
-## Main's standing challenge data for the submit section
-## (the SUBMIT round): one row per live challenge, rebuilt
-## on every boards/identity/scan change so the picker never
-## offers a dead challenge or a stale warning. The selected
-## challenge survives a rebuild when it is still live. The
-## library state in a row is information, never a gate -
-## the picker offers every live challenge, owned or not.
-func set_wovp_submit_data(rows: Array, has_key: bool) -> void:
-	var keep_id: String = ""
-	var current: Dictionary = _selected_submit_row()
-	if not current.is_empty():
-		keep_id = str(current.get("challenge_id", ""))
-	_submit_rows = rows
-	_submit_has_key = has_key
-	if _submit_picker == null:
-		return
-	_submit_picker.clear()
-	for rv: Variant in rows:
-		var row: Dictionary = rv as Dictionary
-		_submit_picker.add_item(str(row.get("picker_text", "")))
-	if not rows.is_empty():
-		var sel: int = 0
-		for i: int in range(rows.size()):
-			if str((rows[i] as Dictionary).get("challenge_id", "")) == keep_id:
-				sel = i
-				break
-		_submit_picker.selected = sel
-	_submit_picker.disabled = not has_key
-	_submit_button.disabled = not has_key
-	_submit_photo_button.disabled = not has_key
-	if _submit_score_edit != null:
-		_submit_score_edit.editable = has_key
-	_refresh_submit_info()
-
-
-func _selected_submit_row() -> Dictionary:
-	if _submit_picker == null or _submit_rows.is_empty():
-		return {}
-	var idx: int = _submit_picker.selected
-	if idx < 0 or idx >= _submit_rows.size():
-		return {}
-	return _submit_rows[idx] as Dictionary
-
-
-func _on_submit_challenge_selected(_idx: int) -> void:
-	_refresh_submit_info()
-
-
-## The chosen challenge's whole case, in plain lines: what
-## it is, when it ends, where the library stands on it, and
-## the standing warning - his posted score named, or the
-## open door when he has none. Read BEFORE the submit, by
-## design: the league accepts only a higher score, and a
-## submission spent under a score it cannot beat is spent
-## for nothing.
-func _refresh_submit_info() -> void:
-	if _submit_info == null:
-		return
-	if not _submit_has_key:
-		_submit_info.text = "No WoVP key saved - save your key above first; submissions use the same key."
-		return
-	var row: Dictionary = _selected_submit_row()
-	if row.is_empty():
-		_submit_info.text = "No live challenges right now - once the boards fetch lands, the challenges to submit to stand here."
-		return
-	var lines: Array[String] = []
-	lines.append("%s - %s" % [str(row.get("type_label", "")), str(row.get("table_name", ""))])
-	lines.append("Ends " + str(row.get("deadline_text", "")))
-	lines.append(str(row.get("library_note", "")))
-	var posted: String = str(row.get("posted_note", ""))
-	if posted != "":
-		lines.append(posted)
-	var vpx: String = str(row.get("vpx_file", ""))
-	lines.append("Sent with the photo: your file name for the challenge's build (%s)." % (vpx if vpx != "" else "none - no matched build"))
-	_submit_info.text = "\n".join(lines)
-
-
-## Submit: the guards speak in words on the status line
-## (no key, no challenge, no photo), then the request rides
-## to Main - the client, the metadata, and the log are all
-## Main's side of the desk's signal discipline.
-func _on_submit_pressed() -> void:
-	if not _submit_has_key:
-		_submit_label.text = "No WoVP key saved - save your key above first; submissions use the same key."
-		return
-	var row: Dictionary = _selected_submit_row()
-	if row.is_empty():
-		_submit_label.text = "No live challenge to submit to right now."
-		return
-	if _submit_photo_path == "":
-		_submit_label.text = "Choose the score photo first."
-		return
-	_submit_label.text = "Submitting..."
-	wovp_submit_requested.emit(str(row.get("challenge_id", "")), _submit_photo_path,
-		_submit_score_edit.text if _submit_score_edit != null else "")
-
-
-## Main's submission verdict (success or the server's own
-## refusal words) in the section's status line.
-func set_wovp_submit_status(text: String) -> void:
-	if _submit_label != null:
-		_submit_label.text = text
-
-
-## The receipt book's lines (SUBMIT2): Main reads the
-## local submission log and builds one line per recent
-## attempt - date, challenge, his recorded score when he
-## typed one, the outcome - newest first. An empty log
-## hides the block entirely: no empty furniture.
-func set_wovp_submission_history(lines: Array) -> void:
-	if _submit_history_label == null:
-		return
-	var texts: Array[String] = []
-	for lv: Variant in lines:
-		texts.append(str(lv))
-	_submit_history_label.text = "\n".join(texts)
-	var stands: bool = not texts.is_empty()
-	_submit_history_label.visible = stands
-	if _submit_history_title != null:
-		_submit_history_title.visible = stands
-
-
-## The chosen photo stands on the desk (the verify step -
-## see the preview's note in _ready): the frame itself,
-## fitted whole into a box big enough to read a score in.
-## A file that cannot be read as an image says so in
-## words and shows nothing - an unverifiable photo is
-## called out here, not discovered by an admin.
-func _show_submit_preview(path: String) -> void:
-	if _submit_preview == null:
-		return
-	var img: Image = Image.load_from_file(path)
-	if img == null or img.is_empty():
-		_submit_preview.texture = null
-		_submit_preview.visible = false
-		_submit_preview_frame.visible = false
-		_submit_verify_label.visible = false
-		_submit_photo_label.text = path.get_file() + " - this file could not be read as an image."
-		return
-	_submit_preview.texture = ImageTexture.create_from_image(img)
-	_submit_preview.visible = true
-	_submit_preview_frame.visible = true
-	_submit_verify_label.visible = true
-
-
 ## Save PINemHi settings: the live apply, on the WoVP key
 ## pattern - folder + toggle land in the config file the
 ## moment the button is pressed; a failed save restores
@@ -1367,6 +1199,7 @@ func _on_pinemhi_save_pressed() -> void:
 	_config.pinemhi_manage_watcher = _pinemhi_manage_check.button_pressed
 	if _config.save_to_disk():
 		_pinemhi_label.text = PinemhiScores.status_line(_config)
+		_mark_step_done(1)
 		pinemhi_settings_saved.emit()
 		return
 	_config.pinemhi_folder = prev_folder
@@ -1392,6 +1225,7 @@ func _on_shots_save_pressed() -> void:
 	_config.screenshots_folder = _shots_edit.text.strip_edges()
 	if _config.save_to_disk():
 		_shots_label.text = ShotsFolder.status_line(_config)
+		_mark_step_done(1)
 		screenshots_settings_saved.emit()
 		return
 	_config.screenshots_folder = prev_folder
@@ -1425,7 +1259,8 @@ func _on_download_pressed() -> void:
 func _on_download_finished(ok: bool, message: String, downloaded_path: String) -> void:
 	_dl_button.disabled = false
 	if ok:
-		_dl_label.text = message + " It will be used by the next Save & Scan."
+		_dl_label.text = message + " It will be used by the next scan."
+		_mark_step_done(2)
 		if _db_edit.text.strip_edges() == "":
 			_db_edit.text = downloaded_path
 	else:
@@ -1447,7 +1282,7 @@ func _on_save_and_scan() -> void:
 		if bool(main.call("start_scan")):
 			_scanned = false
 			_scan_button.disabled = true
-			_enter_button.disabled = true
+			_set_enter_armed(false)
 			_stats_label.text = "Scanning..."
 		else:
 			_stats_label.text = "A scan is already running - one moment."
@@ -1467,7 +1302,7 @@ func show_message(text: String) -> void:
 func set_scan_progress(text: String) -> void:
 	_stats_label.text = text
 	_scan_button.disabled = true
-	_enter_button.disabled = true
+	_set_enter_armed(false)
 	_details_label.text = ""
 	_details_fold.root.visible = false
 	_details_fold.set_expanded(false)
@@ -1484,8 +1319,170 @@ func apply_scan_summary(summary: String, details: String) -> void:
 	_details_label.text = details
 	_details_fold.root.visible = details != ""
 	_scanned = summary != ""
-	_enter_button.disabled = not _scanned
+	_set_enter_armed(_scanned)
 	_scan_button.disabled = false
+	# CHECKLIST: a landed scan finishes step 1 - its bar
+	# gains the check, the step folds away, and the walk
+	# moves on to High Score Setup (only when the player
+	# is standing on step 1; a step he opened himself is
+	# never yanked away).
+	if summary != "" and _checklist_mode:
+		_mark_step_done(0)
+		if _step_open == 0:
+			_open_step(1)
+			if _scroll != null:
+				_scroll.scroll_vertical = 0
+
+
+## CHECKLIST: is this desk's stand a configured one? The
+## same test the brief names: a config file on disk AND
+## at least one table folder in it. Read fresh at every
+## show, so a desk re-stood after a successful setup is
+## the full desk, and one stood over an empty folder
+## list still walks the checklist.
+func _desk_is_configured() -> bool:
+	if _config == null:
+		return false
+	return PvldsConfig.existing_path() != "" and not _config.table_folders.is_empty()
+
+
+## CHECKLIST: stand the desk in the mode its stand
+## calls for. Full desk: the step bars and Skip buttons
+## hide, every step's content stands, the Advanced fold
+## wears its toggle. Checklist: the bars stand, exactly
+## the open step's content shows, the skips stand, and
+## the Advanced fold's toggle hides with the fold held
+## open (in step 4 the step IS the fold).
+func _refresh_desk_mode() -> void:
+	if _step_bars.is_empty():
+		return
+	_checklist_mode = not _desk_is_configured()
+	for b: Button in _step_bars:
+		b.visible = _checklist_mode
+	for s: Button in _step_skips:
+		s.visible = _checklist_mode
+	if _checklist_mode:
+		if _advanced_fold != null:
+			_advanced_fold.toggle.visible = false
+			_advanced_fold.set_expanded(true)
+		_apply_step_visibility()
+	else:
+		if _advanced_fold != null:
+			_advanced_fold.toggle.visible = true
+		for c: VBoxContainer in _step_contents:
+			c.visible = true
+
+
+func _apply_step_visibility() -> void:
+	for j: int in range(_step_contents.size()):
+		_step_contents[j].visible = j == _step_open
+
+
+## CHECKLIST: open a step (checklist mode). Any step can
+## be opened at any time - the guide never gates.
+func _open_step(i: int) -> void:
+	_step_open = i
+	if _checklist_mode:
+		_apply_step_visibility()
+
+
+func _on_step_bar_pressed(i: int) -> void:
+	_open_step(i)
+
+
+## CHECKLIST: an optional step's way out - the step is
+## done, the walk moves on (or closes, past the last).
+func _on_skip_step_pressed(i: int) -> void:
+	_mark_step_done(i)
+	if i + 1 < STEP_NAMES.size():
+		_open_step(i + 1)
+	else:
+		_step_open = -1
+		if _checklist_mode:
+			_apply_step_visibility()
+
+
+## CHECKLIST: a step earns its check - by a skip, by a
+## successful save inside it, or (step 1) by a landed
+## scan. The bar re-reads with the mark.
+func _mark_step_done(i: int) -> void:
+	if i < 0 or i >= _step_done.size():
+		return
+	if not _step_done[i]:
+		_step_done[i] = true
+		_refresh_step_bars()
+
+
+func _refresh_step_bars() -> void:
+	for i: int in range(_step_bars.size()):
+		var t: String = "%d. %s" % [i + 1, STEP_NAMES[i]]
+		if i > 0:
+			t += " (optional)"
+		if _step_done[i]:
+			t += "  ✓"
+		_step_bars[i].text = t
+
+
+## CHECKLIST: Enter's armament, in one place - the
+## standing rule (a scan/config with games arms it) plus
+## the new dress: armed, it wears the DESKCOLOR confirm
+## green; unarmed, the plain desk dress. The arming
+## logic itself is unchanged (the scan arms it, a scan
+## starting disarms it).
+func _set_enter_armed(armed: bool) -> void:
+	if _enter_button == null:
+		return
+	_enter_button.disabled = not armed
+	if armed:
+		DeskTheme.dress_button_family(_enter_button, DeskTheme.FAMILY_CONFIRM)
+	else:
+		_undress_button_family(_enter_button)
+
+
+## Remove exactly the dress dress_button_family put on -
+## the desk's theme dress stands underneath again.
+func _undress_button_family(b: Button) -> void:
+	for state: String in ["normal", "hover", "pressed", "focus", "disabled"]:
+		if b.has_theme_stylebox_override(state):
+			b.remove_theme_stylebox_override(state)
+	for cname: String in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_disabled_color"]:
+		if b.has_theme_color_override(cname):
+			b.remove_theme_color_override(cname)
+
+
+## Smoke census of the CHECKLIST machinery: the standing
+## mode, the open step, the done marks, the bars' exact
+## texts, which contents stand, the regroup's structure
+## (each old block inside its step), the Art step's new
+## order, and the foot's renamed labels + Enter's dress.
+func checklist_census() -> Dictionary:
+	var bars: Array = []
+	for b: Button in _step_bars:
+		bars.append({"text": b.text, "visible": b.visible})
+	var vis: Array = []
+	for c: VBoxContainer in _step_contents:
+		vis.append(c.visible)
+	var dl_row: Control = _dl_button.get_parent() as Control if _dl_button != null else null
+	return {
+		"mode_checklist": _checklist_mode,
+		"open_step": _step_open,
+		"done": _step_done.duplicate(),
+		"bars": bars,
+		"contents_visible": vis,
+		"folders_in_step1": _folder_rows != null and _step_contents[0].is_ancestor_of(_folder_rows),
+		"wovp_in_step2": _wovp_edit != null and _step_contents[1].is_ancestor_of(_wovp_edit),
+		"shots_in_step2": _shots_edit != null and _step_contents[1].is_ancestor_of(_shots_edit),
+		"pinemhi_in_step2": _pinemhi_edit != null and _step_contents[1].is_ancestor_of(_pinemhi_edit),
+		"db_in_step3": _db_edit != null and _step_contents[2].is_ancestor_of(_db_edit),
+		"note_before_download": _db_note != null and dl_row != null and _db_note.get_index() < dl_row.get_index(),
+		"download_before_field": dl_row != null and _db_edit != null and dl_row.get_index() < (_db_edit.get_parent() as Control).get_index(),
+		"args_in_step4": _args_edit != null and _step_contents[3].is_ancestor_of(_args_edit),
+		"advanced_toggle_visible": _advanced_fold.toggle.visible if _advanced_fold != null else true,
+		"scan_text": _scan_button.text if _scan_button != null else "",
+		"enter_text": _enter_button.text if _enter_button != null else "",
+		"enter_disabled": _enter_button.disabled if _enter_button != null else true,
+		"enter_dressed": _enter_button != null and _enter_button.has_theme_stylebox_override("normal"),
+	}
 
 
 ## Smoke census of the DESKEDIT folds and texts.
@@ -1520,8 +1517,8 @@ func deskcolor_census() -> Dictionary:
 		if not bool(s["found"]) or not bool(s["dressed"]) or _color_dist(s["bar"] as Color, DeskTheme.FAMILY_PICKER) > 0.05:
 			browse_ok = false
 	return {
+		"hdr_highscore": _sample_header(_find_header("High Score Setup")),
 		"hdr_wovp": _sample_header(_find_header("World of Virtual Pinball (WoVP) - the Tournament Room's boards")),
-		"hdr_submit": _sample_header(_find_header("Submit a score to WoVP")),
 		"hdr_shots": _sample_header(_find_header("Screenshots - the folder your score photos land in")),
 		"hdr_pinemhi": _sample_header(_find_header("PINemHi - your personal bests on the tournament boards")),
 		"hdr_folders": _sample_header(_find_header("Table folders")),
@@ -1534,8 +1531,6 @@ func deskcolor_census() -> Dictionary:
 		"download": _sample_button(_dl_button),
 		"save_key": _sample_button(_wovp_save_button),
 		"test_key": _sample_button(_wovp_test_button),
-		"choose_photo": _sample_button(_submit_photo_button),
-		"submit_score": _sample_button(_submit_button),
 		"scan": _sample_button(_scan_button),
 		"enter": _sample_button(_enter_button),
 		"open_b2s": _sample_button(_b2s_button),

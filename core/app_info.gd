@@ -9,7 +9,7 @@ extends RefCounted
 ## real home - the constant is one line to move.
 
 const PRODUCT_NAME: String = "LaunchPin VR"
-const PRODUCT_VERSION: String = "1.0.0"
+const PRODUCT_VERSION: String = "1.1.0"
 const UPDATE_FEED_URL: String = "https://raw.githubusercontent.com/SibioJak/pvlds/master/version.json"
 
 
