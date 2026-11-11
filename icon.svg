@@ -1,7 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <rect width="128" height="128" rx="18" fill="#101018"/>
-  <rect x="14" y="30" width="62" height="80" rx="6" fill="#1d1d2e" stroke="#e8b34b" stroke-width="4"/>
-  <rect x="84" y="18" width="30" height="42" rx="5" fill="#262640" stroke="#7fd4ff" stroke-width="3"/>
-  <circle cx="99" cy="76" r="9" fill="#e8b34b"/>
-  <text x="45" y="82" font-family="sans-serif" font-size="30" font-weight="bold" fill="#f2f2f2" text-anchor="middle">P</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+<defs>
+  <radialGradient id="chrome" cx="38%" cy="32%" r="80%">
+    <stop offset="0%" stop-color="#ffffff"/>
+    <stop offset="22%" stop-color="#e6eaef"/>
+    <stop offset="52%" stop-color="#a7aeb8"/>
+    <stop offset="78%" stop-color="#5d646e"/>
+    <stop offset="100%" stop-color="#2b2f36"/>
+  </radialGradient>
+  <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#1d1f28"/>
+    <stop offset="100%" stop-color="#0f0f16"/>
+  </linearGradient>
+  <clipPath id="frontclip"><rect x="0" y="132" width="256" height="124"/></clipPath>
+</defs>
+<rect width="256" height="256" rx="50" fill="url(#tile)"/>
+<g transform="rotate(-16 128 132)"><ellipse cx="128" cy="132" rx="112" ry="33" fill="none" stroke="#ffa829" stroke-width="13"/></g>
+<circle cx="128" cy="128" r="74" fill="url(#chrome)"/><ellipse cx="103" cy="94" rx="26" ry="15" fill="#ffffff" opacity="0.85" transform="rotate(-24 103 94)"/><ellipse cx="112" cy="106" rx="10" ry="6" fill="#ffffff" opacity="0.9" transform="rotate(-24 112 106)"/>
+<g transform="rotate(-16 128 132)"><g clip-path="url(#frontclip)"><ellipse cx="128" cy="132" rx="112" ry="33" fill="none" stroke="#ffa829" stroke-width="13"/></g></g>
 </svg>
