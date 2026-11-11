@@ -774,6 +774,9 @@ func _ready() -> void:
 	if user_args.has("--pvlds-core-test"):
 		_run_core_test()
 		return
+	if user_args.has("--pvlds-smoke-renames"):
+		_run_renames_smoke()
+		return
 	if user_args.has("--pvlds-smoke-pinemhi-marks"):
 		# Deferred: the factory's capture awaits frames, and a
 		# runner suspended inside _ready never sees them.
@@ -25472,6 +25475,59 @@ func _drive_quitwarm_smoke() -> void:
 		_quitwarm_fired = true
 		printerr("PVLDS QUITWARM: FAIL - the warm never got under way (cached %d of %d)" % [cached, total])
 		get_tree().quit(1)
+
+
+## --pvlds-smoke-renames: the RENAMES (1.1.1) config-migration
+## legs, driven by PVLDS_RENAMES_MODE against a filesystem the
+## shell stages (exactly one config standing, or none):
+##   besidelegacy - pvlds_config.json beside the exe only:
+##     resolution finds it, the load reads it as configured
+##     (boot routing's test), and a save MOVES it - the
+##     new-name file beside the exe, the legacy file gone.
+##   userlegacy - pvlds_config.json in user:// only: the same
+##     move; the save lands beside the exe (the save law) and
+##     the user:// legacy file is deleted.
+##   fresh - nothing anywhere: nothing resolves and the load
+##     declines (the first-run checklist's premise).
+func _run_renames_smoke() -> void:
+	var mode: String = OS.get_environment("PVLDS_RENAMES_MODE")
+	var failures: Array[String] = []
+	var beside_dir: String = OS.get_executable_path().get_base_dir()
+	var beside_new: String = beside_dir.path_join(PvldsConfig.CONFIG_FILE_NAME)
+	var beside_legacy: String = beside_dir.path_join(PvldsConfig.LEGACY_CONFIG_FILE_NAME)
+	var user_legacy: String = "user://".path_join(PvldsConfig.LEGACY_CONFIG_FILE_NAME)
+	var resolved: String = PvldsConfig.resolved_path()
+	print("renames: mode=", mode, " resolved=", resolved)
+	var cfg: PvldsConfig = PvldsConfig.new()
+	if mode == "fresh":
+		if resolved != "":
+			failures.append("fresh: a config resolved where none was staged")
+		if cfg.load_from_disk():
+			failures.append("fresh: the load succeeded where no config stands")
+	else:
+		var want: String = beside_legacy if mode == "besidelegacy" else user_legacy
+		if resolved != want:
+			failures.append("resolution found %s, expected the legacy file %s" % [resolved, want])
+		if not cfg.load_from_disk():
+			failures.append("the legacy config did not load")
+		elif not cfg.is_configured():
+			failures.append("the loaded legacy config is not configured")
+		if not cfg.save_to_disk():
+			failures.append("the save failed")
+		if not FileAccess.file_exists(beside_new):
+			failures.append("the new-name file does not stand beside the exe after the save")
+		if FileAccess.file_exists(want):
+			failures.append("the legacy file still stands after the save (the move did not happen)")
+		var back: PvldsConfig = PvldsConfig.new()
+		if not back.load_from_disk() or back.table_folders != cfg.table_folders:
+			failures.append("the moved config does not reload with its folders")
+	for f: String in failures:
+		print("renames FAIL: ", f)
+	if failures.is_empty():
+		print("PVLDS RENAMES SMOKE: PASS")
+	else:
+		print("PVLDS RENAMES SMOKE: FAIL")
+	get_tree().quit(0 if failures.is_empty() else 1)
 
 
 func _run_db_stats(path: String) -> void:

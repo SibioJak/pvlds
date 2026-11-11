@@ -21,7 +21,21 @@ const DEFAULT_LAUNCH_ARGS: String = "-play \"{table}\""
 ## so load_from_disk repairs it to DEFAULT_LAUNCH_ARGS. Anything
 ## else is the user's and is never rewritten.
 const BAD_DEFAULT_LAUNCH_ARGS: String = "-play -exit \"{table}\""
-const CONFIG_FILE_NAME: String = "pvlds_config.json"
+## RENAMES (1.1.1): the config file carries the product name
+## now - launchpin_config.json. The pre-1.1.1 name is the
+## LEGACY name: resolution still finds it (see
+## _candidate_paths), and the first save after loading from a
+## legacy file MOVES it (writes the new file, deletes the
+## legacy one), so an upgraded install ends with exactly the
+## new name standing and nobody loses their setup.
+const CONFIG_FILE_NAME: String = "launchpin_config.json"
+const LEGACY_CONFIG_FILE_NAME: String = "pvlds_config.json"
+
+## RENAMES: the file this instance loaded from ("" = never
+## loaded / nothing stood). save_to_disk compares it against
+## the save target: a legacy source is deleted after the new
+## file is written - the move that retires the old name.
+var _loaded_from_path: String = ""
 
 var vpx_exe_path: String = ""
 var launch_args_template: String = DEFAULT_LAUNCH_ARGS
@@ -111,13 +125,42 @@ static func user_path() -> String:
 	return "user://".path_join(CONFIG_FILE_NAME)
 
 
+## RENAMES: every place a standing config can live, in
+## resolution order - beside-exe new name, beside-exe legacy
+## name, user:// new name, user:// legacy name. (Editor runs
+## skip the beside-exe pair: the "executable" there is the
+## editor itself.) Boot routing's "configured" test is
+## load_from_disk's answer, which reads through this same
+## list - any hit counts as configured.
+static func _candidate_paths() -> Array[String]:
+	var out: Array[String] = []
+	if not OS.has_feature("editor"):
+		var dir: String = OS.get_executable_path().get_base_dir()
+		out.append(dir.path_join(CONFIG_FILE_NAME))
+		out.append(dir.path_join(LEGACY_CONFIG_FILE_NAME))
+	out.append("user://".path_join(CONFIG_FILE_NAME))
+	out.append("user://".path_join(LEGACY_CONFIG_FILE_NAME))
+	return out
+
+
+## The config file that actually stands on disk, or "" when
+## none does (a true first run).
+static func resolved_path() -> String:
+	for p: String in _candidate_paths():
+		if FileAccess.file_exists(p):
+			return p
+	return ""
+
+
 static func existing_path() -> String:
 	# Prefer a config sitting next to the executable (a plain file the user
 	# can see and edit); fall back to user:// (editor runs, first run).
-	if not OS.has_feature("editor"):
-		var beside: String = beside_exe_path()
-		if FileAccess.file_exists(beside):
-			return beside
+	# RENAMES: the resolved file when one stands (either name,
+	# either home); when none stands, the user:// new-name path
+	# the pre-rename code always fell back to.
+	var found: String = resolved_path()
+	if found != "":
+		return found
 	return user_path()
 
 
@@ -127,10 +170,21 @@ static func save_path() -> String:
 	return beside_exe_path()
 
 
+static func _is_legacy_path(path: String) -> bool:
+	return path.get_file() == LEGACY_CONFIG_FILE_NAME
+
+
+static func _delete_file(path: String) -> void:
+	var abs: String = ProjectSettings.globalize_path(path) if path.begins_with("user://") else path
+	if abs != "" and FileAccess.file_exists(abs):
+		DirAccess.remove_absolute(abs)
+
+
 func load_from_disk() -> bool:
-	var path: String = PvldsConfig.existing_path()
-	if not FileAccess.file_exists(path):
+	var path: String = PvldsConfig.resolved_path()
+	if path == "" or not FileAccess.file_exists(path):
 		return false
+	_loaded_from_path = path
 	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
 	if not (parsed is Dictionary):
 		return false
@@ -191,11 +245,20 @@ func save_to_disk() -> bool:
 	for f: String in table_folders:
 		folders.append(f)
 	d["table_folders"] = folders
-	var file: FileAccess = FileAccess.open(PvldsConfig.save_path(), FileAccess.WRITE)
+	var target: String = PvldsConfig.save_path()
+	var file: FileAccess = FileAccess.open(target, FileAccess.WRITE)
 	if file == null:
 		return false
 	file.store_string(JSON.stringify(d, "\t"))
 	file.close()
+	# RENAMES: the migration move. This instance loaded from a
+	# legacy-named file and the save just wrote the new name:
+	# delete the legacy file so the old name leaves the
+	# folder. (A save with no legacy load - a fresh config, a
+	# config already on the new name - deletes nothing.)
+	if _loaded_from_path != "" and _loaded_from_path != target and PvldsConfig._is_legacy_path(_loaded_from_path):
+		PvldsConfig._delete_file(_loaded_from_path)
+		_loaded_from_path = target
 	return true
 
 

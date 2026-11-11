@@ -32,7 +32,13 @@ extends RefCounted
 ## the PVLDS_WATCHDOG_PATH environment override, then in the repo's
 ## watchdog/build/ for editor runs.
 
-const WATCHDOG_EXE_BASE: String = "pvlds_watchdog"
+## RENAMES (1.1.1): the shipped watchdog carries the product
+## name now - LaunchPinWatchdog.exe beside LaunchPin.exe. The
+## dev-tree fallback in resolve_watchdog_path() still accepts
+## the old build name inside watchdog/build/ (the Go build's
+## output name is internal and unchanged).
+const WATCHDOG_EXE_BASE: String = "LaunchPinWatchdog"
+const WATCHDOG_DEV_EXE_BASE: String = "pvlds_watchdog"
 const WATCHDOG_LOCK_NAME: String = "pvlds_watchdog.lock"
 
 
@@ -78,10 +84,14 @@ static func resolve_watchdog_path() -> String:
 		if FileAccess.file_exists(beside):
 			return beside
 	var dev_dir: String = ProjectSettings.globalize_path("res://watchdog/build")
-	for suffix: String in suffixes:
-		var dev: String = dev_dir.path_join(WATCHDOG_EXE_BASE + suffix)
-		if FileAccess.file_exists(dev):
-			return dev
+	# The dev tree holds the Go build under its own name (and
+	# a staged copy under the shipped name, when one exists):
+	# try the shipped name first, then the build's.
+	for base: String in [WATCHDOG_EXE_BASE, WATCHDOG_DEV_EXE_BASE]:
+		for suffix: String in suffixes:
+			var dev: String = dev_dir.path_join(base + suffix)
+			if FileAccess.file_exists(dev):
+				return dev
 	return ""
 
 
