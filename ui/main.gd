@@ -29273,6 +29273,32 @@ func _run_core_test() -> void:
 	var af_none: Dictionary = VpxHunt.hunt([af_base.path_join("D3/nothing-here")])
 	_expect(not bool(af_none.get("found", true)) and str(af_none.get("exe_path", "")) == "",
 		"autofind: an empty tree finds nothing", failures)
+	# FIX113: the BGFX build joins the hunt. A BGFX-only tree
+	# is found at all (the field user's layout: the exe in
+	# its own folder, Tables inside it); GL still outranks
+	# BGFX across roots (name-major), and BGFX outranks the
+	# plain build; the beta roots stand in the pattern list.
+	var af_d5: String = af_base.path_join("D5/VPinballX_BGFX")
+	af_touch.call(af_d5.path_join("VPinballX_BGFX64.exe"))
+	af_touch.call(af_d5.path_join("Tables/Delta.vpx"))
+	var af_bgfx: Dictionary = VpxHunt.hunt([af_d5])
+	_expect(bool(af_bgfx.get("found", false)) and str(af_bgfx.get("exe_path", "")) == af_d5.path_join("VPinballX_BGFX64.exe"),
+		"autofind FIX113: a BGFX-only install is found", failures)
+	var af_bgfx_folders: Array = []
+	for af_bfv: Variant in (af_bgfx.get("table_folders", []) as Array):
+		af_bgfx_folders.append(str((af_bfv as Dictionary).get("path", "")))
+	_expect(af_bgfx_folders.size() == 1 and af_bgfx_folders.has(af_d5.path_join("Tables")),
+		"autofind FIX113: the BGFX install's own Tables is taken", failures)
+	var af_gl_vs_bgfx: Dictionary = VpxHunt.hunt([af_d5, af_d2])
+	_expect(str(af_gl_vs_bgfx.get("exe_path", "")) == af_d2.path_join("VPinballX_GL64.exe"),
+		"autofind FIX113: GL outranks BGFX across roots (name-major)", failures)
+	var af_bgfx_vs_plain: Dictionary = VpxHunt.hunt([af_d5, af_d1])
+	_expect(str(af_bgfx_vs_plain.get("exe_path", "")) == af_d5.path_join("VPinballX_BGFX64.exe"),
+		"autofind FIX113: BGFX outranks the plain build", failures)
+	_expect(VpxHunt.EXE_NAMES.find("VPinballX_GL64.exe") >= 0 and VpxHunt.EXE_NAMES.find("VPinballX_BGFX64.exe") > VpxHunt.EXE_NAMES.find("VPinballX_GL64.exe"),
+		"autofind FIX113: the BGFX exe stands in EXE_NAMES after GL64", failures)
+	_expect(VpxHunt.ROOT_PATTERNS.has("vPinball/VisualPinball BETA") and VpxHunt.ROOT_PATTERNS.has("VPinballX_BGFX"),
+		"autofind FIX113: the beta roots stand in ROOT_PATTERNS", failures)
 	var af_rm: Callable
 	af_rm = func(path: String) -> void:
 		var d: DirAccess = DirAccess.open(path)

@@ -73,14 +73,17 @@ func TestRuntimeSignatureNeverEvidence(t *testing.T) {
 
 func TestRuntimeGateLatchAndSessions(t *testing.T) {
 	var g runtimeGate
-	if seen, just := g.observe(1, false); seen || just {
+	if seen, just := g.observe(1, false, false); seen || just {
 		t.Fatalf("no runtime observed: seen=%v just=%v, want false/false", seen, just)
 	}
-	if seen, just := g.observe(1, true); !seen || !just {
+	if seen, just := g.observe(1, true, false); !seen || !just {
 		t.Fatalf("first runtime observation: seen=%v just=%v, want true/true", seen, just)
 	}
+	if g.ruleFor(1) != runtimeRuleClassic {
+		t.Errorf("ruleFor(1) = %q, want %q", g.ruleFor(1), runtimeRuleClassic)
+	}
 	// Latched: later observations report seen but never re-stamp.
-	if seen, just := g.observe(1, false); !seen || just {
+	if seen, just := g.observe(1, false, false); !seen || just {
 		t.Fatalf("latched after the runtime goes quiet: seen=%v just=%v, want true/false", seen, just)
 	}
 	if !g.hasSeen(1) {
@@ -90,7 +93,179 @@ func TestRuntimeGateLatchAndSessions(t *testing.T) {
 	if g.hasSeen(2) {
 		t.Error("hasSeen(2) = true for a fresh session")
 	}
-	if seen, just := g.observe(2, true); !seen || !just {
+	if seen, just := g.observe(2, true, false); !seen || !just {
 		t.Fatalf("new session's first runtime observation: seen=%v just=%v, want true/true", seen, just)
+	}
+}
+
+// ── FIX113: the VPPlayer-persistence signature ──────────────────
+//
+// Fixtures are the field inventories from
+// pvlds-fix113/droscoe_watchdog.log: the BGFX-build player pid
+// owns exactly three windows in every session - IME and
+// MSCTFIME UI (0x0, hidden) and the VPPlayer player window
+// (1920x1080, visible). Nothing else ever appears.
+
+var droscoeObs = []windowObs{
+	{class: "IME", width: 0, height: 0, visible: false},
+	{class: "MSCTFIME UI", width: 0, height: 0, visible: false},
+	{class: "VPPlayer", width: 1920, height: 1080, visible: true},
+}
+
+func TestVPPlayerRuntimeClassification(t *testing.T) {
+	// The droscoe set: no classic evidence (the defect), but
+	// the player window is in its runtime form.
+	if classifyRuntime(droscoeObs) {
+		t.Error("droscoe set: classic signature must stay silent (that silence is the defect)")
+	}
+	if !classifyVPPlayer(droscoeObs) {
+		t.Error("droscoe set: want VPPlayer runtime form")
+	}
+	// The window must be VISIBLE and substantial: the hidden
+	// or small forms are the just-started player, not runtime
+	// evidence.
+	if classifyVPPlayer([]windowObs{{class: "VPPlayer", width: 1920, height: 1080, visible: false}}) {
+		t.Error("hidden VPPlayer: want NOT runtime form")
+	}
+	if classifyVPPlayer([]windowObs{{class: "VPPlayer", width: 319, height: 240, visible: true}}) {
+		t.Error("undersized VPPlayer: want NOT runtime form")
+	}
+	if !classifyVPPlayer([]windowObs{{class: "VPPlayer", width: 320, height: 240, visible: true}}) {
+		t.Error("VPPlayer at the area floor, visible: want runtime form")
+	}
+	// And the classic signature still refuses the class alone
+	// (TestRuntimeSignatureNeverEvidence pins the same window).
+	if classifyVPPlayer(nil) {
+		t.Error("empty set: want NOT VPPlayer runtime form")
+	}
+}
+
+func TestRuntimeGateVPPlayerStreak(t *testing.T) {
+	var g runtimeGate
+	classic, vp := classifyRuntime(droscoeObs), classifyVPPlayer(droscoeObs)
+	// The raw sighting shape must NOT stamp: polls before the
+	// streak completes report unseen - a stamp here reopens
+	// the 2-3s desktop gap the runtime gate exists to close.
+	for i := 1; i < runtimeVPPlayerStreak; i++ {
+		if seen, just := g.observe(7, classic, vp); seen || just {
+			t.Fatalf("poll %d of %d: seen=%v just=%v, want false/false (no stamp before persistence)",
+				i, runtimeVPPlayerStreak, seen, just)
+		}
+	}
+	if seen, just := g.observe(7, classic, vp); !seen || !just {
+		t.Fatalf("poll %d: seen=%v just=%v, want true/true (the streak completes)",
+			runtimeVPPlayerStreak, seen, just)
+	}
+	if g.ruleFor(7) != runtimeRuleVPPlayer {
+		t.Errorf("ruleFor(7) = %q, want %q", g.ruleFor(7), runtimeRuleVPPlayer)
+	}
+	// Latched, and the rule sticks.
+	if seen, just := g.observe(7, false, false); !seen || just {
+		t.Fatalf("latched: seen=%v just=%v, want true/false", seen, just)
+	}
+	if g.ruleFor(7) != runtimeRuleVPPlayer {
+		t.Errorf("ruleFor(7) after latch = %q, want %q", g.ruleFor(7), runtimeRuleVPPlayer)
+	}
+}
+
+func TestRuntimeGateVPPlayerFlickerResets(t *testing.T) {
+	var g runtimeGate
+	feed := func(classic, vp bool) (bool, bool) { return g.observe(3, classic, vp) }
+	// Half a streak, then a poll with neither signature: the
+	// count restarts from zero.
+	for i := 0; i < runtimeVPPlayerStreak/2; i++ {
+		feed(false, true)
+	}
+	feed(false, false)
+	for i := 1; i < runtimeVPPlayerStreak; i++ {
+		if seen, _ := feed(false, true); seen {
+			t.Fatalf("poll %d after the reset: stamped early - the flicker did not reset the streak", i)
+		}
+	}
+	if seen, just := feed(false, true); !seen || !just {
+		t.Fatalf("full streak after the reset: seen=%v just=%v, want true/true", seen, just)
+	}
+	// A new session starts with a clean streak.
+	var g2 runtimeGate
+	g2.observe(1, false, true)
+	if seen, _ := g2.observe(2, false, true); seen {
+		t.Error("streak leaked across sessions")
+	}
+}
+
+func TestRuntimeGateClassicPriority(t *testing.T) {
+	// A poll carrying BOTH signatures stamps classic.
+	var g runtimeGate
+	if seen, just := g.observe(5, true, true); !seen || !just {
+		t.Fatalf("both signatures: seen=%v just=%v, want true/true", seen, just)
+	}
+	if g.ruleFor(5) != runtimeRuleClassic {
+		t.Errorf("ruleFor(5) = %q, want %q", g.ruleFor(5), runtimeRuleClassic)
+	}
+	// Classic evidence arriving mid-streak stamps at once.
+	var g2 runtimeGate
+	for i := 0; i < 3; i++ {
+		g2.observe(6, false, true)
+	}
+	if seen, just := g2.observe(6, true, false); !seen || !just {
+		t.Fatalf("classic mid-streak: seen=%v just=%v, want true/true", seen, just)
+	}
+	if g2.ruleFor(6) != runtimeRuleClassic {
+		t.Errorf("ruleFor(6) = %q, want %q", g2.ruleFor(6), runtimeRuleClassic)
+	}
+}
+
+// The GL session's shape, from the sessions 25/26 inventories
+// the classic signature is pinned to: the editor set first,
+// then the load set (editor canvas + the SDL device window,
+// created early and INVISIBLE), then the runtime set - the
+// SDL window visible, PinMAME up, the B2S wrapper and the GL
+// render surface present. The gate must stamp exactly at the
+// runtime set, by the classic rule - the same observation it
+// stamped at before FIX113.
+func TestRuntimeGateGLSessionShape(t *testing.T) {
+	editorSet := []windowObs{
+		{class: "VPinball", width: 1167, height: 634, visible: true},
+		{class: "CVFrame", width: 1401, height: 809, visible: false},
+		{class: "#32770", width: 265, height: 111, visible: true},
+		{class: "IME", width: 0, height: 0, visible: false},
+	}
+	loadSet := []windowObs{
+		{class: "VPinball", width: 1167, height: 634, visible: true},
+		{class: "CVFrame", width: 1401, height: 809, visible: false},
+		{class: "#32770", width: 265, height: 111, visible: true},
+		{class: "SDL_app", width: 1920, height: 1080, visible: false},
+		{class: "IME", width: 0, height: 0, visible: false},
+	}
+	runtimeSet := []windowObs{
+		{class: "VPinball", width: 1167, height: 634, visible: true},
+		{class: "CVFrame", width: 1401, height: 809, visible: false},
+		{class: "SDL_app", width: 1920, height: 1080, visible: true},
+		{class: "MAME", width: 320, height: 240, visible: false},
+		{class: "HwndWrapper[DefaultDomain;;3e9af7ee-6456-4c31-8ac2-f179fa2713cb]", width: 460, height: 115, visible: true},
+		{class: "SharpGLRenderWindow", width: 307, height: 77, visible: false},
+		{class: "DIEmWin", width: 0, height: 0, visible: false},
+	}
+	var g runtimeGate
+	feed := func(obs []windowObs) (bool, bool) {
+		return g.observe(9, classifyRuntime(obs), classifyVPPlayer(obs))
+	}
+	// Well past the VPPlayer streak's length in each pre-runtime
+	// phase: no stamp, ever - the GL build exposes no
+	// VPPlayer-class window, so the second signature cannot
+	// count here.
+	for i := 0; i < runtimeVPPlayerStreak+2; i++ {
+		if seen, _ := feed(editorSet); seen {
+			t.Fatalf("editor set, poll %d: stamped - GL behaviour changed", i)
+		}
+		if seen, _ := feed(loadSet); seen {
+			t.Fatalf("load set, poll %d: stamped - GL behaviour changed", i)
+		}
+	}
+	if seen, just := feed(runtimeSet); !seen || !just {
+		t.Fatalf("runtime set: seen=%v just=%v, want true/true at the classic observation", seen, just)
+	}
+	if g.ruleFor(9) != runtimeRuleClassic {
+		t.Errorf("ruleFor(9) = %q, want %q", g.ruleFor(9), runtimeRuleClassic)
 	}
 }

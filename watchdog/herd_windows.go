@@ -218,14 +218,15 @@ func gameWindowExists(gamePID int, sessionID int) (bool, string) {
 }
 
 // gameRuntimeExists reports whether the table-runtime gate
-// (runtime.go) has latched for this session - the resident
-// launcher's hand-off cue, stamped into the contract by
-// main.go exactly as the sighting stamp is.
-func gameRuntimeExists(gamePID int, sessionID int) bool {
+// (runtime.go) has latched for this session, and which
+// signature stamped it - the resident launcher's hand-off
+// cue, stamped into the contract by main.go exactly as the
+// sighting stamp is.
+func gameRuntimeExists(gamePID int, sessionID int) (bool, string) {
 	if gamePID <= 0 {
-		return false
+		return false, ""
 	}
-	return runtimeSeen.hasSeen(sessionID)
+	return runtimeSeen.hasSeen(sessionID), runtimeSeen.ruleFor(sessionID)
 }
 
 // windowClassName reads a window's Win32 class name - "VPPlayer"
@@ -307,7 +308,7 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	}
 	candidate, rule := classifyPlayerCandidate(obs)
 	playerSight.observe(sessionID, candidate, rule)
-	runtimeSeen.observe(sessionID, classifyRuntime(obs))
+	runtimeSeen.observe(sessionID, classifyRuntime(obs), classifyVPPlayer(obs))
 	// The foreground facts: who holds it (class + owner), and
 	// the two window-level identities the duties key on - the
 	// editor frame (hwnd equality, as the detector has always

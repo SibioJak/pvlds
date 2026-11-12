@@ -293,19 +293,17 @@ type holdLadder struct {
 	actionAtMs int64
 }
 
+// gameAlive reports the session's game pid and its liveness.
+// The decision law lives in gamepid.go: a pid standing in the
+// contract is the session's game, alive or dead, and exe
+// discovery runs only while the contract carries no pid yet.
 func gameAlive(c *Contract) (bool, int) {
-	if c.GamePID > 0 && processAlive(c.GamePID) {
-		return true, c.GamePID
+	contractAlive := c.GamePID > 0 && processAlive(c.GamePID)
+	var discovered []int
+	if c.GamePID == 0 && c.GameExePath != "" {
+		discovered = findPIDsByExe(c.GameExePath)
 	}
-	if c.GameExePath != "" {
-		pids := findPIDsByExe(c.GameExePath)
-		for _, pid := range pids {
-			if pid != os.Getpid() {
-				return true, pid
-			}
-		}
-	}
-	return false, 0
+	return resolveSessionGamePID(c.GamePID, contractAlive, discovered, os.Getpid())
 }
 
 func launcherAlive(c *Contract, extraPID int) bool {
@@ -510,8 +508,12 @@ func main() {
 				// for THIS stamp before it leaves the room.
 				// Stamped once per session, sighting-style.
 				if c.RuntimeSeenUnix == 0 {
-					if gameRuntimeExists(c.GamePID, c.SessionID) {
-						logf("watchdog: game runtime up (pid %d), session %d", c.GamePID, c.SessionID)
+					if runtimeUp, runtimeRule := gameRuntimeExists(c.GamePID, c.SessionID); runtimeUp {
+						if runtimeRule == runtimeRuleVPPlayer {
+							logf("watchdog: game runtime up (pid %d), session %d (signature: %s)", c.GamePID, c.SessionID, runtimeRule)
+						} else {
+							logf("watchdog: game runtime up (pid %d), session %d", c.GamePID, c.SessionID)
+						}
 						writeContractMerged(func(mc *Contract) {
 							if mc.RuntimeSeenUnix == 0 && (mc.SessionState == "loading" || mc.SessionState == "live") {
 								mc.RuntimeSeenUnix = time.Now().Unix()
@@ -574,8 +576,10 @@ func main() {
 					actRuntimeSession = c.SessionID
 					actRuntimeMs = 0
 				}
-				if actRuntimeMs == 0 && gameRuntimeExists(c.GamePID, c.SessionID) {
-					actRuntimeMs = time.Now().UnixMilli()
+				if actRuntimeMs == 0 {
+					if runtimeUp, _ := gameRuntimeExists(c.GamePID, c.SessionID); runtimeUp {
+						actRuntimeMs = time.Now().UnixMilli()
+					}
 				}
 				// Focus herding serves the loading phase's
 				// spawn settle ONLY (herdingAllowed): once the

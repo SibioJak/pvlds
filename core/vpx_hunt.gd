@@ -11,19 +11,31 @@ extends RefCounted
 ## Exe names in hunt order: the GL build first (this is a VR
 ## product - the GL exe is the one that plays in the
 ## headset), then the plain 64-bit, then the 32-bit-era name.
+## FIX113: the BGFX build's exe joins the hunt AFTER GL64 -
+## a rig holding both keeps the GL build as the find (GL
+## outranks BGFX), and a BGFX-only rig is found at all.
 const EXE_NAMES: Array[String] = [
 	"VPinballX_GL64.exe",
+	"VPinballX_BGFX64.exe",
 	"VPinballX64.exe",
 	"VPinballX.exe",
 ]
 
 ## The standard install roots, relative to a drive root.
+## FIX113: the beta program's roots join at the end - the
+## 10.8.1 beta installs beside the release tree
+## ("vPinball/VisualPinball BETA", field install) and BGFX
+## builds commonly live in their own folder ("VPinballX_BGFX",
+## the field user's own layout). Appended, so every existing
+## root keeps its precedence.
 const ROOT_PATTERNS: Array[String] = [
 	"vPinball/VisualPinball",
 	"Visual Pinball",
 	"Program Files/Visual Pinball",
 	"Program Files (x86)/Visual Pinball",
 	"VPX",
+	"vPinball/VisualPinball BETA",
+	"VPinballX_BGFX",
 ]
 
 

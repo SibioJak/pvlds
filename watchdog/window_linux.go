@@ -160,13 +160,14 @@ func gameWindowExists(gamePID int, sessionID int) (bool, string) {
 }
 
 // gameRuntimeExists on Linux: whether the runtime gate has
-// latched for this session - the same latch the Windows leaf
-// reports, fed by the stub's runtime marker (gameWindowState).
-func gameRuntimeExists(gamePID int, sessionID int) bool {
+// latched for this session, and which signature stamped it -
+// the same latch the Windows leaf reports, fed by the stub's
+// window set (gameWindowState).
+func gameRuntimeExists(gamePID int, sessionID int) (bool, string) {
 	if gamePID <= 0 {
-		return false
+		return false, ""
 	}
-	return runtimeSeen.hasSeen(sessionID)
+	return runtimeSeen.hasSeen(sessionID), runtimeSeen.ruleFor(sessionID)
 }
 
 // pushFocusToGame on Linux: there is no foreground to raise
@@ -265,7 +266,7 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	}
 	candidate, rule := classifyPlayerCandidate(obs)
 	playerSight.observe(sessionID, candidate, rule)
-	runtimeSeen.observe(sessionID, classifyRuntime(obs))
+	runtimeSeen.observe(sessionID, classifyRuntime(obs), classifyVPPlayer(obs))
 	if editorUp {
 		ws.fgIsEditor = true
 		ws.fgClass = editorWindowClass

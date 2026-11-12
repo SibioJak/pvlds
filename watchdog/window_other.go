@@ -11,7 +11,7 @@ func gameWindowExists(_ int, _ int) (bool, string) { return false, "" }
 
 // gameRuntimeExists off Windows/Linux: no runtime is ever
 // reported, so the contract's runtime stamp never lands here.
-func gameRuntimeExists(_ int, _ int) bool { return false }
+func gameRuntimeExists(_ int, _ int) (bool, string) { return false, "" }
 
 // pushFocusToGame off Windows/Linux: there is no foreground to
 // hand over here.
