@@ -10301,8 +10301,12 @@ func _input_focus_index() -> int:
 ## The FIX114 stick-hysteresis legs: synthetic axis streams
 ## driven through the real Input path (the room's own poll
 ## reads them; nothing here calls a handler). The wall is
-## the nav fixture library (25 games, 9 columns); steps are
-## counted as focused-panel index travel.
+## the nav fixture library (25 games, 9 columns). Units:
+## the hold leg counts STEPS (focus landings, sampled frame
+## by frame) - one step at the seat's geometry travels 3
+## panel-index units (the shelf order is column-major), so
+## raw index travel is NOT a step count; the rattle leg's
+## window is rescaled to one step of index travel (3).
 ##   clean hold  - a stick held past the threshold steps at
 ##                 the designed cadence (a handful of steps,
 ##                 all one way).
@@ -10327,11 +10331,31 @@ func _input_leg_stick_hysteresis_async() -> void:
 	_room._set_focused(seat)
 	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.0, 30)
 	var hold_start: int = _input_focus_index()
-	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.9, 84)
+	# Count STEPS as focus landings, sampled frame by frame
+	# while the axis is held (the feed helper's shape, with
+	# the sampler riding the wait): index travel is not a
+	# step count at this geometry - one step travels 3
+	# index units. A back-step (a landing behind the last)
+	# is counted apart and must never happen on a clean hold.
+	var hold_steps: int = 0
+	var hold_backsteps: int = 0
+	var hold_prev: int = hold_start
+	var hold_ev: InputEventJoypadMotion = InputEventJoypadMotion.new()
+	hold_ev.device = 0
+	hold_ev.axis = JOY_AXIS_LEFT_X
+	hold_ev.axis_value = 0.9
+	Input.parse_input_event(hold_ev)
+	for i: int in range(84):
+		await get_tree().process_frame
+		var hold_now: int = _input_focus_index()
+		if hold_now >= 0 and hold_prev >= 0 and hold_now != hold_prev:
+			hold_steps += 1
+			if hold_now < hold_prev:
+				hold_backsteps += 1
+			hold_prev = hold_now
 	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.0, 12)
-	var hold_steps: int = _input_focus_index() - hold_start
-	_input_expect(hold_steps >= 3 and hold_steps <= 8,
-		"stick-hyst clean hold: a held stick steps at the designed cadence (got %d steps)" % hold_steps)
+	_input_expect(hold_steps >= 3 and hold_steps <= 8 and hold_backsteps == 0,
+		"stick-hyst clean hold: a held stick steps at the designed cadence (got %d steps, %d back)" % [hold_steps, hold_backsteps])
 	# ---- rattle ----
 	_room._set_focused(seat)
 	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.0, 30)
@@ -10350,7 +10374,7 @@ func _input_leg_stick_hysteresis_async() -> void:
 			peak = maxi(peak, after_neg)
 			trough = mini(trough, after_neg)
 	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.0, 12)
-	_input_expect(peak - rattle_start <= 1 and trough == rattle_start,
+	_input_expect(peak - rattle_start <= 3 and trough == rattle_start,
 		"stick-hyst rattle: back-and-forth noise steps at most once and never in reverse (peak %+d, trough %+d)" % [peak - rattle_start, trough - rattle_start])
 	# ---- reversal without neutral ----
 	_room._set_focused(seat)
