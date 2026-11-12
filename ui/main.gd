@@ -729,7 +729,10 @@ var _last_db_ok: bool = false
 var _last_db_path: String = ""
 var _last_db_kind: String = ""
 var _scan_db_path: String = "" ## resolved on the main thread in start_scan()
-var _scan_db_kind: String = "" ## "user" | "download" | "sample"
+var _scan_db_kind: String = "" ## "user" | "download" | "sample" | "none" (FIX114: the forced no-database boot fallback)
+var _scan_force_no_db: bool = false ## FIX114: the next start_scan() scans with NO database - kind "none", never the sample
+var _boot_db_attempted: bool = false ## FIX114: this boot already tried to fetch the database itself (one attempt per boot)
+var _boot_downloader: VpsDownloader = null ## FIX114: Main's own downloader instance for the boot attempt (the desk and the room's panel own theirs)
 var _shot_path: String = ""
 var _shot_frames: int = 0
 var _shot_pop_prefix: String = "" ## --pvlds-shot-pop PREFIX: flush + popped room shots with transform assertions
@@ -1491,7 +1494,16 @@ func start_scan() -> bool:
 		_scan_folders.append(f)
 	# Database selection happens here, on the main thread: the user's
 	# own path, else the downloaded VPS cache, else the bundled sample.
-	var resolved: Array = VpsDatabase.resolve_path(_config.vpsdb_path)
+	# FIX114's exception: a forced no-database scan (the boot fallback
+	# after a failed boot download) resolves to no path at all, so the
+	# worker loads an empty database and every file is identified from
+	# its name alone - the sample is never a fallback's data.
+	var resolved: Array
+	if _scan_force_no_db:
+		_scan_force_no_db = false
+		resolved = ["", "none"]
+	else:
+		resolved = VpsDatabase.resolve_path(_config.vpsdb_path)
 	_scan_db_path = str(resolved[0])
 	_scan_db_kind = str(resolved[1])
 	_scan_progress = ScanProgress.new()
@@ -1794,6 +1806,7 @@ func _finish_scan() -> void:
 			done_msg = "Scan done - %d tables, %d missing a backglass" % [
 				_scanner.total_files, _scanner.missing_b2s_files.size()]
 		_room.apply_setup_panel_scan(_setup_panel_health(), done_msg)
+		_apply_room_db_warning()
 	if _smoke_launch_game != "":
 		var gid: String = _smoke_launch_game
 		_smoke_launch_game = ""
@@ -1802,6 +1815,21 @@ func _finish_scan() -> void:
 	if _enter_room_after_scan:
 		_enter_room_after_scan = false
 		if _last_db_kind == "sample" and not _seeded_dummy and not _art_bench:
+			# FIX114: the sample still never ushers anyone into the
+			# room AS DATA - but a configured user is no longer
+			# trapped at the desk over a missing database
+			# (droscoe, field-convicted: every boot and every
+			# post-table return landed here, forever). The boot
+			# now tries to fetch the real database itself; the
+			# attempt's landing either rescans against the fresh
+			# cache or rescans with no database at all and enters
+			# on the files. One attempt per boot - if the sample
+			# somehow lands again in this same run, what remains
+			# is the standing behaviour below.
+			if not _boot_db_attempted:
+				_boot_db_attempted = true
+				_start_boot_db_download()
+				return
 			# Sample data must never usher anyone into the room: the
 			# room would be built on 10 invented games, and the remedy
 			# (Download VPS database) lives on this desk. The summary
@@ -1813,6 +1841,72 @@ func _finish_scan() -> void:
 			_show_desk()
 			return
 		_enter_room()
+
+
+## FIX114: the configured boot's own database fetch, started
+## when the boot scan resolved to the bundled sample: the
+## download the desk's step asks the user for, attempted by
+## the boot itself, so a user whose download never landed is
+## not trapped at the desk on every start (and every
+## post-table return - the watchdog's relaunch is a fresh
+## boot down this same path). The boot face carries the
+## progress words while it runs.
+func _start_boot_db_download() -> void:
+	if _boot_downloader == null:
+		_boot_downloader = VpsDownloader.new()
+		add_child(_boot_downloader)
+		_boot_downloader.progress.connect(_on_boot_db_download_progress)
+		_boot_downloader.finished.connect(_on_boot_db_download_finished)
+	if _boot_face != null and _boot_face.visible:
+		_boot_face.set_scan_text("Downloading the VPS database...")
+	_boot_downloader.start_download()
+	# A could-not-start failure arrives on finished
+	# synchronously (the downloader's contract); the handler
+	# defers the rescan, so nothing more belongs here.
+
+
+func _on_boot_db_download_progress(text: String) -> void:
+	if _boot_face != null and _boot_face.visible:
+		_boot_face.set_scan_text(text)
+
+
+func _on_boot_db_download_finished(ok: bool, _message: String, _path: String) -> void:
+	# Deferred: finished can fire synchronously out of
+	# start_download (the could-not-start path), and the
+	# rescan must never begin inside _finish_scan's own
+	# call stack.
+	call_deferred("_begin_boot_db_rescan", ok)
+
+
+## FIX114: the boot download's landing. Success: the cache
+## now stands, so a plain rescan resolves to it and the
+## room enters on real data. Failure: the room enters
+## anyway, on a forced no-database scan - the table files
+## identified from their names alone, the sample never
+## touched, and the room carrying the standing database
+## warning until a real database lands. Either way the
+## auto-enter the sample scan interrupted is re-armed for
+## this landing.
+func _begin_boot_db_rescan(ok: bool) -> void:
+	_enter_room_after_scan = true
+	if not ok:
+		_scan_force_no_db = true
+	if not start_scan():
+		_enter_room_after_scan = false
+		_scan_force_no_db = false
+		_show_desk()
+
+
+## FIX114: the room's standing database warning follows the
+## last landed scan's database truth: no database at all
+## (the boot fallback scan) or the bundled sample means the
+## library was identified from file names alone, and the
+## room's plate says so until a scan lands on a real
+## database.
+func _apply_room_db_warning() -> void:
+	if _room == null:
+		return
+	_room.set_db_warning_active(_last_db_kind == "none" or _last_db_kind == "sample")
 
 
 ## The room SETUP panel's SCAN LIBRARY: the same threaded scan
@@ -2531,7 +2625,7 @@ func build_scan_summary() -> String:
 	if _last_db_kind == "sample":
 		lines.append("!! SAMPLE DATABASE ACTIVE !!")
 		lines.append("The bundled database is 10 invented games for testing LaunchPin itself - it cannot identify real tables. Use 'Download VPS database' above to fetch the real one; until then tables are identified from file names only (no VR tags, designers, or known builds).")
-		lines.append("The room stays closed until a real database is in place - download it above, then Save Options and Scan for Tables.")
+		lines.append("LaunchPin also tries to fetch the real database itself when it starts. Without one the room still opens - on file names only, with a warning standing in it - but names, art, and VR tags wait for the real database: download it above, then Save Options and Scan for Tables.")
 	lines.append("Scanned %d table files in %d folder(s): %d games (%d with multiple builds)." % [
 		s.total_files, _config.table_folders.size(), s.games.size(), s.duplicate_group_count()])
 	if _last_db_ok:
@@ -2646,6 +2740,9 @@ func _enter_room() -> void:
 	# The SETUP panel's health rows start from the last scan's
 	# numbers, whichever route built the room.
 	_room.set_setup_health(_setup_panel_health())
+	# FIX114: the standing database warning is (re)applied at
+	# entry - the room may have been built by this very scan.
+	_apply_room_db_warning()
 	# The Tournament Room's standing data (the cache's boards
 	# at boot) reaches the room here.
 	_push_wovp_data()
@@ -10177,7 +10274,100 @@ func _input_legs_async() -> void:
 			"dpad-back setup panel: focus lands on the rail's SETUP stop")
 	await _input_leg_triggers_async()
 	await _input_leg_gf16_refresh_async()
+	await _input_leg_stick_hysteresis_async()
 	_input_done = true
+
+
+## Hold one axis at a value for `frames` rendered frames:
+## the value persists in the Input singleton between events,
+## so one event plus frame waits IS the stream segment.
+func _input_feed_axis_frames(axis: JoyAxis, value: float, frames: int) -> void:
+	var ev: InputEventJoypadMotion = InputEventJoypadMotion.new()
+	ev.device = 0
+	ev.axis = axis
+	ev.axis_value = value
+	Input.parse_input_event(ev)
+	await _input_wait_frames(frames)
+
+
+## The shelf index of the focused panel, or -1 when focus is
+## not on a panel.
+func _input_focus_index() -> int:
+	if _room == null or _room.focused_quad() == null:
+		return -1
+	return _room._panels.find(_room.focused_quad())
+
+
+## The FIX114 stick-hysteresis legs: synthetic axis streams
+## driven through the real Input path (the room's own poll
+## reads them; nothing here calls a handler). The wall is
+## the nav fixture library (25 games, 9 columns); steps are
+## counted as focused-panel index travel.
+##   clean hold  - a stick held past the threshold steps at
+##                 the designed cadence (a handful of steps,
+##                 all one way).
+##   rattle      - full-scale excursions alternating every
+##                 few frames for seconds (a noisy stick at
+##                 the threshold): at most ONE step may fire
+##                 (the first crossing, indistinguishable
+##                 from intent) and NEVER one in reverse.
+##   reversal without neutral - after stepping right, the
+##                 stick slammed straight to full left: no
+##                 step back may fire.
+##   reversal through neutral - centre the stick, then push
+##                 left: the reversal answers.
+func _input_leg_stick_hysteresis_async() -> void:
+	_room._handle_rail("filter:all")
+	await _input_wait_frames(10)
+	var seat: ClickableQuad = _input_panel_at(2, 1)
+	if seat == null:
+		_input_smoke_fail("stick-hyst: no mid-wall seat panel")
+		return
+	# ---- clean hold ----
+	_room._set_focused(seat)
+	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.0, 30)
+	var hold_start: int = _input_focus_index()
+	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.9, 84)
+	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.0, 12)
+	var hold_steps: int = _input_focus_index() - hold_start
+	_input_expect(hold_steps >= 3 and hold_steps <= 8,
+		"stick-hyst clean hold: a held stick steps at the designed cadence (got %d steps)" % hold_steps)
+	# ---- rattle ----
+	_room._set_focused(seat)
+	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.0, 30)
+	var rattle_start: int = _input_focus_index()
+	var peak: int = rattle_start
+	var trough: int = rattle_start
+	for i: int in range(40):
+		await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.8, 3)
+		var after_pos: int = _input_focus_index()
+		if after_pos >= 0:
+			peak = maxi(peak, after_pos)
+			trough = mini(trough, after_pos)
+		await _input_feed_axis_frames(JOY_AXIS_LEFT_X, -0.8, 3)
+		var after_neg: int = _input_focus_index()
+		if after_neg >= 0:
+			peak = maxi(peak, after_neg)
+			trough = mini(trough, after_neg)
+	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.0, 12)
+	_input_expect(peak - rattle_start <= 1 and trough == rattle_start,
+		"stick-hyst rattle: back-and-forth noise steps at most once and never in reverse (peak %+d, trough %+d)" % [peak - rattle_start, trough - rattle_start])
+	# ---- reversal without neutral ----
+	_room._set_focused(seat)
+	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.0, 30)
+	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.9, 30)
+	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.9, 20) ## settle: any in-flight step lands
+	var armed_idx: int = _input_focus_index()
+	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, -0.9, 60)
+	var locked_min: int = _input_focus_index()
+	_input_expect(locked_min >= armed_idx,
+		"stick-hyst reversal-locked: a reversal that never centres fires no step back (was %d, now %d)" % [armed_idx, locked_min])
+	# ---- reversal through neutral ----
+	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.0, 24)
+	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, -0.9, 40)
+	await _input_feed_axis_frames(JOY_AXIS_LEFT_X, 0.0, 10)
+	_input_expect(_input_focus_index() < armed_idx,
+		"stick-hyst reversal-armed: after centring, the reversal answers (was %d, now %d)" % [armed_idx, _input_focus_index()])
 
 
 ## The focused panel's grid coord, or (-1, -1) when focus
@@ -23692,10 +23882,19 @@ func _finish_desk_smoke() -> void:
 ##              scan; a desk-started Save & Scan then disables
 ##              the exit while it runs and re-arms on landing.
 ##   sample   - a configured boot whose scan resolves to the
-##              bundled sample database: the auto-enter is
-##              cancelled, the boot face drops, and the desk
-##              ends standing in full dress with the scan
-##              summary applied; the room never stood.
+##              bundled sample database, with the database
+##              download stubbed to FAIL (FIX114): the boot
+##              tries to fetch the real database itself,
+##              fails, and enters the room ANYWAY on a
+##              no-database scan of the files - the desk
+##              never stands, no invented game appears, and
+##              the room's plate carries the standing
+##              database warning.
+##   sampledl - the same boot with the download stubbed to
+##              SUCCEED (FIX114): the rescan resolves to the
+##              fresh cache (kind "download"), the room
+##              enters on real matched data, the cache file
+##              stands in user://, and no warning stands.
 ##   firstrun - an unconfigured boot: the desk stands in the
 ##              full Initial Setup dress from the first frame on;
 ##              the boot face never appears.
@@ -23757,23 +23956,48 @@ func _drive_bootface_smoke() -> void:
 				_bootface_phase = 1
 		1:
 			_bootface_wait += 1
-			if _bootface_mode == "sample":
-				if not _scan_active and _scanner != null and _last_db_kind == "sample" and _bootface_wait > 10:
-					var sdress: Dictionary = _desk.title_dress()
+			if _bootface_mode == "sample" or _bootface_mode == "sampledl":
+				# FIX114 legs: the sample-resolving boot no longer
+				# ends on the desk. Both legs wait for the room to
+				# stand on the FINAL landing (the download attempt
+				# and its rescan stand between the sample scan and
+				# the room), then judge that landing.
+				var want_kind: String = "none" if _bootface_mode == "sample" else "download"
+				if _room != null and _room.visible and not _scan_active and _last_db_kind == want_kind:
 					_bootface_expect(_boot_face == null or not _boot_face.visible,
-						"sample: the boot face drops when the auto-enter is cancelled")
-					_bootface_expect(_desk.visible, "sample: the desk ends up standing")
-					_bootface_expect(str(sdress["title"]) == "Initial Setup",
-						"sample: the standing desk reads Initial Setup (got '%s')" % str(sdress["title"]))
-					_bootface_expect(int(sdress["panel_children"]) == 1,
-						"sample: the standing desk's head is the title alone (DESKEDIT)")
-					_bootface_expect(_desk._stats_label.text.contains("SAMPLE DATABASE"),
-						"sample: the scan summary stands applied on the desk")
-					_bootface_expect(_room == null or not _room.visible,
-						"sample: the room never stood (no auto-enter on sample data)")
+						"%s: the boot face drops when the room takes over" % _bootface_mode)
+					_bootface_expect(_desk == null,
+						"%s: the desk is never created (no desk trap)" % _bootface_mode)
+					_bootface_expect(_boot_db_attempted,
+						"%s: the boot attempted the database download itself" % _bootface_mode)
+					_bootface_expect(_scanner != null and _scanner.total_files == 14,
+						"%s: the library is the 14 fixture files (got %d)" % [_bootface_mode, _scanner.total_files if _scanner != null else -1])
+					if _bootface_mode == "sample":
+						_bootface_expect(_room.status_plate_text() == RoomView.DB_WARNING_TEXT,
+							"sample: the standing database warning is on the plate (got '%s')" % _room.status_plate_text())
+						var sample_db: VpsDatabase = VpsDatabase.new()
+						sample_db.load_db(VpsDatabase.SAMPLE_PATH)
+						var invented: int = 0
+						var unlocal: int = 0
+						for g: GameEntry in _scanner.games:
+							if sample_db.games_by_id.values().any(func(rec: Variant) -> bool: return str((rec as Dictionary).get("name", "")) == g.title):
+								invented += 1
+							if not g.game_id.begins_with("local:"):
+								unlocal += 1
+						_bootface_expect(invented == 0,
+							"sample: zero invented sample games in the library (got %d)" % invented)
+						_bootface_expect(unlocal == 0 and _scanner.games.size() == 14,
+							"sample: every game is file-derived (local ids, 14 games; got %d unlocal of %d)" % [unlocal, _scanner.games.size()])
+					else:
+						_bootface_expect(FileAccess.file_exists(VpsDatabase.CACHE_PATH),
+							"sampledl: the downloaded cache stands in user://")
+						_bootface_expect(_scanner.matched_files > 0,
+							"sampledl: the rescan matched files against the downloaded database (matched %d)" % _scanner.matched_files)
+						_bootface_expect(_room.status_plate_text() == "",
+							"sampledl: no database warning stands (plate '%s')" % _room.status_plate_text())
 					_finish_bootface_smoke()
-				elif _bootface_wait > 7200:
-					_bootface_fail("sample: the scan never landed on the sample database")
+				elif _bootface_wait > 14400:
+					_bootface_fail("%s: the boot never landed in the room on kind '%s' (last kind '%s')" % [_bootface_mode, want_kind, _last_db_kind])
 					_finish_bootface_smoke()
 			else:
 				if _room != null and _room.visible:

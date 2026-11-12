@@ -1210,6 +1210,26 @@ const BOARD_TEX_RETRY_MS: int = 600 ## the heal's minimum interval between re-re
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
+var _db_warning_active: bool = false ## FIX114: the standing database warning's state (Main drives it from the last landed scan's database kind - see set_db_warning_active)
+
+## FIX114: the standing database warning's words, in both
+## rooms, whenever the library was identified from file
+## names alone (no database, or the bundled sample): the
+## fact, the cost, and where the cure lives - the setup
+## panel's DATA section carries the same download the desk
+## offers.
+const DB_WARNING_TEXT: String = "No VPS database - names/art limited - SETUP (DATA)"
+
+
+## FIX114: the standing database warning's switch. A
+## warning outranks every other plate tenant in both rooms
+## (see _plate_line and _tournament_warning_line), so the
+## state repaints the banner the moment it changes.
+func set_db_warning_active(active: bool) -> void:
+	if active == _db_warning_active:
+		return
+	_db_warning_active = active
+	_refresh_banner()
 var _selected_game_id: String = "" ## last game opened/launched; restored + persisted as view state
 var _marquee: Node3D = null ## the loading marquee's holder; in the tree only during a load wait
 var _marquee_year: Label3D = null
@@ -1436,6 +1456,8 @@ var _focused: ClickableQuad = null
 var _joy_cooldown: float = 0.0
 var _joy_hold_dir: Vector2 = Vector2.ZERO ## GRADFIX13 item 3: the direction of the stick hold in progress (ZERO = no hold) - the poll's hold bookkeeping (see the poll in _process)
 var _joy_hold_steps: int = 0 ## discrete steps fired inside the current continuous hold (OPTIMIZE: every step is discrete; the count survives only for the debug_opt_nc="smoothcruise" seam, which arms its roll on the second step)
+var _joy_axis_state_x: Array = [0, false] ## FIX114: the stick-step hysteresis state for the X axis, [latched direction, reversal-locked] - see _stick_axis_dir
+var _joy_axis_state_y: Array = [0, false] ## FIX114: the same for the Y axis
 var _joy_step_queued: Vector2 = Vector2.ZERO ## OPTIMIZE finish (hold cadence): one pending hold-REPEAT step (the hold's first step never queues) waiting for the drum to land + rest; cleared on release or direction change, fires only while the stick still holds its direction
 var _step_rest_timer: float = 0.0 ## seconds of enforced drum rest left after the last swing landing (STEP_REST_SEC), spent in _process
 var _joy_prev_a: bool = false
@@ -3040,6 +3062,8 @@ func tournament_focused_challenge_id() -> String:
 ## business: they are numbers, and numbers live above the
 ## bar now (see _numbers_line).
 func _tournament_warning_line() -> String:
+	if _db_warning_active:
+		return DB_WARNING_TEXT ## FIX114: the database warning outranks the WoVP states too - the boards join against this same library
 	if not _wovp_has_key:
 		return "Tournament Room - no WoVP key yet (add it in SETUP)"
 	if _wovp_challenges.is_empty():
@@ -5116,6 +5140,8 @@ func _plate_line() -> String:
 		return _banner_line()
 	if _tournament:
 		return _tournament_warning_line()
+	if _db_warning_active:
+		return DB_WARNING_TEXT ## FIX114: the standing database warning takes the library plate alone, like a tournie warning takes its plate
 	var line: String = ""
 	if _filter_note != "":
 		line = _filter_note
@@ -9628,6 +9654,61 @@ func _bumper_page(step: int) -> void:
 ## analog controls share one "meant it" line.
 const TRIGGER_PRESS_THRESHOLD: float = 0.55
 
+## The stick-step thresholds (FIX114): a wall step fires
+## when an axis crosses STICK_STEP_THRESHOLD - the shipped
+## 0.55, unchanged, so deliberate input feels exactly as it
+## always has. STICK_NEUTRAL_BAND is the hysteresis' inner
+## line: an axis reads "centred" inside it, and only a pass
+## through it re-arms the axis after a refused reversal
+## (see _stick_axis_dir).
+const STICK_STEP_THRESHOLD: float = 0.55
+const STICK_NEUTRAL_BAND: float = 0.30
+
+
+## FIX114: one axis of the stick-step hysteresis. Returns
+## the direction this axis contributes to the step poll
+## this frame (-1, 0, or +1) and updates the axis's state
+## pair ([latch, locked], rewritten in place). The laws:
+## - Inside the neutral band the latch and the lock both
+##   clear: the stick has been centred, and the next
+##   crossing is a fresh deliberate push.
+## - Crossing the step threshold takes the latch in that
+##   direction (from centred, or continuing the latched
+##   direction) and contributes it; the grey zone between
+##   the bands contributes nothing but keeps the latch, so
+##   a held stick hovering at the line neither loses its
+##   hold nor gains steps it did not earn.
+## - Crossing the threshold AGAINST the latch is a
+##   reversal without neutral: it contributes nothing and
+##   LOCKS the axis - nothing steps on this axis, in
+##   either direction, until the stick passes back through
+##   neutral. A noisy stick rattling across the threshold
+##   (droscoe's Quest-controller report) moves the wall one
+##   step - its first crossing is indistinguishable from
+##   intent - and never a second one; a deliberate flick
+##   through centre re-arms on the way through, so real
+##   reversals still answer at once.
+func _stick_axis_dir(value: float, state: Array) -> int:
+	var latch: int = int(state[0])
+	var locked: bool = bool(state[1])
+	if absf(value) < STICK_NEUTRAL_BAND:
+		state[0] = 0
+		state[1] = false
+		return 0
+	if value > STICK_STEP_THRESHOLD:
+		if latch < 0:
+			state[1] = true ## reversal without neutral: lock
+			return 0
+		state[0] = 1
+		return 0 if locked else 1
+	if value < -STICK_STEP_THRESHOLD:
+		if latch > 0:
+			state[1] = true ## reversal without neutral: lock
+			return 0
+		state[0] = -1
+		return 0 if locked else -1
+	return 0
+
 
 ## The distinct columns the standing view's CARDS occupy,
 ## in shelf order: every column of the shelf in the library
@@ -12625,15 +12706,32 @@ func _process(delta: float) -> void:
 	_step_rest_timer = maxf(0.0, _step_rest_timer - delta)
 	var ax: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_X)
 	var ay: float = Input.get_joy_axis(0, JOY_AXIS_LEFT_Y)
+	# FIX114: the raw axes pass through the per-axis
+	# hysteresis (_stick_axis_dir) before they may name a
+	# direction - the same thresholds and the same X-before-Y
+	# priority as the flat read this replaces, so a clean
+	# push, hold, or through-centre reversal steps exactly
+	# as it always has, and only a reversal that never
+	# centred is refused. The PVLDS_INPUT_NC=flatstick seam
+	# restores the flat read so the input smoke's
+	# stick-hysteresis legs fail by name.
 	var dir: Vector2 = Vector2.ZERO
-	if ax < -0.55:
-		dir = Vector2(-1.0, 0.0)
-	elif ax > 0.55:
-		dir = Vector2(1.0, 0.0)
-	elif ay < -0.55:
-		dir = Vector2(0.0, -1.0)
-	elif ay > 0.55:
-		dir = Vector2(0.0, 1.0)
+	if debug_input_nc == "flatstick":
+		if ax < -STICK_STEP_THRESHOLD:
+			dir = Vector2(-1.0, 0.0)
+		elif ax > STICK_STEP_THRESHOLD:
+			dir = Vector2(1.0, 0.0)
+		elif ay < -STICK_STEP_THRESHOLD:
+			dir = Vector2(0.0, -1.0)
+		elif ay > STICK_STEP_THRESHOLD:
+			dir = Vector2(0.0, 1.0)
+	else:
+		var sx: int = _stick_axis_dir(ax, _joy_axis_state_x)
+		var sy: int = _stick_axis_dir(ay, _joy_axis_state_y)
+		if sx != 0:
+			dir = Vector2(float(sx), 0.0)
+		elif sy != 0:
+			dir = Vector2(0.0, float(sy))
 	if debug_input_nc == "dpadmove":
 		# The GRADFIX10 negative-control seam (harness env
 		# PVLDS_INPUT_NC=dpadmove): restores the pre-nuke
