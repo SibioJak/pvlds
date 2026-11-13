@@ -24,11 +24,11 @@ package main
 //                    verified assertion of ours;
 //   FocusUnresolved <reason> - the launch window closed
 //                    without a lock: the editor holds it, the
-//                    player window never appeared, a holder
-//                    with deliberate-use evidence holds it, or
-//                    the foreground would not move after the
-//                    attempt budget. The reason names the
-//                    holder and the branch.
+//                    player window never appeared, a foreign
+//                    holder with deliberate-use evidence holds
+//                    it, or the foreground would not move
+//                    after the attempt budget. The reason names
+//                    the holder and the branch.
 //
 // The machine is fed every tick of an active session (loading
 // and live) by main.go, but only while the focus_herding
@@ -64,9 +64,14 @@ package main
 // presumption is spawn shuffle, not user intent: game-process
 // windows, known streamer windows, no window, companions and
 // strangers alike may be asserted over UNLESS deliberate-use
-// evidence is present (input provenance, below). The editor
-// frame is the sole absolute refusal: its foreground is the
-// exit detector's landing, under any circumstances. Each
+// evidence is present (input provenance, below). That veto
+// never applies to the game's own window family: a game-pid
+// holder that is not the player window is the game's internal
+// shuffle, however fresh the desktop input beside it (field
+// session 203 - the veto protected a late VPinMAME grab as if
+// it were the user's choice, and the table came up dead). The
+// editor frame is the sole absolute refusal: its foreground
+// is the exit detector's landing, under any circumstances. Each
 // assertion is verified by read-back at +250 ms and +1 s
 // against the HWND; an episode allows focusMaxAttempts
 // attempts, spaced at least focusAssertSpacingMs apart. An
@@ -205,10 +210,11 @@ type focusSequence struct {
 	finalAttempt  bool // the in-flight assertion was ordered at the deadline: its failure resolves the sequence
 	finalVerified bool // the deadline's assertion verified, but the player hold has still to survive
 
-	beforeDesc     string // the holder's description when the last assertion was ordered (the logs' "was")
-	noTargetLogged bool
-	reasonText     string // the FocusUnresolved reason, once resolved
-	lockedClass    string // the player window's class at the lock (the lock log line)
+	beforeDesc       string // the holder's description when the last assertion was ordered (the logs' "was")
+	beforeGameFamily bool   // the last assertion answered a game-family holder (the log line says so)
+	noTargetLogged   bool
+	reasonText       string // the FocusUnresolved reason, once resolved
+	lockedClass      string // the player window's class at the lock (the lock log line)
 }
 
 func (s *focusSequence) reset(sessionID int) {
@@ -227,6 +233,12 @@ func (s *focusSequence) reason() string { return s.reasonText }
 // before names the holder the last assertion answered - the
 // assertion log line's "was".
 func (s *focusSequence) before() string { return s.beforeDesc }
+
+// beforeIsGameFamily reports whether the last assertion
+// answered a game-family holder - the assertion log line
+// names that plainly ("game window, not the player window -
+// asserting") so a field log reads without a translator.
+func (s *focusSequence) beforeIsGameFamily() bool { return s.beforeGameFamily }
 
 // playerClass names the player window's class at the lock -
 // the lock log line's subject.
@@ -260,6 +272,25 @@ func deliberateEvidence(nowMs, fgSinceMs int64, ws windowState) bool {
 	return landedMs >= fgSinceMs-focusIntentWindowMs
 }
 
+// sequenceDeliberateEvidence is the launch sequence's copy
+// of the provenance veto - and its aim is narrower than the
+// guard's: the veto exists for FOREIGN-process foregrounds
+// (the user deliberately going elsewhere), so it never
+// applies when the holder is the game's own window family
+// (fgIsGame: any window of the game pid; the player window
+// itself is handled before this is ever consulted). A
+// game-family holder is the game's internal shuffle - the
+// sequence asserts over it however fresh the desktop input
+// beside it is. Session 203 is the field conviction: a late
+// VPinMAME grab plus nearby desktop input resolved
+// FocusUnresolved "deliberate use" and left a dead table.
+func sequenceDeliberateEvidence(nowMs, fgSinceMs int64, ws windowState) bool {
+	if ws.fgIsGame {
+		return false
+	}
+	return deliberateEvidence(nowMs, fgSinceMs, ws)
+}
+
 // anchoredPastFloor reports whether the sequence's clock
 // allows a settle resolution: the anchor exists and the
 // resolve floor has passed.
@@ -282,6 +313,7 @@ func (s *focusSequence) orderAssert(nowMs int64, ws windowState) seqResult {
 	s.verifyAtMs = nowMs + focusVerifyFirstMs
 	s.verifyStage = 1
 	s.beforeDesc = holderDesc(ws.fgClass, ws.fgPID, ws.fgProcName, ws.fgTitle)
+	s.beforeGameFamily = ws.fgIsGame && !ws.fgIsPlayer
 	s.phase = 1
 	return seqResult{action: seqAssert, notePush: true}
 }
@@ -445,7 +477,7 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 		s.handoffSeen = true
 		res := seqResult{notePush: true}
 		if !ws.fgIsPlayer && !ws.fgIsEditor && ws.playerHWND != 0 &&
-			!deliberateEvidence(nowMs, s.fgSinceMs, ws) && s.attempts < focusMaxAttempts {
+			!sequenceDeliberateEvidence(nowMs, s.fgSinceMs, ws) && s.attempts < focusMaxAttempts {
 			r := s.orderAssert(nowMs, ws)
 			r.notePush = true
 			return r
@@ -475,7 +507,7 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 		switch {
 		case ws.playerHWND == 0:
 			return s.resolveUnresolved("the player window never appeared")
-		case s.deliberate || deliberateEvidence(nowMs, s.fgSinceMs, ws):
+		case s.deliberate || sequenceDeliberateEvidence(nowMs, s.fgSinceMs, ws):
 			return s.resolveUnresolved(fmt.Sprintf("%s holds the foreground and the desktop shows deliberate use", holderDesc(ws.fgClass, ws.fgPID, ws.fgProcName, ws.fgTitle)))
 		case s.attempts >= focusMaxAttempts && s.episodeHWND == ws.fgHWND:
 			return s.resolveUnresolved(fmt.Sprintf("the foreground would not move after %d attempts (held by %s)", s.attempts, holderDesc(ws.fgClass, ws.fgPID, ws.fgProcName, ws.fgTitle)))
@@ -492,11 +524,13 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 	// The settle resolution: a real holder, stable through
 	// the settle constant, past the resolve floor.
 	if s.pastFloor(nowMs) && nowMs-s.fgSinceMs >= focusSettleMs && !focusLullHolder(ws) {
-		if deliberateEvidence(nowMs, s.fgSinceMs, ws) {
+		if sequenceDeliberateEvidence(nowMs, s.fgSinceMs, ws) {
 			// Visited, not stolen: watch it, and remember the
 			// judgement - the deadline reads the latch, not
 			// just that tick's provenance. The deadline
-			// names it if it never moves.
+			// names it if it never moves. (Foreign holders
+			// only: sequenceDeliberateEvidence never fires
+			// on the game's own window family.)
 			s.deliberate = true
 			return seqResult{}
 		}

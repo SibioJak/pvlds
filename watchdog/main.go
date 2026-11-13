@@ -629,7 +629,11 @@ func main() {
 						if ok {
 							verdict = "accepted"
 						}
-						logf("watchdog: session %d: focus sequence: asserted the player window (foreground was %s; SetForegroundWindow %s)", c.SessionID, sessionFocus.before(), verdict)
+						if sessionFocus.beforeIsGameFamily() {
+							logf("watchdog: session %d: focus sequence: asserted the player window (foreground was %s - game window, not the player window - asserting; SetForegroundWindow %s)", c.SessionID, sessionFocus.before(), verdict)
+						} else {
+							logf("watchdog: session %d: focus sequence: asserted the player window (foreground was %s; SetForegroundWindow %s)", c.SessionID, sessionFocus.before(), verdict)
+						}
 						if sessionFocus.noteAssert(nowMs, attempted) == seqLogNoTarget {
 							logf("watchdog: session %d: focus sequence: no player window to assert (standing down this attempt)", c.SessionID)
 						}

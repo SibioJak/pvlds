@@ -159,6 +159,71 @@ func TestFocusSession39Shape(t *testing.T) {
 	}
 }
 
+func TestFocusSession203LateMAMEFreshInput(t *testing.T) {
+	// Session 203 (Chris's rig, 1.1.6's first field test):
+	// the launch locks, then the game's own VPinMAME window
+	// grabs the foreground LATE inside the launch window,
+	// with desktop input landing right at the grab. Under
+	// the shipped sequence the provenance veto read that
+	// input as deliberate use, protected the game's own
+	// shuffle, and resolved FocusUnresolved at the deadline
+	// - a dead table. The veto is for foreign holders only:
+	// over a game-family holder the sequence must re-assert
+	// and re-lock, never resolve deliberate-use.
+	var s focusSequence
+	up := int64(10000)
+	seqTick(&s, up, up, fgSeqDialog())
+	res := s.tick(up+3000, 1, up, focusInputs{ws: fgSeqDialog(), state: "live", handoff: true})
+	if res.action != seqAssert {
+		t.Fatalf("hand-off over the load dialog: got %v, want the assertion", res.action)
+	}
+	s.noteAssert(up+3000, true)
+	seqTick(&s, up+3250, up, fgSeqSDL())
+	act, lockAt := seqDrive(&s, up+3650, up, fgSeqSDL(), 10)
+	if act != seqLogLocked {
+		t.Fatalf("initial dwell: got %v, want FocusLocked", act)
+	}
+	// The late grab, one tick after the lock: MAME takes
+	// the foreground with desktop input landing on it.
+	grabAt := lockAt + 400
+	mameFresh := func(now int64) windowState {
+		ws := fgSeqMAME()
+		ws.inputAgeMs = now - grabAt // the input landed as MAME took it
+		ws.fgTitle = "VPinMAME: Tommy Pinball Wizard, The Who's (4.00)"
+		return ws
+	}
+	if res := seqTick(&s, grabAt, up, mameFresh(grabAt)); res.action != seqLogReopen {
+		t.Fatalf("late MAME grab: got %v, want the reopen", res.action)
+	}
+	// Work the holder: at its settle the sequence must
+	// assert - the fresh desktop input beside a game-family
+	// holder is not a veto.
+	assertAt := int64(-1)
+	for now := grabAt + 400; now <= up+focusDeadlineMs; now += 400 {
+		if res := seqTick(&s, now, up, mameFresh(now)); res.action == seqAssert {
+			assertAt = now
+			break
+		} else if res.action == seqLogUnresolved {
+			t.Fatalf("at +%dms: resolved unresolved (%q) - the veto fired on a game-family holder", now-up, s.reason())
+		}
+	}
+	if assertAt < 0 {
+		t.Fatalf("no assertion against the late MAME grab before the deadline (reason %q)", s.reason())
+	}
+	if !s.beforeIsGameFamily() {
+		t.Fatal("beforeIsGameFamily() = false, want true for the MAME assertion (the log line's wording)")
+	}
+	if got := s.before(); !strings.Contains(got, `"MAME"`) {
+		t.Fatalf("before() = %s, want the MAME holder named", got)
+	}
+	s.noteAssert(assertAt, true)
+	seqTick(&s, assertAt+250, up, fgSeqSDL())
+	act, _ = seqDrive(&s, assertAt+650, up, fgSeqSDL(), 10)
+	if act != seqLogLocked {
+		t.Fatalf("got %v, want FocusLocked again after the re-assertion", act)
+	}
+}
+
 func TestFocusSession37Shape(t *testing.T) {
 	// Session 37: the editor lulls, then the SDL window
 	// comes up and simply stays - the sequence locks with
