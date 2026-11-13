@@ -754,6 +754,135 @@ func TestFocusReaderUnavailableDegradesTo116(t *testing.T) {
 	}
 }
 
+// ----------------------------------------------------------------
+// FIX118: the blind hand-off delivery. Droscoe's sessions
+// 20-24 are the shape: the focus reading says the player
+// window already holds its thread's focus - the state 1.1.7
+// read as "nothing owed" - while the buttons stay dead.
+// The hand-off order now fires regardless of the reading.
+
+func TestFocusUnconditionalDeliveryHealthyFocus(t *testing.T) {
+	// The healthy reading (focus ON the player window) at
+	// the hand-off tick: 1.1.7 ordered nothing, ever. Now
+	// the rung fires exactly once, flagged unconditional,
+	// and the lock then lands on its ordinary criteria with
+	// no second order behind it.
+	var s focusSequence
+	up := int64(2000)
+	ws := fgSeqFocus(hwFVP, playerWindowClass)
+	in := focusInputs{ws: ws, state: "live", handoff: true}
+	res := seqTickIn(&s, up, up, in)
+	if res.action != seqDeliverFocus {
+		t.Fatalf("hand-off tick: got %v, want the blind delivery", res.action)
+	}
+	if !s.deliverWasUnconditional() {
+		t.Fatal("the hand-off order was not flagged unconditional")
+	}
+	if !res.notePush {
+		t.Fatal("the hand-off tick must be recorded (notePush) whatever the order")
+	}
+	s.noteDeliver(true)
+	deliveries := 1
+	locked := false
+	for now := up + 400; now <= up+focusResolveFloorMs+4000 && !locked; now += 400 {
+		res := seqTickIn(&s, now, up, focusInputs{ws: ws, state: "live"})
+		switch res.action {
+		case seqDeliverFocus, seqProbe:
+			deliveries++
+		case seqLogLocked:
+			locked = true
+		case seqNone:
+		default:
+			t.Fatalf("at +%dms: unexpected action %v", now-up, res.action)
+		}
+	}
+	if deliveries != 1 {
+		t.Fatalf("deliveries = %d, want exactly the one blind order", deliveries)
+	}
+	if !locked {
+		t.Fatal("the sequence never locked behind the blind delivery")
+	}
+}
+
+func TestFocusUnconditionalDeliveryFailedReader(t *testing.T) {
+	// A FAILED reading at the hand-off tick still orders:
+	// the reading's value is not consulted, and a failed
+	// read is a reader that exists. (An ABSENT reader -
+	// focusReadUnknown - still orders nothing: that shape
+	// stays 1.1.6, as TestFocusHandoffTick pins.)
+	var s focusSequence
+	up := int64(2000)
+	ws := fgSeqVP()
+	ws.focusRead = focusReadFailed
+	res := seqTickIn(&s, up, up, focusInputs{ws: ws, state: "live", handoff: true})
+	if res.action != seqDeliverFocus {
+		t.Fatalf("hand-off tick with a failed reader: got %v, want the blind delivery", res.action)
+	}
+	if !s.deliverWasUnconditional() {
+		t.Fatal("the failed-reader order was not flagged unconditional")
+	}
+}
+
+func TestFocusUnconditionalProbeHealthyFocus(t *testing.T) {
+	// The probe under its flag takes the blind moment the
+	// same way: exactly one probe at the hand-off tick even
+	// with the focus reading healthy, no probe behind it,
+	// and the lock unaffected.
+	var s focusSequence
+	up := int64(2000)
+	ws := fgSeqFocus(hwFVP, playerWindowClass)
+	in := focusInputs{ws: ws, state: "live", handoff: true, actuationProbe: true}
+	res := seqTickIn(&s, up, up, in)
+	if res.action != seqProbe {
+		t.Fatalf("hand-off tick: got %v, want the blind probe", res.action)
+	}
+	if !s.deliverWasUnconditional() {
+		t.Fatal("the hand-off probe was not flagged unconditional")
+	}
+	s.noteDeliver(true)
+	probes := 1
+	locked := false
+	for now := up + 400; now <= up+focusResolveFloorMs+4000 && !locked; now += 400 {
+		res := seqTickIn(&s, now, up, focusInputs{ws: ws, state: "live", actuationProbe: true})
+		switch res.action {
+		case seqProbe:
+			probes++
+		case seqDeliverFocus:
+			t.Fatal("a delivery was ordered under the probe flag")
+		case seqLogLocked:
+			locked = true
+		}
+	}
+	if probes != 1 {
+		t.Fatalf("probes = %d, want exactly the one blind probe", probes)
+	}
+	if !locked {
+		t.Fatal("the sequence never locked behind the blind probe")
+	}
+}
+
+func TestFocusUnconditionalAfterHandoffAssertion(t *testing.T) {
+	// The hand-off tick spends itself on an assertion (a
+	// stranger holds the foreground): the blind order stays
+	// owed and fires on the verify tick, the first tracking
+	// tick with the player window in front - even though
+	// the focus reading there is already healthy.
+	var s focusSequence
+	up := int64(2000)
+	res := seqTickIn(&s, up, up, focusInputs{ws: fgSeqThirdBGFX(), state: "live", handoff: true})
+	if res.action != seqAssert {
+		t.Fatalf("hand-off tick: got %v, want the assertion", res.action)
+	}
+	s.noteAssert(up, true)
+	res = seqTick(&s, up+250, up, fgSeqFocus(hwFVP, playerWindowClass))
+	if res.action != seqDeliverFocus {
+		t.Fatalf("verify tick: got %v, want the still-owed blind delivery", res.action)
+	}
+	if !s.deliverWasUnconditional() {
+		t.Fatal("the post-assertion order was not flagged unconditional")
+	}
+}
+
 func TestFocusNoTargetDeliverNotSpent(t *testing.T) {
 	// The leaf reports no target at a delivery: the attempt
 	// is not spent against the episode budget (noteDeliver

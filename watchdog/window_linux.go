@@ -410,6 +410,7 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	ws.fgHWND = stubFGHWND(ws.fgClass, ws.fgPID)
 	ws.fgIsPlayer = ws.playerHWND != 0 && ws.fgHWND == ws.playerHWND
 	stubFocusFacts(gamePID, &ws)
+	stubActiveFacts(gamePID, &ws)
 	return ws
 }
 
@@ -497,6 +498,56 @@ func stubFocusFacts(gamePID int, ws *windowState) {
 		ws.playerFocusHWND = ws.fgHWND
 		ws.playerFocusClass = ws.fgClass
 		ws.focusIsPlayer = ws.fgIsPlayer
+	}
+}
+
+// stubActiveMarker scripts the PLAYER THREAD ACTIVE-WINDOW
+// facts (FIX118): the sibling of stubFocusMarker, with the
+// same vocabulary ("player" / "mame" / "none"). An absent
+// file is the healthy mirror: the thread's active window IS
+// its focus window - the two halves of the one
+// GetGUIThreadInfo reading agree, as they do on a healthy
+// real thread. The marker's whole purpose is the divergence
+// (scenario 48): a thread whose active window differs from
+// its focus window, logged in plain words.
+func stubActiveMarker(gamePID int) string {
+	return "/tmp/pvlds-stub-active-" + strconv.Itoa(gamePID)
+}
+
+// stubActiveFacts folds the scripted active-window facts
+// (stubActiveMarker) into the snapshot. It runs after
+// stubFocusFacts: with no positive focus reading there is no
+// active reading either (the one shared read state), and
+// with no active marker the active window mirrors whatever
+// the focus facts settled on.
+func stubActiveFacts(gamePID int, ws *windowState) {
+	if ws.focusRead != focusReadOK {
+		return
+	}
+	b, err := os.ReadFile(stubActiveMarker(gamePID))
+	if err != nil {
+		ws.playerActiveHWND = ws.playerFocusHWND
+		ws.playerActiveClass = ws.playerFocusClass
+		ws.activeIsPlayer = ws.focusIsPlayer
+		return
+	}
+	switch strings.TrimSpace(string(b)) {
+	case "player":
+		ws.playerActiveHWND = ws.playerHWND
+		ws.playerActiveClass = ws.playerClass
+		ws.activeIsPlayer = ws.playerHWND != 0
+	case "none":
+		ws.playerActiveHWND = 0
+		ws.playerActiveClass = ""
+		ws.activeIsPlayer = false
+	case "mame":
+		ws.playerActiveHWND = stubFGHWND("MAME", gamePID)
+		ws.playerActiveClass = "MAME"
+		ws.activeIsPlayer = false
+	default:
+		ws.playerActiveHWND = ws.playerFocusHWND
+		ws.playerActiveClass = ws.playerFocusClass
+		ws.activeIsPlayer = ws.focusIsPlayer
 	}
 }
 

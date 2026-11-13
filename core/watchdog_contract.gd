@@ -21,6 +21,18 @@ extends RefCounted
 ##                    watchdog falls back to the legacy generic.
 ##                    Cleared whenever a session (re)arms. Schema
 ##                    stays v2.
+##   launcher_version FIX118: the writing launcher's product
+##                    version (AppInfo.PRODUCT_VERSION), stamped
+##                    by to_dictionary() on every save - never
+##                    loaded-and-carried, so the value always
+##                    names the build that last wrote. The
+##                    watchdog logs it in its session header
+##                    beside its own version (the version-
+##                    visibility rule: a field log identifies
+##                    both halves of the pair). Absent in
+##                    contracts written before the field
+##                    existed; the watchdog's header says
+##                    "unknown". Schema stays v2.
 ##   focus_herding    the config kill-switch, mirrored for the watchdog
 ##   pinemhi_manage   PINEMHI2 (Part B): the config's watcher-
 ##                    management toggle, mirrored for the watchdog
@@ -102,6 +114,10 @@ const SCHEMA_VERSION: int = 2
 
 var armed: bool = false
 var disarm_reason: String = ""
+## FIX118: the writing launcher's version, read from disk for
+## completeness; to_dictionary() re-stamps it from AppInfo on
+## every save (see the field note above).
+var launcher_version: String = ""
 var focus_herding: bool = true
 ## FIX117: the focus actuation controls, mirrored for the
 ## watchdog exactly like focus_herding (checkin/launch).
@@ -161,6 +177,7 @@ static func load_from_disk() -> WatchdogContract:
 	var d: Dictionary = parsed
 	c.armed = bool(d.get("armed", false))
 	c.disarm_reason = str(d.get("disarm_reason", ""))
+	c.launcher_version = str(d.get("launcher_version", ""))
 	c.focus_herding = bool(d.get("focus_herding", true))
 	c.focus_actuation_rung = int(d.get("focus_actuation_rung", 1))
 	c.focus_actuation_probe = bool(d.get("focus_actuation_probe", false))
@@ -195,6 +212,9 @@ func to_dictionary() -> Dictionary:
 	d["version"] = SCHEMA_VERSION
 	d["armed"] = armed
 	d["disarm_reason"] = disarm_reason
+	# FIX118: stamped fresh from AppInfo on every save - the
+	# watchdog's session header quotes the writing build.
+	d["launcher_version"] = AppInfo.PRODUCT_VERSION
 	d["focus_herding"] = focus_herding
 	d["focus_actuation_rung"] = focus_actuation_rung
 	d["focus_actuation_probe"] = focus_actuation_probe

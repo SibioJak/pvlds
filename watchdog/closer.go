@@ -141,6 +141,18 @@ type windowState struct {
 	playerFocusClass string
 	focusIsPlayer    bool
 	machineryHWND    uintptr
+	// FIX118 active-window snapshot: the player window's
+	// THREAD ACTIVE window (GetGUIThreadInfo's hwndActive -
+	// the same call that produces the focus reading above,
+	// and focusRead is the shared read state for both). SDL's
+	// activation bookkeeping keys on the active window, the
+	// one thread state FIX117 never read; this round it is
+	// logged alongside the focus reading and NOTHING gates
+	// on it - instrumentation only. activeIsPlayer is HWND
+	// equality with the resolved player target.
+	playerActiveHWND  uintptr
+	playerActiveClass string
+	activeIsPlayer    bool
 }
 
 // The focusRead values (windowState.focusRead).

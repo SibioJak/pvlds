@@ -214,6 +214,61 @@ func TestPlayerFocusTrackerFailedReaderOncePerSession(t *testing.T) {
 	}
 }
 
+// ----------------------------------------------------------------
+// FIX118: the player-thread ACTIVE-window tracker
+// (playerActiveTracker) and its line rendering
+// (playerActiveDesc) - the focus pair's twins.
+
+func activeWS(read int, activeHWND uintptr, activeClass string, isPlayer bool) windowState {
+	ws := focusWS(read, 0, "", false)
+	ws.playerActiveHWND = activeHWND
+	ws.playerActiveClass = activeClass
+	ws.activeIsPlayer = isPlayer
+	return ws
+}
+
+func TestPlayerActiveTrackerChangesOncePerChange(t *testing.T) {
+	var tr playerActiveTracker
+	// First positive reading is a change; the same reading
+	// again is not.
+	if changed := tr.observe(1, activeWS(focusReadOK, hwFMAME, "MAME", false)); !changed {
+		t.Fatal("first reading: the change was not reported")
+	}
+	if changed := tr.observe(1, activeWS(focusReadOK, hwFMAME, "MAME", false)); changed {
+		t.Fatal("an unchanged reading was reported twice")
+	}
+	// The active window lands on the player window: a change.
+	if changed := tr.observe(1, activeWS(focusReadOK, hwFVP, playerWindowClass, true)); !changed {
+		t.Fatal("the active window landing on the player window was not reported")
+	}
+	// A failed or unknown reading is silent here - the one
+	// failure line belongs to the focus tracker.
+	if changed := tr.observe(1, activeWS(focusReadFailed, 0, "", false)); changed {
+		t.Fatal("a failed reading produced an active-window report")
+	}
+	if changed := tr.observe(1, activeWS(focusReadUnknown, 0, "", false)); changed {
+		t.Fatal("an unknown reading produced an active-window report")
+	}
+	// A new session reports its first reading again.
+	if changed := tr.observe(2, activeWS(focusReadOK, hwFVP, playerWindowClass, true)); !changed {
+		t.Fatal("session 2's first reading was not reported")
+	}
+}
+
+func TestPlayerActiveDescWording(t *testing.T) {
+	if got := playerActiveDesc(activeWS(focusReadOK, 0, "", false)); got != "no window" {
+		t.Fatalf("zero active window: got %q, want %q", got, "no window")
+	}
+	got := playerActiveDesc(activeWS(focusReadOK, hwFMAME, "MAME", false))
+	if !strings.Contains(got, "\"MAME\"") {
+		t.Fatalf("elsewhere active window: got %q, want the class named", got)
+	}
+	got = playerActiveDesc(activeWS(focusReadOK, hwFVP, playerWindowClass, true))
+	if !strings.Contains(got, "the player window itself") {
+		t.Fatalf("player active window: got %q, want the player-window suffix", got)
+	}
+}
+
 func TestPlayerFocusDescWording(t *testing.T) {
 	if got := playerFocusDesc(focusWS(focusReadOK, 0, "", false)); got != "no window" {
 		t.Fatalf("zero focus window: got %q, want %q", got, "no window")

@@ -135,6 +135,30 @@ package main
 // nothing, ever: every delivery is gated on a positive
 // "focus is elsewhere" reading, so the degradation is exact
 // 1.1.6 behaviour.
+//
+// FIX118 - DELIVERY THAT FIRES BLIND: the field verdict on
+// 1.1.7 (droscoe, BGFX/Pico 4, his sessions 20-24) convicted
+// the GATE, not the techniques: on his rig the thread focus
+// reads "the player window itself" from the first tick of
+// every session, so the positive reading the deliveries
+// above wait for never came - across five sessions no rung
+// and no probe ever executed, while his buttons stayed dead
+// until a genuine alt-tab. The readings cannot see his
+// gate, so delivery must not wait for them: the hand-off
+// now carries an unconditional obligation - the configured
+// rung (or the probe, under its flag) is ordered exactly
+// once per session from the first of the hand-off tick
+// itself, the lock branch when the hand-off arrives with
+// the lock already due, or a tracking backstop when the
+// hand-off tick spent itself on an assertion - regardless
+// of the focus reading's VALUE (on the player window,
+// elsewhere, the zero window, a failed read). It draws from
+// the same per-episode budget, and the triggered deliveries
+// above behave exactly as 1.1.7 within what remains. One
+// gate survives: the leaf must HAVE a reader (a snapshot
+// whose focusRead is not unknown) - a leaf with no reader
+// has no delivery to order with, and the degradation there
+// stays exact 1.1.6 behaviour, as TestFocusHandoffTick pins.
 
 import "fmt"
 
@@ -276,6 +300,15 @@ type focusSequence struct {
 	deliverRungUsed    int     // the ladder rung of the last delivery order (the log line)
 	deliverWasProbe    bool    // the last order was the probe, not a rung
 	focusDescText      string  // where the focus sat when the last delivery was ordered (the log line)
+
+	// FIX118 unconditional hand-off delivery bookkeeping:
+	// handoffDeliveryDone says the session's one blind
+	// hand-off order has been placed (by whichever of its
+	// three moments came first); deliverUnconditional says
+	// the LAST order was that blind one (the log line names
+	// it). Session-scoped, not episode-scoped: exactly once.
+	handoffDeliveryDone  bool
+	deliverUnconditional bool
 }
 
 func (s *focusSequence) reset(sessionID int) {
@@ -317,9 +350,25 @@ func focusOwed(ws windowState) bool {
 		ws.focusRead == focusReadOK && !ws.focusIsPlayer
 }
 
+// unconditionalDue reports whether the FIX118 blind hand-off
+// order may be placed on this snapshot: the obligation stands
+// (not yet placed this session), a player target stands, the
+// per-episode budget has room, and the leaf HAS a reader -
+// the one gate the blind order keeps (a reading's VALUE is
+// never consulted here; a failed read still orders).
+func (s *focusSequence) unconditionalDue(ws windowState) bool {
+	return !s.handoffDeliveryDone && ws.playerHWND != 0 &&
+		ws.focusRead != focusReadUnknown && s.deliverAttempts < focusMaxAttempts
+}
+
 // deliverRung names the ladder rung of the last delivery
 // order - the delivery log line's wording.
 func (s *focusSequence) deliverRung() int { return s.deliverRungUsed }
+
+// deliverWasUnconditional reports whether the last delivery
+// order was the FIX118 blind hand-off order - the delivery
+// and probe log lines name it ("unconditional").
+func (s *focusSequence) deliverWasUnconditional() bool { return s.deliverUnconditional }
 
 // deliverWasProbeAction reports whether the last delivery
 // order was the diagnostic probe rather than a ladder rung.
@@ -358,8 +407,11 @@ func (s *focusSequence) deliveryDue(nowMs int64, ws windowState) bool {
 // foreground touch; the probe posts messages only and
 // records none, so the tracking caller passes false for it
 // (the hand-off caller records the hand-off tick itself, as
-// it always has, whatever the order).
-func (s *focusSequence) orderDeliver(nowMs int64, ws windowState, in focusInputs, notePush bool) seqResult {
+// it always has, whatever the order). unconditional marks
+// the FIX118 blind hand-off order: it spends the session's
+// one obligation (handoffDeliveryDone) alongside the
+// episode budget every order spends.
+func (s *focusSequence) orderDeliver(nowMs int64, ws windowState, in focusInputs, notePush bool, unconditional bool) seqResult {
 	rung := in.actuationRung
 	if rung < 1 || rung > 3 {
 		rung = 1
@@ -368,6 +420,10 @@ func (s *focusSequence) orderDeliver(nowMs int64, ws windowState, in focusInputs
 	s.lastDeliverMs = nowMs
 	s.deliverRungUsed = rung
 	s.deliverWasProbe = in.actuationProbe
+	s.deliverUnconditional = unconditional
+	if unconditional {
+		s.handoffDeliveryDone = true
+	}
 	s.focusDescText = playerFocusDesc(ws)
 	if in.actuationProbe {
 		return seqResult{action: seqProbe, notePush: notePush}
@@ -640,16 +696,28 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 		// and an undelivered focus never denies it (brief
 		// §4: the focus-landed requirement ships log-only in
 		// this build).
-		if focusOwed(ws) && !s.pastDeadline(nowMs) {
-			if s.deliverAttempts >= focusMaxAttempts {
-				if !s.notDeliveredLogged {
-					s.notDeliveredLogged = true
-					return seqResult{action: seqLogFocusNotDelivered}
+		if !s.pastDeadline(nowMs) {
+			// FIX118: the blind hand-off order, when this tick
+			// IS the hand-off tick (or follows it) arriving
+			// with the lock already due - the resident
+			// launcher leaves a long-held table, and this
+			// branch runs before the hand-off block below, so
+			// the obligation is worked here or the lock would
+			// be declared over it.
+			if (in.handoff || s.handoffSeen) && s.unconditionalDue(ws) {
+				return s.orderDeliver(nowMs, ws, in, !in.actuationProbe, true)
+			}
+			if focusOwed(ws) {
+				if s.deliverAttempts >= focusMaxAttempts {
+					if !s.notDeliveredLogged {
+						s.notDeliveredLogged = true
+						return seqResult{action: seqLogFocusNotDelivered}
+					}
+				} else if s.lastDeliverMs == 0 || nowMs-s.lastDeliverMs >= focusAssertSpacingMs {
+					return s.orderDeliver(nowMs, ws, in, !in.actuationProbe, false)
+				} else {
+					return seqResult{}
 				}
-			} else if s.lastDeliverMs == 0 || nowMs-s.lastDeliverMs >= focusAssertSpacingMs {
-				return s.orderDeliver(nowMs, ws, in, !in.actuationProbe)
-			} else {
-				return seqResult{}
 			}
 		}
 		s.phase = 2
@@ -677,20 +745,33 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 			r.notePush = true
 			return r
 		}
-		if focusOwed(ws) && s.deliverAttempts < focusMaxAttempts {
-			// The born-foreground hand-off (sessions 18/19):
-			// the player window already holds the foreground,
-			// so no assertion is owed - but the inner switch
-			// may never have been delivered, and the hand-off
-			// tick is the first delivery moment. (The probe,
-			// when its flag is on, takes the same moment; the
-			// tick itself is recorded either way, as it
-			// always has been.)
-			r := s.orderDeliver(nowMs, ws, in, false)
+		if ws.fgIsPlayer && s.unconditionalDue(ws) {
+			// FIX118: the hand-off delivery fires BLIND. In
+			// 1.1.7 this moment waited for a positive "focus
+			// is elsewhere" reading (the born-foreground
+			// shape, sessions 18/19); droscoe's sessions
+			// 20-24 read the focus as already delivered from
+			// the first tick while his buttons stayed dead,
+			// so nothing ever fired. The readings cannot see
+			// his gate: the configured rung (or the probe,
+			// under its flag) is ordered now, readings
+			// regardless; the reading itself is logged
+			// before and after as ever. The tick itself is
+			// recorded either way, as it always has been.
+			r := s.orderDeliver(nowMs, ws, in, false, true)
 			r.notePush = true
 			return r
 		}
 		return res
+	}
+
+	// FIX118 backstop: the blind hand-off order, still owed
+	// because the hand-off tick spent itself on an assertion
+	// (or the foreground reached the player window by another
+	// road): the first tracking tick with the player window
+	// in front places it, readings regardless.
+	if s.handoffSeen && ws.fgIsPlayer && s.unconditionalDue(ws) {
+		return s.orderDeliver(nowMs, ws, in, !in.actuationProbe, true)
 	}
 
 	// FIX117 focus delivery in tracking: the player window
@@ -705,7 +786,7 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 			return seqResult{action: seqLogFocusNotDelivered}
 		}
 		if s.deliveryDue(nowMs, ws) {
-			return s.orderDeliver(nowMs, ws, in, !in.actuationProbe)
+			return s.orderDeliver(nowMs, ws, in, !in.actuationProbe, false)
 		}
 	}
 

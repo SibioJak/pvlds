@@ -154,6 +154,57 @@ func playerFocusDesc(ws windowState) string {
 	return s
 }
 
+// playerActiveDesc renders the player thread's ACTIVE window
+// for a log line, in the same plain words as playerFocusDesc
+// (FIX118): the window's class and handle, "no window" when
+// the thread has none, and the player-window suffix when the
+// active window IS the player target.
+func playerActiveDesc(ws windowState) string {
+	if ws.playerActiveHWND == 0 {
+		return "no window"
+	}
+	s := fmt.Sprintf("%q window (hwnd %#x)", ws.playerActiveClass, ws.playerActiveHWND)
+	if ws.activeIsPlayer {
+		s += " - the player window itself"
+	}
+	return s
+}
+
+// playerActiveTracker is the per-session change detector for
+// the PLAYER THREAD'S ACTIVE window (FIX118 instrumentation):
+// the twin of playerFocusTracker below, for the second half
+// of the same GetGUIThreadInfo reading. Fed every
+// active-session tick, it reports the active reading ONCE PER
+// CHANGE. The reader-failure line is the focus tracker's to
+// write (one reader, one failure line), so a failed or
+// unknown reading is simply silent here. LOGGING ONLY, like
+// everything in this file: no decision reads the tracker.
+type playerActiveTracker struct {
+	sessionID int
+	seen      bool // a positive reading has been recorded
+	hwnd      uintptr
+	class     string
+	isPlayer  bool
+}
+
+// observe folds one tick's thread snapshot in. changed=true
+// says the caller logs playerActiveDesc(ws) as the new state.
+func (t *playerActiveTracker) observe(sessionID int, ws windowState) (changed bool) {
+	if sessionID != t.sessionID {
+		t.sessionID = sessionID
+		t.seen = false
+	}
+	if ws.focusRead != focusReadOK {
+		return false
+	}
+	if t.seen && t.hwnd == ws.playerActiveHWND && t.class == ws.playerActiveClass && t.isPlayer == ws.activeIsPlayer {
+		return false
+	}
+	t.seen = true
+	t.hwnd, t.class, t.isPlayer = ws.playerActiveHWND, ws.playerActiveClass, ws.activeIsPlayer
+	return true
+}
+
 // playerFocusTracker is the per-session change detector for
 // the PLAYER THREAD'S focus (FIX117 instrumentation): fed
 // every active-session tick, it reports the focus reading

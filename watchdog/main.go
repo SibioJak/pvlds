@@ -60,7 +60,14 @@
 //     its 1.1.6 criteria: the focus requirement ships
 //     log-only in this build (investigation:
 //     ~/workspace/pvlds-actuation/INVESTIGATION.md; build
-//     record: ~/workspace/pvlds-fix117/STATUS.md),
+//     record: ~/workspace/pvlds-fix117/STATUS.md). FIX118
+//     makes the hand-off delivery fire BLIND - once per
+//     session, readings regardless, because the field rig
+//     the delivery was built for reads its focus as already
+//     delivered while its buttons stay dead - and adds the
+//     thread's ACTIVE-window reading beside the focus one,
+//     plus the version stamps in the session header
+//     (build record: ~/workspace/pvlds-fix118/STATUS.md),
 //   - and once the sequence has ended in a live session, run
 //     the focus guard (guard.go): take the foreground back
 //     ONLY from known bystander windows that raise themselves
@@ -109,9 +116,23 @@ import (
 	"time"
 )
 
+// WatchdogVersion is this watchdog's own release version
+// (FIX118, the version-visibility rule): it rides the
+// session header line alongside the launcher version the
+// contract carries, so a field log names both halves of the
+// pair that produced it.
+const WatchdogVersion = "1.1.8"
+
 type Contract struct {
 	Version int  `json:"version"`
 	Armed   bool `json:"armed"`
+	// LauncherVersion is the launcher's product version,
+	// written by the launcher on every contract save (an
+	// additive mirror like FocusHerding): the session header
+	// logs it beside WatchdogVersion. Absent in contracts
+	// written before the field existed - the header says
+	// "unknown" and nothing else changes.
+	LauncherVersion string `json:"launcher_version"`
 	// DisarmReason names who dismissed the session ("room Exit",
 	// "window close", "watchdog loop cap", ...), written by the
 	// disarmer alongside armed=false and read into the stand-down
@@ -356,6 +377,12 @@ func launcherAlive(c *Contract, extraPID int) bool {
 // with or without any delivery firing.
 var sessionFocusTracker playerFocusTracker
 
+// FIX118's player-thread active-window feed (fgwatch.go):
+// the tracker that logs the player window's thread ACTIVE
+// window the moment it changes - the second half of the
+// same GetGUIThreadInfo reading, kept beside the first.
+var sessionActiveTracker playerActiveTracker
+
 func main() {
 	exe, _ := os.Executable()
 	dir := filepath.Dir(exe)
@@ -550,7 +577,18 @@ func main() {
 					if c.FocusHerding {
 						herdingWord = "on"
 					}
-					logf("watchdog: session %d: %s (pid %d); focus herding %s (as received)", c.SessionID, filepath.Base(c.GameExePath), c.GamePID, herdingWord)
+					// FIX118: the header also stamps the pair's
+					// versions - this watchdog's own and the
+					// launcher version the contract carried -
+					// so a field log self-identifies the build
+					// that produced it (the version-visibility
+					// rule; droscoe's 1.1.7 sessions could be
+					// told apart only by timestamp).
+					launcherVersion := c.LauncherVersion
+					if launcherVersion == "" {
+						launcherVersion = "unknown"
+					}
+					logf("watchdog: session %d: %s (pid %d); focus herding %s (as received); watchdog %s, launcher %s", c.SessionID, filepath.Base(c.GameExePath), c.GamePID, herdingWord, WatchdogVersion, launcherVersion)
 					// FIX117: a non-default actuation setting
 					// names itself in the header - a field log
 					// proves which act produced (or didn't
@@ -680,6 +718,15 @@ func main() {
 					} else if changed {
 						logf("watchdog: session %d: player thread focus: %s", c.SessionID, playerFocusDesc(ws))
 					}
+					// The FIX118 active-window feed (fgwatch.go):
+					// the player thread's ACTIVE window, the
+					// second half of the same reading, logged
+					// the moment it changes - the state
+					// FIX117's focus-only picture could not
+					// show. Instrumentation only.
+					if sessionActiveTracker.observe(c.SessionID, ws) {
+						logf("watchdog: session %d: player thread active window: %s", c.SessionID, playerActiveDesc(ws))
+					}
 					res := sessionFocus.tick(nowMs, c.SessionID, actRuntimeMs, focusInputs{ws: ws, state: c.SessionState, handoff: handoff, actuationRung: actuationRung, actuationProbe: c.FocusActuationProbe})
 					if res.notePush {
 						sessionCloser.notePush(c.SessionID, nowMs)
@@ -715,7 +762,13 @@ func main() {
 							if ok {
 								verdict = "accepted"
 							}
-							logf("watchdog: session %d: focus sequence: delivered focus to the player window (rung %d; focus was %s; leaf %s)", c.SessionID, sessionFocus.deliverRung(), sessionFocus.focusDesc(), verdict)
+							// FIX118: the blind hand-off order
+							// names itself inside the line.
+							unconditionalWord := ""
+							if sessionFocus.deliverWasUnconditional() {
+								unconditionalWord = ", unconditional"
+							}
+							logf("watchdog: session %d: focus sequence: delivered focus to the player window (rung %d%s; focus was %s; leaf %s)", c.SessionID, sessionFocus.deliverRung(), unconditionalWord, sessionFocus.focusDesc(), verdict)
 						} else {
 							logf("watchdog: session %d: focus sequence: no player window to deliver focus to (standing down this attempt)", c.SessionID)
 						}
@@ -727,7 +780,13 @@ func main() {
 						attempted := probePlayerFocus(c.GamePID, ws.playerHWND)
 						sessionFocus.noteDeliver(attempted)
 						if attempted {
-							logf("watchdog: session %d: focus sequence: probe - posted activation messages to the player window (focus was %s; diagnostic only)", c.SessionID, sessionFocus.focusDesc())
+							// FIX118: the blind hand-off probe
+							// names itself inside the line.
+							unconditionalWord := ""
+							if sessionFocus.deliverWasUnconditional() {
+								unconditionalWord = "; unconditional"
+							}
+							logf("watchdog: session %d: focus sequence: probe - posted activation messages to the player window (focus was %s; diagnostic only%s)", c.SessionID, sessionFocus.focusDesc(), unconditionalWord)
 						} else {
 							logf("watchdog: session %d: focus sequence: probe - no player window to probe (standing down this attempt)", c.SessionID)
 						}

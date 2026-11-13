@@ -362,8 +362,9 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	// layer gates joystick input on, which the foreground
 	// facts above cannot see - and the machinery window, the
 	// activation-cycle nudge's excursion target.
-	ws.focusRead, ws.playerFocusHWND, ws.playerFocusClass = readPlayerThreadFocus(ws.playerHWND)
+	ws.focusRead, ws.playerFocusHWND, ws.playerFocusClass, ws.playerActiveHWND, ws.playerActiveClass = readPlayerThreadFocus(ws.playerHWND)
 	ws.focusIsPlayer = ws.focusRead == focusReadOK && ws.playerHWND != 0 && ws.playerFocusHWND == ws.playerHWND
+	ws.activeIsPlayer = ws.focusRead == focusReadOK && ws.playerHWND != 0 && ws.playerActiveHWND == ws.playerHWND
 	ws.machineryHWND = pickMachineryWindow(windows, ws.playerHWND, ws.editorHWND)
 	return ws
 }
@@ -391,25 +392,32 @@ type guiThreadInfo struct {
 // window, which is precisely the born-foreground state the
 // delivery exists for. No player window reads unknown; a
 // failed call reads failed, and every consumer degrades to
-// 1.1.6 behaviour on either.
-func readPlayerThreadFocus(playerHWND uintptr) (int, uintptr, string) {
+// 1.1.6 behaviour on either. FIX118: the same call's
+// hwndActive comes back alongside (the thread's ACTIVE
+// window - the state SDL's activation bookkeeping keys on,
+// logged this round, gated on by nothing).
+func readPlayerThreadFocus(playerHWND uintptr) (int, uintptr, string, uintptr, string) {
 	if playerHWND == 0 {
-		return focusReadUnknown, 0, ""
+		return focusReadUnknown, 0, "", 0, ""
 	}
 	threadID, _, _ := procGetWindowThreadProcID.Call(playerHWND, 0)
 	if threadID == 0 {
-		return focusReadFailed, 0, ""
+		return focusReadFailed, 0, "", 0, ""
 	}
 	info := guiThreadInfo{cbSize: uint32(unsafe.Sizeof(guiThreadInfo{}))}
 	r, _, _ := procGetGUIThreadInfo.Call(threadID, uintptr(unsafe.Pointer(&info)))
 	if r == 0 {
-		return focusReadFailed, 0, ""
+		return focusReadFailed, 0, "", 0, ""
 	}
 	class := ""
 	if info.hwndFocus != 0 {
 		class = windowClassName(info.hwndFocus)
 	}
-	return focusReadOK, info.hwndFocus, class
+	activeClass := ""
+	if info.hwndActive != 0 {
+		activeClass = windowClassName(info.hwndActive)
+	}
+	return focusReadOK, info.hwndFocus, class, info.hwndActive, activeClass
 }
 
 // pickMachineryWindow chooses the activation-cycle nudge's
