@@ -409,6 +409,35 @@ func TestFocusDeadlineShuffle(t *testing.T) {
 	}
 }
 
+func TestFocusDeadlineFinalAttemptBrokenHold(t *testing.T) {
+	// The deadline's final attempt VERIFIES - and then the
+	// foreground flaps away again inside the dwell. The
+	// sequence resolves ("would not hold") instead of
+	// re-asserting past the deadline forever.
+	var s focusSequence
+	up := int64(2000)
+	for now, i := up, 0; now < up+focusDeadlineMs; now, i = now+400, i+1 {
+		ws := fgSeqMAME()
+		if i%2 == 1 {
+			ws = fgSeqVD()
+		}
+		seqTick(&s, now, up, ws)
+	}
+	at := up + focusDeadlineMs
+	res := seqTick(&s, at, up, fgSeqMAME())
+	if res.action != seqAssert {
+		t.Fatalf("deadline: got %v, want the final attempt", res.action)
+	}
+	s.noteAssert(at, true)
+	if res := seqTick(&s, at+250, up, fgSeqSDL()); res.action != seqNone {
+		t.Fatalf("verify tick: got %v, want none (verified, dwell running)", res.action)
+	}
+	res = seqTick(&s, at+650, up, fgSeqVD())
+	if res.action != seqLogUnresolved || !strings.Contains(s.reason(), "would not hold") {
+		t.Fatalf("broken hold: got (%v, %q), want the would-not-hold resolution", res.action, s.reason())
+	}
+}
+
 func TestFocusNoTargetAttemptLoggedOnce(t *testing.T) {
 	// The leaf reports no target at the attempt: the
 	// sequence logs it once and stands the attempt down -

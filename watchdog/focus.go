@@ -196,13 +196,14 @@ type focusSequence struct {
 
 	handoffSeen bool // the hand-off tick has been consumed
 
-	attempts     int     // assertions ordered in the current episode
-	episodeHWND  uintptr // the holder the current episode is working on
-	lastAssertMs int64
-	assertAtMs   int64
-	verifyAtMs   int64
-	verifyStage  int  // 1 = first read-back pending, 2 = verdict read-back pending
-	finalAttempt bool // the in-flight episode was ordered at the deadline: its failure resolves the sequence
+	attempts      int     // assertions ordered in the current episode
+	episodeHWND   uintptr // the holder the current episode is working on
+	lastAssertMs  int64
+	assertAtMs    int64
+	verifyAtMs    int64
+	verifyStage   int  // 1 = first read-back pending, 2 = verdict read-back pending
+	finalAttempt  bool // the in-flight assertion was ordered at the deadline: its failure resolves the sequence
+	finalVerified bool // the deadline's assertion verified, but the player hold has still to survive
 
 	beforeDesc     string // the holder's description when the last assertion was ordered (the logs' "was")
 	noTargetLogged bool
@@ -320,8 +321,14 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 		if ws.fgHWND != s.episodeHWND {
 			s.attempts = 0
 			s.noTargetLogged = false
-			s.finalAttempt = false
 			s.deliberate = false
+			// The deadline's final attempt is NOT reset by a
+			// holder change past the deadline: there are no
+			// fresh episodes there, and a flapping foreground
+			// would otherwise re-arm assertions forever.
+			if !s.pastDeadline(nowMs) {
+				s.finalAttempt = false
+			}
 		}
 	}
 	if ws.fgIsPlayer {
@@ -384,6 +391,9 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 			// dwell (and the lock check below) takes it from
 			// here.
 			s.verified = true
+			if s.finalAttempt {
+				s.finalVerified = true
+			}
 			s.phase = 0
 		} else if s.verifyStage == 1 {
 			s.verifyAtMs = s.assertAtMs + focusVerifySecondMs
@@ -453,6 +463,13 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 		return seqResult{}
 	}
 
+	// The deadline's assertion verified but the player hold
+	// broke anyway: that is the resolution - the sequence
+	// does not keep re-asserting past the deadline.
+	if s.finalVerified {
+		return s.resolveUnresolved("the player window would not hold the foreground at the deadline")
+	}
+
 	// The deadline resolves on whatever holds the foreground.
 	if s.pastDeadline(nowMs) {
 		switch {
@@ -462,7 +479,7 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 			return s.resolveUnresolved(fmt.Sprintf("%s holds the foreground and the desktop shows deliberate use", holderDesc(ws.fgClass, ws.fgPID, ws.fgProcName, ws.fgTitle)))
 		case s.attempts >= focusMaxAttempts && s.episodeHWND == ws.fgHWND:
 			return s.resolveUnresolved(fmt.Sprintf("the foreground would not move after %d attempts (held by %s)", s.attempts, holderDesc(ws.fgClass, ws.fgPID, ws.fgProcName, ws.fgTitle)))
-		case s.attempts < focusMaxAttempts:
+		case s.attempts < focusMaxAttempts && !s.finalAttempt:
 			// One last-chance assertion; its failure resolves
 			// the sequence in the verify branch above.
 			s.finalAttempt = true
