@@ -9,7 +9,7 @@ extends RefCounted
 ## real home - the constant is one line to move.
 
 const PRODUCT_NAME: String = "LaunchPin VR"
-const PRODUCT_VERSION: String = "1.1.4"
+const PRODUCT_VERSION: String = "1.1.5"
 ## PANEL112 (item 1): the feed's home is the PUBLIC releases
 ## repo (SibioJak/launchpin-vr) - the source repo stays
 ## private (Chris's ruling), and a private repo's raw file

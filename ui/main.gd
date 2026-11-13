@@ -777,10 +777,29 @@ var _bench_t_mark: int = 0
 var _bench_warm_started_msec: int = 0
 var _bench_max_frame_msec: float = 0.0
 var _bench_max_frame_warm_msec: float = 0.0
+var _bootstrap_bounced: bool = false ## FIX115: set in _init when SdlBootstrap relaunched this process; _ready then quits before any dispatch
+
+
+func _init() -> void:
+	# FIX115: the earliest app entry there is. On Windows a
+	# cold start whose environment lacks SDL_JOYSTICK_
+	# DIRECTINPUT relaunches itself once with the variable
+	# set (the controller-grab fix, core/sdl_bootstrap.gd)
+	# and this generation exits in _ready, before any boot
+	# logic, window, or watchdog contact. Every other start
+	# proceeds exactly as before.
+	_bootstrap_bounced = SdlBootstrap.maybe_bounce()
 
 
 func _ready() -> void:
+	if _bootstrap_bounced:
+		get_tree().quit()
+		return
 	var user_args: PackedStringArray = OS.get_cmdline_user_args()
+	var bootstrap_idx: int = user_args.find("--pvlds-smoke-bootstrap")
+	if bootstrap_idx >= 0 and bootstrap_idx + 1 < user_args.size():
+		_run_bootstrap_smoke(user_args[bootstrap_idx + 1])
+		return
 	if user_args.has("--pvlds-core-test"):
 		_run_core_test()
 		return
@@ -26367,6 +26386,33 @@ func _expect(cond: bool, label: String, failures: Array[String]) -> void:
 	else:
 		failures.append(label)
 		printerr("  FAIL - ", label)
+
+
+## FIX115 bench probe (--pvlds-smoke-bootstrap <path>):
+## appends ONE JSON record per process that reaches this
+## dispatch — the variable's value as this process sees
+## it, plus the engine and user argument lists verbatim —
+## then quits. A bounced start never reaches here in the
+## parent (it quit in _ready), so the record on disk is
+## the child's, and its argument lists prove the bounce
+## carried them whole. Driven by pvlds-fix115's
+## run_bootstrap_smoke.sh legs.
+func _run_bootstrap_smoke(path: String) -> void:
+	var seen: String = OS.get_environment(SdlBootstrap.HINT_VAR) if OS.has_environment(SdlBootstrap.HINT_VAR) else "UNSET"
+	var record: Dictionary = {
+		"value": seen,
+		"engine_args": OS.get_cmdline_args(),
+		"user_args": OS.get_cmdline_user_args(),
+	}
+	var f: FileAccess = FileAccess.open(path, FileAccess.READ_WRITE)
+	if f == null:
+		f = FileAccess.open(path, FileAccess.WRITE)
+	if f != null:
+		f.seek_end()
+		f.store_line(JSON.stringify(record))
+		f.close()
+	print("PVLDS bootstrap smoke: recorded (value ", seen, ")")
+	get_tree().quit()
 
 
 func _run_core_test() -> void:
