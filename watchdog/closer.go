@@ -75,21 +75,52 @@ package main
 type windowState struct {
 	fgIsEditor bool    // the foreground window IS the game pid's editor frame
 	editorHWND uintptr // the editor frame (Windows WM_CLOSE target); 0 elsewhere
-	// The wider foreground facts (activation.go reads them; the
-	// exit detector above reads only fgIsEditor). fgPID is the
-	// foreground window's owner (0 = no foreground window) and
-	// fgClass its Win32 class ("" likewise). fgIsGame says the
-	// owner is the game process - at PROCESS level; session 35
-	// taught the difference between that and the right WINDOW
-	// holding it, which is what fgIsSDL carries: the foreground
-	// window is one of the game pid's SDL_app windows, the
-	// surface that owns input.
+	// The wider foreground facts (the focus duties read them;
+	// the exit detector above reads only fgIsEditor). fgPID is
+	// the foreground window's owner (0 = no foreground window)
+	// and fgClass its Win32 class ("" likewise). fgIsGame says
+	// the owner is the game process - at PROCESS level; session
+	// 35 taught the difference between that and the right
+	// WINDOW holding it. FIX116 made that window a first-class
+	// resolved target (target.go): playerHWND/playerClass name
+	// THE window that owns input for this build (SDL_app on
+	// GL, VPPlayer on BGFX, a persisted candidate elsewhere),
+	// and fgIsPlayer is HWND equality with it - the identity
+	// every focus duty now keys on. fgIsSDL remains as the
+	// class-level fact (the foreground is an SDL window of the
+	// game pid) for the log lines that speak in classes.
 	fgClass  string
 	fgPID    int
 	fgHWND   uintptr // the foreground window itself (0 = no foreground window); fgwatch.go's change identity
 	fgIsGame bool
 	fgIsSDL  bool
-	sdlHWND  uintptr // an SDL window of the game pid (Windows activation target); 0 elsewhere
+	sdlHWND  uintptr // an SDL window of the game pid (the pre-FIX116 activation target); 0 elsewhere
+
+	// FIX116 snapshot facts. playerHWND is the resolved player
+	// target (target.go) for this snapshot: 0 = no target in
+	// the game pid's current window set. playerClass is its
+	// class and playerWhy the resolver rank that chose it (the
+	// target-bookkeeping log line's wording). fgIsPlayer is
+	// HWND equality: fgHWND == playerHWND, both nonzero.
+	playerHWND  uintptr
+	playerClass string
+	playerWhy   string
+	fgIsPlayer  bool
+	// The foreground holder's fuller identity (fgwatch.go's
+	// lines and the focus guard's bystander matching read
+	// them): the window's title and its owning process's image
+	// basename. "" where a leaf cannot know them.
+	fgTitle    string
+	fgProcName string
+	// Input provenance for the focus duties' deliberate-use
+	// tests: inputAgeMs is the age of the last DESKTOP
+	// keyboard/mouse input (GetLastInputInfo on Windows -
+	// gamepad input does not advance it), -1 = the leaf
+	// cannot know. altWinEdge says an Alt/Win/mouse-button
+	// key was down at this tick or the previous one (a
+	// deliberate foreground move's fingerprints).
+	inputAgeMs int64
+	altWinEdge bool
 }
 
 // closeAction is what one detector tick decided.

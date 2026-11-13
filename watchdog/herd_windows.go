@@ -38,11 +38,15 @@ var (
 	procIsWindowVisible       = user32.NewProc("IsWindowVisible")
 	procGetWindowRect         = user32.NewProc("GetWindowRect")
 	procGetClassNameW         = user32.NewProc("GetClassNameW")
+	procGetWindowTextW        = user32.NewProc("GetWindowTextW")
 	procRegisterWindowMsgW    = user32.NewProc("RegisterWindowMessageW")
 	procSendMessageTimeoutW   = user32.NewProc("SendMessageTimeoutW")
 	procPostMessageW          = user32.NewProc("PostMessageW")
 	procAttachThreadInput     = user32.NewProc("AttachThreadInput")
+	procGetLastInputInfo      = user32.NewProc("GetLastInputInfo")
+	procGetAsyncKeyState      = user32.NewProc("GetAsyncKeyState")
 	procGetCurrentThreadID    = kernel32.NewProc("GetCurrentThreadId")
+	procGetTickCount          = kernel32.NewProc("GetTickCount")
 )
 
 type rect struct {
@@ -108,6 +112,12 @@ var playerSight playerSighting
 // launcher takes as its hand-off cue.
 var runtimeSeen runtimeGate
 
+// playerTargetState is this leaf's player-target resolver
+// (target.go): the one ranked choice of THE window that owns
+// input for the session's build, fed this leaf's snapshot
+// each tick exactly as the two gates above are fed theirs.
+var playerTargetState targetResolver
+
 // obsWindow pairs a window handle with its sighting observation.
 type obsWindow struct {
 	hwnd uintptr
@@ -148,6 +158,7 @@ func enumerateGameWindows(gamePID int, sessionID int) []obsWindow {
 			visible = true
 		}
 		out = append(out, obsWindow{hwnd: hwnd, obs: windowObs{
+			hwnd:    hwnd,
 			class:   windowClassName(hwnd),
 			width:   int64(rc.Right - rc.Left),
 			height:  int64(rc.Bottom - rc.Top),
@@ -266,9 +277,10 @@ func windowClassName(hwnd uintptr) string {
 //     load and play; it is the editor exactly when a table
 //     exit lands.
 //
-//   - The activation sequence (activation.go), which reads
-//     the wider foreground facts (class, owner, the SDL
-//     identity) from the same snapshot.
+//   - The focus duties (focus.go / guard.go), which read the
+//     wider foreground facts (class, owner, title, process,
+//     input provenance) and the resolved player target from
+//     the same snapshot.
 //
 //   - The foreground-change log (fgwatch.go), which reads the
 //     foreground window's identity (the handle itself) from
@@ -276,7 +288,7 @@ func windowClassName(hwnd uintptr) string {
 //     change is written to the log, the mid-play input-loss
 //     forensics the window-SET inventory lines cannot see.
 func gameWindowState(gamePID int, sessionID int) windowState {
-	var ws windowState
+	ws := windowState{inputAgeMs: -1}
 	if gamePID <= 0 {
 		return ws
 	}
@@ -292,8 +304,9 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 			}
 		}
 	}
-	// The SDL target (activation.go): a visible SDL window of
-	// the game pid if it has one, else any SDL window it has.
+	// The SDL fact (fgIsSDL's target bookkeeping): a visible
+	// SDL window of the game pid if it has one, else any SDL
+	// window it has.
 	for _, w := range windows {
 		if w.obs.class != sdlWindowClass {
 			continue
@@ -309,11 +322,13 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	candidate, rule := classifyPlayerCandidate(obs)
 	playerSight.observe(sessionID, candidate, rule)
 	runtimeSeen.observe(sessionID, classifyRuntime(obs), classifyVPPlayer(obs))
-	// The foreground facts: who holds it (class + owner), and
-	// the two window-level identities the duties key on - the
-	// editor frame (hwnd equality, as the detector has always
-	// read it) and the SDL window (class + owner: the SDL
-	// surface that owns input, activation.go's whole subject).
+	// The player target (target.go): the ONE ranked resolver
+	// every focus duty raises and verifies against.
+	ws.playerHWND, ws.playerClass, ws.playerWhy = playerTargetState.resolve(sessionID, obs)
+	// The foreground facts: who holds it (class + owner +
+	// title + process), and the window-level identities the
+	// duties key on - the editor frame and the player target,
+	// both by handle equality.
 	if fg, _, _ := procGetForegroundWindow.Call(); fg != 0 {
 		var fgPID uint32
 		procGetWindowThreadProcID.Call(fg, uintptr(unsafe.Pointer(&fgPID)))
@@ -325,15 +340,146 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 			ws.fgIsEditor = true
 		}
 		ws.fgIsSDL = ws.fgIsGame && ws.fgClass == sdlWindowClass
+		ws.fgIsPlayer = ws.playerHWND != 0 && fg == ws.playerHWND
+		ws.fgTitle = windowTitle(fg)
+		ws.fgProcName = processBaseName(ws.fgPID)
 	}
+	// Input provenance (focus.go / guard.go): the age of the
+	// last DESKTOP input - gamepad input does not advance
+	// GetLastInputInfo's clock, which is exactly the
+	// discrimination the deliberate-use tests need - and
+	// whether an Alt/Win/mouse-button key is down now or was
+	// at the previous snapshot (a deliberate foreground move's
+	// fingerprints).
+	ws.inputAgeMs = lastInputAgeMs()
+	ws.altWinEdge = altWinEdgeSample()
 	return ws
+}
+
+// windowTitle reads a window's title text ("" when it has
+// none or cannot be read).
+func windowTitle(hwnd uintptr) string {
+	buf := make([]uint16, 512)
+	n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if n == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buf[:n])
+}
+
+// procNameCache memoizes process basenames by pid: the
+// foreground owner's identity is read every tick, and a pid's
+// image does not change under it. Main-loop only.
+var procNameCache = map[int]string{}
+
+// processBaseName returns the image basename of a process
+// ("pinemhi_rom_monitor.exe"), "" when it cannot be read.
+func processBaseName(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	if name, ok := procNameCache[pid]; ok {
+		return name
+	}
+	name := ""
+	if path := processImagePath(pid); path != "" {
+		if idx := strings.LastIndexAny(path, `\/`); idx >= 0 {
+			name = path[idx+1:]
+		} else {
+			name = path
+		}
+	}
+	procNameCache[pid] = name
+	return name
+}
+
+// lastInputInfo mirrors LASTINPUTINFO for GetLastInputInfo.
+type lastInputInfo struct {
+	cbSize uint32
+	dwTime uint32
+}
+
+// lastInputAgeMs returns how long ago the last desktop
+// keyboard/mouse input landed, in milliseconds (-1 when the
+// read fails). The arithmetic is on GetTickCount's wrapping
+// 32-bit clock, exactly as the API intends.
+func lastInputAgeMs() int64 {
+	var li lastInputInfo
+	li.cbSize = uint32(unsafe.Sizeof(li))
+	r, _, _ := procGetLastInputInfo.Call(uintptr(unsafe.Pointer(&li)))
+	if r == 0 {
+		return -1
+	}
+	now, _, _ := procGetTickCount.Call()
+	return int64(uint32(now) - li.dwTime)
+}
+
+// The virtual-key codes the deliberate-move sample watches:
+// either Alt, either Windows key, and the mouse buttons.
+var altWinKeys = []uintptr{0x12, 0x5B, 0x5C, 0x01, 0x02, 0x04} // VK_MENU, VK_LWIN, VK_RWIN, VK_LBUTTON, VK_RBUTTON, VK_MBUTTON
+
+var altWinPrevDown bool
+
+// altWinEdgeSample reports whether any watched key is down at
+// this snapshot or was down at the previous one.
+func altWinEdgeSample() bool {
+	down := false
+	for _, vk := range altWinKeys {
+		if r, _, _ := procGetAsyncKeyState.Call(vk); r&0x8000 != 0 {
+			down = true
+			break
+		}
+	}
+	edge := down || altWinPrevDown
+	altWinPrevDown = down
+	return edge
+}
+
+// noteForegroundOwner logs the foreground owner's top-level
+// windows (class, title, size, visibility) on a foreground
+// change: the game pid's set is inventoried elsewhere, but a
+// CHANGE of owner - a companion window's pop, a streamer's
+// surface - is exactly the moment the owner's own window set
+// names it (FIX116 logging; the pre-FIX116 log recorded the
+// game pid's windows only, so a thief's identity stopped at
+// its class).
+func noteForegroundOwner(sessionID int, ws windowState) {
+	if ws.fgPID <= 0 {
+		return
+	}
+	parts := make([]string, 0, 8)
+	for _, hwnd := range allTopWindows(ws.fgPID) {
+		var rc rect
+		procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
+		vis := "hidden"
+		if r, _, _ := procIsWindowVisible.Call(hwnd); r != 0 {
+			vis = "visible"
+		}
+		parts = append(parts, fmt.Sprintf("class %q title %q %dx%d %s",
+			windowClassName(hwnd), windowTitle(hwnd),
+			int64(rc.Right-rc.Left), int64(rc.Bottom-rc.Top), vis))
+	}
+	set := strings.Join(parts, "; ")
+	if set == "" {
+		set = "(none)"
+	}
+	proc := ws.fgProcName
+	if proc == "" {
+		proc = "-"
+	}
+	logf("watchdog: session %d: foreground owner pid %d (%s) windows: %s", sessionID, ws.fgPID, proc, set)
 }
 
 var herdState herdBrain
 
 // herdTick performs one herding duty tick: read the foreground, ask
-// the brain, act on its decision.
-func herdTick(gamePID int, sessionID int, now time.Time) {
+// the brain, act on its decision. FIX116: the brain's assertion
+// target is the resolved player HWND (target.go) whenever the
+// snapshot resolved one - herding now herds to the window that
+// owns input, not merely the largest visible window; the
+// largest-visible anchor remains only as the fallback for the
+// early load, before any target exists.
+func herdTick(gamePID int, sessionID int, now time.Time, targetHWND uintptr) {
 	if gamePID <= 0 {
 		return
 	}
@@ -352,7 +498,10 @@ func herdTick(gamePID int, sessionID int, now time.Time) {
 	fgIsGame := int(fgPID) == gamePID
 	switch herdState.decide(now.UnixMilli(), fg, fgIsGame) {
 	case herdAssert:
-		target := gameWindow(gamePID)
+		target := targetHWND
+		if target == 0 {
+			target = gameWindow(gamePID)
+		}
 		if target == 0 || target == fg {
 			return
 		}
@@ -366,9 +515,12 @@ func herdTick(gamePID int, sessionID int, now time.Time) {
 // Windows denies foreground theft to background processes unless
 // the caller briefly shares the current foreground thread's input
 // queue. Attach, assert, detach - windows are never moved or
-// resized. Fire-and-forget: whether it stuck is the caller's next
-// observation.
-func raiseForeground(target uintptr, fg uintptr) {
+// resized. Returns SetForegroundWindow's own verdict (FIX116:
+// the focus duties log it - the pre-FIX116 leaves discarded it,
+// so a refused raise was indistinguishable from a landed one);
+// whether the foreground actually MOVED is still the caller's
+// read-back, a tick later.
+func raiseForeground(target uintptr, fg uintptr) bool {
 	fgThread, _, _ := procGetWindowThreadProcID.Call(fg, 0)
 	myThread, _, _ := procGetCurrentThreadID.Call()
 	attached := false
@@ -377,10 +529,11 @@ func raiseForeground(target uintptr, fg uintptr) {
 		attached = r != 0
 	}
 	procBringWindowToTop.Call(target)
-	procSetForegroundWindow.Call(target)
+	r, _, _ := procSetForegroundWindow.Call(target)
 	if attached {
 		procAttachThreadInput.Call(myThread, fgThread, 0)
 	}
+	return r != 0
 }
 
 // assertForeground is herding's raise: raiseForeground plus the
@@ -402,89 +555,26 @@ func foregroundPID() int {
 	return int(pid)
 }
 
-// pushFocusToGame is the one-shot focus handoff's Windows leaf
-// (main.go owns the moment and the logging; herd_logic.go owns
-// the verdict vocabulary). The push buys PROCESS focus: the
-// target is the game pid's visible SDL window if it has one
-// (the player surface), else its editor frame - same process
-// either way, and VPX's own window order takes the foreground
-// from there. Skipped when the foreground already belongs to
-// the game process. The verdict is verified synchronously:
-// after the raise, the foreground's owner is re-read - a push
-// Windows quietly ignored reports as declined, not handed.
-func pushFocusToGame(gamePID int) focusPushOutcome {
-	if gamePID <= 0 {
-		return focusPushDeclined
-	}
-	if foregroundPID() == gamePID {
-		return focusPushAlready
-	}
-	fg, _, _ := procGetForegroundWindow.Call()
-	var sdl, editor uintptr
-	for _, hwnd := range allTopWindows(gamePID) {
-		if r, _, _ := procIsWindowVisible.Call(hwnd); r == 0 {
-			continue
-		}
-		switch windowClassName(hwnd) {
-		case sdlWindowClass:
-			if sdl == 0 {
-				sdl = hwnd
-			}
-		case editorWindowClass:
-			if editor == 0 {
-				editor = hwnd
-			}
-		}
-	}
-	target := sdl
-	if target == 0 {
-		target = editor
-	}
-	if target == 0 {
-		return focusPushDeclined
-	}
-	raiseForeground(target, fg)
-	if foregroundPID() == gamePID {
-		return focusPushHanded
-	}
-	return focusPushDeclined
-}
-
-// activateSDLWindow is the activation sequence's Windows leaf
-// (activation.go owns the decision; main.go owns the moment
-// and the logging): raise the game pid's SDL window - the
-// visible one if it has one, else any SDL window of the pid.
-// Unlike the focus handoff above there is NO editor fallback:
-// the editor window is the one target this duty must never
-// raise, under any circumstances. Returns false when the game
-// has no SDL window at all (the caller stands the sequence
-// down); a true return says only that the raise was attempted
-// - whether it stuck is the caller's read-back, a tick later.
-func activateSDLWindow(gamePID int) bool {
-	if gamePID <= 0 {
-		return false
-	}
-	var sdlVisible, sdlAny uintptr
-	for _, hwnd := range allTopWindows(gamePID) {
-		if windowClassName(hwnd) != sdlWindowClass {
-			continue
-		}
-		if sdlAny == 0 {
-			sdlAny = hwnd
-		}
-		if r, _, _ := procIsWindowVisible.Call(hwnd); r != 0 {
-			sdlVisible = hwnd
-			break
-		}
-	}
-	target := sdlVisible
-	if target == 0 {
-		target = sdlAny
-	}
-	if target == 0 {
-		return false
+// activatePlayerWindow is the focus duties' Windows leaf
+// (focus.go / guard.go own the decisions; main.go owns the
+// moments and the logging): raise the session's resolved
+// player target (target.go) - the ONE window that owns input
+// for this build, SDL_app on GL, VPPlayer on BGFX, a
+// persisted candidate elsewhere. There is NO editor fallback,
+// under any circumstances: the editor window is the one
+// target these duties must never raise. attempted=false says
+// there was no target to raise (the caller stands the attempt
+// down); ok is SetForegroundWindow's own verdict - whether
+// the foreground actually moved is the caller's read-back
+// against the HWND, a tick later. (This leaf and
+// pushFocusToGame, the retired one-shot handoff, are the
+// FIX116 replacement for the SDL-only activation leaf:
+// same call shape, a target that finally knows the BGFX
+// build's window.)
+func activatePlayerWindow(gamePID int, targetHWND uintptr) (attempted bool, ok bool) {
+	if gamePID <= 0 || targetHWND == 0 {
+		return false, false
 	}
 	fg, _, _ := procGetForegroundWindow.Call()
-	raiseForeground(target, fg)
-	return true
+	return true, raiseForeground(targetHWND, fg)
 }

@@ -25,8 +25,9 @@ import "fmt"
 // away. This tracker is fed exactly that already-sampled fact
 // (main.go, live sessions only) and writes one line per change.
 //
-// The identity is the foreground WINDOW (its handle); class +
-// owning pid are the attributes the line reports. No cap and
+// The identity is the foreground WINDOW (its handle); class,
+// owning pid, process basename and title are the attributes
+// the line reports. No cap and
 // no de-dup beyond per-tick identity: a flapping foreground is
 // precisely the suspected fault, and summarizing it away would
 // destroy the evidence this exists to collect. Changes the
@@ -39,27 +40,58 @@ import "fmt"
 
 // fgChange is one observed foreground transition, old side and
 // new side, each as the window's identity plus its class and
-// owning pid at the tick it was sampled.
+// owning pid at the tick it was sampled. FIX116 adds the two
+// facts the pre-FIX116 log could not see - the window's TITLE
+// and its owning process's image basename - because class +
+// pid cannot distinguish two same-class processes or identify
+// a companion window (the PINemHi board) at all.
 type fgChange struct {
 	oldHWND  uintptr
 	oldClass string
 	oldPID   int
+	oldProc  string
+	oldTitle string
 	newHWND  uintptr
 	newClass string
 	newPID   int
+	newProc  string
+	newTitle string
 }
 
-// fgSide renders one side of a transition for the log line: a
-// window as "CLASS" (pid N), and no window at all as none.
-func fgSide(hwnd uintptr, class string, pid int) string {
+// holderDesc renders one foreground holder for a log line: a
+// window as "CLASS" (pid N), extended with the process
+// basename and the title when the leaf knows them -
+// "CLASS" (pid N, proc.exe, "Some Title") - and no window at
+// all as none. The focus sequence and the guard speak of
+// holders in the same words (focus.go / guard.go).
+func holderDesc(class string, pid int, proc, title string) string {
+	if pid == 0 && class == "" {
+		return "none"
+	}
+	s := fmt.Sprintf("%q (pid %d", class, pid)
+	if proc != "" {
+		s += ", " + proc
+	}
+	if title != "" {
+		s += fmt.Sprintf(", %q", title)
+	}
+	return s + ")"
+}
+
+// fgSide renders one side of a transition for the log line.
+func fgSide(hwnd uintptr, class string, pid int, proc, title string) string {
 	if hwnd == 0 {
 		return "none"
 	}
-	return fmt.Sprintf("%q (pid %d)", class, pid)
+	return holderDesc(class, pid, proc, title)
 }
 
-func (c fgChange) oldSide() string { return fgSide(c.oldHWND, c.oldClass, c.oldPID) }
-func (c fgChange) newSide() string { return fgSide(c.newHWND, c.newClass, c.newPID) }
+func (c fgChange) oldSide() string {
+	return fgSide(c.oldHWND, c.oldClass, c.oldPID, c.oldProc, c.oldTitle)
+}
+func (c fgChange) newSide() string {
+	return fgSide(c.newHWND, c.newClass, c.newPID, c.newProc, c.newTitle)
+}
 
 // fgTracker is the per-session foreground-change detector. The
 // first live tick of a session only sets the baseline (the
@@ -74,6 +106,8 @@ type fgTracker struct {
 	hwnd      uintptr
 	class     string
 	pid       int
+	proc      string
+	title     string
 }
 
 // observe folds one live tick's foreground facts in and
@@ -87,6 +121,7 @@ func (t *fgTracker) observe(sessionID int, ws windowState) (fgChange, bool) {
 	if !t.seen {
 		t.seen = true
 		t.hwnd, t.class, t.pid = ws.fgHWND, ws.fgClass, ws.fgPID
+		t.proc, t.title = ws.fgProcName, ws.fgTitle
 		return fgChange{}, false
 	}
 	if ws.fgHWND == t.hwnd {
@@ -94,8 +129,11 @@ func (t *fgTracker) observe(sessionID int, ws windowState) (fgChange, bool) {
 	}
 	ch := fgChange{
 		oldHWND: t.hwnd, oldClass: t.class, oldPID: t.pid,
+		oldProc: t.proc, oldTitle: t.title,
 		newHWND: ws.fgHWND, newClass: ws.fgClass, newPID: ws.fgPID,
+		newProc: ws.fgProcName, newTitle: ws.fgTitle,
 	}
 	t.hwnd, t.class, t.pid = ws.fgHWND, ws.fgClass, ws.fgPID
+	t.proc, t.title = ws.fgProcName, ws.fgTitle
 	return ch, true
 }

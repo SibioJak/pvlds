@@ -64,7 +64,12 @@ import "sync"
 // platform leaf observed it. Visibility is recorded for the
 // diagnostic inventory (herd_windows.go logs it); the sighting
 // rule itself deliberately ignores it - see the file header.
+// hwnd is the window's handle (the leaves fill it; the
+// sighting/runtime classifiers ignore it) - the player-target
+// resolver (target.go) ranks windows by identity, and the
+// focus duties raise and verify against the handle itself.
 type windowObs struct {
+	hwnd    uintptr
 	class   string
 	width   int64
 	height  int64

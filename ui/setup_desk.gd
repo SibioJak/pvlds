@@ -849,7 +849,7 @@ func _build_ui() -> void:
 	# one-string label named a mechanism a first-timer
 	# could not be expected to know.
 	_herding_check.text = "Focus herding"
-	_herding_check.tooltip_text = "During the launch settle and during play, the watchdog returns foreground focus to the VPX window when something steals it. It never moves or resizes windows."
+	_herding_check.tooltip_text = "While a table launches, LaunchPin puts the game's window in front and keeps it there through the launch. During play it takes the front back only from known companions — the PINemHi LeaderBoard board and VPX's own windows — and if you alt-tab away yourself, it leaves you alone. It never moves or resizes windows."
 	_herding_check.toggled.connect(func(_on: bool) -> void: _apply_session_settings())
 	step4.add_child(_herding_check)
 	_herding_note = Label.new()

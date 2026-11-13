@@ -13,15 +13,17 @@ func gameWindowExists(_ int, _ int) (bool, string) { return false, "" }
 // reported, so the contract's runtime stamp never lands here.
 func gameRuntimeExists(_ int, _ int) (bool, string) { return false, "" }
 
-// pushFocusToGame off Windows/Linux: there is no foreground to
-// hand over here.
-func pushFocusToGame(_ int) focusPushOutcome { return focusPushDeclined }
+// activatePlayerWindow off Windows/Linux: no player window
+// exists to raise, so the focus duties stand their attempts
+// down if they are ever fed here.
+func activatePlayerWindow(_ int, _ uintptr) (bool, bool) { return false, false }
 
-// activateSDLWindow off Windows/Linux: no SDL window exists to
-// raise, so the activation sequence stands down on its
-// no-target path if it is ever fed here.
-func activateSDLWindow(_ int) bool { return false }
+// noteForegroundOwner off Windows/Linux: no owner inventory
+// exists to log.
+func noteForegroundOwner(_ int, _ windowState) {}
 
 // gameWindowState off Windows/Linux: no windows are ever reported,
-// so the session-close duties never fire here.
-func gameWindowState(_ int, _ int) windowState { return windowState{} }
+// so the session-close duties never fire here. The input age
+// reads unknown (-1), as the focus duties' contract requires
+// of a leaf that cannot know it.
+func gameWindowState(_ int, _ int) windowState { return windowState{inputAgeMs: -1} }

@@ -114,6 +114,27 @@ func TestFGWatchEveryChangeIsReported(t *testing.T) {
 	}
 }
 
+func TestFGWatchProcAndTitleRender(t *testing.T) {
+	// FIX116: a change side that knows its process and title
+	// renders them; a side that doesn't stays byte-identical
+	// to the pre-FIX116 line.
+	var tr fgTracker
+	tr.observe(7, fgSDL1)
+	board := fgH("PinemhiLeaderboard", 5150, 0xBD)
+	board.fgProcName = "PINemHi LeaderBoard.exe"
+	board.fgTitle = "PINemHi LeaderBoard"
+	ch, changed := tr.observe(7, board)
+	if !changed {
+		t.Fatal("no change reported for SDL -> board")
+	}
+	if got, want := ch.oldSide(), `"SDL_app" (pid 5264)`; got != want {
+		t.Fatalf("oldSide() = %s, want %s", got, want)
+	}
+	if got, want := ch.newSide(), `"PinemhiLeaderboard" (pid 5150, PINemHi LeaderBoard.exe, "PINemHi LeaderBoard")`; got != want {
+		t.Fatalf("newSide() = %s, want %s", got, want)
+	}
+}
+
 func TestFGWatchPerSessionReset(t *testing.T) {
 	var tr fgTracker
 	tr.observe(7, fgSDL1)

@@ -130,11 +130,12 @@ func stubFGHWND(class string, pid int) uintptr {
 }
 
 // stubFGStubbornMarker is the stubborn-foreground signal for
-// the activation sequence's smokes (activation.go): while the
-// file stands, this leaf's activateSDLWindow reports an attempt
-// but the foreground does not move - the mirror of a holder
-// (or Windows) refusing the raise, so the sequence's verify
-// and single retry run their course. The stub raises it under
+// the focus sequence's smokes (focus.go): while the file
+// stands, this leaf's activatePlayerWindow reports an attempt
+// whose SetForegroundWindow verdict is refusal and the
+// foreground does not move - the mirror of a holder (or
+// Windows) refusing the raise, so the sequence's verify and
+// retries run their course. The stub raises it under
 // STUB_FG_STUBBORN (see stub_vpx_window.c).
 func stubFGStubbornMarker(gamePID int) string {
 	return "/tmp/pvlds-stub-fg-stubborn-" + strconv.Itoa(gamePID)
@@ -144,6 +145,11 @@ func stubFGStubbornMarker(gamePID int) string {
 // same shared gate the Windows leaf feeds, so the smokes exercise
 // the shipped rule, persistence included.
 var playerSight playerSighting
+
+// playerTargetState is this leaf's player-target resolver
+// (target.go) - the same shared resolver the Windows leaf
+// feeds, over this leaf's synthesized-handle observations.
+var playerTargetState targetResolver
 
 // runtimeSeen is this leaf's runtime gate (runtime.go) - the
 // same shared gate the Windows leaf feeds.
@@ -170,23 +176,78 @@ func gameRuntimeExists(gamePID int, sessionID int) (bool, string) {
 	return runtimeSeen.hasSeen(sessionID), runtimeSeen.ruleFor(sessionID)
 }
 
-// pushFocusToGame on Linux: there is no foreground to raise
-// here; the mirror reports the verdict the scripted facts
-// imply, so main.go's one-shot handoff (its trigger, its
-// exactly-once bookkeeping, its logging, and notePush into the
-// exit detector) runs end to end in the smokes. The foreground
-// marker names the editor - the game process's own window -
-// as the foreground holder, which is the Windows leaf's
-// "already holds" case; anything else reads as a successful
-// push (nothing on this platform can decline it).
-func pushFocusToGame(gamePID int) focusPushOutcome {
-	if gamePID <= 0 {
-		return focusPushDeclined
+// stubFGFactsMarker is the scripted identity file for the
+// "board" foreground token: lines of key=value naming the
+// bystander window's proc=, class= and title= - the facts the
+// Windows leaf reads off a real window (GetWindowText, the
+// process image) and the focus guard matches its registry
+// against (bystanders.go). The smoke writes it beside the
+// stub (the stub C owns it under STUB_BOARD_FACTS; a scenario
+// may also write it directly). Absent fields fall back to the
+// PINemHi-shaped defaults in stubBoardFacts.
+func stubFGFactsMarker(gamePID int) string {
+	return "/tmp/pvlds-stub-fgfacts-" + strconv.Itoa(gamePID)
+}
+
+// stubInputMarker scripts the INPUT PROVENANCE facts the
+// focus duties read (windowState.inputAgeMs / altWinEdge):
+// its contents are "<age-ms>" - how long ago the last desktop
+// input landed - optionally followed by " edge" (an Alt/Win/
+// mouse-button key down). The stub C writes it under
+// STUB_INPUT_SEQ (an age@sec script mirroring STUB_FG_SEQ);
+// a scenario may also write it directly. An absent file reads
+// as the age being unknown (-1): the launch sequence treats
+// unknown as no deliberate-use evidence (assertions proceed),
+// the guard treats it as ambiguity and never reclaims - the
+// asymmetry is the design's (focus.go / guard.go).
+func stubInputMarker(gamePID int) string {
+	return "/tmp/pvlds-stub-input-" + strconv.Itoa(gamePID)
+}
+
+// stubBoardFacts reads the "board" token's scripted identity
+// (stubFGFactsMarker), with PINemHi-shaped defaults.
+func stubBoardFacts(gamePID int) (proc, class, title string) {
+	proc, class, title = "PINemHi LeaderBoard.exe", "PinemhiLeaderboard", "PINemHi LeaderBoard"
+	b, err := os.ReadFile(stubFGFactsMarker(gamePID))
+	if err != nil {
+		return proc, class, title
 	}
-	if b, err := os.ReadFile(stubForegroundMarker(gamePID)); err == nil && strings.TrimSpace(string(b)) == "editor" {
-		return focusPushAlready
+	for _, line := range strings.Split(string(b), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "proc":
+			proc = v
+		case "class":
+			class = v
+		case "title":
+			title = v
+		}
 	}
-	return focusPushHanded
+	return proc, class, title
+}
+
+// stubInputFacts reads the scripted input-provenance facts
+// (stubInputMarker): the desktop-input age in ms (-1 =
+// unknown) and whether an Alt/Win/mouse edge is scripted.
+func stubInputFacts(gamePID int) (ageMs int64, edge bool) {
+	ageMs = -1
+	b, err := os.ReadFile(stubInputMarker(gamePID))
+	if err != nil {
+		return ageMs, false
+	}
+	for _, f := range strings.Fields(string(b)) {
+		if f == "edge" {
+			edge = true
+			continue
+		}
+		if n, err := strconv.ParseInt(f, 10, 64); err == nil {
+			ageMs = n
+		}
+	}
+	return ageMs, edge
 }
 
 // stubVirtualDesktopPID is the foreground-owner pid the "vd"
@@ -229,23 +290,36 @@ const stubThirdPartyPID = 424242
 //	"mame"    PinMAME's window, game pid - session 35's thief
 //	"vd"      Virtual Desktop's window (CabinetWClass)
 //	"third"   an unrelated process's window
+//	"board"   a known-bystander window (FIX116): its class,
+//	          process and title come from the facts file
+//	          (stubFGFactsMarker), its pid is the bystander
+//	          pid - the focus guard's PINemHi shape
 //	"none"    no foreground window at all
-//	"other"   (or an absent file) the stub's player window,
-//	          carrying its declared class (stubPlayerClass)
+//	"player"  the stub's player window, carrying its declared
+//	          class (stubPlayerClass) - what this leaf's own
+//	          raise writes when an assertion lands
+//	"other"   (or an absent file) the same as "player"
+//
+// The window observations carry synthesized handles
+// (stubFGHWND over class + pid) so the shared player-target
+// resolver (target.go) ranks them exactly as the Windows leaf
+// ranks real handles, and fgIsPlayer is the same handle
+// equality the shipped build computes. The input-provenance
+// facts come from the input marker (stubInputMarker).
 //
 // While the editor marker stands, the foreground is reported
 // as the editor regardless of the token: the stub is IN its
 // editor state then, and on the real rig that state is the
 // editor holding the foreground - the invariant the exit
 // detector is built on. (It also keeps this leaf's own
-// activateSDLWindow token write, landing a moment before the
-// stub's editor phase begins, from forging a player
+// activatePlayerWindow token write, landing a moment before
+// the stub's editor phase begins, from forging a player
 // foreground the rig could never show.) No editor handle
 // exists off Windows; the foreground identity (fgHWND) is
 // synthesized from the holder's class + pid instead - see
 // stubFGHWND.
 func gameWindowState(gamePID int, sessionID int) windowState {
-	var ws windowState
+	ws := windowState{inputAgeMs: -1}
 	if gamePID <= 0 {
 		return ws
 	}
@@ -253,20 +327,23 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	editorUp := false
 	if _, err := os.Stat(stubEditorMarker(gamePID)); err == nil {
 		editorUp = true
-		obs = append(obs, windowObs{class: editorWindowClass, width: 1280, height: 900, visible: true})
+		obs = append(obs, windowObs{hwnd: stubFGHWND(editorWindowClass, gamePID), class: editorWindowClass, width: 1280, height: 900, visible: true})
 	} else if gameWindowPresentOnMaps(gamePID) {
 		visible := true
 		if _, err := os.Stat(stubPlayerHiddenMarker(gamePID)); err == nil {
 			visible = false
 		}
-		obs = append(obs, windowObs{class: stubPlayerClass(gamePID), width: 400, height: 300, visible: visible})
+		class := stubPlayerClass(gamePID)
+		obs = append(obs, windowObs{hwnd: stubFGHWND(class, gamePID), class: class, width: 400, height: 300, visible: visible})
 		if _, err := os.Stat(stubRuntimeMarker(gamePID)); err == nil {
-			obs = append(obs, windowObs{class: "SharpGLRenderWindow", width: 307, height: 77, visible: false})
+			obs = append(obs, windowObs{hwnd: stubFGHWND("SharpGLRenderWindow", gamePID), class: "SharpGLRenderWindow", width: 307, height: 77, visible: false})
 		}
 	}
 	candidate, rule := classifyPlayerCandidate(obs)
 	playerSight.observe(sessionID, candidate, rule)
 	runtimeSeen.observe(sessionID, classifyRuntime(obs), classifyVPPlayer(obs))
+	ws.playerHWND, ws.playerClass, ws.playerWhy = playerTargetState.resolve(sessionID, obs)
+	ws.inputAgeMs, ws.altWinEdge = stubInputFacts(gamePID)
 	if editorUp {
 		ws.fgIsEditor = true
 		ws.fgClass = editorWindowClass
@@ -302,42 +379,67 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	case "third":
 		ws.fgClass = "OtherApp"
 		ws.fgPID = stubThirdPartyPID
+	case "board":
+		ws.fgProcName, ws.fgClass, ws.fgTitle = stubBoardFacts(gamePID)
+		ws.fgPID = stubBystanderPID
 	case "none":
 		// No foreground window: the zero facts say exactly that.
-	default: // "other": the stub's player window holds it
+	default: // "player" / "other": the stub's player window holds it
 		ws.fgClass = stubPlayerClass(gamePID)
 		ws.fgPID = gamePID
 		ws.fgIsGame = true
 		ws.fgIsSDL = ws.fgClass == sdlWindowClass
 	}
 	ws.fgHWND = stubFGHWND(ws.fgClass, ws.fgPID)
+	ws.fgIsPlayer = ws.playerHWND != 0 && ws.fgHWND == ws.playerHWND
 	return ws
 }
 
-// activateSDLWindow on Linux: the activation sequence's push,
+// activatePlayerWindow on Linux: the focus duties' raise,
 // mirrored through the foreground marker - a successful
-// attempt moves the scripted foreground to the game's SDL
-// window ("sdl"), which the next gameWindowState reads back
-// as fgIsSDL for the sequence's verify. Two honest failures:
-// the game has no SDL window to raise - reported while the
-// stub is in its editor state (the player, and its SDL
-// window, are gone) or has no window phase at all - and the
-// stubborn case (stubFGStubbornMarker), where the attempt is
-// reported but the foreground does not move, so verify and
-// the single retry run their course.
-func activateSDLWindow(gamePID int) bool {
-	if gamePID <= 0 {
-		return false
+// attempt moves the scripted foreground to the player window
+// ("player"), which the next gameWindowState reads back as
+// fgIsPlayer for the sequence's verify. Honest failures: no
+// target, or the game has no player window to raise -
+// reported while the stub is in its editor state (the player
+// is gone) or has no window phase at all (attempted=false) -
+// and the stubborn case (stubFGStubbornMarker), where the
+// attempt is real but its verdict is refusal and the
+// foreground does not move, so verify and the retries run
+// their course (attempted=true, ok=false).
+func activatePlayerWindow(gamePID int, targetHWND uintptr) (attempted bool, ok bool) {
+	if gamePID <= 0 || targetHWND == 0 {
+		return false, false
 	}
 	if _, err := os.Stat(stubEditorMarker(gamePID)); err == nil {
-		return false
+		return false, false
 	}
 	if !gameWindowPresentOnMaps(gamePID) {
-		return false
+		return false, false
 	}
 	if _, err := os.Stat(stubFGStubbornMarker(gamePID)); err == nil {
-		return true
+		return true, false
 	}
-	os.WriteFile(stubForegroundMarker(gamePID), []byte("sdl\n"), 0644)
-	return true
+	os.WriteFile(stubForegroundMarker(gamePID), []byte("player\n"), 0644)
+	return true, true
+}
+
+// noteForegroundOwner on Linux: the bench's only scripted
+// foreign owner is the "board" bystander; when it holds the
+// foreground, its facts file is the owner's window inventory,
+// logged in the Windows line's shape. Other owners have no
+// scripted set here and stay silent (the Windows leaf logs
+// the real enumeration).
+func noteForegroundOwner(sessionID int, ws windowState) {
+	if ws.fgPID != stubBystanderPID {
+		return
+	}
+	proc, class, title := stubBoardFactsFromWS(ws)
+	logf("watchdog: session %d: foreground owner pid %d (%s) windows: class %q title %q (stub-scripted)", sessionID, ws.fgPID, proc, class, title)
+}
+
+// stubBoardFactsFromWS is noteForegroundOwner's fact source:
+// the snapshot already carries the board token's facts.
+func stubBoardFactsFromWS(ws windowState) (proc, class, title string) {
+	return ws.fgProcName, ws.fgClass, ws.fgTitle
 }

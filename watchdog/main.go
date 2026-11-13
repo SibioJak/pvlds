@@ -32,20 +32,29 @@
 //     the resident launcher's hand-off cue, because the
 //     sighting stamps off the editor's own canvas seconds
 //     before a real load finishes,
-//   - at the hand-off (the session live, the supervising
-//     launcher gone), hand the foreground to the game process
-//     ONCE - a single deliberate push, not herding - so the
-//     table does not come up unfocused (no sound, no
-//     controller) behind whatever the launcher's exit left in
-//     front,
-//   - and once the table's runtime is up in a live session,
-//     run ONE aimed activation (activation.go): when the
-//     startup foreground shuffle settles, put the foreground
-//     on the game's SDL window specifically - the process-level
-//     push above stood down in the field while PinMAME's
-//     window held the foreground and the SDL window, which
-//     owns input, never did (no gamepad, no sound, until the
-//     player alt-tabbed),
+//   - run the launch focus sequence (focus.go, FIX116): from
+//     spawn through the hand-off, put the foreground on the
+//     game's resolved PLAYER window (target.go) - the window
+//     that owns input, SDL_app on GL builds, VPPlayer on BGFX
+//     builds - verified by read-back against the window's
+//     handle, until it verifiably holds (FocusLocked) or the
+//     log says why not (FocusUnresolved). The sequence folds
+//     in the hand-off assertion at the moment the supervising
+//     launcher is observed gone. It replaces the two one-shot
+//     mechanisms that preceded it: a process-level push that
+//     certified success while the wrong window held the
+//     foreground, and an SDL-only activation that could never
+//     raise a BGFX build's player window at all,
+//   - and once the sequence has ended in a live session, run
+//     the focus guard (guard.go): take the foreground back
+//     ONLY from known bystander windows that raise themselves
+//     (the PINemHi LeaderBoard board is the field case) and
+//     from the game's own window family - never from the
+//     editor, never against desktop-input evidence that the
+//     user put a window there, and never past three silent
+//     reclamations per window. Both duties live under the
+//     focus_herding switch, which now gates the whole focus
+//     family (FIX116),
 //   - in a live session, log EVERY foreground identity change
 //     (fgwatch.go): the mid-play input-loss forensics. The
 //     window inventory lines print only on window-SET changes
@@ -128,8 +137,8 @@ type Contract struct {
 	// read. The close duty itself stays unconditional — the
 	// hold is an ADDITIONAL, separately gated exit, not a
 	// switch on the closer.
-	HoldExitEnabled   bool  `json:"hold_exit_enabled"`
-	HoldExitFiredUnix int64 `json:"hold_exit_fired_unix"`
+	HoldExitEnabled    bool   `json:"hold_exit_enabled"`
+	HoldExitFiredUnix  int64  `json:"hold_exit_fired_unix"`
 	SessionID          int    `json:"session_id"`
 	SessionState       string `json:"session_state"`
 	GameExePath        string `json:"game_exe_path"`
@@ -369,11 +378,13 @@ func main() {
 		strikes           int
 		sessionCloser     closer
 		sessionFGTracker  fgTracker
-		focusPushSession  int  // the session the one-shot focus handoff belongs to
-		focusPushed       bool // the handoff has been attempted for focusPushSession
-		sessionActivator  activator
+		sessionFocus      focusSequence     // the launch focus sequence (focus.go)
+		sessionGuard      focusGuard        // the live-session focus guard (guard.go)
+		focusHeaderLog    int               // the session the header line has been logged for
+		focusTargetLog    int               // the session the target bookkeeping belongs to
+		focusTargetHWND   uintptr           // the target last named in the log for focusTargetLog
 		actRuntimeSession int               // the session actRuntimeMs belongs to
-		actRuntimeMs      int64             // first tick the session's runtime stamp was observed (the activation deadline's anchor)
+		actRuntimeMs      int64             // first tick the session's runtime stamp was observed (the focus sequence's anchor)
 		pinemhiMissingLog bool              // the manage-on-but-no-exe line has been logged this duty spell (no retry spam)
 		pinemhiLatch      pinemhiStartLatch // WATCHERFIX: a failed watcher start logs once per spell, then latches
 		pinemhiLife       pinemhiLifetime   // WATCHERLIFE: the session/tail tracker - the watcher is up only inside a session or its extraction tail
@@ -485,6 +496,38 @@ func main() {
 				// inventory on change, and yields the facts
 				// the stamp below and the exit detector read.
 				ws := gameWindowState(c.GamePID, c.SessionID)
+				// Session header (FIX116 logging): the first
+				// tick a session is observed with its game
+				// alive names the session, the game, and the
+				// focus_herding value AS RECEIVED - "the switch
+				// was on" used to be untestable from a field
+				// log, and two field cases turned on it.
+				if focusHeaderLog != c.SessionID {
+					focusHeaderLog = c.SessionID
+					herdingWord := "off"
+					if c.FocusHerding {
+						herdingWord = "on"
+					}
+					logf("watchdog: session %d: %s (pid %d); focus herding %s (as received)", c.SessionID, filepath.Base(c.GameExePath), c.GamePID, herdingWord)
+				}
+				// Target bookkeeping (FIX116 logging): the
+				// resolved player target (target.go) is logged
+				// when it appears, changes, or is lost, with
+				// the rank that chose it - so a field log names
+				// the window every focus duty will raise,
+				// before any of them act.
+				if focusTargetLog != c.SessionID {
+					focusTargetLog = c.SessionID
+					focusTargetHWND = 0
+				}
+				if ws.playerHWND != focusTargetHWND {
+					if ws.playerHWND != 0 {
+						logf("watchdog: session %d: focus target: %q window (hwnd %#x) - %s", c.SessionID, ws.playerClass, ws.playerHWND, ws.playerWhy)
+					} else if focusTargetHWND != 0 {
+						logf("watchdog: session %d: focus target lost - the player window is gone", c.SessionID)
+					}
+					focusTargetHWND = ws.playerHWND
+				}
 				// The hand-off cue for the resident launcher: a
 				// player sighting has stamped for this session
 				// (sighting.go - the editor frame is up from app
@@ -535,43 +578,12 @@ func main() {
 					})
 					promoted = true
 				}
-				// One-shot focus handoff: the first tick the
-				// session is live with the supervising launcher
-				// observed gone is the hand-off moment, and the
-				// foreground belongs to nobody in particular -
-				// whatever the launcher's exit left in front.
-				// A table that comes up behind that comes up
-				// unfocused (no sound, no controller; the field
-				// fix was the player alt-tabbing). So the
-				// watchdog pushes the foreground to the game
-				// process ONCE - a single deliberate push at
-				// the one moment it is ours to give, not
-				// herding (which never runs live). The attempt
-				// is recorded with the exit detector either
-				// way (notePush): excursions at or before this
-				// tick may be the push's own placement, so
-				// arming waits for a later one (closer.go).
-				if focusPushSession != c.SessionID {
-					focusPushSession = c.SessionID
-					focusPushed = false
-				}
-				if !focusPushed && (c.SessionState == "live" || promoted) && c.LauncherPID > 0 && !processAlive(c.LauncherPID) {
-					focusPushed = true
-					sessionCloser.notePush(c.SessionID, time.Now().UnixMilli())
-					switch pushFocusToGame(c.GamePID) {
-					case focusPushHanded:
-						logf("watchdog: session %d: handed focus to the game (one-shot)", c.SessionID)
-					case focusPushAlready:
-						logf("watchdog: session %d: game already holds the foreground", c.SessionID)
-					default:
-						logf("watchdog: session %d: focus push declined by Windows", c.SessionID)
-					}
-				}
-				// The activation deadline's anchor: the first
-				// tick this watchdog observes the session's
-				// runtime stamp (tracked in either session
-				// state - the stamp lands during loading,
-				// while the sequence itself runs live, below).
+				// The focus sequence's anchor: the first tick
+				// this watchdog observes the session's runtime
+				// stamp (tracked in either session state - the
+				// stamp lands during loading, while the
+				// sequence's resolutions land near the
+				// hand-off and after).
 				if actRuntimeSession != c.SessionID {
 					actRuntimeSession = c.SessionID
 					actRuntimeMs = 0
@@ -581,15 +593,64 @@ func main() {
 						actRuntimeMs = time.Now().UnixMilli()
 					}
 				}
+				// The hand-off tick (focus.go): the first tick
+				// the session is live with the supervising
+				// launcher observed gone. The sequence
+				// evaluates it immediately - the foreground at
+				// that moment belongs to whatever the
+				// launcher's exit left in front.
+				handoff := (c.SessionState == "live" || promoted) && c.LauncherPID > 0 && !processAlive(c.LauncherPID)
+				// The launch focus sequence (focus.go): fed
+				// every tick of the session while the
+				// focus_herding switch is on (the switch gates
+				// the whole focus family, FIX116). It asserts
+				// to the resolved player HWND only, verifies
+				// by read-back, and ends the launch in a
+				// logged FocusLocked or FocusUnresolved. An
+				// assertion it orders - and the hand-off tick
+				// itself - is recorded with the exit detector
+				// (notePush: the detector counts excursions
+				// from facts after our last foreground touch),
+				// and it runs BEFORE the detector's tick
+				// below, so the record precedes the reading.
+				if c.FocusHerding {
+					nowMs := time.Now().UnixMilli()
+					res := sessionFocus.tick(nowMs, c.SessionID, actRuntimeMs, focusInputs{ws: ws, state: c.SessionState, handoff: handoff})
+					if res.notePush {
+						sessionCloser.notePush(c.SessionID, nowMs)
+					}
+					switch res.action {
+					case seqAssert:
+						attempted, ok := activatePlayerWindow(c.GamePID, ws.playerHWND)
+						if attempted {
+							sessionCloser.notePush(c.SessionID, nowMs)
+						}
+						verdict := "refused"
+						if ok {
+							verdict = "accepted"
+						}
+						logf("watchdog: session %d: focus sequence: asserted the player window (foreground was %s; SetForegroundWindow %s)", c.SessionID, sessionFocus.before(), verdict)
+						if sessionFocus.noteAssert(nowMs, attempted) == seqLogNoTarget {
+							logf("watchdog: session %d: focus sequence: no player window to assert (standing down this attempt)", c.SessionID)
+						}
+					case seqLogLocked:
+						logf("watchdog: session %d: focus locked - the player window (%q) holds the foreground", c.SessionID, sessionFocus.playerClass())
+					case seqLogUnresolved:
+						logf("watchdog: session %d: focus unresolved - %s", c.SessionID, sessionFocus.reason())
+					case seqLogReopen:
+						logf("watchdog: session %d: focus sequence reopened - the player window lost the foreground inside the launch window", c.SessionID)
+					}
+				}
 				// Focus herding serves the loading phase's
 				// spawn settle ONLY (herdingAllowed): once the
 				// session is live it never runs - on the VR rig
 				// its only anchor there is the editor frame,
 				// which it was caught forcing to the foreground
 				// mid-play, polluting the exit detector's
-				// signal below.
+				// signal below. Its assertion target is the
+				// resolved player HWND when one exists.
 				if herdingAllowed(c.FocusHerding, c.SessionState) {
-					herdTick(c.GamePID, c.SessionID, time.Now())
+					herdTick(c.GamePID, c.SessionID, time.Now(), ws.playerHWND)
 				}
 				// Foreground-change forensics (fgwatch.go):
 				// in a live session, log every change of
@@ -603,50 +664,42 @@ func main() {
 				// foreground flicker left no trace). The
 				// tracker is fed live ticks only; the load's
 				// shuffle stays the inventory lines' story.
-				// Logging only: no behavior reads it.
+				// Logging only: no behavior reads it. FIX116:
+				// a change also logs the new owner's window
+				// inventory (noteForegroundOwner) - a thief's
+				// identity used to stop at its class.
 				if c.SessionState == "live" {
 					if ch, changed := sessionFGTracker.observe(c.SessionID, ws); changed {
 						logf("watchdog: session %d: foreground changed: %s -> %s", c.SessionID, ch.oldSide(), ch.newSide())
+						noteForegroundOwner(c.SessionID, ws)
 					}
 				}
-				// Session activation (activation.go): once the
-				// runtime is up and the session is live, ONE
-				// aimed activation of the game's SDL window
-				// after the startup foreground shuffle settles.
-				// The ef8 focus push above works at PROCESS
-				// level and stood down in the field ("game
-				// already holds the foreground") while the
-				// table had neither gamepad nor sound: the
-				// foreground sat on PinMAME's window, and the
-				// SDL window - the one that owns input - never
-				// held it. This duty works at WINDOW level. A
-				// push it orders is recorded with the exit
-				// detector exactly like the focus push
-				// (notePush: the detector counts excursions
-				// from facts after our last foreground touch),
-				// and it runs BEFORE the detector's tick below,
-				// so the record precedes the reading.
-				if c.SessionState == "live" {
+				// The live-session focus guard (guard.go):
+				// once the launch sequence has ended and the
+				// session is live, take the foreground back
+				// only from known bystanders and the game's
+				// own window family - never the editor, never
+				// against deliberate-use evidence, never past
+				// the per-window cap - under the same switch.
+				// It pauses while either close ladder is in
+				// flight. A reclamation is recorded with the
+				// exit detector exactly like the sequence's
+				// assertions, and it likewise runs BEFORE the
+				// detector's tick below.
+				if c.FocusHerding && c.SessionState == "live" && sessionFocus.done() {
 					nowMs := time.Now().UnixMilli()
-					switch act := sessionActivator.tick(nowMs, c.SessionID, actRuntimeMs, ws); act {
-					case actPushNow:
-						attempted := activateSDLWindow(c.GamePID)
+					closerBusy := sessionCloser.stage == 1 || sessionCloser.stage == 2 ||
+						sessionHold.stage == 1 || sessionHold.stage == 2
+					gres := sessionGuard.tick(nowMs, c.SessionID, ws, closerBusy)
+					switch gres.action {
+					case guardAssert:
+						attempted, _ := activatePlayerWindow(c.GamePID, ws.playerHWND)
 						if attempted {
 							sessionCloser.notePush(c.SessionID, nowMs)
+							logf("watchdog: session %d: focus guard: %s", c.SessionID, gres.detail)
 						}
-						if sessionActivator.notePushAttempted(nowMs, attempted) == actLogNoTarget {
-							logf("watchdog: session %d: activation - the game has no SDL window to activate; standing down", c.SessionID)
-						}
-					case actLogNotNeeded:
-						logf("watchdog: session %d: activation not needed - the SDL window already holds the foreground", c.SessionID)
-					case actLogStuck:
-						logf("watchdog: session %d: activation - foreground was %q; set to the game's SDL window (stuck)", c.SessionID, sessionActivator.beforeClass())
-					case actLogFailed:
-						logf("watchdog: session %d: activation - foreground was %q; set to the game's SDL window (did not stick after retry)", c.SessionID, sessionActivator.beforeClass())
-					case actLogEditor:
-						logf("watchdog: session %d: activation - the editor holds the foreground; standing down", c.SessionID)
-					case actLogThirdParty:
-						logf("watchdog: session %d: activation - foreground held by %q (another process); standing down", c.SessionID, ws.fgClass)
+					case guardLog:
+						logf("watchdog: session %d: focus guard: %s", c.SessionID, gres.detail)
 					}
 				}
 				// Session-close duty (closer.go) - the only exit

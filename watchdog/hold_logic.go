@@ -67,11 +67,11 @@ type holdSample struct {
 // it reports true exactly once per session: on the poll where a
 // continuous, armed hold crosses the threshold.
 type holdDetector struct {
-	sessionID  int
-	armed      bool  // a release has been witnessed this session
-	phase      string
-	heldSince  int64 // first poll of the current continuous hold; 0 = not holding
-	fired      bool  // this session's one fire has gone out
+	sessionID int
+	armed     bool // a release has been witnessed this session
+	phase     string
+	heldSince int64 // first poll of the current continuous hold; 0 = not holding
+	fired     bool  // this session's one fire has gone out
 }
 
 // observe folds one poll in. nowMs is a monotonic millisecond
