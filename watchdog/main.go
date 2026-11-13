@@ -732,7 +732,11 @@ func main() {
 							logf("watchdog: session %d: focus sequence: probe - no player window to probe (standing down this attempt)", c.SessionID)
 						}
 					case seqLogFocusNotDelivered:
-						logf("watchdog: session %d: focus not delivered - the player window holds the foreground, but its thread focus stayed on %s after %d deliveries", c.SessionID, playerFocusDesc(ws), focusMaxAttempts)
+						attemptsWord := "deliveries"
+						if c.FocusActuationProbe {
+							attemptsWord = "probes"
+						}
+						logf("watchdog: session %d: focus not delivered - the player window holds the foreground, but its thread focus stayed on %s after %d %s", c.SessionID, playerFocusDesc(ws), focusMaxAttempts, attemptsWord)
 					case seqLogLocked:
 						logf("watchdog: session %d: focus locked - the player window (%q) holds the foreground", c.SessionID, sessionFocus.playerClass())
 					case seqLogUnresolved:
