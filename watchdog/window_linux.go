@@ -261,6 +261,12 @@ const stubVirtualDesktopPID = 9932
 // game, never Virtual Desktop.
 const stubThirdPartyPID = 424242
 
+// stubExplorerPID is the foreground-owner pid the "switcher"
+// marker token reports: explorer.exe in the field inventories
+// (sessions 202/204/205), used verbatim like
+// stubVirtualDesktopPID above.
+const stubExplorerPID = 11576
+
 // gameWindowState on Linux (smoke build only) gathers the same
 // facts the Windows leaf does. The sighting gate is fed
 // sighting observations: the editor marker is a "VPinball"-
@@ -294,6 +300,11 @@ const stubThirdPartyPID = 424242
 //	          process and title come from the facts file
 //	          (stubFGFactsMarker), its pid is the bystander
 //	          pid - the focus guard's PINemHi shape
+//	"switcher" the Windows Task Switching window (FIX116
+//	          pass 2): explorer's alt-tab picker island
+//	          window - class XamlExplorerHostIslandWindow,
+//	          pid stubExplorerPID, title "Task Switching" -
+//	          the focus guard's deliberate-switch evidence
 //	"none"    no foreground window at all
 //	"player"  the stub's player window, carrying its declared
 //	          class (stubPlayerClass) - what this leaf's own
@@ -382,6 +393,11 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	case "board":
 		ws.fgProcName, ws.fgClass, ws.fgTitle = stubBoardFacts(gamePID)
 		ws.fgPID = stubBystanderPID
+	case "switcher":
+		ws.fgClass = taskSwitcherClass
+		ws.fgPID = stubExplorerPID
+		ws.fgProcName = "explorer.exe"
+		ws.fgTitle = taskSwitcherTitle
 	case "none":
 		// No foreground window: the zero facts say exactly that.
 	default: // "player" / "other": the stub's player window holds it

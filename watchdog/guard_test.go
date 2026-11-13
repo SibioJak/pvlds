@@ -14,11 +14,12 @@ import (
 // tenure, unknown provenance, and the per-window yield cap.
 
 const (
-	hwGSDL   = uintptr(0xA1)
-	hwGBoard = uintptr(0xBD)
-	hwGMAME  = uintptr(0xB1)
-	hwGEdit  = uintptr(0xE1)
-	hwGOther = uintptr(0xC3)
+	hwGSDL      = uintptr(0xA1)
+	hwGBoard    = uintptr(0xBD)
+	hwGMAME     = uintptr(0xB1)
+	hwGEdit     = uintptr(0xE1)
+	hwGOther    = uintptr(0xC3)
+	hwGSwitcher = uintptr(0xD5)
 )
 
 func guardWS(class string, pid int, hwnd uintptr, ageMs int64) windowState {
@@ -149,13 +150,115 @@ func TestGuardUnknownAndEditorUntouched(t *testing.T) {
 
 func TestGuardGameFamilyReclaim(t *testing.T) {
 	// The game's own non-player window (PinMAME) holding the
-	// foreground cold is reclaimable like a bystander's.
+	// foreground cold is reclaimable like a bystander's. The
+	// reclaim line carries pass 2's plain shape (pass 1's
+	// sequence wording): a game window, not the player
+	// window.
 	var g focusGuard
 	g.tick(1000, 1, gPlayer(), false)
 	g.tick(1400, 1, gMAME(60000), false)
 	res := g.tick(2400, 1, gMAME(60000), false)
-	if res.action != guardAssert || !strings.Contains(res.detail, "game's own window family") {
+	if res.action != guardAssert || !strings.Contains(res.detail, "game window, not the player window") {
 		t.Fatalf("got (%v, %q), want the family reclaim", res.action, res.detail)
+	}
+}
+
+func gSwitcher(age int64) windowState {
+	// The Windows Task Switching window (the alt-tab
+	// picker): explorer's island window, the field pid
+	// verbatim (sessions 202/204/205).
+	ws := guardWS(taskSwitcherClass, 11576, hwGSwitcher, age)
+	ws.fgProcName = "explorer.exe"
+	ws.fgTitle = taskSwitcherTitle
+	return ws
+}
+
+func TestGuardSession205StealFreshInputAtDoor(t *testing.T) {
+	// Session 205 (pvlds_watchdog-16.log), the door shape:
+	// mid-play, the game's VPinMAME window takes the
+	// foreground unprompted while the player's desktop input
+	// is fresh - he is PLAYING, so the input at the door is
+	// gameplay, not a visit. Pass 2: the provenance veto
+	// never applies to the game's own family; the guard
+	// waits out the grace and takes the foreground back.
+	var g focusGuard
+	g.tick(1000, 1, gPlayer(), false)
+	if res := g.tick(1400, 1, gMAME(0), false); res.action != guardNone {
+		t.Fatalf("steal's first tick: got (%v, %q), want the grace running, no veto", res.action, res.detail)
+	}
+	res := g.tick(2400, 1, gMAME(0), false)
+	if res.action != guardAssert || !strings.Contains(res.detail, "game window, not the player window") {
+		t.Fatalf("after the grace: got (%v, %q), want the family reclaim", res.action, res.detail)
+	}
+}
+
+func TestGuardSession205StealInputDuringTenure(t *testing.T) {
+	// Session 205, the mid-tenure shape: the grab lands
+	// cold, then desktop input arrives while the window
+	// holds - the player working his controls mid-game. The
+	// mid-tenure input veto is a bystander test; against the
+	// game's own family it must not latch either.
+	var g focusGuard
+	g.tick(1000, 1, gPlayer(), false)
+	g.tick(1400, 1, gMAME(60000), false)
+	if res := g.tick(1800, 1, gMAME(50), false); res.action != guardNone {
+		t.Fatalf("input during tenure: got (%v, %q), want silence, no veto", res.action, res.detail)
+	}
+	res := g.tick(2400, 1, gMAME(450), false)
+	if res.action != guardAssert {
+		t.Fatalf("after the grace: got (%v, %q), want the family reclaim", res.action, res.detail)
+	}
+}
+
+func TestGuardSwitcherCarveOut(t *testing.T) {
+	// The deliberate variant of session 205: the Task
+	// Switching window holds the foreground, then the game's
+	// MAME window lands - the user alt-tabbed and picked it.
+	// The guard stands down for that landing, names the
+	// switcher, and never reclaims the tenure.
+	var g focusGuard
+	g.tick(1000, 1, gPlayer(), false)
+	g.tick(1400, 1, gSwitcher(0), false)
+	res := g.tick(1800, 1, gMAME(0), false)
+	if res.action != guardLog || !strings.Contains(res.detail, "task switcher") {
+		t.Fatalf("switcher-delivered landing: got (%v, %q), want the switcher stand-down", res.action, res.detail)
+	}
+	if res := g.tick(3800, 1, gMAME(2000), false); res.action != guardNone {
+		t.Fatalf("carved tenure past grace: got %v, want none", res.action)
+	}
+}
+
+func TestGuardSwitcherMidTenure(t *testing.T) {
+	// The MAME window grabs cold; mid-tenure the switcher
+	// appears and the foreground comes back to the same MAME
+	// window - the user cycled away and landed back on it by
+	// hand. The tenure latches deliberate from the sighting.
+	var g focusGuard
+	g.tick(1000, 1, gPlayer(), false)
+	g.tick(1400, 1, gMAME(60000), false)
+	g.tick(1800, 1, gSwitcher(60000), false)
+	res := g.tick(2200, 1, gMAME(60000), false)
+	if res.action != guardLog || !strings.Contains(res.detail, "task switcher") {
+		t.Fatalf("switcher mid-tenure: got (%v, %q), want the switcher stand-down", res.action, res.detail)
+	}
+	if res := g.tick(4200, 1, gMAME(60000), false); res.action != guardNone {
+		t.Fatalf("carved tenure past grace: got %v, want none", res.action)
+	}
+}
+
+func TestGuardSwitcherStaleSightingDoesNotCarveOut(t *testing.T) {
+	// A switcher sighting older than the carve-out window
+	// is history, not a delivery: a family grab after it is
+	// reclaimed as usual.
+	var g focusGuard
+	g.tick(1000, 1, gPlayer(), false)
+	g.tick(1400, 1, gSwitcher(0), false)
+	g.tick(1800, 1, gPlayer(), false)
+	if res := g.tick(5400, 1, gMAME(0), false); res.action != guardNone {
+		t.Fatalf("stale-sighting grab's first tick: got %v, want the grace running", res.action)
+	}
+	if res := g.tick(6400, 1, gMAME(1000), false); res.action != guardAssert {
+		t.Fatalf("after the grace: got %v, want the family reclaim", res.action)
 	}
 }
 

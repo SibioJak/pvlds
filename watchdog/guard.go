@@ -73,6 +73,33 @@ import "fmt"
 // never closes, minimises, or moves the bystander - and the
 // caller records it with the exit detector (notePush), like
 // every watchdog assertion before it.
+//
+// PASS 2 (field session 205, 2026-11-13): the provenance
+// veto never applies to a GAME-FAMILY holder at all. In
+// session 205 the game's VPinMAME window took the foreground
+// unprompted ~26 s into play, and the door veto read the
+// player's own gameplay input - which at the door is always
+// fresh, because he is playing - as deliberate use and stood
+// down; the flippers died until he alt-tabbed himself back.
+// During play, desktop input is constant, so the provenance
+// test protects every mid-play steal by the game's own
+// windows: against the family it is not evidence, it is
+// noise. The family's vetoes (fresh input at the door, input
+// arriving mid-tenure, the no-provenance latch) are skipped
+// outright, exactly as pass 1 skipped them in the launch
+// sequence (sequenceDeliberateEvidence, focus.go). The
+// family's one remaining deliberate path is the TASK
+// SWITCHER: Chris's real alt-tabs are delivered by the
+// Windows Task Switching window (the field logs show it
+// holding the foreground in the second before the landing -
+// sessions 202/204/205), while the convicted steal had no
+// switcher sighting anywhere before it. A family landing
+// the switcher delivered - sighted within
+// guardSwitcherWindowMs before the tenure began, or during
+// the tenure - latches as deliberate use through the same
+// per-holder veto latch, and its log line names the
+// switcher. Bystander holders keep every veto above,
+// unchanged.
 
 const (
 	// How long a reclaimable holder must hold the foreground
@@ -94,7 +121,33 @@ const (
 	// grow by roughly the tick length; clock granularity is
 	// not evidence).
 	guardInputDropMs = 100
+	// How long after the Task Switching window last held
+	// the foreground a game-family landing still counts as
+	// the switcher's delivery (pass 2). The guard ticks at
+	// 400 ms; every field landing followed the switcher's
+	// last sighting within the same second (sessions
+	// 202/204/205), so 3000 ms is ~7 ticks of margin for a
+	// switcher a poll catches only once - and nowhere near
+	// the convicted steal's shape (no sighting at all in
+	// the 26 s before it).
+	guardSwitcherWindowMs = 3000
 )
+
+// The Windows Task Switching window's identity - the
+// alt-tab picker's island window, explorer.exe's own - as
+// the field inventories name it (class + title). Its recent
+// presence in the foreground is the one deliberate-use
+// evidence a game-family landing can carry (pass 2).
+const (
+	taskSwitcherClass = "XamlExplorerHostIslandWindow"
+	taskSwitcherTitle = "Task Switching"
+)
+
+// isTaskSwitcher reports whether the snapshot's foreground
+// is the Windows Task Switching window.
+func isTaskSwitcher(ws windowState) bool {
+	return ws.fgClass == taskSwitcherClass && ws.fgTitle == taskSwitcherTitle
+}
 
 type guardAction int
 
@@ -122,6 +175,8 @@ type focusGuard struct {
 	prevAgeMs    int64   // the desktop-input age at the previous tick of this tenure
 	lastAssertMs int64   // the last reclamation against this tenure's holder
 
+	lastSwitcherMs int64 // when the Task Switching window last held the foreground (0 = never this session)
+
 	attempts map[uintptr]int  // reclamations per window this session (the cap's count)
 	yielded  map[uintptr]bool // windows the cap has yielded to (logged once)
 	vetoed   map[uintptr]bool // windows latched as deliberate use (logged once)
@@ -146,6 +201,16 @@ func (g *focusGuard) reset(sessionID int) {
 func (g *focusGuard) tick(nowMs int64, sessionID int, ws windowState, closerBusy bool) guardResult {
 	if sessionID != g.sessionID {
 		g.reset(sessionID)
+	}
+	// The task switcher's last sighting (pass 2's carve-out
+	// reads it): stamped on every tick that sees it in the
+	// foreground, whatever the tick then decides. It is NOT
+	// cleared when the player regains the foreground - a
+	// switch that concluded on the player, followed inside
+	// the window by a family grab, is an ambiguity, and
+	// every ambiguity resolves toward the user.
+	if isTaskSwitcher(ws) {
+		g.lastSwitcherMs = nowMs
 	}
 	// Healthy: the player window holds the foreground. Per-
 	// hold tracking and the deliberate-use latches clear; the
@@ -178,17 +243,18 @@ func (g *focusGuard) tick(nowMs int64, sessionID int, ws windowState, closerBusy
 	// Classify the holder.
 	family := ws.fgIsGame // any other window of the game pid (player and editor are handled above)
 	source := ""
-	if family {
-		source = "the game's own window family"
-	} else if name, ok := matchBystander(holderFacts{proc: ws.fgProcName, class: ws.fgClass, title: ws.fgTitle}); ok {
-		source = "known companion window (" + name + ")"
-	} else {
-		// Unknown: log once per window, and leave it alone.
-		if !g.classed[hwnd] {
-			g.classed[hwnd] = true
-			return guardResult{action: guardLog, detail: fmt.Sprintf("%s is not a known companion window; logging only", desc)}
+	if !family {
+		name, ok := matchBystander(holderFacts{proc: ws.fgProcName, class: ws.fgClass, title: ws.fgTitle})
+		if ok {
+			source = "known companion window (" + name + ")"
+		} else {
+			// Unknown: log once per window, and leave it alone.
+			if !g.classed[hwnd] {
+				g.classed[hwnd] = true
+				return guardResult{action: guardLog, detail: fmt.Sprintf("%s is not a known companion window; logging only", desc)}
+			}
+			return guardResult{}
 		}
-		return guardResult{}
 	}
 
 	// A window latched as deliberate use is left alone for
@@ -204,6 +270,21 @@ func (g *focusGuard) tick(nowMs int64, sessionID int, ws windowState, closerBusy
 		g.holderSince = nowMs
 		g.prevAgeMs = ws.inputAgeMs
 		g.lastAssertMs = 0
+		if family {
+			// The game's own window family: the provenance
+			// vetoes below never apply (pass 2 - during play
+			// the player's desktop input is constant, so it
+			// cannot tell a steal from a visit; session 205).
+			// The one deliberate path left is the task
+			// switcher: a landing it just delivered is the
+			// user's own switch, latched like any deliberate
+			// use - and the line names the switcher.
+			if g.switcherDelivered(nowMs) {
+				g.vetoed[hwnd] = true
+				return guardResult{action: guardLog, detail: fmt.Sprintf("%s was reached through the task switcher; leaving the foreground with it", desc)}
+			}
+			return guardResult{}
+		}
 		// No provenance at all is an ambiguity, and every
 		// ambiguity resolves toward the user: a holder whose
 		// tenure cannot be judged is never reclaimed over.
@@ -224,11 +305,20 @@ func (g *focusGuard) tick(nowMs int64, sessionID int, ws windowState, closerBusy
 		return guardResult{}
 	}
 
-	// A continuing tenure: input arriving while the window
-	// holds is use of it - the age dropping between ticks is
-	// the arrival (the last-input clock only advances on
-	// input). An edge mid-tenure is the same story.
-	if ws.altWinEdge || (ws.inputAgeMs >= 0 && g.prevAgeMs >= 0 && ws.inputAgeMs < g.prevAgeMs-guardInputDropMs) {
+	// A continuing tenure. For a bystander: input arriving
+	// while the window holds is use of it - the age dropping
+	// between ticks is the arrival (the last-input clock only
+	// advances on input) - and an edge mid-tenure is the same
+	// story. For the game's own family the same arrivals are
+	// just gameplay (pass 2); its mid-tenure deliberate story
+	// is the switcher appearing during the tenure - the user
+	// cycled away and landed back on this window by hand.
+	if family {
+		if g.lastSwitcherMs > g.holderSince && g.switcherDelivered(nowMs) {
+			g.vetoed[hwnd] = true
+			return guardResult{action: guardLog, detail: fmt.Sprintf("%s was reached through the task switcher; leaving the foreground with it", desc)}
+		}
+	} else if ws.altWinEdge || (ws.inputAgeMs >= 0 && g.prevAgeMs >= 0 && ws.inputAgeMs < g.prevAgeMs-guardInputDropMs) {
 		g.vetoed[hwnd] = true
 		return guardResult{action: guardLog, detail: fmt.Sprintf("%s looks like deliberate use (desktop input); leaving the foreground with it", desc)}
 	}
@@ -246,11 +336,24 @@ func (g *focusGuard) tick(nowMs int64, sessionID int, ws windowState, closerBusy
 		return guardResult{}
 	}
 
-	// The reclaim: grace served, no veto, budget left.
+	// The reclaim: grace served, no veto, budget left. A
+	// family reclaim says so in pass 1's plain shape - the
+	// holder is a game window, not the player window.
 	if nowMs-g.holderSince >= guardGraceMs && (g.lastAssertMs == 0 || nowMs-g.lastAssertMs >= guardMinIntervalMs) {
 		g.attempts[hwnd]++
 		g.lastAssertMs = nowMs
+		if family {
+			return guardResult{action: guardAssert, detail: fmt.Sprintf("reclaimed the foreground from %s - game window, not the player window - asserting", desc)}
+		}
 		return guardResult{action: guardAssert, detail: fmt.Sprintf("reclaimed the foreground from %s (%s)", desc, source)}
 	}
 	return guardResult{}
+}
+
+// switcherDelivered reports whether the Task Switching
+// window held the foreground within guardSwitcherWindowMs
+// before nowMs - the fingerprint of a deliberate alt-tab
+// landing (pass 2).
+func (g *focusGuard) switcherDelivered(nowMs int64) bool {
+	return g.lastSwitcherMs != 0 && nowMs-g.lastSwitcherMs <= guardSwitcherWindowMs
 }
