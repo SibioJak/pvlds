@@ -103,6 +103,10 @@ const SCHEMA_VERSION: int = 2
 var armed: bool = false
 var disarm_reason: String = ""
 var focus_herding: bool = true
+## FIX117: the focus actuation controls, mirrored for the
+## watchdog exactly like focus_herding (checkin/launch).
+var focus_actuation_rung: int = 1
+var focus_actuation_probe: bool = false
 var pinemhi_manage: bool = false
 var pinemhi_folder: String = ""
 var pinemhi_watcher_pid: int = 0
@@ -158,6 +162,8 @@ static func load_from_disk() -> WatchdogContract:
 	c.armed = bool(d.get("armed", false))
 	c.disarm_reason = str(d.get("disarm_reason", ""))
 	c.focus_herding = bool(d.get("focus_herding", true))
+	c.focus_actuation_rung = int(d.get("focus_actuation_rung", 1))
+	c.focus_actuation_probe = bool(d.get("focus_actuation_probe", false))
 	c.pinemhi_manage = bool(d.get("pinemhi_manage", false))
 	c.pinemhi_folder = str(d.get("pinemhi_folder", ""))
 	c.pinemhi_watcher_pid = int(d.get("pinemhi_watcher_pid", 0))
@@ -190,6 +196,8 @@ func to_dictionary() -> Dictionary:
 	d["armed"] = armed
 	d["disarm_reason"] = disarm_reason
 	d["focus_herding"] = focus_herding
+	d["focus_actuation_rung"] = focus_actuation_rung
+	d["focus_actuation_probe"] = focus_actuation_probe
 	d["pinemhi_manage"] = pinemhi_manage
 	d["pinemhi_folder"] = pinemhi_folder
 	d["pinemhi_watcher_pid"] = pinemhi_watcher_pid

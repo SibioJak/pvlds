@@ -528,3 +528,251 @@ func TestFocusNoTargetAttemptLoggedOnce(t *testing.T) {
 		t.Fatalf("got %v, want FocusLocked", act)
 	}
 }
+
+// ----------------------------------------------------------------
+// FIX117 focus delivery (the inner switch): the born-foreground
+// shape (droscoe's sessions 18/19 - the player window foreground
+// from the first tick, its thread's focus never delivered), the
+// hand-off delivery moment, the verified-assertion delivery, the
+// budget-end line, the probe flag, and the reader degradations.
+
+// fgSeqFocus builds the born-foreground BGFX snapshot with the
+// player thread's focus reading attached: focusHWND/focusClass
+// are the thread's focus window as the leaf read it (the zero
+// window with an empty class = the thread has no focus window).
+func fgSeqFocus(focusHWND uintptr, focusClass string) windowState {
+	ws := fgSeqVP()
+	ws.focusRead = focusReadOK
+	ws.playerFocusHWND = focusHWND
+	ws.playerFocusClass = focusClass
+	ws.focusIsPlayer = focusHWND != 0 && focusHWND == ws.playerHWND
+	return ws
+}
+
+// seqTickIn feeds one tick with explicit sequence inputs (the
+// ladder flags ride them).
+func seqTickIn(s *focusSequence, nowMs, runtimeUpMs int64, in focusInputs) seqResult {
+	return s.tick(nowMs, 1, runtimeUpMs, in)
+}
+
+func TestFocusBornForegroundOrdersDelivery(t *testing.T) {
+	// Sessions 18/19 replayed with the reader attached: the
+	// VPPlayer window holds the foreground from the first
+	// tick (zero assertions in the field, a clean lock) while
+	// its thread's focus sits on the game's own MAME window.
+	// Today that shape produces NO actuation of any kind.
+	// Now: the settle resolution (the lock branch, at the
+	// floor) works the owed focus first - one delivery, rung
+	// 1 by default - and once the focus lands, the lock
+	// follows on its ordinary criteria.
+	var s focusSequence
+	up := int64(2000)
+	ws := fgSeqFocus(hwFMAME, "MAME")
+	act, at := seqDrive(&s, up, up, ws, 40)
+	if act != seqDeliverFocus || at != up+focusResolveFloorMs {
+		t.Fatalf("got (%v, +%dms), want the delivery at the floor's resolution", act, at-up)
+	}
+	if s.deliverRung() != 1 {
+		t.Fatalf("deliverRung() = %d, want the default rung 1", s.deliverRung())
+	}
+	if !strings.Contains(s.focusDesc(), "MAME") {
+		t.Fatalf("focusDesc() = %q, want it to name where the focus sat", s.focusDesc())
+	}
+	s.noteDeliver(true)
+	// The focus lands on the player window: the episode is
+	// over, and the lock declares on the dwell behind it.
+	act, _ = seqDrive(&s, at+400, up, fgSeqFocus(hwFVP, playerWindowClass), 10)
+	if act != seqLogLocked {
+		t.Fatalf("got %v, want FocusLocked once the focus has landed", act)
+	}
+	if got := s.deliverAttempts; got != 0 {
+		t.Fatalf("deliverAttempts = %d after the focus landed, want the episode reset", got)
+	}
+}
+
+func TestFocusBornForegroundNoFocusWindow(t *testing.T) {
+	// The zero-focus-window reading (the thread has NO focus
+	// window - the other half of droscoe's state): a delivery
+	// is owed exactly the same.
+	var s focusSequence
+	up := int64(2000)
+	act, _ := seqDrive(&s, up, up, fgSeqFocus(0, ""), 40)
+	if act != seqDeliverFocus {
+		t.Fatalf("got %v, want a delivery ordered against the zero focus window", act)
+	}
+	if !strings.Contains(s.focusDesc(), "no window") {
+		t.Fatalf("focusDesc() = %q, want the no-window wording", s.focusDesc())
+	}
+}
+
+func TestFocusDeliveryAtHandoffTick(t *testing.T) {
+	// The hand-off tick is the first delivery moment: the
+	// player window already holds the foreground when the
+	// launcher leaves, its thread focus elsewhere - the
+	// delivery is ordered on that very tick, and the tick is
+	// recorded with the exit detector as it always has been.
+	var s focusSequence
+	up := int64(2000)
+	in := focusInputs{ws: fgSeqFocus(hwFMAME, "MAME"), state: "live", handoff: true}
+	res := seqTickIn(&s, up, up, in)
+	if res.action != seqDeliverFocus {
+		t.Fatalf("got %v, want the delivery on the hand-off tick", res.action)
+	}
+	if !res.notePush {
+		t.Fatal("the hand-off tick must be recorded (notePush) whatever the order")
+	}
+	// The ladder rides the inputs: rung 3 is honoured.
+	var s3 focusSequence
+	in.actuationRung = 3
+	if res := seqTickIn(&s3, up, up, in); res.action != seqDeliverFocus || s3.deliverRung() != 3 {
+		t.Fatalf("rung 3: got (%v, rung %d), want the delivery at rung 3", res.action, s3.deliverRung())
+	}
+	// An out-of-range rung clamps to 1.
+	var s9 focusSequence
+	in.actuationRung = 9
+	if res := seqTickIn(&s9, up, up, in); res.action != seqDeliverFocus || s9.deliverRung() != 1 {
+		t.Fatalf("rung 9: got (%v, rung %d), want the delivery clamped to rung 1", res.action, s9.deliverRung())
+	}
+}
+
+func TestFocusDeliveryAfterVerifiedAssertion(t *testing.T) {
+	// The foreground is won by OUR assertion (PinMAME held
+	// it; the verify lands the player window) while the
+	// thread focus still sits elsewhere: the delivery is due
+	// on the verify tick itself - the foreground is ours, the
+	// inner switch is the remaining half.
+	var s focusSequence
+	up := int64(2000)
+	act, at := seqDrive(&s, up, up, fgSeqMAME(), 40)
+	if act != seqAssert {
+		t.Fatalf("got %v, want the assertion at the floor", act)
+	}
+	s.noteAssert(at, true)
+	res := seqTick(&s, at+250, up, fgSeqFocus(hwFMAME, "MAME"))
+	if res.action != seqDeliverFocus {
+		t.Fatalf("verify tick: got %v, want the delivery behind the verified assertion", res.action)
+	}
+	if !res.notePush {
+		t.Fatal("a real delivery moves the foreground value: notePush must ride it")
+	}
+}
+
+func TestFocusDeliveryBudgetEndsWithNotDeliveredLine(t *testing.T) {
+	// The focus never lands: three deliveries (the budget),
+	// spaced; then ONE budget-end line naming the state; then
+	// the lock on its 1.1.6 criteria anyway - the line is
+	// log-only, never a lock blocker - and no second line.
+	var s focusSequence
+	up := int64(2000)
+	ws := fgSeqFocus(hwFMAME, "MAME")
+	deliveries := 0
+	notDelivered := 0
+	locked := false
+	for now := up; now <= up+focusResolveFloorMs+6000 && !locked; now += 400 {
+		res := seqTick(&s, now, up, ws)
+		switch res.action {
+		case seqDeliverFocus:
+			deliveries++
+			s.noteDeliver(true)
+		case seqLogFocusNotDelivered:
+			notDelivered++
+			if deliveries != focusMaxAttempts {
+				t.Fatalf("budget-end line after %d deliveries, want the budget (%d) spent first", deliveries, focusMaxAttempts)
+			}
+		case seqLogLocked:
+			locked = true
+		case seqNone:
+		default:
+			t.Fatalf("at +%dms: unexpected action %v", now-up, res.action)
+		}
+	}
+	if deliveries != focusMaxAttempts {
+		t.Fatalf("deliveries = %d, want exactly the budget %d", deliveries, focusMaxAttempts)
+	}
+	if notDelivered != 1 {
+		t.Fatalf("budget-end lines = %d, want exactly 1", notDelivered)
+	}
+	if !locked {
+		t.Fatal("the sequence never locked: an undelivered focus must not block the 1.1.6 lock")
+	}
+}
+
+func TestFocusProbeReplacesDelivery(t *testing.T) {
+	// The probe flag: probes at the delivery moments, never a
+	// rung delivery, and no foreground touch recorded (the
+	// probe posts messages only).
+	var s focusSequence
+	up := int64(2000)
+	probes := 0
+	for now := up; now <= up+focusResolveFloorMs+2000; now += 400 {
+		in := focusInputs{ws: fgSeqFocus(hwFMAME, "MAME"), state: "live", actuationProbe: true}
+		res := seqTickIn(&s, now, up, in)
+		switch res.action {
+		case seqProbe:
+			probes++
+			if res.notePush {
+				t.Fatal("a probe must never record a foreground touch")
+			}
+			s.noteDeliver(true)
+		case seqDeliverFocus:
+			t.Fatal("a delivery was ordered under the probe flag - the probe replaces rungs, never combines")
+		case seqLogLocked:
+			now = up + focusResolveFloorMs + 2000 // done: leave by the loop's end
+		}
+	}
+	if probes == 0 {
+		t.Fatal("no probe was ordered at the delivery moments")
+	}
+	if !s.deliverWasProbeAction() {
+		t.Fatal("deliverWasProbeAction() = false after a probe order")
+	}
+}
+
+func TestFocusReaderUnavailableDegradesTo116(t *testing.T) {
+	// No reader (unknown) and a failed reader alike: the
+	// born-foreground shape behaves EXACTLY as 1.1.6 - zero
+	// deliveries, zero probe lines, the floor lock.
+	for _, read := range []int{focusReadUnknown, focusReadFailed} {
+		var s focusSequence
+		up := int64(2000)
+		ws := fgSeqVP()
+		ws.focusRead = read
+		ws.playerFocusHWND = hwFMAME // facts the reader never delivered - must be ignored
+		ws.playerFocusClass = "MAME"
+		act, at := seqDrive(&s, up, up, ws, 40)
+		if act != seqLogLocked || at != up+focusResolveFloorMs {
+			t.Fatalf("read=%d: got (%v, +%dms), want the plain 1.1.6 floor lock", read, act, at-up)
+		}
+	}
+	// And with the focus already ON the player window, a
+	// healthy reading likewise orders nothing.
+	var s focusSequence
+	up := int64(2000)
+	act, _ := seqDrive(&s, up, up, fgSeqFocus(hwFVP, playerWindowClass), 40)
+	if act != seqLogLocked {
+		t.Fatalf("healthy focus: got %v, want the floor lock with no delivery", act)
+	}
+}
+
+func TestFocusNoTargetDeliverNotSpent(t *testing.T) {
+	// The leaf reports no target at a delivery: the attempt
+	// is not spent against the episode budget (noteDeliver
+	// rewinds it), so the delivery is ordered again on a
+	// later due tick rather than burning the budget on
+	// nothing.
+	var s focusSequence
+	up := int64(2000)
+	ws := fgSeqFocus(hwFMAME, "MAME")
+	act, at := seqDrive(&s, up, up, ws, 40)
+	if act != seqDeliverFocus {
+		t.Fatalf("got %v, want the first delivery", act)
+	}
+	s.noteDeliver(false)
+	if got := s.deliverAttempts; got != 0 {
+		t.Fatalf("deliverAttempts = %d after a no-target delivery, want it unspent", got)
+	}
+	act, _ = seqDrive(&s, at+400, up, ws, 10)
+	if act != seqDeliverFocus {
+		t.Fatalf("got %v, want the delivery re-ordered after the no-target stand-down", act)
+	}
+}

@@ -121,7 +121,34 @@ type windowState struct {
 	// deliberate foreground move's fingerprints).
 	inputAgeMs int64
 	altWinEdge bool
+	// FIX117 focus snapshot: the PLAYER WINDOW'S THREAD focus,
+	// read by the leaf through GetGUIThreadInfo (the state
+	// VPX's SDL layer actually gates joystick input on -
+	// INVESTIGATION in ~/workspace/pvlds-actuation). focusRead
+	// says what the leaf knows: focusReadUnknown (no player
+	// target to read, or a leaf with no reader), focusReadOK
+	// (playerFocusHWND/playerFocusClass are the thread's focus
+	// window - possibly the ZERO window: "the thread has no
+	// focus window" is a real reading, droscoe's state), or
+	// focusReadFailed (the read was attempted and failed).
+	// focusIsPlayer is HWND equality with the resolved player
+	// target. machineryHWND is a game-family window of the
+	// game pid that is neither the player target nor the
+	// editor - the activation-cycle nudge's excursion target
+	// (focus.go's rung 3); 0 when the game pid has none.
+	focusRead        int
+	playerFocusHWND  uintptr
+	playerFocusClass string
+	focusIsPlayer    bool
+	machineryHWND    uintptr
 }
+
+// The focusRead values (windowState.focusRead).
+const (
+	focusReadUnknown = iota
+	focusReadOK
+	focusReadFailed
+)
 
 // closeAction is what one detector tick decided.
 type closeAction int

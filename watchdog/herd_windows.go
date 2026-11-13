@@ -43,6 +43,10 @@ var (
 	procSendMessageTimeoutW   = user32.NewProc("SendMessageTimeoutW")
 	procPostMessageW          = user32.NewProc("PostMessageW")
 	procAttachThreadInput     = user32.NewProc("AttachThreadInput")
+	procGetGUIThreadInfo      = user32.NewProc("GetGUIThreadInfo")
+	procSetActiveWindow       = user32.NewProc("SetActiveWindow")
+	procSetFocus              = user32.NewProc("SetFocus")
+	procSwitchToThisWindow    = user32.NewProc("SwitchToThisWindow")
 	procGetLastInputInfo      = user32.NewProc("GetLastInputInfo")
 	procGetAsyncKeyState      = user32.NewProc("GetAsyncKeyState")
 	procGetCurrentThreadID    = kernel32.NewProc("GetCurrentThreadId")
@@ -353,7 +357,91 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	// fingerprints).
 	ws.inputAgeMs = lastInputAgeMs()
 	ws.altWinEdge = altWinEdgeSample()
+	// The FIX117 focus snapshot: the player window's THREAD
+	// focus (readPlayerThreadFocus) - the state VPX's SDL
+	// layer gates joystick input on, which the foreground
+	// facts above cannot see - and the machinery window, the
+	// activation-cycle nudge's excursion target.
+	ws.focusRead, ws.playerFocusHWND, ws.playerFocusClass = readPlayerThreadFocus(ws.playerHWND)
+	ws.focusIsPlayer = ws.focusRead == focusReadOK && ws.playerHWND != 0 && ws.playerFocusHWND == ws.playerHWND
+	ws.machineryHWND = pickMachineryWindow(windows, ws.playerHWND, ws.editorHWND)
 	return ws
+}
+
+// guiThreadInfo mirrors GUITHREADINFO for GetGUIThreadInfo:
+// the per-thread window state of another thread - in
+// particular hwndFocus, the window that thread's keyboard
+// input actually goes to.
+type guiThreadInfo struct {
+	cbSize        uint32
+	flags         uint32
+	hwndActive    uintptr
+	hwndFocus     uintptr
+	hwndCapture   uintptr
+	hwndMenuOwner uintptr
+	hwndMoveSize  uintptr
+	hwndCaret     uintptr
+	rcCaret       rect
+}
+
+// readPlayerThreadFocus reads the player window's thread
+// focus via GetGUIThreadInfo - the FIX117 reader (closer.go's
+// focus snapshot). The zero focus window is a REAL reading
+// (focusReadOK with a zero handle): the thread has no focus
+// window, which is precisely the born-foreground state the
+// delivery exists for. No player window reads unknown; a
+// failed call reads failed, and every consumer degrades to
+// 1.1.6 behaviour on either.
+func readPlayerThreadFocus(playerHWND uintptr) (int, uintptr, string) {
+	if playerHWND == 0 {
+		return focusReadUnknown, 0, ""
+	}
+	threadID, _, _ := procGetWindowThreadProcID.Call(playerHWND, 0)
+	if threadID == 0 {
+		return focusReadFailed, 0, ""
+	}
+	info := guiThreadInfo{cbSize: uint32(unsafe.Sizeof(guiThreadInfo{}))}
+	r, _, _ := procGetGUIThreadInfo.Call(threadID, uintptr(unsafe.Pointer(&info)))
+	if r == 0 {
+		return focusReadFailed, 0, ""
+	}
+	class := ""
+	if info.hwndFocus != 0 {
+		class = windowClassName(info.hwndFocus)
+	}
+	return focusReadOK, info.hwndFocus, class
+}
+
+// pickMachineryWindow chooses the activation-cycle nudge's
+// excursion target (focus.go's rung 3): a game-family window
+// of the game pid that is neither the player target nor the
+// editor - a visible PinMAME window preferred (the field's
+// machinery shape), any substantial other game window as the
+// fallback, helper surfaces never.
+func pickMachineryWindow(windows []obsWindow, playerHWND, editorHWND uintptr) uintptr {
+	var fallback uintptr
+	for _, w := range windows {
+		if w.hwnd == 0 || w.hwnd == playerHWND || w.hwnd == editorHWND {
+			continue
+		}
+		switch w.obs.class {
+		case "MAME":
+			if w.obs.visible {
+				return w.hwnd
+			}
+			if fallback == 0 {
+				fallback = w.hwnd
+			}
+		case editorWindowClass, loadDialogClass, "CVFrame", "IME", "MSCTFIME UI", "tooltips_class32":
+			// Editor furniture and input helpers: never an
+			// excursion target.
+		default:
+			if w.obs.area() > 0 && fallback == 0 {
+				fallback = w.hwnd
+			}
+		}
+	}
+	return fallback
 }
 
 // windowTitle reads a window's title text ("" when it has
@@ -577,4 +665,118 @@ func activatePlayerWindow(gamePID int, targetHWND uintptr) (attempted bool, ok b
 	}
 	fg, _, _ := procGetForegroundWindow.Call()
 	return true, raiseForeground(targetHWND, fg)
+}
+
+// deliverPlayerFocus is the FIX117 focus-delivery leaf
+// (focus.go owns the decisions and the moments; main.go owns
+// the logging): deliver keyboard focus INTO the player
+// window's thread - the inner switch the foreground value
+// cannot prove. The ladder rung (from the contract) chooses
+// the act:
+//
+//	rung 1: the full-family delivery - attach our thread to
+//	  the current foreground thread (raiseForeground's dance)
+//	  AND to the TARGET window's thread, then inside the
+//	  merged queue family BringWindowToTop +
+//	  SetForegroundWindow + SetActiveWindow + SetFocus.
+//	  AttachThreadInput's documented purpose is enabling
+//	  exactly this cross-thread SetFocus: the player thread's
+//	  focus window becomes the player window, WM_SETFOCUS
+//	  fires into VPX's pump, and SDL's keyboard-focus flag -
+//	  the gate its joystick delivery checks - is set by the
+//	  app's own message flow, not by a lie told to it.
+//	rung 2: SwitchToThisWindow(player, TRUE) - the shell's
+//	  own switch call, TRUE meaning switched "using the
+//	  Alt/Ctl+Tab key sequence": the closest programmatic
+//	  relative of the player's manual cure, in one call.
+//	rung 3: the activation-cycle nudge - raise the machinery
+//	  window (machineryHWND: a game-family window, never the
+//	  editor) for a beat, then rung 1's delivery, so the
+//	  player thread receives a real deactivate -> activate
+//	  pair instead of inheriting a static foreground. The
+//	  excursion lives entirely inside this call and happens
+//	  only when the sequence orders a delivery, which is
+//	  launch-window only.
+//
+// attempted=false says there was no target to deliver to;
+// ok is SetForegroundWindow's verdict on rungs 1/3 (rung 2's
+// call returns nothing, so a made call reports ok). Whether
+// the focus actually LANDED is the reader's next ticks - the
+// sequence spends its budget against those readings, not
+// against this verdict.
+func deliverPlayerFocus(gamePID int, targetHWND uintptr, rung int, machineryHWND uintptr) (attempted bool, ok bool) {
+	if gamePID <= 0 || targetHWND == 0 {
+		return false, false
+	}
+	if rung == 2 {
+		procSwitchToThisWindow.Call(targetHWND, 1)
+		return true, true
+	}
+	fg, _, _ := procGetForegroundWindow.Call()
+	if rung == 3 && machineryHWND != 0 && machineryHWND != targetHWND {
+		var mPID uint32
+		procGetWindowThreadProcID.Call(machineryHWND, uintptr(unsafe.Pointer(&mPID)))
+		if int(mPID) == gamePID {
+			raiseForeground(machineryHWND, fg)
+			time.Sleep(150 * time.Millisecond)
+			fg = machineryHWND
+		}
+	}
+	return true, deliverFocusForeground(targetHWND, fg)
+}
+
+// deliverFocusForeground performs rung 1's call sequence:
+// attach (current foreground thread, then the target's
+// thread), raise, activate, focus, detach in reverse order.
+func deliverFocusForeground(target uintptr, fg uintptr) bool {
+	targetThread, _, _ := procGetWindowThreadProcID.Call(target, 0)
+	fgThread, _, _ := procGetWindowThreadProcID.Call(fg, 0)
+	myThread, _, _ := procGetCurrentThreadID.Call()
+	attachedFG := false
+	if fgThread != 0 && fgThread != myThread && fgThread != targetThread {
+		r, _, _ := procAttachThreadInput.Call(myThread, fgThread, 1)
+		attachedFG = r != 0
+	}
+	attachedTarget := false
+	if targetThread != 0 && targetThread != myThread {
+		r, _, _ := procAttachThreadInput.Call(myThread, targetThread, 1)
+		attachedTarget = r != 0
+	}
+	procBringWindowToTop.Call(target)
+	r, _, _ := procSetForegroundWindow.Call(target)
+	procSetActiveWindow.Call(target)
+	procSetFocus.Call(target)
+	if attachedTarget {
+		procAttachThreadInput.Call(myThread, targetThread, 0)
+	}
+	if attachedFG {
+		procAttachThreadInput.Call(myThread, fgThread, 0)
+	}
+	return r != 0
+}
+
+// The message probe's messages (FIX117, diagnostic only):
+// WM_ACTIVATE with WA_ACTIVE, then WM_SETFOCUS - the pair
+// that makes SDL set its keyboard-focus flag without any real
+// Windows state moving.
+const (
+	wmActivateMsg = 0x0006 // WM_ACTIVATE
+	wmSetFocusMsg = 0x0007 // WM_SETFOCUS
+	waActiveMsg   = 1      // WA_ACTIVE
+)
+
+// probePlayerFocus is the FIX117 diagnostic probe leaf: post
+// the activation message pair to the player window. It lies
+// to the app about real state on purpose - its one job is to
+// convict or kill the SDL-gate mechanism in a single field
+// session if the ladder stalls - and it is reachable only
+// under the contract's probe flag, never as standing
+// behaviour (focus.go carries the law).
+func probePlayerFocus(gamePID int, targetHWND uintptr) (attempted bool) {
+	if gamePID <= 0 || targetHWND == 0 {
+		return false
+	}
+	procPostMessageW.Call(targetHWND, wmActivateMsg, waActiveMsg, 0)
+	procPostMessageW.Call(targetHWND, wmSetFocusMsg, 0, 0)
+	return true
 }

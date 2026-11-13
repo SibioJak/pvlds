@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The foreground-change detector (fgwatch.go), exercised on
 // Linux. The detector's whole contract: the first live tick of
@@ -150,5 +153,77 @@ func TestFGWatchPerSessionReset(t *testing.T) {
 	}
 	if _, changed := tr.observe(9, fgMAME1); changed {
 		t.Fatal("first tick of session 9 reported a change")
+	}
+}
+
+// ----------------------------------------------------------------
+// FIX117: the player-thread focus tracker (playerFocusTracker)
+// and its line rendering (playerFocusDesc).
+
+func focusWS(read int, focusHWND uintptr, focusClass string, isPlayer bool) windowState {
+	ws := windowState{inputAgeMs: -1}
+	ws.playerHWND = hwFVP
+	ws.focusRead = read
+	ws.playerFocusHWND = focusHWND
+	ws.playerFocusClass = focusClass
+	ws.focusIsPlayer = isPlayer
+	return ws
+}
+
+func TestPlayerFocusTrackerChangesOncePerChange(t *testing.T) {
+	var tr playerFocusTracker
+	// First positive reading is a change (the "before"
+	// picture); the same reading again is not.
+	if changed, failed := tr.observe(1, focusWS(focusReadOK, hwFMAME, "MAME", false)); !changed || failed {
+		t.Fatalf("first reading: got (changed=%v, failed=%v), want the change reported", changed, failed)
+	}
+	if changed, _ := tr.observe(1, focusWS(focusReadOK, hwFMAME, "MAME", false)); changed {
+		t.Fatal("an unchanged reading was reported twice")
+	}
+	// The focus lands on the player window: a change.
+	if changed, _ := tr.observe(1, focusWS(focusReadOK, hwFVP, playerWindowClass, true)); !changed {
+		t.Fatal("the focus landing on the player window was not reported")
+	}
+	// The zero window is a real reading and a real change.
+	if changed, _ := tr.observe(1, focusWS(focusReadOK, 0, "", false)); !changed {
+		t.Fatal("the focus dropping to no window was not reported")
+	}
+}
+
+func TestPlayerFocusTrackerFailedReaderOncePerSession(t *testing.T) {
+	var tr playerFocusTracker
+	if _, failed := tr.observe(1, focusWS(focusReadFailed, 0, "", false)); !failed {
+		t.Fatal("the reader failure was not reported")
+	}
+	if _, failed := tr.observe(1, focusWS(focusReadFailed, 0, "", false)); failed {
+		t.Fatal("the reader failure was reported twice in one session")
+	}
+	// A new session reports it again - and a failure with no
+	// target standing is not the reader's failure at all.
+	if _, failed := tr.observe(2, focusWS(focusReadFailed, 0, "", false)); !failed {
+		t.Fatal("session 2's reader failure was not reported")
+	}
+	noTarget := focusWS(focusReadFailed, 0, "", false)
+	noTarget.playerHWND = 0
+	if _, failed := tr.observe(3, noTarget); failed {
+		t.Fatal("a failure with no player target was blamed on the reader")
+	}
+	// Unknown readings are silent throughout.
+	if changed, failed := tr.observe(3, focusWS(focusReadUnknown, 0, "", false)); changed || failed {
+		t.Fatal("an unknown reading produced a report")
+	}
+}
+
+func TestPlayerFocusDescWording(t *testing.T) {
+	if got := playerFocusDesc(focusWS(focusReadOK, 0, "", false)); got != "no window" {
+		t.Fatalf("zero focus window: got %q, want %q", got, "no window")
+	}
+	got := playerFocusDesc(focusWS(focusReadOK, hwFMAME, "MAME", false))
+	if !strings.Contains(got, "\"MAME\"") {
+		t.Fatalf("elsewhere focus: got %q, want the class named", got)
+	}
+	got = playerFocusDesc(focusWS(focusReadOK, hwFVP, playerWindowClass, true))
+	if !strings.Contains(got, "the player window itself") {
+		t.Fatalf("delivered focus: got %q, want the player-window suffix", got)
 	}
 }

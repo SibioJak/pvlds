@@ -99,6 +99,42 @@ package main
 // not assert over it, watches for a change, and at the
 // deadline reports it as the reason. No evidence (a streamer
 // surface, a companion's self-raise, silence) asserts.
+//
+// FIX117 - FOCUS DELIVERY (the inner switch): the foreground
+// is only half of what VPX's input runs on. SDL sets its
+// keyboard-focus flag from window messages and discards
+// joystick button-downs while the flag is clear, and a table
+// BORN foreground under this launcher (droscoe's sessions
+// 18/19: foreground right from the first tick, zero
+// assertions, a clean FocusLocked) can hold the foreground
+// value forever with its thread's focus never delivered -
+// buttons dead, picture and sound perfect, cured permanently
+// by one genuine alt-tab. So actuation is owed even when
+// assertion is not: while the player window holds the
+// foreground but the leaf's focus reader (closer.go's focus
+// snapshot) positively reads the player THREAD's focus as
+// somewhere else, the sequence orders a focus DELIVERY at
+// the delivery moments - the hand-off tick, behind a verified
+// assertion of ours, and at the settle moment - spaced and
+// budgeted like assertions but spending none of their
+// machinery (no verify phase: the reader's next ticks are
+// the read-back, in the log). The ladder (which delivery the
+// leaf performs - rung 1 full-family SetFocus, rung 2
+// SwitchToThisWindow, rung 3 the activation-cycle nudge) and
+// the diagnostic message probe ride the contract, set by the
+// launcher from its config exactly like the focus switch
+// itself; the probe replaces deliveries at the same moments
+// under its own flag and is never combined with a rung. If
+// the delivery budget ends with the foreground held and the
+// focus still undelivered, the sequence logs exactly that
+// ("focus not delivered") ONCE per focus episode - the lock
+// itself keeps its 1.1.6 foreground criteria in this build:
+// the focus-landed requirement ships log-only until a healthy
+// GL session's focus reading is known (the reader in this
+// build is what reveals it). A failed or absent reader orders
+// nothing, ever: every delivery is gated on a positive
+// "focus is elsewhere" reading, so the degradation is exact
+// 1.1.6 behaviour.
 
 import "fmt"
 
@@ -153,12 +189,15 @@ const (
 type seqAction int
 
 const (
-	seqNone          seqAction = iota
-	seqAssert                  // raise the player target now (leaf call), then report via noteAssert
-	seqLogLocked               // FocusLocked reached (also the re-lock after a reopen)
-	seqLogUnresolved           // FocusUnresolved reached; reason() names why
-	seqLogReopen               // a locked sequence lost the player window inside the launch window and reopened
-	seqLogNoTarget             // an assertion was ordered but the caller had no target to raise
+	seqNone                 seqAction = iota
+	seqAssert                         // raise the player target now (leaf call), then report via noteAssert
+	seqLogLocked                      // FocusLocked reached (also the re-lock after a reopen)
+	seqLogUnresolved                  // FocusUnresolved reached; reason() names why
+	seqLogReopen                      // a locked sequence lost the player window inside the launch window and reopened
+	seqLogNoTarget                    // an assertion was ordered but the caller had no target to raise
+	seqDeliverFocus                   // FIX117: deliver focus into the player thread now (leaf call), rung per the contract
+	seqProbe                          // FIX117: the diagnostic message probe (leaf call) - never combined with a rung
+	seqLogFocusNotDelivered           // FIX117: the delivery budget ended, foreground held, focus undelivered (log-only)
 )
 
 // seqResult is one tick's full report: the action, and whether
@@ -180,6 +219,13 @@ type focusInputs struct {
 	ws      windowState
 	state   string // "loading" or "live"
 	handoff bool
+	// FIX117 ladder, from the contract (mirrored by the
+	// launcher from its config like the focus switch):
+	// actuationRung is 1..3 (the caller clamps; an absent or
+	// invalid value arrives as 1), actuationProbe replaces
+	// deliveries with the diagnostic message probe.
+	actuationRung  int
+	actuationProbe bool
 }
 
 // focusSequence is the per-session launch focus machine. A
@@ -215,6 +261,21 @@ type focusSequence struct {
 	noTargetLogged   bool
 	reasonText       string // the FocusUnresolved reason, once resolved
 	lockedClass      string // the player window's class at the lock (the lock log line)
+
+	// FIX117 focus-delivery bookkeeping. A focus EPISODE is
+	// one focus window being worked while the player window
+	// holds the foreground: it keys on the focus HWND the
+	// reader reports, and a change of that HWND - or the
+	// focus landing, or the player losing the foreground -
+	// starts a fresh episode with a fresh budget.
+	deliverAttempts    int     // deliveries/probes ordered in the current focus episode
+	deliverEpisodeHWND uintptr // the focus HWND the current episode is working on
+	deliverEpisodeSet  bool    // deliverEpisodeHWND is meaningful (a zero focus HWND is a real episode)
+	lastDeliverMs      int64   // when the last delivery/probe was ordered (the spacing clock)
+	notDeliveredLogged bool    // the budget-end line has been written for this episode
+	deliverRungUsed    int     // the ladder rung of the last delivery order (the log line)
+	deliverWasProbe    bool    // the last order was the probe, not a rung
+	focusDescText      string  // where the focus sat when the last delivery was ordered (the log line)
 }
 
 func (s *focusSequence) reset(sessionID int) {
@@ -243,6 +304,93 @@ func (s *focusSequence) beforeIsGameFamily() bool { return s.beforeGameFamily }
 // playerClass names the player window's class at the lock -
 // the lock log line's subject.
 func (s *focusSequence) playerClass() string { return s.lockedClass }
+
+// focusOwed reports whether a focus delivery is owed on this
+// snapshot: the player window holds the foreground, a target
+// stands, and the reader POSITIVELY reads the player thread's
+// focus as somewhere else. Every clause is load-bearing: an
+// unknown or failed reading owes nothing (the degradation to
+// exact 1.1.6 behaviour), and a focus that already sits on
+// the player window is the delivered state itself.
+func focusOwed(ws windowState) bool {
+	return ws.fgIsPlayer && ws.playerHWND != 0 &&
+		ws.focusRead == focusReadOK && !ws.focusIsPlayer
+}
+
+// deliverRung names the ladder rung of the last delivery
+// order - the delivery log line's wording.
+func (s *focusSequence) deliverRung() int { return s.deliverRungUsed }
+
+// deliverWasProbeAction reports whether the last delivery
+// order was the diagnostic probe rather than a ladder rung.
+func (s *focusSequence) deliverWasProbeAction() bool { return s.deliverWasProbe }
+
+// focusDesc names where the player thread's focus sat when
+// the last delivery was ordered - the delivery log line's
+// "was", in fgwatch.go's plain words.
+func (s *focusSequence) focusDesc() string { return s.focusDescText }
+
+// deliveryDue reports whether a delivery may be ordered on
+// this tick in the tracking phase: the spacing clock has run,
+// the episode budget stands, and a verified assertion of ours
+// landed this player hold - the foreground is ours, the inner
+// switch is the remaining half, and the dwell has still to
+// run. (The other two delivery moments live elsewhere by
+// construction: the hand-off tick in its own block, and the
+// settle resolution inside the lock branch - a player-held
+// foreground's settle IS its lock, and the lock branch works
+// an owed focus before declaring.)
+func (s *focusSequence) deliveryDue(nowMs int64, ws windowState) bool {
+	if !focusOwed(ws) || s.deliverAttempts >= focusMaxAttempts {
+		return false
+	}
+	if s.lastDeliverMs != 0 && nowMs-s.lastDeliverMs < focusAssertSpacingMs {
+		return false
+	}
+	return s.verified
+}
+
+// orderDeliver records a focus delivery (or, under the probe
+// flag, a probe) against the current focus episode and
+// returns the tick's result. notePush rides a real delivery -
+// every rung moves the foreground value, and the exit
+// detector counts excursions from facts after our last
+// foreground touch; the probe posts messages only and
+// records none, so the tracking caller passes false for it
+// (the hand-off caller records the hand-off tick itself, as
+// it always has, whatever the order).
+func (s *focusSequence) orderDeliver(nowMs int64, ws windowState, in focusInputs, notePush bool) seqResult {
+	rung := in.actuationRung
+	if rung < 1 || rung > 3 {
+		rung = 1
+	}
+	s.deliverAttempts++
+	s.lastDeliverMs = nowMs
+	s.deliverRungUsed = rung
+	s.deliverWasProbe = in.actuationProbe
+	s.focusDescText = playerFocusDesc(ws)
+	if in.actuationProbe {
+		return seqResult{action: seqProbe, notePush: notePush}
+	}
+	return seqResult{action: seqDeliverFocus, notePush: notePush}
+}
+
+// noteDeliver reports the caller's delivery attempt back: the
+// leaf either performed it (attempted) or had no target to
+// deliver to (the window vanished between the snapshot and
+// the call). A no-target attempt is not spent against the
+// episode budget - nothing was delivered, so nothing was
+// tried - but it DID consume its moment: the spacing clock
+// keeps the order's stamp, so a flickering target is retried
+// at the spacing, not every tick.
+func (s *focusSequence) noteDeliver(attempted bool) {
+	if attempted {
+		return
+	}
+	if s.deliverAttempts > 0 {
+		s.deliverAttempts--
+	}
+}
 
 // lullHolder reports whether the foreground holder is a
 // load-phase placeholder whose stability must not count
@@ -371,6 +519,26 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 		s.playerSinceMs = 0
 		s.verified = false
 	}
+	// FIX117 focus-episode bookkeeping: the delivery budget
+	// belongs to one focus window being worked while the
+	// player window holds the foreground. A change of the
+	// reported focus window starts a fresh episode; so does
+	// the focus landing on the player window, or the player
+	// losing the foreground - the next owed stretch is a new
+	// episode with a new budget and a new budget-end line.
+	if ws.focusRead == focusReadOK {
+		switch {
+		case !ws.fgIsPlayer || ws.focusIsPlayer:
+			s.deliverAttempts = 0
+			s.deliverEpisodeSet = false
+			s.notDeliveredLogged = false
+		case !s.deliverEpisodeSet || s.deliverEpisodeHWND != ws.playerFocusHWND:
+			s.deliverAttempts = 0
+			s.deliverEpisodeHWND = ws.playerFocusHWND
+			s.deliverEpisodeSet = true
+			s.notDeliveredLogged = false
+		}
+	}
 	if focusLullHolder(ws) && s.phase == 0 {
 		// No stability accumulates under a placeholder: the
 		// settle clock restarts from this tick, so a settle
@@ -457,6 +625,33 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 	// disturbed needs no assertion to be believed).
 	if ws.fgIsPlayer && s.playerSinceMs != 0 && nowMs-s.playerSinceMs >= focusDwellMs &&
 		(s.verified || s.pastFloor(nowMs)) {
+		// FIX117: a player-held foreground's settle resolution
+		// IS this lock, so an owed focus is worked HERE, at
+		// the resolution moment, before the lock is declared:
+		// the budget-end line when the budget is spent, a
+		// delivery when the spacing allows, and a deferral
+		// while a delivery's spacing is still running (the
+		// budget is the point of the resolution - declaring
+		// on the next tick would spend one delivery and call
+		// it done). The lock keeps its criteria above: these
+		// ticks only ever DEFER it - bounded by the delivery
+		// budget and spacing, and never past the launch
+		// deadline, where the lock declares as 1.1.6's did -
+		// and an undelivered focus never denies it (brief
+		// §4: the focus-landed requirement ships log-only in
+		// this build).
+		if focusOwed(ws) && !s.pastDeadline(nowMs) {
+			if s.deliverAttempts >= focusMaxAttempts {
+				if !s.notDeliveredLogged {
+					s.notDeliveredLogged = true
+					return seqResult{action: seqLogFocusNotDelivered}
+				}
+			} else if s.lastDeliverMs == 0 || nowMs-s.lastDeliverMs >= focusAssertSpacingMs {
+				return s.orderDeliver(nowMs, ws, in, !in.actuationProbe)
+			} else {
+				return seqResult{}
+			}
+		}
 		s.phase = 2
 		s.lockedClass = ws.playerClass
 		if s.runtimeUp == 0 {
@@ -482,7 +677,36 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 			r.notePush = true
 			return r
 		}
+		if focusOwed(ws) && s.deliverAttempts < focusMaxAttempts {
+			// The born-foreground hand-off (sessions 18/19):
+			// the player window already holds the foreground,
+			// so no assertion is owed - but the inner switch
+			// may never have been delivered, and the hand-off
+			// tick is the first delivery moment. (The probe,
+			// when its flag is on, takes the same moment; the
+			// tick itself is recorded either way, as it
+			// always has been.)
+			r := s.orderDeliver(nowMs, ws, in, false)
+			r.notePush = true
+			return r
+		}
 		return res
+	}
+
+	// FIX117 focus delivery in tracking: the player window
+	// holds the foreground, the reader positively reads its
+	// thread's focus elsewhere, and a delivery moment is due
+	// (deliveryDue). The budget-end line comes first when the
+	// budget is spent - log-only, once per focus episode,
+	// never a lock blocker (the header carries the law).
+	if focusOwed(ws) {
+		if s.deliverAttempts >= focusMaxAttempts && !s.notDeliveredLogged {
+			s.notDeliveredLogged = true
+			return seqResult{action: seqLogFocusNotDelivered}
+		}
+		if s.deliveryDue(nowMs, ws) {
+			return s.orderDeliver(nowMs, ws, in, !in.actuationProbe)
+		}
 	}
 
 	if ws.fgIsPlayer || ws.fgIsEditor {

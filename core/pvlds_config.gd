@@ -42,6 +42,16 @@ var launch_args_template: String = DEFAULT_LAUNCH_ARGS
 var table_folders: Array[String] = []
 var vpsdb_path: String = ""
 var focus_herding: bool = true ## watchdog window duty kill-switch (design section 3 amendment)
+## FIX117 focus actuation controls (watchdog focus delivery):
+## the rung selects HOW a focus delivery is performed (1 the
+## attachment-family delivery, 2 the shell switch call, 3 the
+## activation-cycle nudge) and the probe flag is a DIAGNOSTIC
+## that swaps deliveries for posted activation messages.
+## Hand-edited in this file only - no panel exposes them; the
+## watchdog reads them off the contract exactly like
+## focus_herding, and anything outside 1..3 reads as rung 1.
+var focus_actuation_rung: int = 1
+var focus_actuation_probe: bool = false
 ## The player's World of Virtual Pinball API key (self-service
 ## in his WoVP profile; the Tournament Room's read side uses
 ## it). A secret: it lives ONLY in this local file, is loaded
@@ -200,6 +210,10 @@ func load_from_disk() -> bool:
 		launch_args_template = DEFAULT_LAUNCH_ARGS
 	vpsdb_path = str(d.get("vpsdb_path", ""))
 	focus_herding = bool(d.get("focus_herding", true))
+	focus_actuation_rung = int(d.get("focus_actuation_rung", 1))
+	if focus_actuation_rung < 1 or focus_actuation_rung > 3:
+		focus_actuation_rung = 1
+	focus_actuation_probe = bool(d.get("focus_actuation_probe", false))
 	wovp_api_key = str(d.get("wovp_api_key", ""))
 	starfield_mode = str(d.get("starfield_mode", "layered"))
 	if not STARFIELD_MODES.has(starfield_mode):
@@ -231,6 +245,8 @@ func save_to_disk() -> bool:
 	d["launch_args_template"] = launch_args_template
 	d["vpsdb_path"] = vpsdb_path
 	d["focus_herding"] = focus_herding
+	d["focus_actuation_rung"] = focus_actuation_rung
+	d["focus_actuation_probe"] = focus_actuation_probe
 	d["wovp_api_key"] = wovp_api_key
 	d["starfield_mode"] = starfield_mode
 	d["pinemhi_folder"] = pinemhi_folder

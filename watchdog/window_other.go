@@ -27,3 +27,12 @@ func noteForegroundOwner(_ int, _ windowState) {}
 // reads unknown (-1), as the focus duties' contract requires
 // of a leaf that cannot know it.
 func gameWindowState(_ int, _ int) windowState { return windowState{inputAgeMs: -1} }
+
+// deliverPlayerFocus off Windows/Linux: no window exists to
+// deliver focus to; the FIX117 focus duties stand their
+// attempts down here.
+func deliverPlayerFocus(_ int, _ uintptr, _ int, _ uintptr) (bool, bool) { return false, false }
+
+// probePlayerFocus off Windows/Linux: no player window exists
+// to probe.
+func probePlayerFocus(_ int, _ uintptr) bool { return false }

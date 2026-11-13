@@ -361,6 +361,7 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 		ws.fgPID = gamePID
 		ws.fgIsGame = true
 		ws.fgHWND = stubFGHWND(ws.fgClass, ws.fgPID)
+		stubFocusFacts(gamePID, &ws)
 		return ws
 	}
 	token := "other"
@@ -408,6 +409,7 @@ func gameWindowState(gamePID int, sessionID int) windowState {
 	}
 	ws.fgHWND = stubFGHWND(ws.fgClass, ws.fgPID)
 	ws.fgIsPlayer = ws.playerHWND != 0 && ws.fgHWND == ws.playerHWND
+	stubFocusFacts(gamePID, &ws)
 	return ws
 }
 
@@ -438,6 +440,105 @@ func activatePlayerWindow(gamePID int, targetHWND uintptr) (attempted bool, ok b
 	}
 	os.WriteFile(stubForegroundMarker(gamePID), []byte("player\n"), 0644)
 	return true, true
+}
+
+// stubFocusMarker scripts the PLAYER THREAD FOCUS facts the
+// FIX117 duties read (windowState's focus snapshot): the
+// contents name where the player window's thread focus sits -
+// "player" (on the player window), "mame" (on a MAME window
+// of the game pid), "none" (the thread has no focus window),
+// "stuck" (like "mame", but a delivery does not move it - the
+// budget-exhaustion shape), "fail" (the reader fails). An
+// absent file is the healthy mirror: focus follows the
+// foreground holder. A delivery (deliverPlayerFocus below)
+// rewrites "mame"/"none" to "player"; the probe rewrites
+// nothing - the stub cannot model SDL's message flag, so a
+// probe's effect is deliberately not scripted here.
+func stubFocusMarker(gamePID int) string {
+	return "/tmp/pvlds-stub-focus-" + strconv.Itoa(gamePID)
+}
+
+// stubFocusFacts folds the scripted focus facts (stubFocus-
+// Marker) into the snapshot, and names the machinery mirror:
+// a MAME sibling window of the game pid whenever a player
+// window stands (rung 3's excursion target).
+func stubFocusFacts(gamePID int, ws *windowState) {
+	if ws.playerHWND != 0 {
+		ws.machineryHWND = stubFGHWND("MAME", gamePID)
+	}
+	b, err := os.ReadFile(stubFocusMarker(gamePID))
+	if err != nil {
+		// The healthy mirror: the focus sits on whoever
+		// holds the foreground.
+		ws.focusRead = focusReadOK
+		ws.playerFocusHWND = ws.fgHWND
+		ws.playerFocusClass = ws.fgClass
+		ws.focusIsPlayer = ws.fgIsPlayer
+		return
+	}
+	switch strings.TrimSpace(string(b)) {
+	case "fail":
+		ws.focusRead = focusReadFailed
+	case "player":
+		ws.focusRead = focusReadOK
+		ws.playerFocusHWND = ws.playerHWND
+		ws.playerFocusClass = ws.playerClass
+		ws.focusIsPlayer = ws.playerHWND != 0
+	case "none":
+		ws.focusRead = focusReadOK
+		ws.playerFocusHWND = 0
+		ws.playerFocusClass = ""
+	case "mame", "stuck":
+		ws.focusRead = focusReadOK
+		ws.playerFocusHWND = stubFGHWND("MAME", gamePID)
+		ws.playerFocusClass = "MAME"
+	default:
+		ws.focusRead = focusReadOK
+		ws.playerFocusHWND = ws.fgHWND
+		ws.playerFocusClass = ws.fgClass
+		ws.focusIsPlayer = ws.fgIsPlayer
+	}
+}
+
+// deliverPlayerFocus on Linux mirrors the focus marker: a
+// real delivery moves the scripted focus to the player
+// window (the next gameWindowState reads it as delivered),
+// except under the "stuck" marker, where the attempt is real
+// but the focus does not move - the budget-exhaustion shape.
+// Honest stand-downs mirror activatePlayerWindow's: no
+// target, the editor state (the player is gone), or no
+// window phase at all. The rung makes no difference here -
+// the stub scripts the focus state, not the act.
+func deliverPlayerFocus(gamePID int, targetHWND uintptr, _ int, _ uintptr) (attempted bool, ok bool) {
+	if gamePID <= 0 || targetHWND == 0 {
+		return false, false
+	}
+	if _, err := os.Stat(stubEditorMarker(gamePID)); err == nil {
+		return false, false
+	}
+	if !gameWindowPresentOnMaps(gamePID) {
+		return false, false
+	}
+	if b, err := os.ReadFile(stubFocusMarker(gamePID)); err == nil && strings.TrimSpace(string(b)) == "stuck" {
+		return true, false
+	}
+	os.WriteFile(stubFocusMarker(gamePID), []byte("player\n"), 0644)
+	return true, true
+}
+
+// probePlayerFocus on Linux mirrors the probe's stand-downs
+// and nothing else: the stub cannot model SDL's message flag,
+// so a probe never moves the scripted focus - the smoke sees
+// the probe lines and their count, and that is all a probe
+// may claim here either.
+func probePlayerFocus(gamePID int, targetHWND uintptr) (attempted bool) {
+	if gamePID <= 0 || targetHWND == 0 {
+		return false
+	}
+	if _, err := os.Stat(stubEditorMarker(gamePID)); err == nil {
+		return false
+	}
+	return gameWindowPresentOnMaps(gamePID)
 }
 
 // noteForegroundOwner on Linux: the bench's only scripted

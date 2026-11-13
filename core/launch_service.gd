@@ -136,7 +136,10 @@ func checkin(config: PvldsConfig) -> WatchdogContract:
 	var c: WatchdogContract = WatchdogContract.load_from_disk()
 	c.armed = true
 	c.disarm_reason = "" ## a fresh arm buries the last dismissal's reason
-	c.focus_herding = config.focus_herding if config != null else true
+	c.focus_herding = config.focus_herding
+	# FIX117: mirror the focus actuation controls the same way.
+	c.focus_actuation_rung = config.focus_actuation_rung
+	c.focus_actuation_probe = config.focus_actuation_probe
 	# PINEMHI2 (Part B): mirror the watcher-management toggle +
 	# the resolved folder for the watchdog. The watchdog-owned
 	# pid/state are NOT touched here - they loaded from disk
@@ -181,6 +184,9 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	c.armed = true
 	c.disarm_reason = ""
 	c.focus_herding = config.focus_herding
+	# FIX117: the actuation mirror, same as checkin.
+	c.focus_actuation_rung = config.focus_actuation_rung
+	c.focus_actuation_probe = config.focus_actuation_probe
 	# PINEMHI2 (Part B): the same mirror as checkin (the
 	# watchdog-owned pid/state ride through untouched).
 	c.pinemhi_manage = config.pinemhi_manage_watcher

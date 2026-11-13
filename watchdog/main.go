@@ -44,7 +44,23 @@
 //     mechanisms that preceded it: a process-level push that
 //     certified success while the wrong window held the
 //     foreground, and an SDL-only activation that could never
-//     raise a BGFX build's player window at all,
+//     raise a BGFX build's player window at all. FIX117 adds
+//     focus DELIVERY inside the sequence: the foreground lock
+//     proves the outer switch, but the player THREAD's
+//     keyboard focus - the inner switch VPX's SDL layer gates
+//     joystick input on - was never read or worked (the
+//     watchdog made no SetFocus, SetActiveWindow or
+//     GetGUIThreadInfo call at all). The sequence now reads
+//     the player thread's focus, logs its every change, and
+//     at the delivery moments - the hand-off tick, behind a
+//     verified assertion, and at the lock's own resolution -
+//     delivers focus into the player window by the contract's
+//     ladder rung, or probes it with the activation message
+//     pair under the diagnostic probe flag. The lock keeps
+//     its 1.1.6 criteria: the focus requirement ships
+//     log-only in this build (investigation:
+//     ~/workspace/pvlds-actuation/INVESTIGATION.md; build
+//     record: ~/workspace/pvlds-fix117/STATUS.md),
 //   - and once the sequence has ended in a live session, run
 //     the focus guard (guard.go): take the foreground back
 //     ONLY from known bystander windows that raise themselves
@@ -103,6 +119,17 @@ type Contract struct {
 	// existed: the empty string falls back to the legacy generic.
 	DisarmReason string `json:"disarm_reason"`
 	FocusHerding bool   `json:"focus_herding"`
+	// FocusActuationRung and FocusActuationProbe are FIX117's
+	// actuation controls (focus.go): the rung selects HOW the
+	// focus delivery is performed (1 attachment-family, 2 the
+	// shell switch call, 3 the activation-cycle nudge) and the
+	// probe flag swaps every delivery for the diagnostic
+	// message pair. They ride ONLY this additive read - the
+	// parse below is field-by-field and never fails on a
+	// contract that lacks them, so an older app's contract
+	// keeps the defaults (rung 1, probe off).
+	FocusActuationRung  int  `json:"focus_actuation_rung"`
+	FocusActuationProbe bool `json:"focus_actuation_probe"`
 	// PINemHi watcher management (PINEMHI2 Part B; pinemhi.go
 	// carries the law). PinemhiManage + PinemhiFolder are
 	// mirrored by the launcher from its config on every
@@ -322,6 +349,13 @@ func launcherAlive(c *Contract, extraPID int) bool {
 	return c.LauncherPID > 0 && processAlive(c.LauncherPID)
 }
 
+// FIX117's player-thread focus feed (fgwatch.go): the
+// tracker that logs the player window's thread focus the
+// moment it changes - the before/after picture of every
+// delivery, and the state that decides droscoe's next report
+// with or without any delivery firing.
+var sessionFocusTracker playerFocusTracker
+
 func main() {
 	exe, _ := os.Executable()
 	dir := filepath.Dir(exe)
@@ -496,6 +530,14 @@ func main() {
 				// inventory on change, and yields the facts
 				// the stamp below and the exit detector read.
 				ws := gameWindowState(c.GamePID, c.SessionID)
+				// The FIX117 ladder setting, clamped here so
+				// every consumer (the session header line, the
+				// sequence's inputs) reads the value that will
+				// actually be used: anything outside 1..3 is 1.
+				actuationRung := c.FocusActuationRung
+				if actuationRung < 1 || actuationRung > 3 {
+					actuationRung = 1
+				}
 				// Session header (FIX116 logging): the first
 				// tick a session is observed with its game
 				// alive names the session, the game, and the
@@ -509,6 +551,16 @@ func main() {
 						herdingWord = "on"
 					}
 					logf("watchdog: session %d: %s (pid %d); focus herding %s (as received)", c.SessionID, filepath.Base(c.GameExePath), c.GamePID, herdingWord)
+					// FIX117: a non-default actuation setting
+					// names itself in the header - a field log
+					// proves which act produced (or didn't
+					// produce) the delivery lines below. The
+					// defaults (rung 1, probe off) stay silent.
+					if c.FocusHerding && c.FocusActuationProbe {
+						logf("watchdog: session %d: focus actuation: message probe (diagnostic)", c.SessionID)
+					} else if c.FocusHerding && actuationRung != 1 {
+						logf("watchdog: session %d: focus actuation: rung %d", c.SessionID, actuationRung)
+					}
 				}
 				// Target bookkeeping (FIX116 logging): the
 				// resolved player target (target.go) is logged
@@ -615,7 +667,20 @@ func main() {
 				// below, so the record precedes the reading.
 				if c.FocusHerding {
 					nowMs := time.Now().UnixMilli()
-					res := sessionFocus.tick(nowMs, c.SessionID, actRuntimeMs, focusInputs{ws: ws, state: c.SessionState, handoff: handoff})
+					// The player-thread focus feed (fgwatch.go):
+					// the player window's thread focus, logged
+					// the moment it changes - the before/after
+					// picture of every delivery below, and the
+					// evidence that settles the next field
+					// report whether or not any delivery
+					// fires. A failed reader reports once per
+					// session, and only while a target stands.
+					if changed, failed := sessionFocusTracker.observe(c.SessionID, ws); failed {
+						logf("watchdog: session %d: player thread focus: the focus reader is unavailable this session - focus duties run as in 1.1.6", c.SessionID)
+					} else if changed {
+						logf("watchdog: session %d: player thread focus: %s", c.SessionID, playerFocusDesc(ws))
+					}
+					res := sessionFocus.tick(nowMs, c.SessionID, actRuntimeMs, focusInputs{ws: ws, state: c.SessionState, handoff: handoff, actuationRung: actuationRung, actuationProbe: c.FocusActuationProbe})
 					if res.notePush {
 						sessionCloser.notePush(c.SessionID, nowMs)
 					}
@@ -637,6 +702,37 @@ func main() {
 						if sessionFocus.noteAssert(nowMs, attempted) == seqLogNoTarget {
 							logf("watchdog: session %d: focus sequence: no player window to assert (standing down this attempt)", c.SessionID)
 						}
+					case seqDeliverFocus:
+						// The FIX117 delivery: the rung leaf
+						// performs the act; the line names the
+						// rung and where the focus sat, so a
+						// field log shows which act was used
+						// and what it was working against.
+						attempted, ok := deliverPlayerFocus(c.GamePID, ws.playerHWND, sessionFocus.deliverRung(), ws.machineryHWND)
+						sessionFocus.noteDeliver(attempted)
+						if attempted {
+							verdict := "refused"
+							if ok {
+								verdict = "accepted"
+							}
+							logf("watchdog: session %d: focus sequence: delivered focus to the player window (rung %d; focus was %s; leaf %s)", c.SessionID, sessionFocus.deliverRung(), sessionFocus.focusDesc(), verdict)
+						} else {
+							logf("watchdog: session %d: focus sequence: no player window to deliver focus to (standing down this attempt)", c.SessionID)
+						}
+					case seqProbe:
+						// The FIX117 message probe (diagnostic
+						// only, the contract's probe flag): the
+						// line says "probe" outright so it can
+						// never be mistaken for a real delivery.
+						attempted := probePlayerFocus(c.GamePID, ws.playerHWND)
+						sessionFocus.noteDeliver(attempted)
+						if attempted {
+							logf("watchdog: session %d: focus sequence: probe - posted activation messages to the player window (focus was %s; diagnostic only)", c.SessionID, sessionFocus.focusDesc())
+						} else {
+							logf("watchdog: session %d: focus sequence: probe - no player window to probe (standing down this attempt)", c.SessionID)
+						}
+					case seqLogFocusNotDelivered:
+						logf("watchdog: session %d: focus not delivered - the player window holds the foreground, but its thread focus stayed on %s after %d deliveries", c.SessionID, playerFocusDesc(ws), focusMaxAttempts)
 					case seqLogLocked:
 						logf("watchdog: session %d: focus locked - the player window (%q) holds the foreground", c.SessionID, sessionFocus.playerClass())
 					case seqLogUnresolved:

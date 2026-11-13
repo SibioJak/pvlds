@@ -137,3 +137,70 @@ func (t *fgTracker) observe(sessionID int, ws windowState) (fgChange, bool) {
 	t.proc, t.title = ws.fgProcName, ws.fgTitle
 	return ch, true
 }
+
+// playerFocusDesc renders the player thread's focus window
+// for a log line, in plain words: the window's class and
+// handle, "no window" when the thread has none, and the
+// player-window suffix when the focus IS the player target -
+// the one distinction a field log is read for (FIX117).
+func playerFocusDesc(ws windowState) string {
+	if ws.playerFocusHWND == 0 {
+		return "no window"
+	}
+	s := fmt.Sprintf("%q window (hwnd %#x)", ws.playerFocusClass, ws.playerFocusHWND)
+	if ws.focusIsPlayer {
+		s += " - the player window itself"
+	}
+	return s
+}
+
+// playerFocusTracker is the per-session change detector for
+// the PLAYER THREAD'S focus (FIX117 instrumentation): fed
+// every active-session tick, it reports the focus reading
+// ONCE PER CHANGE - the same discipline as the foreground
+// tracker above, for the state the foreground tracker cannot
+// see (a session whose foreground never moves can still have
+// its player thread's focus land, move, or never arrive).
+// A failed reader is reported once per session; an unknown
+// reading (no target yet, a leaf with no reader) is silent -
+// it is the absence of a fact, not a fact. LOGGING ONLY, like
+// everything in this file: no decision reads the tracker.
+type playerFocusTracker struct {
+	sessionID    int
+	seen         bool // a positive reading has been recorded
+	hwnd         uintptr
+	class        string
+	isPlayer     bool
+	failedLogged bool // the reader-failure line has been written this session
+}
+
+// observe folds one tick's focus snapshot in. changed=true
+// says the caller logs playerFocusDesc(ws) as the new state;
+// failed=true (once per session) says the caller logs the
+// reader-unavailable line.
+func (t *playerFocusTracker) observe(sessionID int, ws windowState) (changed, failed bool) {
+	if sessionID != t.sessionID {
+		t.sessionID = sessionID
+		t.seen = false
+		t.failedLogged = false
+	}
+	switch ws.focusRead {
+	case focusReadFailed:
+		// Only a failure WITH a target standing is the
+		// reader's failure; with no target there is nothing
+		// to read and nothing to report.
+		if ws.playerHWND != 0 && !t.failedLogged {
+			t.failedLogged = true
+			return false, true
+		}
+		return false, false
+	case focusReadOK:
+		if t.seen && t.hwnd == ws.playerFocusHWND && t.class == ws.playerFocusClass && t.isPlayer == ws.focusIsPlayer {
+			return false, false
+		}
+		t.seen = true
+		t.hwnd, t.class, t.isPlayer = ws.playerFocusHWND, ws.playerFocusClass, ws.focusIsPlayer
+		return true, false
+	}
+	return false, false
+}
