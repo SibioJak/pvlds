@@ -65,6 +65,27 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
 
 ## The hand-off (M2)
 
+- **Handheld controller pointers after return.** The room binds its
+  controller nodes to Godot's registered `left_hand` / `right_hand`
+  trackers. The OpenXR `/user/hand/left` / `/user/hand/right` paths belong
+  in the action map, not the XRServer tracker lookup: the field log
+  showed a focused session with both lookups missing under those paths.
+  The regression test builds the room's actual rig against trackers
+  registered under the names used by Godot's OpenXR backend.
+  Both tracked hands now show their own laser and hit marker. Each
+  trigger selects that hand's target; the room's shared hover follows
+  the most recently selecting hand. Previously, the right-hand laser
+  hid the left one and either trigger acted on the right-hand hover.
+  The pointer now chooses
+  a pose with current tracking data (aim first, then default or grip),
+  rather than treating a registered pose as proof of tracking. An
+  untracked right hand no longer masks a tracked left hand, and a
+  returning hand can use a live aim pose while its default pose is
+  inactive. The launcher records OpenXR state, active action sets,
+  controller profiles and pose tracking in `user://pvlds_xr_input.log`.
+  This includes a ten-second heartbeat and button events so a remaining
+  runtime input failure can be distinguished from a stale pointer. The
+  unsuccessful three-second return delay has been removed.
 - **Controller input after launch.** The default Windows focus delivery
   now gives an already-foreground VPX player a real activation cycle:
   it briefly focuses an off-screen watchdog tool window, then returns
