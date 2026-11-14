@@ -1737,10 +1737,7 @@ func _build_rigs() -> void:
 	add_child(origin)
 	_xr_camera = XRCamera3D.new()
 	origin.add_child(_xr_camera)
-	for side: String in ["left", "right"]:
-		var ctrl: XRController3D = XRController3D.new()
-		ctrl.tracker = StringName("/user/hand/" + side)
-		origin.add_child(ctrl)
+	PointerRig.add_hand_controllers(origin)
 	_desk_rig = Node3D.new()
 	_desk_rig.position = EYE
 	add_child(_desk_rig)
