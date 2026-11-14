@@ -80,6 +80,9 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
   A library of up to twelve games stays centred as a group, including
   when restoring a saved game. It does not scroll while all games fit
   on one page; larger libraries keep the edge scrolling behavior.
+  Floating amber arrows mark the available scroll directions at the
+  view's side edges, vertically centred. Each disappears at its end
+  of the library, and both hide during loading or modal screens.
 - **Handheld controller pointers after return.** The room binds its
   controller nodes to Godot's registered `left_hand` / `right_hand`
   trackers. The OpenXR `/user/hand/left` / `/user/hand/right` paths belong

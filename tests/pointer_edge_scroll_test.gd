@@ -48,6 +48,7 @@ func _room(xr: bool, count: int = 30) -> EdgeRoom:
 		room._visible_games.append(GameEntry.new())
 	room._focusables.assign(room._panels)
 	room._set_centre(4 if count > 4 else 0, true)
+	room._update_scroll_arrows()
 	return room
 
 
@@ -56,6 +57,14 @@ func _tick(room: EdgeRoom, frames: int) -> void:
 		room._step_rest_timer = maxf(0.0, room._step_rest_timer - 1.0 / 90.0)
 		room._follow_centre(1.0 / 90.0)
 		room._update_swing(1.0 / 90.0)
+		room._update_scroll_arrows()
+
+
+func _expect_arrows(room: EdgeRoom, left: bool, right: bool, message: String) -> void:
+	var arrows: ScrollEdgeArrows = room._scroll_arrows
+	var actual_left: bool = arrows._left_3d.visible if room._xr_enabled else arrows._left_2d.visible
+	var actual_right: bool = arrows._right_3d.visible if room._xr_enabled else arrows._right_2d.visible
+	_expect(actual_left == left and actual_right == right, message + " (XR=%s)" % room._xr_enabled)
 
 
 func _run() -> void:
@@ -104,6 +113,30 @@ func _run() -> void:
 
 	for xr: bool in [false, true]:
 		var room: EdgeRoom = _room(xr)
+		_expect_arrows(room, true, true, "both directions are shown within a larger library")
+		var arrows: ScrollEdgeArrows = room._scroll_arrows
+		if xr:
+			var old_camera: Transform3D = room._xr_camera.transform
+			room._xr_camera.transform = Transform3D(Basis(Vector3.UP, 0.4), Vector3(1, 2, 3))
+			for arrow: MeshInstance3D in [arrows._left_3d, arrows._right_3d]:
+				var local: Vector3 = room._xr_camera.global_transform.affine_inverse() * arrow.global_position
+				_expect(is_zero_approx(local.y) and is_equal_approx(absf(atan2(local.x, -local.z)), PointerEdgeScroll.VR_EDGE_ANGLE_RAD),
+					"XR arrow stays at eye height in its head-relative scroll zone")
+				_expect(arrow.mesh.get_surface_count() == 1 and arrow.mesh.get_aabb().size.y > 0, "XR chevron has visible triangle geometry")
+			room._xr_camera.transform = old_camera
+		else:
+			for dimensions: Vector2i in [Vector2i(1280, 720), Vector2i(800, 600), Vector2i(1920, 1080)]:
+				root.size = dimensions
+				await process_frame
+				var view: Vector2 = root.get_visible_rect().size
+				for arrow: Control in [arrows._left_2d, arrows._right_2d]:
+					_expect(is_equal_approx(arrow.global_position.y, view.y * 0.5), "desktop arrow stays vertically centred on resize")
+					var sample: Dictionary = PointerEdgeScroll.mouse_sample(arrow.global_position, root.get_visible_rect())
+					_expect(sample["valid"] and absf(sample["x"]) > 1.0, "desktop arrow sits inside its scroll zone")
+					_expect(arrow.mouse_filter == Control.MOUSE_FILTER_IGNORE and arrow.get_parent().mouse_filter == Control.MOUSE_FILTER_IGNORE,
+						"arrows cannot intercept mouse hover or clicks")
+			root.size = Vector2i(1280, 720)
+			await process_frame
 		var initial: int = room._centre_index
 		room.samples = [_sample(0.0, "right_hand" if xr else "mouse")]
 		# The real card material and pop spring must follow hover,
@@ -141,6 +174,7 @@ func _run() -> void:
 		_tick(room, 900)
 		_expect(room._grid_coord(room._centre_index).x == room._columns - 1,
 			"holding right edge with no highlighted card reaches the last column (XR=%s)" % xr)
+		_expect_arrows(room, true, false, "right arrow hides at the last column")
 		var end_yaw: float = room._drum_yaw
 		_tick(room, 300)
 		_expect(is_equal_approx(room._drum_yaw, end_yaw) and not room._swing_active,
@@ -149,11 +183,28 @@ func _run() -> void:
 		_tick(room, 1200)
 		_expect(room._grid_coord(room._centre_index).x == 0 and not room._swing_active,
 			"holding left edge reaches and stops at the first column (XR=%s)" % xr)
+		_expect_arrows(room, false, true, "left arrow hides at the first column")
 		room.samples = [_sample(1.2)]
 		room._setup_panel_up = true
 		_tick(room, 120)
 		_expect(room._grid_coord(room._centre_index).x == 0, "setup panel prevents edge scrolling")
+		_expect_arrows(room, false, false, "setup panel hides scroll arrows")
 		room._setup_panel_up = false
+		for modal: String in ["_placard_up", "_submit_panel_up", "_submissions_panel_up"]:
+			room.set(modal, true)
+			room._update_scroll_arrows()
+			_expect_arrows(room, false, false, "modal screens hide scroll arrows")
+			room.set(modal, false)
+		room._mode = "detail"
+		room._update_scroll_arrows()
+		_expect_arrows(room, false, false, "detail view hides arrows")
+		room._mode = "wall"
+		room._launching_game_id = "test-game"
+		room._update_scroll_arrows()
+		_expect_arrows(room, false, false, "launch wait hides arrows")
+		room._launching_game_id = ""
+		room._update_scroll_arrows()
+		_expect_arrows(room, false, true, "arrows return with the browsing wall")
 		room._focused = room._panels[6]
 		room.samples = [_sample(0)]
 		_tick(room, 1)
@@ -188,6 +239,7 @@ func _run() -> void:
 			for side: int in [-1, 1]:
 				small.samples = [_sample(side * 1.2)]
 				_tick(small, 300)
+				_expect_arrows(small, false, false, "single-page library has no scroll arrows")
 				_expect(small._edge_scroll_target(side) == -1 and is_equal_approx(small._drum_yaw, centred_yaw) and not small._swing_active,
 					"single-page library ignores edge scrolling (XR=%s, count=%d)" % [xr, count])
 			small.queue_free()

@@ -40,7 +40,7 @@ func observe(controllers: Array[XRController3D], selected: XRController3D, deskt
 	if not _header_written:
 		_header_written = true
 		var contract: WatchdogContract = WatchdogContract.load_from_disk()
-		record_event("launcher_xr_input", {"build": "small-library-centre-8", "godot": Engine.get_version_info().get("string", ""),
+		record_event("launcher_xr_input", {"build": "scroll-edge-arrows-9", "godot": Engine.get_version_info().get("string", ""),
 			"session_id": contract.session_id, "session_state": contract.session_state,
 			"runtime": interface.call("get_system_info") if interface != null and interface.has_method("get_system_info") else {}})
 	var snapshot: Dictionary = {"initialized": interface != null and interface.is_initialized(),

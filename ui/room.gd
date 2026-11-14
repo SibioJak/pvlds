@@ -1436,6 +1436,7 @@ var _swing_cols: float = 1.0 ## the live swing's remaining travel in columns (th
 var _swing_journey: bool = false ## a retarget arrived mid-travel in the travel's own direction: the spring softens to the stepping cadence so a held scroll builds to a cruise instead of settling between steps
 var _swing_active: bool = false
 var _pointer_edge_scroll: PointerEdgeScroll = PointerEdgeScroll.new()
+var _scroll_arrows: ScrollEdgeArrows
 var _pointer_follow_focus: ClickableQuad = null
 var _nc_roll_dir: int = 0 ## debug_opt_nc="smoothcruise" seam only: the continuous roll's direction while it stands (0 in every production run - STEPPED never rolls)
 var _step_from_col: int = -1 ## OPTIMIZE telemetry: the standing step record's origin column (-1 = no step in flight)
@@ -1754,6 +1755,9 @@ func _build_rigs() -> void:
 	_rig.setup_controllers(origin)
 	_rig.hover_changed.connect(_on_hover_changed)
 	_rig.select_pressed.connect(_on_select)
+	_scroll_arrows = ScrollEdgeArrows.new()
+	_active_camera().add_child(_scroll_arrows)
+	_scroll_arrows.setup(_xr_enabled)
 
 
 func _active_camera() -> Camera3D:
@@ -8201,7 +8205,7 @@ func _pop_target_panel() -> ClickableQuad:
 ## hover. Holding an edge advances one column at a time while more
 ## games exist that way. Explicit navigation focus remains immediate.
 func _follow_centre(delta: float = 0.0) -> void:
-	if _mode != "wall" or _placard_up or _setup_panel_up or _submit_panel_up or _launching_game_id != "":
+	if not _edge_scroll_enabled():
 		_pointer_edge_scroll.reset()
 		_pointer_follow_focus = _focused
 		return
@@ -8228,6 +8232,17 @@ func _follow_centre(delta: float = 0.0) -> void:
 		var target: int = left if direction < 0 else right
 		_telemetry_record("pointer_edge_step", {"from_index": _centre_index, "to_index": target, "direction": direction})
 		_set_centre(target)
+
+
+func _edge_scroll_enabled() -> bool:
+	return is_visible_in_tree() and _mode == "wall" and not _placard_up and not _setup_panel_up \
+		and not _submit_panel_up and not _submissions_panel_up and _launching_game_id == ""
+
+
+func _update_scroll_arrows() -> void:
+	if _scroll_arrows != null:
+		var enabled: bool = _edge_scroll_enabled() and _nc_roll_dir == 0
+		_scroll_arrows.set_available(enabled and _edge_scroll_target(-1) >= 0, enabled and _edge_scroll_target(1) >= 0)
 
 
 func _edge_pointer_samples() -> Array[Dictionary]:
@@ -12660,6 +12675,7 @@ func _process(delta: float) -> void:
 	_update_pop(delta)
 	_update_rail_lift(delta)
 	_update_swing(delta)
+	_update_scroll_arrows()
 	# Scroll telemetry (observation only): one frame record
 	# per rendered frame in which the drum was moving when
 	# the frame began or still is when its swing update has
