@@ -65,6 +65,21 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
 
 ## The hand-off (M2)
 
+- **Controller input after launch.** The default Windows focus delivery
+  now gives an already-foreground VPX player a real activation cycle:
+  it briefly focuses an off-screen watchdog tool window, then returns
+  focus to the player. This covers tables whose Windows focus readings
+  look correct but whose buttons only start working after Alt+Tab,
+  including BGFX sessions with no PinMAME companion window. The
+  hand-off delivery also runs when focus locked during loading or the
+  launcher exits after the focus deadline. No controller remapping is
+  required. Keep `focus_herding` enabled and `focus_actuation_probe`
+  disabled; the default rung 1 and rung 3 both use the activation cycle
+  when the player already holds the foreground. The watchdog logs
+  `activation cycle: switched away ... and back (returned=true)` when
+  the round trip succeeds. As with the existing focus helpers, a
+  refused Windows focus request is logged; controller operation still
+  needs verification on the actual headset and controller.
 - **Launch.** Every wall panel carries a **LAUNCH** button (the card
   itself still opens the detail view). In the VR room, **Y flips the
   focused card** to its data back — table data and its own LAUNCH in
