@@ -29,6 +29,7 @@ signal wovp_key_test_requested ## the SETUP panel's TEST KEY: Main validates the
 signal wovp_submit_requested(challenge_id: String, photo_path: String) ## ROOMSUBMIT: the submit panel's SEND: Main runs the same two-step WoVP submission the desk runs (its refusals, its log, its boards refresh) and answers through set_wovp_submit_result
 signal display_settings_changed ## a SETUP display dial turned (the starfield): Main persists the room's standing values to the config
 signal pinemhi_watcher_toggled(on: bool) ## PINEMHI2 (Part B): the SETUP panel's PINEMHI WATCHER dial flipped: Main flips + saves the config's watcher-management toggle (the room never holds config)
+signal edge_arrows_toggled(on: bool) ## FIX122: the SETUP panel's EDGE ARROWS dial flipped: Main flips + saves the config's edge-arrows toggle (the room never holds config)
 
 const PAGE_COLS: int = 4
 const PAGE_ROWS: int = 3
@@ -1294,6 +1295,8 @@ var _setup_panel_stars_btn: ClickableQuad = null ## STARS: LAYERED/FLAT/OFF - th
 var _setup_panel_back_btn: ClickableQuad = null
 var _setup_panel_ipdb_btn: ClickableQuad = null ## CARDBACK/IPDBFIX: RE-APPLY IPDB DATA - Main re-applies the bundled snapshot, the panel's mirror of the desk's button
 var _setup_panel_watcher_btn: ClickableQuad = null ## PINEMHI2 (Part B): PINEMHI WATCHER: ON/OFF - the watcher-management dial, a full-width row under BACK's row (the panel's PINemHi presence is its face line; the dial stands beside it in the button stack)
+var _setup_panel_arrows_btn: ClickableQuad = null ## FIX122: EDGE ARROWS: ON/OFF - the edge-scroll chevron dial, a full-width row under the watcher row (OFF by default - the player hates the chevrons)
+var _edge_arrows: bool = false ## FIX122: the dial's standing value, pushed by Main from the config (set_edge_arrows); a press flips it here and reports via edge_arrows_toggled - Main owns the save
 var _setup_btn_tex: Dictionary = {} ## ENDGAME (Part B): panel button quad -> [rest_tex, lifted_tex] - both dresses rendered at fill time, swapped on focus (the strip's discipline: the material change must never wait on a render)
 var _setup_btn_home: Dictionary = {} ## ENDGAME (Part B): panel button quad -> its built position; the focused button lifts toward the eye off this home
 const SETUP_BTN_LIFT: float = 0.02 ## ENDGAME (Part B): the focused panel button's bevel-lift toward the eye (the strip sections lift 0.032 off a wider bar; a button is a smaller piece of furniture)
@@ -7996,6 +7999,8 @@ func _refresh_focusables() -> void:
 			_focusables.append(_setup_panel_ipdb_btn)
 		if _setup_panel_watcher_btn != null:
 			_focusables.append(_setup_panel_watcher_btn)
+		if _setup_panel_arrows_btn != null:
+			_focusables.append(_setup_panel_arrows_btn)
 		if _setup_panel_back_btn != null:
 			_focusables.append(_setup_panel_back_btn)
 	elif _submit_panel_up:
@@ -8084,7 +8089,8 @@ func _apply_setup_panel_button_dress() -> void:
 	for bq: ClickableQuad in [_setup_panel_scan_btn, _setup_panel_dl_btn,
 			_setup_panel_wovp_paste_btn, _setup_panel_wovp_test_btn,
 			_setup_panel_stars_btn,
-			_setup_panel_ipdb_btn, _setup_panel_back_btn, _setup_panel_watcher_btn]:
+			_setup_panel_ipdb_btn, _setup_panel_back_btn, _setup_panel_watcher_btn,
+			_setup_panel_arrows_btn]:
 		if bq == null:
 			continue
 		var lifted: bool = bq == _focused
@@ -8150,6 +8156,8 @@ func _refresh_quad_states() -> void:
 		all.append(_setup_panel_ipdb_btn)
 	if _setup_panel_watcher_btn != null:
 		all.append(_setup_panel_watcher_btn)
+	if _setup_panel_arrows_btn != null:
+		all.append(_setup_panel_arrows_btn)
 	if _setup_panel_back_btn != null:
 		all.append(_setup_panel_back_btn)
 	# ROOMSUBMIT: the submit panel's stops take visual
@@ -8255,7 +8263,11 @@ func _edge_scroll_enabled() -> bool:
 
 func _update_scroll_arrows() -> void:
 	if _scroll_arrows != null:
-		var enabled: bool = _edge_scroll_enabled() and _nc_roll_dir == 0
+		# FIX122: the chevrons are a toggle, OFF by default - the
+		# gate stands here, the one choke point, so off means no
+		# chevron anywhere, in either room, in any state. Edge
+		# scrolling itself never consults this flag.
+		var enabled: bool = _edge_arrows and _edge_scroll_enabled() and _nc_roll_dir == 0
 		_scroll_arrows.set_available(enabled and _edge_scroll_target(-1) >= 0, enabled and _edge_scroll_target(1) >= 0)
 
 
@@ -9006,6 +9018,13 @@ func _activate(quad: ClickableQuad) -> void:
 				_pinemhi_manage_watcher = not _pinemhi_manage_watcher
 				set_setup_panel_message("PINemHi watcher: LaunchPin will run the watcher while a table is playing - saving..." if _pinemhi_manage_watcher else "PINemHi watcher: LaunchPin will not run the watcher - saving...")
 				pinemhi_watcher_toggled.emit(_pinemhi_manage_watcher)
+				_request_setup_panel_render(true)
+			"setup_setting_edge_arrows":
+				quad.pulse()
+				_edge_arrows = not _edge_arrows
+				set_setup_panel_message("Edge arrows: the wall's edge chevrons will show when a scroll is available - saving..." if _edge_arrows else "Edge arrows: the wall's edge chevrons will stay hidden - saving...")
+				edge_arrows_toggled.emit(_edge_arrows)
+				_update_scroll_arrows()
 				_request_setup_panel_render(true)
 		return
 	if _submit_panel_up:
@@ -10216,6 +10235,7 @@ func clear_setup_panel() -> void:
 		_setup_panel_wovp_test_btn = null
 		_setup_panel_ipdb_btn = null
 		_setup_panel_watcher_btn = null
+		_setup_panel_arrows_btn = null
 		_setup_panel_back_btn = null
 		_setup_btn_tex.clear()
 		_setup_btn_home.clear()
@@ -10278,6 +10298,10 @@ func setup_panel_watcher_quad() -> ClickableQuad:
 	return _setup_panel_watcher_btn
 
 
+func setup_panel_arrows_quad() -> ClickableQuad:
+	return _setup_panel_arrows_btn
+
+
 ## PINEMHI2 (Part B): the watcher dial's standing value -
 ## Main pushes the config's toggle in at room entry (the
 ## room never holds config), a press on the dial flips the
@@ -10292,6 +10316,24 @@ func set_pinemhi_manage_watcher(on: bool) -> void:
 
 func pinemhi_manage_watcher() -> bool:
 	return _pinemhi_manage_watcher
+
+
+## FIX122: the edge-arrows dial's standing value - Main pushes
+## the config's toggle in at room entry (the room never holds
+## config), a press on the dial flips the local value and
+## reports it (edge_arrows_toggled), and Main calls back here
+## if its save failed, so the dial never shows a state the
+## config does not hold. Flipping applies at once: the
+## chevrons vanish (or return) without leaving the panel.
+func set_edge_arrows(on: bool) -> void:
+	_edge_arrows = on
+	_update_scroll_arrows()
+	if _setup_panel_up:
+		_request_setup_panel_render(true)
+
+
+func edge_arrows() -> bool:
+	return _edge_arrows
 
 
 ## PASTE KEY: the room's paste field. VR has no keyboard,
@@ -10395,10 +10437,15 @@ func _build_setup_panel() -> void:
 	# (~681 px/m, so the spec's text sizes keep their
 	# physical size): the face grows to hold the worst-case
 	# health census with margin, the buttons widen until no
-	# label wraps, and the stack's bottom (local -1.065,
-	# world y 0.255) clears the numbers line and the strip
-	# below it. Stack: face +0.14..+1.645, rows at 0.0 /
-	# -0.245 / -0.49 / -0.735 / -0.98.
+	# label wraps, and the stack's bottom clears the numbers
+	# line and the strip below it. Stack: face +0.14..+1.645.
+	# FIX122: the EDGE ARROWS dial added a sixth row, so the
+	# pitch compresses 0.245 -> 0.21 (rows at 0.0 / -0.21 /
+	# -0.42 / -0.63 / -0.84 / -1.05) and the bottom stands at
+	# local -1.135, world y 0.185 - still 5.4 degrees above
+	# the numbers line, inside PANELFIT's 3-degree law. A
+	# sixth row at the old pitch would have landed at 1.9
+	# degrees and failed the clearance leg.
 	# PANEL112 (item 2): the face grows UP to hold the
 	# sectioned body at the standing body size - the fit
 	# law's own term. The bottom stays at local +0.14 (the
@@ -10428,11 +10475,11 @@ func _build_setup_panel() -> void:
 	# the standing state in words.
 	_setup_panel_wovp_paste_btn = ClickableQuad.new()
 	_setup_panel_wovp_paste_btn.setup("setup_panel_wovp_paste", "", placeholder, Vector2(0.98, 0.17))
-	_setup_panel_wovp_paste_btn.position = Vector3(-0.515, -0.245, 0.0)
+	_setup_panel_wovp_paste_btn.position = Vector3(-0.515, -0.21, 0.0)
 	_setup_panel.add_child(_setup_panel_wovp_paste_btn)
 	_setup_panel_wovp_test_btn = ClickableQuad.new()
 	_setup_panel_wovp_test_btn.setup("setup_panel_wovp_test", "", placeholder, Vector2(0.98, 0.17))
-	_setup_panel_wovp_test_btn.position = Vector3(0.515, -0.245, 0.0)
+	_setup_panel_wovp_test_btn.position = Vector3(0.515, -0.21, 0.0)
 	_setup_panel.add_child(_setup_panel_wovp_test_btn)
 	# The display dial row (the GRAD FIX round; the WING
 	# dial retired with the wing itself in GRADFIX6 - the
@@ -10450,7 +10497,7 @@ func _build_setup_panel() -> void:
 	# that could not change anything.
 	_setup_panel_stars_btn = ClickableQuad.new()
 	_setup_panel_stars_btn.setup("setup_setting_stars", "", placeholder, Vector2(2.01, 0.17))
-	_setup_panel_stars_btn.position = Vector3(0.0, -0.49, 0.0)
+	_setup_panel_stars_btn.position = Vector3(0.0, -0.42, 0.0)
 	_setup_panel.add_child(_setup_panel_stars_btn)
 	# The last two-column row (CARDBACK/IPDBFIX): RE-APPLY
 	# IPDB DATA shares it with BACK - the bundled snapshot's
@@ -10458,11 +10505,11 @@ func _build_setup_panel() -> void:
 	# panel only asks.
 	_setup_panel_ipdb_btn = ClickableQuad.new()
 	_setup_panel_ipdb_btn.setup("setup_panel_ipdb", "", placeholder, Vector2(0.98, 0.17))
-	_setup_panel_ipdb_btn.position = Vector3(-0.515, -0.735, 0.0)
+	_setup_panel_ipdb_btn.position = Vector3(-0.515, -0.63, 0.0)
 	_setup_panel.add_child(_setup_panel_ipdb_btn)
 	_setup_panel_back_btn = ClickableQuad.new()
 	_setup_panel_back_btn.setup("setup_panel_back", "", placeholder, Vector2(0.98, 0.17))
-	_setup_panel_back_btn.position = Vector3(0.515, -0.735, 0.0)
+	_setup_panel_back_btn.position = Vector3(0.515, -0.63, 0.0)
 	_setup_panel.add_child(_setup_panel_back_btn)
 	# The watcher row (PINEMHI2 Part B): one full-width dial
 	# under the BACK row - PINEMHI WATCHER: ON/OFF, the STARS
@@ -10474,8 +10521,18 @@ func _build_setup_panel() -> void:
 	# stack directly beneath it.
 	_setup_panel_watcher_btn = ClickableQuad.new()
 	_setup_panel_watcher_btn.setup("setup_setting_pinemhi_watcher", "", placeholder, Vector2(2.01, 0.17))
-	_setup_panel_watcher_btn.position = Vector3(0.0, -0.98, 0.0)
+	_setup_panel_watcher_btn.position = Vector3(0.0, -0.84, 0.0)
 	_setup_panel.add_child(_setup_panel_watcher_btn)
+	# The arrows row (FIX122): one full-width dial under the
+	# watcher row - EDGE ARROWS: ON/OFF, the STARS dial's
+	# terms (the label states the standing value; a press
+	# flips it in the room at once and Main persists it via
+	# edge_arrows_toggled). OFF by default: the chevrons
+	# stay hidden until the player asks for them.
+	_setup_panel_arrows_btn = ClickableQuad.new()
+	_setup_panel_arrows_btn.setup("setup_setting_edge_arrows", "", placeholder, Vector2(2.01, 0.17))
+	_setup_panel_arrows_btn.position = Vector3(0.0, -1.05, 0.0)
+	_setup_panel.add_child(_setup_panel_arrows_btn)
 	# ENDGAME (Part B): the panel's buttons wear the machined
 	# dress - their focus read is the bevel-lift (lifted
 	# gradient + a step toward the eye), not the frame, so
@@ -10485,7 +10542,8 @@ func _build_setup_panel() -> void:
 	for bq: ClickableQuad in [_setup_panel_scan_btn, _setup_panel_dl_btn,
 			_setup_panel_wovp_paste_btn, _setup_panel_wovp_test_btn,
 			_setup_panel_stars_btn,
-			_setup_panel_ipdb_btn, _setup_panel_back_btn, _setup_panel_watcher_btn]:
+			_setup_panel_ipdb_btn, _setup_panel_back_btn, _setup_panel_watcher_btn,
+			_setup_panel_arrows_btn]:
 		bq.suppress_frame = true
 		_setup_btn_home[bq] = bq.position
 	if _setup_downloader == null:
@@ -10553,6 +10611,7 @@ func _fill_setup_panel_textures(gen: int) -> void:
 		[_setup_panel_ipdb_btn, "RE-APPLY IPDB DATA", false, Vector2i(672, 116)],
 		[_setup_panel_back_btn, "BACK", true, Vector2i(672, 116)],
 		[_setup_panel_watcher_btn, "PINEMHI WATCHER: " + ("ON" if _pinemhi_manage_watcher else "OFF"), false, Vector2i(1372, 116)],
+		[_setup_panel_arrows_btn, "EDGE ARROWS: " + ("ON" if _edge_arrows else "OFF"), false, Vector2i(1372, 116)],
 	]
 	for lifted_pass: bool in [false, true]:
 		for b: Array in btns:

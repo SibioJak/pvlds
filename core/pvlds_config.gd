@@ -105,6 +105,14 @@ const STARFIELD_MODES: Array[String] = ["layered", "flat", "off"]
 ## "stepped". The SETUP panel's WALL MOTION button is gone.
 var wall_motion_mode: String = "stepped" ## always "stepped" (OPTIMIZE)
 const WALL_MOTION_MODES: Array[String] = ["stepped"]
+## FIX122: the edge-scroll arrows toggle. The amber chevrons
+## droscoe added at the wall's edges (1.1.11) mark which way the
+## wall can scroll; the player hates them, so they are an option
+## and OFF by default - a config without the key loads OFF, an
+## explicit true is honoured. The toggle lives on the in-room
+## SETUP panel (EDGE ARROWS: ON/OFF); edge scrolling itself
+## never consults this key - only the chevrons do.
+var edge_arrows: bool = false
 ## HOLD-EXIT: the hold-to-exit toggle. Holding D-pad right for
 ## 1.5 s during a table session shuts the whole works down
 ## (the watchdog reads the pad and fires; see watchdog/
@@ -222,6 +230,7 @@ func load_from_disk() -> bool:
 	pinemhi_enabled = bool(d.get("pinemhi_enabled", true))
 	hold_exit_enabled = bool(d.get("hold_exit_enabled", true))
 	pinemhi_manage_watcher = bool(d.get("pinemhi_manage_watcher", false))
+	edge_arrows = bool(d.get("edge_arrows", false))
 	screenshots_folder = str(d.get("screenshots_folder", ""))
 	update_feed_url = str(d.get("update_feed_url", ""))
 	# OPTIMIZE: any stored gait coerces to the one gait -
@@ -253,6 +262,7 @@ func save_to_disk() -> bool:
 	d["pinemhi_enabled"] = pinemhi_enabled
 	d["hold_exit_enabled"] = hold_exit_enabled
 	d["pinemhi_manage_watcher"] = pinemhi_manage_watcher
+	d["edge_arrows"] = edge_arrows
 	d["screenshots_folder"] = screenshots_folder
 	d["update_feed_url"] = update_feed_url
 	wall_motion_mode = "stepped" ## OPTIMIZE: saves write the one gait, whatever a caller left standing in the var

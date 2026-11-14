@@ -2373,6 +2373,26 @@ func _on_room_pinemhi_watcher_toggled(on: bool) -> void:
 		_room.set_setup_panel_message("That watcher setting could NOT be saved - the config file is not writable, so the switch has been put back as it was.")
 
 
+## FIX122: the room SETUP panel's EDGE ARROWS dial - the
+## watcher's terms exactly (flip + save, and a failed save
+## restores the config AND the dial, and says so on the
+## panel: a toggle that did not save must not look - or act
+## - flipped).
+func _on_room_edge_arrows_toggled(on: bool) -> void:
+	if _config == null:
+		return
+	_config.edge_arrows = on
+	if _config.save_to_disk():
+		if _room != null:
+			_room.set_setup_panel_message("Edge arrows: the wall's edge chevrons will show when a scroll is available." if on else "Edge arrows: the wall's edge chevrons will stay hidden.")
+		_refresh_setup_panel_health()
+		return
+	_config.edge_arrows = not on
+	if _room != null:
+		_room.set_edge_arrows(not on)
+		_room.set_setup_panel_message("That arrows setting could NOT be saved - the config file is not writable, so the switch has been put back as it was.")
+
+
 func _on_room_wovp_key_pasted(api_key: String) -> void:
 	if _config == null:
 		return
@@ -2739,11 +2759,13 @@ func _enter_room() -> void:
 		_room.tournament_refresh_requested.connect(_pinemhi_fetch_weekly) ## PINEMHI2: REFRESH re-pulls the weekly boards too
 		_room.wovp_key_pasted.connect(_on_room_wovp_key_pasted)
 		_room.pinemhi_watcher_toggled.connect(_on_room_pinemhi_watcher_toggled)
+		_room.edge_arrows_toggled.connect(_on_room_edge_arrows_toggled)
 		_room.wovp_submit_requested.connect(_on_room_wovp_submit_requested)
 		_room.wovp_key_test_requested.connect(_on_room_wovp_key_test)
 		_room.display_settings_changed.connect(_on_display_settings_changed)
 		_room.set_starfield_mode(_config.starfield_mode)
 		_room.set_pinemhi_manage_watcher(_config.pinemhi_manage_watcher) ## PINEMHI2 (Part B): the SETUP dial's standing value
+		_room.set_edge_arrows(_config.edge_arrows) ## FIX122: the SETUP dial's standing value (OFF by default)
 		_room.set_wall_motion_mode(_config.wall_motion_mode)
 		_room.launch_requested.connect(_on_launch_requested)
 		_room.exit_requested.connect(_on_exit_requested)
@@ -4871,9 +4893,18 @@ func _setup_panel_smoke_orphan_highlight() -> bool:
 ## at least 3 degrees above the numbers line's centre, so
 ## the stack reads clear of the strip furniture under it.
 func _setup_panel_bottom_clears_numbers() -> bool:
-	if _room == null or _room.setup_panel_watcher_quad() == null or _room._numbers_label == null:
+	# FIX122: the lowest quad is the EDGE ARROWS dial now (the
+	# sixth row, under the watcher) - the clearance reads off
+	# it; the watcher quad stands as the fallback while the
+	# panel is still being built.
+	if _room == null or _room._numbers_label == null:
 		return false
-	var wq: ClickableQuad = _room.setup_panel_watcher_quad()
+	var lowest: ClickableQuad = _room.setup_panel_arrows_quad()
+	if lowest == null:
+		lowest = _room.setup_panel_watcher_quad()
+	if lowest == null:
+		return false
+	var wq: ClickableQuad = lowest
 	var gt: Transform3D = wq.get_global_transform()
 	var half: Vector2 = wq.quad_size() * 0.5
 	var worst: float = -90.0
@@ -4968,8 +4999,23 @@ func _setup_panel_surface_assertions() -> void:
 		"wall motion dial: the config still reads STEPPED after panel interaction")
 	_room._activate(_room.setup_panel_stars_quad())
 	_room._activate(_room.setup_panel_stars_quad())
+	# FIX122: the EDGE ARROWS dial flips the config and the
+	# room together - pressed twice, so the panel is left
+	# as it was found (OFF). The press handler's own
+	# _update_scroll_arrows call is what hides the chevrons
+	# at once; the room-level legs in the edge-scroll suite
+	# prove the render side.
+	_setup_panel_expect(_config != null and not _config.edge_arrows,
+		"edge arrows: the dial starts OFF (the config carries no key)")
+	_room._activate(_room.setup_panel_arrows_quad())
+	_setup_panel_expect(_config != null and _config.edge_arrows and _room.edge_arrows(),
+		"edge arrows: one press turns the dial (and the config) ON")
+	_room._activate(_room.setup_panel_arrows_quad())
+	_setup_panel_expect(_config != null and not _config.edge_arrows and not _room.edge_arrows(),
+		"edge arrows: a second press turns the dial (and the config) back OFF")
 	_setup_panel_expect(_room.setup_panel_ipdb_quad() != null, "XR setup: the panel has RE-APPLY IPDB DATA")
 	_setup_panel_expect(_room.setup_panel_watcher_quad() != null, "XR setup: the panel has PINEMHI WATCHER (the watcher dial row)")
+	_setup_panel_expect(_room.setup_panel_arrows_quad() != null, "XR setup: the panel has EDGE ARROWS (the chevron dial row, FIX122)")
 	_setup_panel_expect(_room.setup_panel_back_quad() != null, "XR setup: the panel has BACK")
 	# PANELFIT (item 1): the reseated panel's bottom clears
 	# the numbers line - the lowest panel quad's downward
@@ -5031,6 +5077,7 @@ func _setup_panel_surface_assertions() -> void:
 		and _room.setup_panel_stars_quad().pick_enabled
 		and _room.setup_panel_ipdb_quad().pick_enabled
 		and _room.setup_panel_watcher_quad().pick_enabled
+		and _room.setup_panel_arrows_quad().pick_enabled
 		and _room.setup_panel_back_quad().pick_enabled,
 		"XR setup: the panel's own buttons are live")
 	# PANELFIT restatement: this leg was written when the
@@ -5040,7 +5087,8 @@ func _setup_panel_surface_assertions() -> void:
 	# button, and the leg now pins the surviving EIGHT -
 	# same intent (focus is confined to the panel's own
 	# buttons), true census.
-	_setup_panel_expect(_room._focusables.size() == 8
+	# FIX122: the EDGE ARROWS dial makes it NINE.
+	_setup_panel_expect(_room._focusables.size() == 9
 		and _room._focusables.has(_room.setup_panel_scan_quad())
 		and _room._focusables.has(_room.setup_panel_download_quad())
 		and _room._focusables.has(_room.setup_panel_wovp_paste_quad())
@@ -5048,8 +5096,9 @@ func _setup_panel_surface_assertions() -> void:
 		and _room._focusables.has(_room.setup_panel_stars_quad())
 		and _room._focusables.has(_room.setup_panel_ipdb_quad())
 		and _room._focusables.has(_room.setup_panel_watcher_quad())
+		and _room._focusables.has(_room.setup_panel_arrows_quad())
 		and _room._focusables.has(_room.setup_panel_back_quad()),
-		"XR setup: focus navigation is confined to the panel's eight buttons")
+		"XR setup: focus navigation is confined to the panel's nine buttons")
 	_setup_panel_expect(_room._focused == _room.setup_panel_scan_quad(),
 		"XR setup: focus opens on SCAN LIBRARY")
 	# Confinement under travel: TAB around the stops and
@@ -26922,6 +26971,27 @@ func _run_core_test() -> void:
 	var default_cfg: PvldsConfig = PvldsConfig.new()
 	_expect(default_cfg.load_from_disk() and default_cfg.hold_exit_enabled,
 		"a config without hold_exit_enabled loads the feature ON (its default)", failures)
+
+	# FIX122: the edge-arrows toggle round-trips through the
+	# config file - a config written before the key existed
+	# loads it OFF (never an error), an explicit true
+	# survives save/load, and an explicit false is honoured.
+	_expect(not default_cfg.edge_arrows,
+		"edge arrows: a config without the key loads the chevrons OFF (their default)", failures)
+	_expect(_write_text_file(config_file, JSON.stringify({"edge_arrows": true})),
+		"edge arrows: config carrying the toggle ON written", failures)
+	var arrows_cfg: PvldsConfig = PvldsConfig.new()
+	_expect(arrows_cfg.load_from_disk() and arrows_cfg.edge_arrows,
+		"edge arrows: an explicit true loads ON", failures)
+	_expect(arrows_cfg.save_to_disk(), "edge arrows: config with the toggle ON saves", failures)
+	var arrows_resaved: PvldsConfig = PvldsConfig.new()
+	_expect(arrows_resaved.load_from_disk() and arrows_resaved.edge_arrows,
+		"edge arrows: the saved config round-trips (toggle still ON)", failures)
+	_expect(_write_text_file(config_file, JSON.stringify({"edge_arrows": false})),
+		"edge arrows: config carrying the toggle OFF written", failures)
+	var arrows_off_cfg: PvldsConfig = PvldsConfig.new()
+	_expect(arrows_off_cfg.load_from_disk() and not arrows_off_cfg.edge_arrows,
+		"edge arrows: an explicit false loads OFF", failures)
 
 	# ROOMSUBMIT (M1): the screenshots folder round-trips
 	# through the config file - set on the desk, read by the

@@ -31,7 +31,7 @@ func _sample(x: float, source: String = "mouse", valid: bool = true) -> Dictiona
 	return {"source": source, "valid": valid, "x": x}
 
 
-func _room(xr: bool, count: int = 30) -> EdgeRoom:
+func _room(xr: bool, count: int = 30, arrows_on: bool = true) -> EdgeRoom:
 	var room: EdgeRoom = EdgeRoom.new()
 	root.add_child(room)
 	room.set_process(false)
@@ -48,6 +48,10 @@ func _room(xr: bool, count: int = 30) -> EdgeRoom:
 		room._visible_games.append(GameEntry.new())
 	room._focusables.assign(room._panels)
 	room._set_centre(4 if count > 4 else 0, true)
+	# FIX122: the pre-toggle legs below run against the
+	# toggle ON, so the room enables it here; the toggle
+	# legs of their own build rooms with it OFF.
+	room.set_edge_arrows(arrows_on)
 	room._update_scroll_arrows()
 	return room
 
@@ -110,6 +114,26 @@ func _run() -> void:
 		for frame: int in range(5):
 			hand_step = policy.observe([_sample(side * 1.2, "left_hand"), _sample(0, "right_hand")], true, true, 0.05, false)
 		_expect(hand_step == side, "left hand can scroll with right hand pointing at the middle")
+
+	# FIX122: the chevrons are a toggle, OFF by default.
+	# A fresh room never shows them, in either render path;
+	# the toggle restores the old rules at once, and takes
+	# them away at once; edge scrolling itself never
+	# consults the toggle.
+	for xr: bool in [false, true]:
+		var dark: EdgeRoom = _room(xr, 30, false)
+		_expect(not dark.edge_arrows(), "the toggle defaults OFF on a fresh room (XR=%s)" % xr)
+		_expect_arrows(dark, false, false, "chevrons stay hidden with the toggle OFF, mid-library")
+		dark.samples = [_sample(1.2, "left_hand" if xr else "mouse")]
+		_tick(dark, 900)
+		_expect(dark._grid_coord(dark._centre_index).x == dark._columns - 1,
+			"edge scrolling still steps with the toggle OFF (XR=%s)" % xr)
+		_expect_arrows(dark, false, false, "scrolling to the last column shows no chevrons with the toggle OFF")
+		dark.set_edge_arrows(true)
+		_expect_arrows(dark, true, false, "turning the toggle ON shows the chevron for the open direction")
+		dark.set_edge_arrows(false)
+		_expect_arrows(dark, false, false, "turning the toggle OFF hides the chevrons at once")
+		dark.queue_free()
 
 	for xr: bool in [false, true]:
 		var room: EdgeRoom = _room(xr)
