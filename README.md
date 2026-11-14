@@ -65,15 +65,21 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
 
 ## The hand-off (M2)
 
-- **Deliberate hover navigation in VR.** Point at a card for about
-  0.4 seconds to turn the wall toward it. Brief sweeps do not turn the
-  wall, and a turn completes before another hover can move it again.
-  After a turn, a fresh hand movement (about two degrees or three
-  centimetres) rearms hover navigation. This breaks the feedback loop
-  where the moving wall put another card under a stationary pointer
-  and immediately swung back or continued scrolling. Losing a ray hit
-  no longer jumps to an older gamepad focus. Trigger selection remains
-  immediate, and explicit navigation controls still turn without a dwell.
+- **View-edge scrolling.** Hold the pointer near the left or right
+  side of the view to scroll one column at a time in that direction.
+  The mouse uses the outer 12% of the window; VR uses head-relative
+  side zones beginning about 35 degrees from the centre. Returning
+  to the middle stops further steps. These zones stay fixed while
+  the wall moves and work without a highlighted card. Scrolling stops
+  at the first or last column; there is no wrap or outward bounce.
+  Either tracked hand can scroll; opposing requests cancel. Bottom
+  controls and modal panels do not trigger edge scrolling. Card hover
+  highlighting follows the pointer independently of wall position;
+  the amber frame and raised card share that hover target. Clicks use
+  exact card bounds; a small release margin steadies visual hover.
+  A library of up to twelve games stays centred as a group, including
+  when restoring a saved game. It does not scroll while all games fit
+  on one page; larger libraries keep the edge scrolling behavior.
 - **Handheld controller pointers after return.** The room binds its
   controller nodes to Godot's registered `left_hand` / `right_hand`
   trackers. The OpenXR `/user/hand/left` / `/user/hand/right` paths belong

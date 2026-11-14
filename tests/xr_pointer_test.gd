@@ -115,7 +115,7 @@ func _run() -> void:
 	await process_frame
 	rig._process(0.0)
 	_expect(str(rig.hover_ray_sample().get("hand", "")) == "right_hand",
-		"hover navigation receives the hand actually owning room hover")
+		"hover ray records the hand actually owning room hover")
 	_expect(rig._lasers[rig._controllers[0]].visible and rig._lasers[rig._controllers[1]].visible,
 		"both tracked controllers show lasers simultaneously")
 	_expect(rig._hand_dots[rig._controllers[0]].visible and rig._hand_dots[rig._controllers[1]].visible,
@@ -127,9 +127,14 @@ func _run() -> void:
 	_expect(selected.size() == 1 and selected[0] == left_target, "left trigger selects the left ray's target while right is tracked")
 	_expect(str(rig.hover_ray_sample().get("hand", "")) == "left_hand"
 		and (rig.hover_ray_sample().get("origin", Vector3.ZERO) as Vector3).is_equal_approx(Vector3(-1, 1, 0)),
-		"a left-hand selection updates the hover navigation ray immediately")
+		"a left-hand selection updates the hover ray immediately")
 	rig._process(0.0)
 	_expect(rig.hovered == left_target, "left hand retains room hover after selecting")
+	var edge_samples: Array[Dictionary] = rig.edge_scroll_samples(room._xr_camera, 3.6)
+	_expect(edge_samples.size() == 2 and edge_samples[0]["source"] == "left_hand"
+		and edge_samples[1]["source"] == "right_hand", "edge scrolling samples both tracked hands")
+	_expect(rig.hovered == left_target and rig._active_controller == rig._controllers[0]
+		and rig.hover_ray_sample()["hand"] == "left_hand", "sampling both edges preserves hover and click ownership")
 	right.set_input(&"trigger_click", true)
 	right.set_input(&"trigger_click", false)
 	_expect(selected.size() == 2 and selected[1] == right_target, "right trigger selects its own target after a left-hand selection")
@@ -147,6 +152,86 @@ func _run() -> void:
 	left.set_input(&"trigger_click", true)
 	left.set_input(&"trigger_click", false)
 	_expect(selected.size() == 3 and selected[2] == left_target, "left-hand selection recovers without restarting")
+	var hover_changes: Array[int] = [0]
+	rig.hover_changed.connect(func(_quad: ClickableQuad) -> void: hover_changes[0] += 1)
+	for side: int in [-1, 1]:
+		var tracker: XRControllerTracker = left if side < 0 else right
+		var ctrl: XRController3D = rig._controllers[0] if side < 0 else rig._controllers[1]
+		var target: ClickableQuad = left_target if side < 0 else right_target
+		rig._active_controller = ctrl
+		_track(tracker, &"aim", Vector3(side, 1, 0))
+		rig._process(0.0)
+		hover_changes[0] = 0
+		for sample: int in range(20):
+			var offset: float = 0.01 if sample % 2 == 0 else -0.005
+			_track(tracker, &"aim", Vector3(side * (1.4 + offset), 1, 0))
+			rig._process(0.0)
+			_expect(rig.hovered == target, "hover is stable across outer edge samples (side %d)" % side)
+		_expect(hover_changes[0] == 0, "outer-edge hit/miss does not repeatedly toggle hover (side %d)" % side)
+		_track(tracker, &"aim", Vector3(side * 1.41, 1, 0))
+		rig._process(0.0)
+		_expect(rig._pick_controller(ctrl)["quad"] == null and not rig.hover_ray_sample()["target_valid"],
+			"expanded hover border is excluded from real selection/navigation hits")
+		tracker.set_input(&"trigger_click", true)
+		tracker.set_input(&"trigger_click", false)
+		_expect(selected[-1] == null, "VR trigger outside actual card does not select its retained hover")
+		_track(tracker, &"aim", Vector3(side * 1.48, 1, 0))
+		rig._process(0.0)
+		_expect(rig.hovered == null, "moving beyond the edge margin releases hover")
+		_track(tracker, &"aim", Vector3(side, 1, 0))
+		rig._process(0.0)
+		target.pick_enabled = false
+		rig._process(0.0)
+		_expect(rig.hovered == null, "disabled cards release retained hover")
+		target.pick_enabled = true
+	# Exercise the desktop _process and click path too. Orthographic
+	# camera translation places the actual mouse ray on each boundary
+	# without relying on OS mouse warping in a headless test.
+	rig.xr_active = false
+	var camera: Camera3D = room._desk_camera
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 4.0
+	camera.global_rotation = Vector3.ZERO
+	var mouse: Vector2 = root.get_mouse_position()
+	for side: int in [-1, 1]:
+		var target: ClickableQuad = left_target if side < 0 else right_target
+		camera.global_position += Vector3(side, 1, 0) - camera.project_ray_origin(mouse)
+		rig._process(0.0)
+		_expect(rig.hovered == target, "desktop ray initially acquires the edge card")
+		edge_samples = rig.edge_scroll_samples(camera, 3.6)
+		_expect(edge_samples.size() == 1 and edge_samples[0]["source"] == "mouse"
+			and rig.hovered == target, "desktop edge sampling preserves card hover")
+		hover_changes[0] = 0
+		for sample: int in range(20):
+			var offset: float = 0.01 if sample % 2 == 0 else -0.005
+			camera.global_position += Vector3(side * (1.4 + offset), 1, 0) - camera.project_ray_origin(mouse)
+			rig._process(0.0)
+			_expect(rig.hovered == target, "desktop outer-edge hover stays stable")
+		_expect(hover_changes[0] == 0, "desktop outer edge does not flicker hover state")
+		camera.global_position += Vector3(side * 1.41, 1, 0) - camera.project_ray_origin(mouse)
+		rig._process(0.0)
+		_expect(not rig.hover_ray_sample()["target_valid"], "desktop border retention remains separate from exact card hits")
+		var click: InputEventMouseButton = InputEventMouseButton.new()
+		click.button_index = MOUSE_BUTTON_LEFT
+		click.pressed = true
+		rig._unhandled_input(click)
+		_expect(selected[-1] == null, "desktop click outside actual card cannot select retained hover")
+		camera.global_position += Vector3(side * 1.48, 1, 0) - camera.project_ray_origin(mouse)
+		rig._process(0.0)
+		_expect(rig.hovered == null, "desktop hover releases beyond the outer margin")
+	var old_transform: Transform3D = right_target.transform
+	right_target.rotation.y = deg_to_rad(25.0)
+	right_target.scale = Vector3.ONE * 1.08
+	var angled_origin: Vector3 = right_target.to_global(Vector3(0.41, 0, 3))
+	var angled_direction: Vector3 = -right_target.global_basis.z.normalized()
+	var miss: Dictionary = {"quad": null, "position": angled_origin + angled_direction * 8.0}
+	_expect(PointerRig.stable_hover_hit(angled_origin, angled_direction, miss, {"quad": right_target})["quad"] == right_target,
+		"edge tolerance follows an angled and popped card's local geometry")
+	right_target.visible = false
+	_expect(PointerRig.stable_hover_hit(angled_origin, angled_direction, miss, {"quad": right_target})["quad"] == null,
+		"hidden card cannot retain hover")
+	right_target.visible = true
+	right_target.transform = old_transform
 	left_target.queue_free()
 	right_target.queue_free()
 	XRServer.remove_tracker(left)

@@ -17,6 +17,7 @@ signal select_pressed(quad: ClickableQuad)
 ## paths in the action map. OpenXR maps /user/hand/left to left_hand
 ## and /user/hand/right to right_hand before registering controllers.
 const HAND_TRACKERS: Array[StringName] = [&"left_hand", &"right_hand"]
+const HOVER_EDGE_MARGIN_M: float = 0.025
 
 var xr_active: bool = false
 var mouse_camera: Camera3D = null
@@ -28,6 +29,8 @@ var _hand_dots: Dictionary = {} ## XRController3D -> hit marker
 var _dot: MeshInstance3D = null
 var _active_controller: XRController3D = null
 var _hover_ray: Dictionary = {}
+var _hand_hover_hits: Dictionary = {}
+var _desktop_hover_hit: Dictionary = {}
 var _xr_diagnostic_elapsed: float = 0.0
 var _xr_diagnostic: XrInputDiagnostics = XrInputDiagnostics.new()
 
@@ -108,7 +111,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb: InputEventMouseButton = event
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
-			select_pressed.emit(hovered)
+			# Hover has a small release margin; clicks always use the
+			# exact current ray so empty space cannot activate a card.
+			if mouse_camera != null:
+				var mouse_pos: Vector2 = get_viewport().get_mouse_position()
+				var hit: Dictionary = _pick_ray(mouse_camera.project_ray_origin(mouse_pos), mouse_camera.project_ray_normal(mouse_pos))
+				_set_hovered(hit["quad"])
+				select_pressed.emit(hit["quad"])
 
 
 ## A registered pose may remain "active" after tracking is lost.
@@ -167,6 +176,21 @@ func hover_ray_sample() -> Dictionary:
 	return _hover_ray
 
 
+## Spatial navigation samples are separate from picking and hover.
+## Both hands may request a scroll without changing hover ownership.
+func edge_scroll_samples(camera: Camera3D, distance: float) -> Array[Dictionary]:
+	var samples: Array[Dictionary] = []
+	if xr_active:
+		if camera == null:
+			return samples
+		for ctrl: XRController3D in _tracked_controllers():
+			samples.append(PointerEdgeScroll.vr_sample(str(ctrl.tracker), camera.global_transform,
+				ctrl.global_position, -ctrl.global_transform.basis.z.normalized(), distance))
+	else:
+		samples.append(PointerEdgeScroll.mouse_sample(get_viewport().get_mouse_position(), get_viewport().get_visible_rect()))
+	return samples
+
+
 func _controller_ray(ctrl: XRController3D) -> Dictionary:
 	if ctrl == null:
 		return {"valid": false}
@@ -183,12 +207,20 @@ func _process(delta: float) -> void:
 		var tracked: Array[XRController3D] = _tracked_controllers()
 		var active_ctrl: XRController3D = _choose_controller(tracked)
 		_hover_ray = _controller_ray(active_ctrl)
+		_hover_ray["target_valid"] = false
 		var active_quad: ClickableQuad = null
+		for ctrl: Variant in _hand_hover_hits.keys():
+			if not tracked.has(ctrl):
+				_hand_hover_hits.erase(ctrl)
 		for ctrl: XRController3D in tracked:
-			var hit: Dictionary = _pick_controller(ctrl)
+			var raw_hit: Dictionary = _pick_controller(ctrl)
+			var hit: Dictionary = stable_hover_hit(ctrl.global_position, -ctrl.global_transform.basis.z.normalized(),
+				raw_hit, _hand_hover_hits.get(ctrl, {}))
+			_hand_hover_hits[ctrl] = hit
 			_update_hand_laser(ctrl, hit)
 			if ctrl == active_ctrl:
 				active_quad = hit["quad"]
+				_hover_ray["target_valid"] = raw_hit["quad"] != null
 		_set_hovered(active_quad)
 		_xr_diagnostic_elapsed += delta
 		if _xr_diagnostic_elapsed >= 0.5:
@@ -201,7 +233,13 @@ func _process(delta: float) -> void:
 		_dot.visible = false
 		return
 	var mouse_pos: Vector2 = get_viewport().get_mouse_position()
-	var hit: Dictionary = _pick_ray(mouse_camera.project_ray_origin(mouse_pos), mouse_camera.project_ray_normal(mouse_pos))
+	var origin: Vector3 = mouse_camera.project_ray_origin(mouse_pos)
+	var direction: Vector3 = mouse_camera.project_ray_normal(mouse_pos)
+	var raw_hit: Dictionary = _pick_ray(origin, direction)
+	_hover_ray = {"valid": true, "hand": "mouse", "origin": origin, "direction": direction,
+		"target_valid": raw_hit["quad"] != null}
+	var hit: Dictionary = stable_hover_hit(origin, direction, raw_hit, _desktop_hover_hit)
+	_desktop_hover_hit = hit
 	_set_hovered(hit["quad"])
 	_dot.visible = hovered != null
 	if _dot.visible:
@@ -228,9 +266,37 @@ func _pick_ray(origin: Vector3, dir: Vector3) -> Dictionary:
 		var collider: Object = hit["collider"]
 		if collider is ClickableQuad:
 			var cq: ClickableQuad = collider
-			if cq.pick_enabled:
+			if cq.pick_enabled and cq.is_visible_in_tree():
 				quad = cq
 	return {"quad": quad, "position": hit_pos}
+
+
+## Keep hover through tiny excursions beyond a card edge, but release
+## it as soon as the ray moves beyond the margin or hits another item.
+## This is visual hysteresis only: clicking uses the raw physics hit.
+## Edge scrolling uses view position and does not consult either hit.
+static func stable_hover_hit(origin: Vector3, direction: Vector3, raw_hit: Dictionary, previous: Dictionary) -> Dictionary:
+	if raw_hit.get("quad") != null:
+		return raw_hit
+	var old_quad: Variant = previous.get("quad")
+	if not is_instance_valid(old_quad):
+		return raw_hit
+	var quad: ClickableQuad = old_quad as ClickableQuad
+	if quad == null or not quad.pick_enabled or not quad.is_visible_in_tree():
+		return raw_hit
+	var inverse: Transform3D = quad.global_transform.affine_inverse()
+	var local_origin: Vector3 = inverse * origin
+	var local_direction: Vector3 = inverse.basis * direction
+	if absf(local_direction.z) < 0.000001:
+		return raw_hit
+	var distance: float = -local_origin.z / local_direction.z
+	if distance <= 0.0 or distance > 30.0:
+		return raw_hit
+	var point: Vector3 = local_origin + local_direction * distance
+	if absf(point.x) > quad._size.x * 0.5 + HOVER_EDGE_MARGIN_M \
+		or absf(point.y) > quad._size.y * 0.5 + HOVER_EDGE_MARGIN_M:
+		return raw_hit
+	return {"quad": quad, "position": origin + direction * distance, "held_at_edge": true}
 
 
 func _update_hand_laser(ctrl: XRController3D, hit: Dictionary) -> void:
