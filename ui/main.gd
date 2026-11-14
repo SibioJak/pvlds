@@ -442,7 +442,7 @@ var _rs_deadline: int = 0
 var _rs_idx: int = -1 ## the Addams challenge's row/panel index in the standing tournament view
 var _rs_searches_before: int = 0 ## the stub's search count when the send fired (the refresh leg's baseline)
 var _smoke_submitnav: bool = false ## --pvlds-smoke-submitnav (SUBMITNAV round): the submit panel's navigation + readability smoke - one boot over a SIX-shot fixture drives the panel with REAL stick steps through the room's poll, prints every observed focus path, and judges the one-step road to SEND, the row walk, the full-resolution big view and the focus==shown==sent identity. PVLDS_SUBMITNAV_NC=oldwalk restores the projection walk on the panel: the "one step to SEND" legs must fail by name
-var _smoke_submitpanel: bool = false ## --pvlds-smoke-submitpanel (SUBMITPANEL round): the reworked panel's smoke - Part A geometry legs (the big view grown, the face strip low) plus a rendered grab, and Part B read-back legs over the stub's rb-* variants (modes in PVLDS_SUBMITPANEL_SMOKE_MODE: pending | approved | late | absent | refused): after a REAL pad send, the panel must read back what WoVP recorded ("They recorded: 54,488,150") with the standing in the boards' words, land it by polling when the row arrives late, and close the window with "Not on the board yet." when it never lands. PVLDS_SUBMITPANEL_NC=nofetch must fail the read-back legs by name
+var _smoke_submitpanel: bool = false ## --pvlds-smoke-submitpanel (SUBMITPANEL round): the reworked panel's smoke - Part A geometry legs (the big view grown, the face strip low) plus a rendered grab, and Part B read-back legs over the stub's rb-* variants (modes in PVLDS_SUBMITPANEL_SMOKE_MODE: pending | approved | late | absent | refused | stale): after a REAL pad send, the panel must read back what WoVP recorded ("They recorded: 54,488,150") with the standing in the boards' words, land it by polling when the row arrives late, and close the window with "Sent - WoVP scores the photo on their side; not recorded yet." when no NEW score ever lands. FIX120: every announced verdict is a genuine change against the arm-time board (his posted 24,531,070); the stale mode's board never moves and the panel must NEVER announce his old row. PVLDS_SUBMITPANEL_NC=nofetch must fail the read-back legs by name; PVLDS_SUBMITPANEL_NC=stale must fail the stale-row leg by name
 var _sp_mode: String = ""
 var _sp_phase: int = 0
 var _sp_wait: int = 0
@@ -17667,7 +17667,13 @@ func _drive_roomsubmit_smoke() -> void:
 				_rs_phase = 10
 				_rs_wait = 0
 		10:
-			if _room.submit_panel_message() == "They recorded: 24,531,070 - awaiting validation.":
+			# FIX120: the verdict is the CHANGED score - the
+			# happy boot runs the stub's rb-pending variant,
+			# whose board moves his row from the posted
+			# 24,531,070 to 54,488,150 after the submit.
+			# (Pre-fix this phase expected his UNCHANGED
+			# standing row announced - the bug itself.)
+			if _room.submit_panel_message() == "They recorded: 54,488,150 - awaiting validation.":
 				_rs_happy_verdict_legs()
 				_rs_deadline = Time.get_ticks_msec() + 15000
 				_rs_phase = 15
@@ -17805,7 +17811,7 @@ func _rs_open_legs() -> void:
 
 
 func _rs_happy_verdict_legs() -> void:
-	_rs_expect(true, "read-back: the panel reports what WoVP recorded (They recorded: 24,531,070 - awaiting validation)")
+	_rs_expect(true, "read-back: the panel reports what WoVP recorded (They recorded: 54,488,150 - awaiting validation)")
 	var lines: Array = _submit_stub_lines()
 	var photo_idx: int = -1
 	var submit_idx: int = -1
@@ -18238,20 +18244,32 @@ func _sn_finish_smoke() -> void:
 ## decode width, the face is a 1.66x0.40 strip seated
 ## BELOW the SEND/BACK row, and a rendered grab of the
 ## standing panel lands for the eye. Part B legs (modes in
-## PVLDS_SUBMITPANEL_SMOKE_MODE, stub variant rb-<mode>):
-## the post-submit board carries his row at a NEW score
-## (54,488,150 - not his posted 24,531,070), and the panel
-## must read it back in words: pending -> "They recorded:
-## 54,488,150 - awaiting validation.", approved ->
-## "... - Approved.", refused -> "... - Refused.", late
-## (the row absent from the first post-submit board,
-## present on the next) -> the line lands with NO further
-## pad input, on a fetch the panel asked for itself;
-## absent -> "Not on the board yet." and the panel still
-## closes. PVLDS_SUBMITPANEL_NC=nofetch must fail the
-## read-back legs by name.
+## PVLDS_SUBMITPANEL_SMOKE_MODE, stub variant rb-<mode>).
+## FIX120 re-base: the arm-time board always stands first
+## (his posted 24,531,070), and a verdict may be announced
+## only when the board CHANGES against that snapshot:
+## pending / approved / refused -> the post-submit board
+## carries his row at a NEW score (54,488,150) and the
+## panel reads it back in words: "They recorded:
+## 54,488,150 - awaiting validation." / "... - Approved."
+## / "... - Refused."; late (the row absent from the first
+## post-submit board, present on the next) -> the line
+## lands with NO further pad input, on a fetch the panel
+## asked for itself; absent (no row ever stands) -> the
+## honest close "Sent - WoVP scores the photo on their
+## side; not recorded yet." and the panel still closes;
+## stale (the board NEVER moves: his old row unchanged
+## across every post-submit fetch, the 2026-11-14 field
+## case) -> the panel must NEVER say "They recorded:" and
+## must close with the same honest words, rendered
+## standing in a grab. PVLDS_SUBMITPANEL_NC=nofetch must
+## fail the read-back legs by name;
+## PVLDS_SUBMITPANEL_NC=stale (announce any row found -
+## the pre-fix behaviour) must fail the stale leg by name.
 
 var _sp_searches_at_send: int = 0 ## the stub's search count when the send fired (the late leg's baseline)
+var _sp_stale_grabbed: bool = false ## FIX120: the stale leg's rendered grab of the honest close, taken once
+var _sp_stale_settle: int = 0 ## FIX120: frames the honest close has stood before the grab (the face render trails the status string)
 
 
 func _sp_expect(ok: bool, label: String) -> void:
@@ -18268,8 +18286,11 @@ func _sp_expected_line() -> String:
 			return "They recorded: 54,488,150 - Approved."
 		"refused":
 			return "They recorded: 54,488,150 - Refused."
-		"absent":
-			return "Not on the board yet."
+		"absent", "stale":
+			# FIX120: the honest close - the photo was sent,
+			# WoVP has not recorded a score for it. (The
+			# pre-fix words were "Not on the board yet.")
+			return "Sent - WoVP scores the photo on their side; not recorded yet."
 		_:
 			return "They recorded: 54,488,150 - awaiting validation."
 
@@ -18385,7 +18406,26 @@ func _drive_submitpanel_smoke() -> void:
 			var msg: String = _room.submit_panel_message()
 			if msg == "Checking what WoVP recorded...":
 				_sp_saw_checking = true
-			if msg == _sp_expected_line():
+			if _sp_mode == "stale" and msg.begins_with("They recorded:"):
+				# FIX120: the one unforgivable line in stale
+				# mode - his old row announced as the verdict
+				# on the submission just sent. (This is the
+				# leg PVLDS_SUBMITPANEL_NC=stale must fail.)
+				_sp_expect(false, "read-back stale: the panel announced his old row as the verdict (%s)" % msg)
+				_sp_finish_smoke()
+				return
+			if _sp_mode == "stale" and not _sp_stale_grabbed and msg == _sp_expected_line():
+				# Presentation settle before the grab (the
+				# phase-45 lesson: a grab on the condition's
+				# own tick reads the last frame - the status
+				# string flips a render ahead of the face
+				# texture). The verdict handling below waits
+				# until the grab has the drawn close.
+				_sp_stale_settle += 1
+				if _sp_stale_settle >= 15:
+					_grad_save_grab("submitpanel_stale.png")
+					_sp_stale_grabbed = true
+			if msg == _sp_expected_line() and (_sp_mode != "stale" or _sp_stale_grabbed):
 				_sp_expect(_sp_saw_checking, "read-back: the panel said it was checking before the verdict stood")
 				match _sp_mode:
 					"pending":
@@ -18399,8 +18439,12 @@ func _drive_submitpanel_smoke() -> void:
 						_sp_expect(_tournament_search_count() >= _sp_searches_at_send + 2,
 							"read-back late: the panel asked for another fetch itself (searches %d -> %d)" % [_sp_searches_at_send, _tournament_search_count()])
 					"absent":
-						_sp_expect(true, "read-back absent: not on the board yet - plain words, no error face")
+						_sp_expect(true, "read-back absent: closed honest - sent, WoVP has not recorded it, no error face")
 						_sp_expect(_room.is_submit_panel_up(), "read-back absent: the panel still stands (closable)")
+					"stale":
+						_sp_expect(true, "read-back stale: his old row was never announced and the window closed in honest words")
+						_sp_expect(_room.is_submit_panel_up(), "read-back stale: the panel still stands (closable)")
+						_sp_expect(_sp_stale_grabbed, "read-back stale: the honest close stands rendered in the grab (submitpanel_stale.png)")
 				_rs_inject(JOY_BUTTON_B, true)
 				_sp_phase = 9
 				_sp_wait = 0

@@ -1334,9 +1334,20 @@ var _submit_sending: bool = false
 ## WoVP recorded. Bounded: at most SUBMITPANEL_RB_MAX_TRIES
 ## fresh fetches are evaluated, spaced by room-asked
 ## fetches SUBMITPANEL_RB_POLL_GAP_MSEC apart; then the
-## panel says "Not on the board yet." and stops. Closing
-## the panel stops it at any moment. It never re-submits
-## and never writes anything.
+## panel closes in honest words (FIX120) and stops.
+## Closing the panel stops it at any moment. It never
+## re-submits and never writes anything.
+## FIX120: the report is snapshot-and-change. A fresh
+## submission carries NO score on the board - WoVP scores
+## the photo on their side, in validation, later - so the
+## first row found after a send is usually his PRE-EXISTING
+## standing row, and announcing it as the verdict on the
+## submission just sent is false (field case 2026-11-14:
+## the panel announced his old 11,804,650 four times for
+## games played at 15,021,930). _rb_start therefore
+## snapshots his board state for the challenge, and a
+## polled row counts as THIS submission's verdict only
+## when it is new information against that snapshot.
 const SUBMITPANEL_RB_MAX_TRIES: int = 5
 const SUBMITPANEL_RB_POLL_GAP_MSEC: int = 3000
 var _rb_active: bool = false ## the read-back is armed (a successful submit landed, no verdict yet)
@@ -1345,6 +1356,9 @@ var _rb_tries: int = 0 ## fresh fetches evaluated since the submit
 var _rb_start_seq: int = -1 ## the fetch sequence standing when the submit landed - only NEWER fetches count
 var _rb_last_seq: int = -1 ## the newest fetch sequence already evaluated
 var _rb_next_fetch_msec: int = 0 ## when the next room-asked fetch is due (0 = none scheduled)
+var _rb_snap_has_row: bool = false ## FIX120: the arm-time snapshot - whether his row stood on the board
+var _rb_snap_score: float = 0.0 ## FIX120: the snapshot row's score (meaningful only when _rb_snap_has_row)
+var _rb_snap_status: int = -1 ## FIX120: the snapshot row's approval_status - recorded, never a qualifier: a status-only change on the same score is his OLD submission being processed, not this one
 var _wovp_fetch_seq: int = 0 ## Main's fetch sequence, pushed with the boards (see set_wovp_data): bumped on every challenges fetch completion, so a NEW fetch is told from a re-push of the same boards (fetched_at is second-granular and cannot)
 var _setup_health: Dictionary = {} ## the last completed scan's numbers, fed by Main (see set_setup_health)
 var _setup_message: String = "" ## the panel's message line: the last action's outcome, in plain words
@@ -10817,8 +10831,13 @@ func set_wovp_submit_result(_ok: bool, message: String, challenge_id: String) ->
 ## SUBMITPANEL (Part B): arm the read-back for the panel's
 ## challenge. The first re-read is Main's own post-submit
 ## fetch (its standing success path); the room only
-## watches for it and asks for more if the row has not
-## landed. Under the NC seam the read-back never arms.
+## watches for it and asks for more if the verdict has
+## not landed. Under the NC seam the read-back never arms.
+## FIX120: arming snapshots his board state for the
+## challenge from the boards as they stand right now.
+## This runs inside set_wovp_submit_result, which Main
+## calls BEFORE its post-submit re-fetch - the snapshot
+## is genuinely the pre-verdict board.
 func _rb_start() -> void:
 	_rb_stop()
 	if debug_submitpanel_nc == "nofetch":
@@ -10829,7 +10848,25 @@ func _rb_start() -> void:
 	_rb_challenge_id = _submit_challenge_id
 	_rb_start_seq = _wovp_fetch_seq
 	_rb_last_seq = _wovp_fetch_seq
+	var snap: WovpScoreRow = _rb_his_row()
+	if snap != null:
+		_rb_snap_has_row = true
+		_rb_snap_score = snap.score
+		_rb_snap_status = snap.approval_status
 	_submit_status = "Checking what WoVP recorded..."
+
+
+## His row on the read-back's challenge, in the boards as
+## they currently stand in the room. Null when he has none
+## (or the boards are not live / his id is unknown).
+func _rb_his_row() -> WovpScoreRow:
+	if not _wovp_live or _wovp_user_id == "" or _rb_challenge_id == "":
+		return null
+	for cv: Variant in _wovp_challenges:
+		var ch: WovpChallenge = cv as WovpChallenge
+		if ch != null and ch.challenge_id == _rb_challenge_id:
+			return ch.his_row(_wovp_user_id)
+	return null
 
 
 ## Stop the read-back (panel closing, a new panel opening,
@@ -10839,15 +10876,27 @@ func _rb_stop() -> void:
 	_rb_challenge_id = ""
 	_rb_tries = 0
 	_rb_next_fetch_msec = 0
+	_rb_snap_has_row = false
+	_rb_snap_score = 0.0
+	_rb_snap_status = -1
 
 
 ## Judge one boards push against the armed read-back.
 ## Only a push carrying a NEW fetch sequence counts as a
 ## try - a re-push of the same boards (Main pushes for
 ## many reasons) must not burn the bounded window. On a
-## try: his row on the fresh board ends the read-back
-## with the recorded line; otherwise the next fetch is
-## scheduled, or the window closes in plain words.
+## try: his row ends the read-back with the recorded line
+## ONLY when it is the verdict on THIS submission - new
+## information against the arm-time snapshot (FIX120):
+## no row stood at arm and one stands now, or the row's
+## score differs from the snapshot score. A row identical
+## to the snapshot is his old standing row and is never
+## announced. No qualifying change inside the window:
+## the panel closes in honest words - the photo was
+## sent; WoVP has not recorded a score for it yet.
+## Under the NC seam PVLDS_SUBMITPANEL_NC=stale any row
+## found is announced (the pre-fix behaviour), so the
+## submitpanel smoke's stale-row leg fails by name.
 func _rb_evaluate() -> void:
 	if not _rb_active or not _submit_panel_up:
 		return
@@ -10856,20 +10905,16 @@ func _rb_evaluate() -> void:
 	_rb_last_seq = _wovp_fetch_seq
 	_rb_tries += 1
 	_rb_next_fetch_msec = 0
-	if _wovp_live and _wovp_user_id != "":
-		for cv: Variant in _wovp_challenges:
-			var ch: WovpChallenge = cv as WovpChallenge
-			if ch == null or ch.challenge_id != _rb_challenge_id:
-				continue
-			var row: WovpScoreRow = ch.his_row(_wovp_user_id)
-			if row != null:
-				_submit_status = _rb_recorded_line(row)
-				_rb_active = false
-				_request_submit_panel_render(true)
-				return
-			break
+	var row: WovpScoreRow = _rb_his_row()
+	var is_verdict: bool = row != null and (debug_submitpanel_nc == "stale" \
+		or not _rb_snap_has_row or row.score != _rb_snap_score)
+	if is_verdict:
+		_submit_status = _rb_recorded_line(row)
+		_rb_active = false
+		_request_submit_panel_render(true)
+		return
 	if _rb_tries >= SUBMITPANEL_RB_MAX_TRIES:
-		_submit_status = "Not on the board yet."
+		_submit_status = "Sent - WoVP scores the photo on their side; not recorded yet."
 		_rb_active = false
 		_request_submit_panel_render(true)
 		return
