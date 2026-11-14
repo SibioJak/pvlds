@@ -20,6 +20,7 @@ package main
 
 import (
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -617,6 +618,8 @@ func herdTick(gamePID int, sessionID int, now time.Time, targetHWND uintptr) {
 // whether the foreground actually MOVED is still the caller's
 // read-back, a tick later.
 func raiseForeground(target uintptr, fg uintptr) bool {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	fgThread, _, _ := procGetWindowThreadProcID.Call(fg, 0)
 	myThread, _, _ := procGetCurrentThreadID.Call()
 	attached := false
@@ -682,6 +685,11 @@ func activatePlayerWindow(gamePID int, targetHWND uintptr) (attempted bool, ok b
 // cannot prove. The ladder rung (from the contract) chooses
 // the act:
 //
+// When rung 1 or 3 finds the player already in the foreground,
+// cyclePlayerActivation now creates a real activation transition
+// first; a same-window SetFocus alone can leave controller input
+// inactive even though GetGUIThreadInfo reports the player focused.
+//
 //	rung 1: the full-family delivery - attach our thread to
 //	  the current foreground thread (raiseForeground's dance)
 //	  AND to the TARGET window's thread, then inside the
@@ -716,11 +724,24 @@ func deliverPlayerFocus(gamePID int, targetHWND uintptr, rung int, machineryHWND
 	if gamePID <= 0 || targetHWND == 0 {
 		return false, false
 	}
+	var targetPID uint32
+	procGetWindowThreadProcID.Call(targetHWND, uintptr(unsafe.Pointer(&targetPID)))
+	if int(targetPID) != gamePID {
+		return false, false
+	}
 	if rung == 2 {
 		procSwitchToThisWindow.Call(targetHWND, 1)
 		return true, true
 	}
 	fg, _, _ := procGetForegroundWindow.Call()
+	// Reasserting an already-focused window sends no new activation
+	// transition. The default delivery must actually leave and return
+	// to it: Windows' focus reading can be healthy while VPX's input
+	// remains inactive. Rung 3 uses the same reliable excursion
+	// rather than depending on an optional game machinery window.
+	if fg == targetHWND {
+		return true, cyclePlayerActivation(targetHWND)
+	}
 	if rung == 3 && machineryHWND != 0 && machineryHWND != targetHWND {
 		var mPID uint32
 		procGetWindowThreadProcID.Call(machineryHWND, uintptr(unsafe.Pointer(&mPID)))
@@ -737,6 +758,8 @@ func deliverPlayerFocus(gamePID int, targetHWND uintptr, rung int, machineryHWND
 // attach (current foreground thread, then the target's
 // thread), raise, activate, focus, detach in reverse order.
 func deliverFocusForeground(target uintptr, fg uintptr) bool {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	targetThread, _, _ := procGetWindowThreadProcID.Call(target, 0)
 	fgThread, _, _ := procGetWindowThreadProcID.Call(fg, 0)
 	myThread, _, _ := procGetCurrentThreadID.Call()

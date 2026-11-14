@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -903,5 +904,112 @@ func TestFocusNoTargetDeliverNotSpent(t *testing.T) {
 	act, _ = seqDrive(&s, at+400, up, ws, 10)
 	if act != seqDeliverFocus {
 		t.Fatalf("got %v, want the delivery re-ordered after the no-target stand-down", act)
+	}
+}
+
+func TestFocusHandoffAfterLoadingLock(t *testing.T) {
+	for _, delay := range []int64{focusResolveFloorMs + 1000, focusDeadlineMs + 1000} {
+		t.Run(fmt.Sprintf("delay_%d", delay), func(t *testing.T) {
+			var s focusSequence
+			up := int64(2000)
+			ws := fgSeqFocus(hwFVP, playerWindowClass)
+			loading := focusInputs{ws: ws, state: "loading"}
+			seqTickIn(&s, up, up, loading)
+			if res := seqTickIn(&s, up+focusResolveFloorMs, up, loading); res.action != seqLogLocked {
+				t.Fatalf("loading: got %v, want a foreground lock", res.action)
+			}
+			if delay > focusDeadlineMs {
+				seqTickIn(&s, up+focusDeadlineMs, up, loading)
+				if !s.done() {
+					t.Fatal("expected the early lock to reach its deadline")
+				}
+			}
+			in := focusInputs{ws: ws, state: "live", handoff: true}
+			res := seqTickIn(&s, up+delay, up, in)
+			if res.action != seqDeliverFocus || !res.notePush || !s.deliverWasUnconditional() {
+				t.Fatalf("late hand-off: got %+v, want the unconditional delivery with push guard", res)
+			}
+			s.noteDeliver(true)
+			for now := up + delay + 400; now <= up+delay+4000; now += 400 {
+				res = seqTickIn(&s, now, up, in)
+				if res.action == seqDeliverFocus || res.action == seqProbe {
+					t.Fatal("late hand-off repeated its delivery")
+				}
+			}
+		})
+	}
+}
+
+func TestFocusHandoffDeliveryRetriesVanishedTarget(t *testing.T) {
+	var s focusSequence
+	up := int64(2000)
+	ws := fgSeqFocus(hwFVP, playerWindowClass)
+	in := focusInputs{ws: ws, state: "live", handoff: true}
+	if res := seqTickIn(&s, up, up, in); res.action != seqDeliverFocus {
+		t.Fatalf("hand-off: got %v, want delivery", res.action)
+	}
+	s.noteDeliver(false)
+	if s.handoffDeliveryDone {
+		t.Fatal("a vanished target consumed the session's hand-off delivery")
+	}
+	if res := seqTickIn(&s, up+400, up, in); res.action != seqNone {
+		t.Fatalf("before retry spacing: got %v, want none", res.action)
+	}
+	if res := seqTickIn(&s, up+focusAssertSpacingMs, up, in); res.action != seqDeliverFocus {
+		t.Fatalf("retry: got %v, want delivery", res.action)
+	}
+}
+
+func TestFocusLateHandoffRespectsEditorAndDeliberateUse(t *testing.T) {
+	for _, ws := range []windowState{fgSeqEditor(), fgSeqThirdBGFX()} {
+		var s focusSequence
+		up := int64(2000)
+		player := fgSeqFocus(hwFVP, playerWindowClass)
+		seqTick(&s, up, up, player)
+		seqTick(&s, up+focusResolveFloorMs, up, player)
+		ws.altWinEdge = true
+		res := seqTickIn(&s, up+focusResolveFloorMs+400, up,
+			focusInputs{ws: ws, state: "live", handoff: true})
+		if res.action == seqDeliverFocus || res.action == seqAssert || res.action == seqProbe {
+			t.Fatalf("hand-off interfered with editor/deliberate foreground: %+v", res)
+		}
+	}
+}
+
+func TestFocusLockedHandoffWithoutReaderDoesNotRepeat(t *testing.T) {
+	var s focusSequence
+	up := int64(2000)
+	ws := fgSeqVP() // A platform leaf with no focus reader.
+	seqTick(&s, up, up, ws)
+	seqTick(&s, up+focusResolveFloorMs, up, ws)
+	in := focusInputs{ws: ws, state: "live", handoff: true}
+	res := seqTickIn(&s, up+focusResolveFloorMs+400, up, in)
+	if res.action != seqLogLocked || !res.notePush {
+		t.Fatalf("readerless hand-off: got %+v, want the lock and push guard", res)
+	}
+	for now := up + focusResolveFloorMs + 800; now <= up+focusDeadlineMs+400; now += 400 {
+		if res := seqTickIn(&s, now, up, in); res.action != seqNone {
+			t.Fatalf("readerless hand-off repeated at %d: %+v", now, res)
+		}
+	}
+}
+
+func TestFocusLockedHandoffRetriesAtSpacing(t *testing.T) {
+	var s focusSequence
+	up := int64(2000)
+	ws := fgSeqFocus(hwFVP, playerWindowClass)
+	seqTick(&s, up, up, ws)
+	seqTick(&s, up+focusResolveFloorMs, up, ws)
+	in := focusInputs{ws: ws, state: "live", handoff: true}
+	at := up + focusResolveFloorMs + 400
+	if res := seqTickIn(&s, at, up, in); res.action != seqDeliverFocus {
+		t.Fatalf("locked hand-off: got %v, want delivery", res.action)
+	}
+	s.noteDeliver(false)
+	if res := seqTickIn(&s, at+400, up, in); res.action != seqNone {
+		t.Fatalf("pending delivery locked or retried too soon: %+v", res)
+	}
+	if res := seqTickIn(&s, at+focusAssertSpacingMs, up, in); res.action != seqDeliverFocus {
+		t.Fatalf("locked hand-off retry: got %v, want delivery", res.action)
 	}
 }

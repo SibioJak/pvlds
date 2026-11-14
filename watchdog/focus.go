@@ -356,9 +356,10 @@ func focusOwed(ws windowState) bool {
 // per-episode budget has room, and the leaf HAS a reader -
 // the one gate the blind order keeps (a reading's VALUE is
 // never consulted here; a failed read still orders).
-func (s *focusSequence) unconditionalDue(ws windowState) bool {
+func (s *focusSequence) unconditionalDue(nowMs int64, ws windowState) bool {
 	return !s.handoffDeliveryDone && ws.playerHWND != 0 &&
-		ws.focusRead != focusReadUnknown && s.deliverAttempts < focusMaxAttempts
+		ws.focusRead != focusReadUnknown && s.deliverAttempts < focusMaxAttempts &&
+		(s.lastDeliverMs == 0 || nowMs-s.lastDeliverMs >= focusAssertSpacingMs)
 }
 
 // deliverRung names the ladder rung of the last delivery
@@ -445,6 +446,9 @@ func (s *focusSequence) noteDeliver(attempted bool) {
 	}
 	if s.deliverAttempts > 0 {
 		s.deliverAttempts--
+	}
+	if s.deliverUnconditional {
+		s.handoffDeliveryDone = false
 	}
 }
 
@@ -539,6 +543,14 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 	ws := in.ws
 	if sessionID != s.sessionID {
 		s.reset(sessionID)
+	}
+	newHandoff := in.handoff && !s.handoffSeen
+	// Foreground can settle while the launcher still owns the XR
+	// session. Its eventual exit still owes a hand-off delivery,
+	// even if the early lock has already reached its deadline.
+	if newHandoff && !ws.fgIsEditor &&
+		(s.phase == 2 || (s.phase == 3 && s.lockedClass != "")) {
+		s.phase = 0
 	}
 	if s.phase == 3 {
 		return seqResult{}
@@ -681,6 +693,9 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 	// disturbed needs no assertion to be believed).
 	if ws.fgIsPlayer && s.playerSinceMs != 0 && nowMs-s.playerSinceMs >= focusDwellMs &&
 		(s.verified || s.pastFloor(nowMs)) {
+		if in.handoff {
+			s.handoffSeen = true
+		}
 		// FIX117: a player-held foreground's settle resolution
 		// IS this lock, so an owed focus is worked HERE, at
 		// the resolution moment, before the lock is declared:
@@ -696,17 +711,19 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 		// and an undelivered focus never denies it (brief
 		// §4: the focus-landed requirement ships log-only in
 		// this build).
-		if !s.pastDeadline(nowMs) {
-			// FIX118: the blind hand-off order, when this tick
-			// IS the hand-off tick (or follows it) arriving
-			// with the lock already due - the resident
-			// launcher leaves a long-held table, and this
-			// branch runs before the hand-off block below, so
-			// the obligation is worked here or the lock would
-			// be declared over it.
-			if (in.handoff || s.handoffSeen) && s.unconditionalDue(ws) {
-				return s.orderDeliver(nowMs, ws, in, !in.actuationProbe, true)
+		// A late launcher exit is still a hand-off, including
+		// after the launch deadline. Work it before declaring
+		// the foreground locked, and retain a vanished target's
+		// obligation until the retry spacing has passed.
+		if (in.handoff || s.handoffSeen) && !s.handoffDeliveryDone &&
+			ws.focusRead != focusReadUnknown && s.deliverAttempts < focusMaxAttempts {
+			s.handoffSeen = true
+			if s.unconditionalDue(nowMs, ws) {
+				return s.orderDeliver(nowMs, ws, in, true, true)
 			}
+			return seqResult{}
+		}
+		if !s.pastDeadline(nowMs) {
 			if focusOwed(ws) {
 				if s.deliverAttempts >= focusMaxAttempts {
 					if !s.notDeliveredLogged {
@@ -728,7 +745,7 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 			// reopen inside, so the lock is final here.
 			s.phase = 3
 		}
-		return seqResult{action: seqLogLocked}
+		return seqResult{action: seqLogLocked, notePush: newHandoff}
 	}
 
 	// The hand-off tick: evaluate immediately (see the
@@ -745,7 +762,7 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 			r.notePush = true
 			return r
 		}
-		if ws.fgIsPlayer && s.unconditionalDue(ws) {
+		if ws.fgIsPlayer && s.unconditionalDue(nowMs, ws) {
 			// FIX118: the hand-off delivery fires BLIND. In
 			// 1.1.7 this moment waited for a positive "focus
 			// is elsewhere" reading (the born-foreground
@@ -770,7 +787,7 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 	// (or the foreground reached the player window by another
 	// road): the first tracking tick with the player window
 	// in front places it, readings regardless.
-	if s.handoffSeen && ws.fgIsPlayer && s.unconditionalDue(ws) {
+	if s.handoffSeen && ws.fgIsPlayer && s.unconditionalDue(nowMs, ws) {
 		return s.orderDeliver(nowMs, ws, in, !in.actuationProbe, true)
 	}
 
