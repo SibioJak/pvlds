@@ -114,6 +114,8 @@ func _run() -> void:
 	await physics_frame
 	await process_frame
 	rig._process(0.0)
+	_expect(str(rig.hover_ray_sample().get("hand", "")) == "right_hand",
+		"hover navigation receives the hand actually owning room hover")
 	_expect(rig._lasers[rig._controllers[0]].visible and rig._lasers[rig._controllers[1]].visible,
 		"both tracked controllers show lasers simultaneously")
 	_expect(rig._hand_dots[rig._controllers[0]].visible and rig._hand_dots[rig._controllers[1]].visible,
@@ -123,6 +125,9 @@ func _run() -> void:
 	left.set_input(&"trigger_click", true)
 	left.set_input(&"trigger_click", false)
 	_expect(selected.size() == 1 and selected[0] == left_target, "left trigger selects the left ray's target while right is tracked")
+	_expect(str(rig.hover_ray_sample().get("hand", "")) == "left_hand"
+		and (rig.hover_ray_sample().get("origin", Vector3.ZERO) as Vector3).is_equal_approx(Vector3(-1, 1, 0)),
+		"a left-hand selection updates the hover navigation ray immediately")
 	rig._process(0.0)
 	_expect(rig.hovered == left_target, "left hand retains room hover after selecting")
 	right.set_input(&"trigger_click", true)

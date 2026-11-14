@@ -27,6 +27,7 @@ var _lasers: Dictionary = {} ## XRController3D -> laser MeshInstance3D
 var _hand_dots: Dictionary = {} ## XRController3D -> hit marker
 var _dot: MeshInstance3D = null
 var _active_controller: XRController3D = null
+var _hover_ray: Dictionary = {}
 var _xr_diagnostic_elapsed: float = 0.0
 var _xr_diagnostic: XrInputDiagnostics = XrInputDiagnostics.new()
 
@@ -90,6 +91,7 @@ func _on_controller_button(button_name: String, ctrl: XRController3D) -> void:
 	if selects:
 		if tracked:
 			_active_controller = ctrl
+			_hover_ray = _controller_ray(ctrl)
 			var hit: Dictionary = _pick_controller(ctrl)
 			quad = hit["quad"]
 			_set_hovered(quad)
@@ -161,6 +163,17 @@ func _tracked_controller() -> XRController3D:
 	return _choose_controller(_tracked_controllers())
 
 
+func hover_ray_sample() -> Dictionary:
+	return _hover_ray
+
+
+func _controller_ray(ctrl: XRController3D) -> Dictionary:
+	if ctrl == null:
+		return {"valid": false}
+	return {"valid": true, "hand": str(ctrl.tracker), "origin": ctrl.global_position,
+		"direction": -ctrl.global_transform.basis.z.normalized()}
+
+
 func _process(delta: float) -> void:
 	for ctrl: Variant in _lasers:
 		(_lasers[ctrl] as MeshInstance3D).visible = false
@@ -169,6 +182,7 @@ func _process(delta: float) -> void:
 		_dot.visible = false
 		var tracked: Array[XRController3D] = _tracked_controllers()
 		var active_ctrl: XRController3D = _choose_controller(tracked)
+		_hover_ray = _controller_ray(active_ctrl)
 		var active_quad: ClickableQuad = null
 		for ctrl: XRController3D in tracked:
 			var hit: Dictionary = _pick_controller(ctrl)
@@ -181,6 +195,7 @@ func _process(delta: float) -> void:
 			_xr_diagnostic_elapsed = 0.0
 			_xr_diagnostic.observe(_controllers, active_ctrl, get_window().has_focus())
 		return
+	_hover_ray = {}
 	if mouse_camera == null:
 		_set_hovered(null)
 		_dot.visible = false

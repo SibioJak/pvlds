@@ -1435,6 +1435,8 @@ var _swing_vel: float = 0.0 ## drum yaw velocity (rad/s), carried across retarge
 var _swing_cols: float = 1.0 ## the live swing's remaining travel in columns (the spring stiffens with distance: its settle tail grows logarithmically, the duration law only as a square root)
 var _swing_journey: bool = false ## a retarget arrived mid-travel in the travel's own direction: the spring softens to the stepping cadence so a held scroll builds to a cruise instead of settling between steps
 var _swing_active: bool = false
+var _pointer_hover_turn: PointerHoverTurn = PointerHoverTurn.new()
+var _pointer_follow_focus: ClickableQuad = null
 var _nc_roll_dir: int = 0 ## debug_opt_nc="smoothcruise" seam only: the continuous roll's direction while it stands (0 in every production run - STEPPED never rolls)
 var _step_from_col: int = -1 ## OPTIMIZE telemetry: the standing step record's origin column (-1 = no step in flight)
 var _step_to_col: int = -1 ## OPTIMIZE telemetry: the standing step record's target column
@@ -8188,15 +8190,20 @@ func _pop_target_panel() -> ClickableQuad:
 	return _panels[_centre_index]
 
 
-## The centre follows the player's point: the pointer's card
-## wins (VR laser and mouse hover both arrive as the rig's
-## hover), else the gamepad/keyboard focus's card. Called
-## per frame from _update_pop; _set_centre early-outs when
-## the centre already stands there, and the swing retargets
-## from the drum's current angle, so a sweeping point swings
-## the drum with it - input is never gated by the travel.
-func _follow_centre() -> void:
+## In VR, a deliberate, stable hover can turn the wall once. The
+## player must move the ray again before another automatic turn, so
+## the wall's own movement cannot feed back into its hover target.
+## Explicit navigation focus remains immediate. The desktop keeps
+## its existing pointer-follow behavior below.
+## Called per frame from _update_pop. On desktop, the mouse's
+## card wins, else the gamepad/keyboard focus's card. In VR,
+## only a changed navigation focus or a completed hover dwell
+## requests a new centre; a ray miss cannot restore stale focus.
+func _follow_centre(delta: float = 0.0) -> void:
 	if _mode != "wall" or _placard_up or _setup_panel_up or _submit_panel_up or _launching_game_id != "":
+		if _xr_enabled:
+			_pointer_hover_turn.hold_until_moved(_rig.hover_ray_sample() if _rig != null else {})
+			_pointer_follow_focus = _focused
 		return
 	var hovered: ClickableQuad = _rig.hovered if _rig != null else null
 	if _boot_guard:
@@ -8227,6 +8234,24 @@ func _follow_centre() -> void:
 		# While the NC seam's roll stands (debug only), its
 		# own drive owns the centre; the follow resumes the
 		# frame the roll ends.
+		return
+	if _xr_enabled:
+		var ray: Dictionary = _rig.hover_ray_sample() if _rig != null else {}
+		if _focused != _pointer_follow_focus:
+			_pointer_follow_focus = _focused
+			_pointer_hover_turn.hold_until_moved(ray)
+			var focused_panel: ClickableQuad = _panel_for(_focused)
+			if focused_panel != null:
+				var focused_index: int = _panels.find(focused_panel)
+				if focused_index >= 0 and focused_index != _centre_index:
+					_set_centre(focused_index)
+			return
+		var hovered_panel: ClickableQuad = _panel_for(hovered)
+		var candidate: int = _panels.find(hovered_panel) if hovered_panel != null else -1
+		var turn: int = _pointer_hover_turn.observe(candidate, _centre_index, delta,
+			_swing_active or page_slide_active(), ray)
+		if turn >= 0:
+			_set_centre(turn)
 		return
 	var p: ClickableQuad = _panel_for(hovered)
 	if p == null:
@@ -8303,7 +8328,7 @@ func _follow_centre() -> void:
 ## clickable while popped.
 func _update_pop(delta: float) -> void:
 	var tel_pop_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the pop block's cost, timed below
-	_follow_centre()
+	_follow_centre(delta)
 	if _panels.is_empty():
 		return
 	var target: ClickableQuad = _pop_target_panel()

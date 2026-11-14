@@ -65,6 +65,15 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
 
 ## The hand-off (M2)
 
+- **Deliberate hover navigation in VR.** Point at a card for about
+  0.4 seconds to turn the wall toward it. Brief sweeps do not turn the
+  wall, and a turn completes before another hover can move it again.
+  After a turn, a fresh hand movement (about two degrees or three
+  centimetres) rearms hover navigation. This breaks the feedback loop
+  where the moving wall put another card under a stationary pointer
+  and immediately swung back or continued scrolling. Losing a ray hit
+  no longer jumps to an older gamepad focus. Trigger selection remains
+  immediate, and explicit navigation controls still turn without a dwell.
 - **Handheld controller pointers after return.** The room binds its
   controller nodes to Godot's registered `left_hand` / `right_hand`
   trackers. The OpenXR `/user/hand/left` / `/user/hand/right` paths belong
