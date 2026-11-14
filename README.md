@@ -65,6 +65,45 @@ says so. Design of record: `~/workspace/vpx-vr-launcher/design.md`
 
 ## The hand-off (M2)
 
+- **View-edge scrolling.** Hold the pointer near the left or right
+  side of the view to scroll one column at a time in that direction.
+  The mouse uses the outer 12% of the window; VR uses head-relative
+  side zones beginning about 35 degrees from the centre. Returning
+  to the middle stops further steps. These zones stay fixed while
+  the wall moves and work without a highlighted card. Scrolling stops
+  at the first or last column; there is no wrap or outward bounce.
+  Either tracked hand can scroll; opposing requests cancel. Bottom
+  controls and modal panels do not trigger edge scrolling. Card hover
+  highlighting follows the pointer independently of wall position;
+  the amber frame and raised card share that hover target. Clicks use
+  exact card bounds; a small release margin steadies visual hover.
+  A library of up to twelve games stays centred as a group, including
+  when restoring a saved game. It does not scroll while all games fit
+  on one page; larger libraries keep the edge scrolling behavior.
+  Floating amber arrows mark the available scroll directions at the
+  view's side edges, vertically centred. Each disappears at its end
+  of the library, and both hide during loading or modal screens.
+- **Handheld controller pointers after return.** The room binds its
+  controller nodes to Godot's registered `left_hand` / `right_hand`
+  trackers. The OpenXR `/user/hand/left` / `/user/hand/right` paths belong
+  in the action map, not the XRServer tracker lookup: the field log
+  showed a focused session with both lookups missing under those paths.
+  The regression test builds the room's actual rig against trackers
+  registered under the names used by Godot's OpenXR backend.
+  Both tracked hands now show their own laser and hit marker. Each
+  trigger selects that hand's target; the room's shared hover follows
+  the most recently selecting hand. Previously, the right-hand laser
+  hid the left one and either trigger acted on the right-hand hover.
+  The pointer now chooses
+  a pose with current tracking data (aim first, then default or grip),
+  rather than treating a registered pose as proof of tracking. An
+  untracked right hand no longer masks a tracked left hand, and a
+  returning hand can use a live aim pose while its default pose is
+  inactive. The launcher records OpenXR state, active action sets,
+  controller profiles and pose tracking in `user://pvlds_xr_input.log`.
+  This includes a ten-second heartbeat and button events so a remaining
+  runtime input failure can be distinguished from a stale pointer. The
+  unsuccessful three-second return delay has been removed.
 - **Controller input after launch.** The default Windows focus delivery
   now gives an already-foreground VPX player a real activation cycle:
   it briefly focuses an off-screen watchdog tool window, then returns

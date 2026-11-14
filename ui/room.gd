@@ -762,7 +762,7 @@ var _panel_pop_vel: Array[float] = [] ## pop spring velocity per panel (GRADFIX1
 var _panel_size: Vector2 = PANEL_SIZE ## the standing view's card size: CARD_SIZE, or the Tournament board size
 var _panel_face_px: Vector2i = CARD_FACE_PX ## the panel faces' render size (CARD_FACE_PX, or the board's)
 var _panel_art_aspect: Array[float] = [] ## per panel: its art's aspect (w/h) once its face lands, 0 = no art (title card)
-var _panel_frames: Array[MeshInstance3D] = [] ## per panel: the card's frame quad (prototype geometry; amber while the card is the centre)
+var _panel_frames: Array[MeshInstance3D] = [] ## per panel: amber on the hovered card, otherwise the centre
 var _panel_plates: Array[MeshInstance3D] = [] ## per panel: the nameplate's dark plate behind the title label
 var _panel_labels: Array[Label3D] = [] ## per panel: the title label on its nameplate
 var _mat_frame_dark: StandardMaterial3D = null ## the cards' shared dark frame material
@@ -1449,6 +1449,9 @@ var _swing_vel: float = 0.0 ## drum yaw velocity (rad/s), carried across retarge
 var _swing_cols: float = 1.0 ## the live swing's remaining travel in columns (the spring stiffens with distance: its settle tail grows logarithmically, the duration law only as a square root)
 var _swing_journey: bool = false ## a retarget arrived mid-travel in the travel's own direction: the spring softens to the stepping cadence so a held scroll builds to a cruise instead of settling between steps
 var _swing_active: bool = false
+var _pointer_edge_scroll: PointerEdgeScroll = PointerEdgeScroll.new()
+var _scroll_arrows: ScrollEdgeArrows
+var _pointer_follow_focus: ClickableQuad = null
 var _nc_roll_dir: int = 0 ## debug_opt_nc="smoothcruise" seam only: the continuous roll's direction while it stands (0 in every production run - STEPPED never rolls)
 var _step_from_col: int = -1 ## OPTIMIZE telemetry: the standing step record's origin column (-1 = no step in flight)
 var _step_to_col: int = -1 ## OPTIMIZE telemetry: the standing step record's target column
@@ -1751,10 +1754,7 @@ func _build_rigs() -> void:
 	add_child(origin)
 	_xr_camera = XRCamera3D.new()
 	origin.add_child(_xr_camera)
-	for side: String in ["left", "right"]:
-		var ctrl: XRController3D = XRController3D.new()
-		ctrl.tracker = StringName("/user/hand/" + side)
-		origin.add_child(ctrl)
+	PointerRig.add_hand_controllers(origin)
 	_desk_rig = Node3D.new()
 	_desk_rig.position = EYE
 	add_child(_desk_rig)
@@ -1769,6 +1769,9 @@ func _build_rigs() -> void:
 	_rig.setup_controllers(origin)
 	_rig.hover_changed.connect(_on_hover_changed)
 	_rig.select_pressed.connect(_on_select)
+	_scroll_arrows = ScrollEdgeArrows.new()
+	_active_camera().add_child(_scroll_arrows)
+	_scroll_arrows.setup(_xr_enabled)
 
 
 func _active_camera() -> Camera3D:
@@ -3801,15 +3804,23 @@ func _card_transform_at(col: int, row: int) -> Transform3D:
 	return Transform3D(Basis(x_axis, y_axis, z_axis), pos)
 
 
-## The drum's resting yaw for a column: the swing target that
-## brings that column in front of the player.
+## A library that fits on one page stays centred as a group,
+## regardless of which game was restored or receives focus.
+func _library_fits_one_page() -> bool:
+	return not _tournament and not _visible_games.is_empty() and _visible_games.size() <= PAGE_SIZE
+
+
+## Larger shelves turn to the requested column. A single page
+## rests halfway between its outer columns, including even counts.
 func _yaw_for_column(col: int) -> float:
+	if _library_fits_one_page():
+		return deg_to_rad(float(_columns - 1) * 0.5 * ANGLE_STEP_DEG)
 	return deg_to_rad(float(col) * ANGLE_STEP_DEG)
 
 
 ## Shared card materials (the prototype's palette): the dark
 ## frame every card wears, the amber it takes while it is the
-## centred card, and the nameplate's dark plate.
+## highlighted card, and the nameplate's dark plate.
 func _frame_mat(amber: bool) -> StandardMaterial3D:
 	if amber:
 		if _mat_frame_amber == null:
@@ -4424,22 +4435,21 @@ func _nc_costume_tick() -> void:
 		_nc_costume_on = false
 
 
-## The centred card's frame goes amber; every other card's
-## stays dark. The ClickableQuad highlight frame still answers
-## hover/focus on top of this - the amber frame is the shelf's
-## own statement of where its centre stands.
+## The amber frame and raised card share one visual target.
+## Pointer hover can change that target without moving the wall.
 func _refresh_card_frames() -> void:
+	var target: ClickableQuad = _pop_target_panel()
 	for idx: int in range(_panels.size()):
 		if idx >= _panel_frames.size():
 			break
 		var f: MeshInstance3D = _panel_frames[idx]
 		if f != null:
-			# GRADFIX17: only the old and new centre frames
+			# GRADFIX17: only the old and new highlighted frames
 			# ever change material (two shared materials,
 			# centre or dark) - assigning the standing one
 			# again is a renderer write for nothing, per
 			# panel per column. Compare and skip.
-			var want_mat: StandardMaterial3D = _frame_mat(idx == _centre_index)
+			var want_mat: StandardMaterial3D = _frame_mat(_panels[idx] == target)
 			if f.material_override != want_mat:
 				f.material_override = want_mat
 
@@ -8092,6 +8102,7 @@ func _apply_setup_panel_button_dress() -> void:
 
 func _refresh_quad_states() -> void:
 	var tel_q_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the focus-change sweep's cost, timed below
+	_refresh_card_frames()
 	var hovered: ClickableQuad = _rig.hovered if _rig != null else null
 	var all: Array[ClickableQuad] = []
 	all.append_array(_panels)
@@ -8190,68 +8201,81 @@ func _panel_for(q: ClickableQuad) -> ClickableQuad:
 	return null
 
 
-## The one card that should be popped right now: the CENTRED
-## card (DOME5's law - on a drum the pop is the shelf's own
-## statement of where it stands, not a hover effect; hover
-## and pad focus MOVE the centre, in _update_pop's follow
-## step, and the pop follows the centre). No pop while the
-## detail view or the placard owns the room, and none during
-## the load wait - the wall is frozen behind the marquee.
+## Hover owns the card's highlight and pop independently of wall
+## scrolling. With no hovered card, retain the centred card's
+## visual selection for keyboard/gamepad navigation.
 func _pop_target_panel() -> ClickableQuad:
 	if _mode != "wall" or _placard_up or _setup_panel_up or _submit_panel_up or _launching_game_id != "":
 		return null
+	var hovered: ClickableQuad = _panel_for(_rig.hovered) if _rig != null else null
+	if hovered != null and hovered.pick_enabled and hovered.is_visible_in_tree():
+		return hovered
 	if _centre_index < 0 or _centre_index >= _panels.size():
 		return null
 	return _panels[_centre_index]
 
 
-## The centre follows the player's point: the pointer's card
-## wins (VR laser and mouse hover both arrive as the rig's
-## hover), else the gamepad/keyboard focus's card. Called
-## per frame from _update_pop; _set_centre early-outs when
-## the centre already stands there, and the swing retargets
-## from the drum's current angle, so a sweeping point swings
-## the drum with it - input is never gated by the travel.
-func _follow_centre() -> void:
-	if _mode != "wall" or _placard_up or _setup_panel_up or _submit_panel_up or _launching_game_id != "":
+## Pointer navigation uses fixed view edges, independently of card
+## hover. Holding an edge advances one column at a time while more
+## games exist that way. Explicit navigation focus remains immediate.
+func _follow_centre(delta: float = 0.0) -> void:
+	if not _edge_scroll_enabled():
+		_pointer_edge_scroll.reset()
+		_pointer_follow_focus = _focused
 		return
-	var hovered: ClickableQuad = _rig.hovered if _rig != null else null
-	if _boot_guard:
-		# The boot seating guard (see setup): while it
-		# stands, the pointer's RESTING hover is not a
-		# point - the follow runs on the focus alone,
-		# which is the restore's seating. The guard falls
-		# to the first genuine act: the hover CHANGES
-		# from the resting place recorded when the wall
-		# landed (the player pointed somewhere), or the
-		# focus or centre was seated by another path
-		# (a pad step, a letter pick, a page turn - the
-		# input's own seating lands that frame, and the
-		# shipped pointer law resumes from the next).
-		var released_by_seat: bool = false
-		if _focused != _boot_focus_ref or _centre_index != _boot_centre_ref:
-			_boot_guard = false
-			released_by_seat = true
-		elif not _boot_hover_sampled:
-			if wall_ready:
-				_boot_hover_ref = hovered
-				_boot_hover_sampled = true
-		elif hovered != _boot_hover_ref:
-			_boot_guard = false
-		if _boot_guard or released_by_seat:
-			hovered = null
 	if _nc_roll_dir != 0:
 		# While the NC seam's roll stands (debug only), its
 		# own drive owns the centre; the follow resumes the
 		# frame the roll ends.
 		return
-	var p: ClickableQuad = _panel_for(hovered)
-	if p == null:
-		p = _panel_for(_focused)
-	if p != null:
-		var idx: int = _panels.find(p)
-		if idx >= 0 and idx != _centre_index:
-			_set_centre(idx)
+	if _focused != _pointer_follow_focus:
+		_pointer_follow_focus = _focused
+		_pointer_edge_scroll.reset()
+		var focused_panel: ClickableQuad = _panel_for(_focused)
+		if focused_panel != null:
+			var focused_index: int = _panels.find(focused_panel)
+			if focused_index >= 0 and focused_index != _centre_index:
+				_telemetry_record("focus_turn", {"from_index": _centre_index, "to_index": focused_index})
+				_set_centre(focused_index)
+		return
+	var left: int = _edge_scroll_target(-1)
+	var right: int = _edge_scroll_target(1)
+	var direction: int = _pointer_edge_scroll.observe(_edge_pointer_samples(), left >= 0, right >= 0, delta,
+		_swing_active or page_slide_active() or _step_rest_timer > 0.0)
+	if direction != 0:
+		var target: int = left if direction < 0 else right
+		_telemetry_record("pointer_edge_step", {"from_index": _centre_index, "to_index": target, "direction": direction})
+		_set_centre(target)
+
+
+func _edge_scroll_enabled() -> bool:
+	return is_visible_in_tree() and _mode == "wall" and not _placard_up and not _setup_panel_up \
+		and not _submit_panel_up and not _submissions_panel_up and _launching_game_id == ""
+
+
+func _update_scroll_arrows() -> void:
+	if _scroll_arrows != null:
+		var enabled: bool = _edge_scroll_enabled() and _nc_roll_dir == 0
+		_scroll_arrows.set_available(enabled and _edge_scroll_target(-1) >= 0, enabled and _edge_scroll_target(1) >= 0)
+
+
+func _edge_pointer_samples() -> Array[Dictionary]:
+	return _rig.edge_scroll_samples(_active_camera(), WALL_RADIUS) if _rig != null else []
+
+
+func _edge_scroll_target(step: int) -> int:
+	if _centre_index < 0 or _centre_index >= _visible_games.size() or _panels.is_empty():
+		return -1
+	if _library_fits_one_page():
+		return -1
+	if _tournament:
+		var next: int = _tourn_side_step(_centre_index, step)
+		return next if next != _centre_index else -1
+	var coord: Vector2i = _grid_coord(_centre_index)
+	var column: int = coord.x + step
+	if column < 0 or column >= _columns:
+		return -1
+	return _panel_in_column(column, coord.y) if debug_grid_nc == "rowmajor" else _index_at(column, coord.y)
 
 
 ## Per-frame pop animation, driven from _process.
@@ -8320,7 +8344,7 @@ func _follow_centre() -> void:
 ## clickable while popped.
 func _update_pop(delta: float) -> void:
 	var tel_pop_t0: int = Time.get_ticks_usec() ## GRADFIX17 telemetry: the pop block's cost, timed below
-	_follow_centre()
+	_follow_centre(delta)
 	if _panels.is_empty():
 		return
 	var target: ClickableQuad = _pop_target_panel()
@@ -12696,6 +12720,7 @@ func _process(delta: float) -> void:
 	_update_pop(delta)
 	_update_rail_lift(delta)
 	_update_swing(delta)
+	_update_scroll_arrows()
 	# Scroll telemetry (observation only): one frame record
 	# per rendered frame in which the drum was moving when
 	# the frame began or still is when its swing update has
