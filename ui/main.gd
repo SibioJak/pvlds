@@ -21753,45 +21753,61 @@ func _drive_tournament_artdark() -> void:
 					_tournament_fail("artdark: the room never came up")
 					_finish_tournament_smoke()
 		1:
-			# The boards stand; judge the match legs once,
-			# then wait for the shot to land and be worn.
+			# The boards stand and the entry fetches have
+			# settled (both base URLs are dead ports - they
+			# refuse at once): judge the match legs once,
+			# then land ONE settled WoVP push. The settled
+			# push is the field's own shape - in the field
+			# the WoVP push is the last data event before
+			# the shot lands - and under the nostaple NC it
+			# is what lets the staple stand long enough for
+			# the shot to be worn, so the NC's failure lands
+			# on the survival legs below, by name.
 			var rows1: Array = _room.tournament_rows()
 			var art_row: Dictionary = _artdark_row(rows1, "fix124-art")
-			if not art_row.is_empty():
+			var clients_idle: bool = (_wovp_client == null or not _wovp_client.is_busy()) \
+				and (_pinemhi_client == null or not _pinemhi_client.is_busy())
+			if not art_row.is_empty() and clients_idle:
 				if not _artdark_match_judged:
 					_artdark_match_judged = true
 					_artdark_judge_match(rows1)
-				var url: String = _artdark_shot_url
-				if url != "" and ArtProvider.shot_is_cached(url) \
-						and str(_room._panel_face_key.get("wovp:none:fix124-art", "")).contains(ArtProvider.shot_cache_path_for(url)):
-					_tournament_expect(str((art_row.get("game") as GameEntry).shot_url) == url,
-						"artdark: after the WoVP push the unowned row carries its shot URL as data")
-					_tournament_expect(true,
-						"artdark: after the WoVP push the unowned card wears its db shot")
-					_artdark_push_weekly()
-					_tournament_smoke_phase = 2
-				elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
-					_tournament_fail("artdark: the unowned card's shot never landed after the WoVP push")
-					_finish_tournament_smoke()
+				_push_wovp_data()
+				_tournament_smoke_phase = 2
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
-				_tournament_fail("artdark: the challenge rows never stood")
+				_tournament_fail("artdark: the challenge rows never stood and settled")
 				_finish_tournament_smoke()
 		2:
+			# Wait for the shot to land and be worn.
+			var rows2: Array = _room.tournament_rows()
+			var art_row2: Dictionary = _artdark_row(rows2, "fix124-art")
+			var url: String = _artdark_shot_url
+			if not art_row2.is_empty() and url != "" and ArtProvider.shot_is_cached(url) \
+					and str(_room._panel_face_key.get("wovp:none:fix124-art", "")).contains(ArtProvider.shot_cache_path_for(url)):
+				_tournament_expect(str((art_row2.get("game") as GameEntry).shot_url) == url,
+					"artdark: after the WoVP push the unowned row carries its shot URL as data")
+				_tournament_expect(true,
+					"artdark: after the WoVP push the unowned card wears its db shot")
+				_artdark_push_weekly()
+				_tournament_smoke_phase = 3
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("artdark: the unowned card's shot never landed after the WoVP push")
+				_finish_tournament_smoke()
+		3:
 			# The weekly push landed (the field bug's killing
 			# blow): settle, then the shot must still stand.
 			if Time.get_ticks_msec() > _artdark_pushed_msec + 4000:
 				_artdark_judge_shot_standing("after the PINemHi weekly push")
 				_push_wovp_data()
 				_artdark_pushed_msec = Time.get_ticks_msec()
-				_tournament_smoke_phase = 3
-		3:
+				_tournament_smoke_phase = 4
+		4:
 			# WoVP last this time: the mirror order ends with
 			# the shot standing too.
 			if Time.get_ticks_msec() > _artdark_pushed_msec + 3000:
 				_artdark_judge_shot_standing("after a WoVP push that followed the weekly push")
 				_artdark_push_weekly()
-				_tournament_smoke_phase = 4
-		4:
+				_tournament_smoke_phase = 5
+		5:
 			if Time.get_ticks_msec() > _artdark_pushed_msec + 4000:
 				_artdark_judge_shot_standing("after a second weekly-last sequence")
 				_finish_tournament_smoke()
