@@ -1149,6 +1149,18 @@ static var debug_phantom_nc: String = ""
 ## mechanism; inert until the round's product commit.)
 static var debug_compose_nc: String = ""
 
+## FIX124 negative-control seam (the harness env
+## PVLDS_FIX124_NC, set by Main before any room exists):
+## "nofallback" - the tournament join never falls back to
+## the challenge's name+maker+year identity (the pre-FIX124
+## single exact-id join), so the artdark smoke's fallback
+## legs fail by name; "nostaple" - a synthetic unowned
+## entry ignores the shot URL the WoVP push carries, so it
+## is reborn virgin on every rebuild (the pre-FIX124
+## staple race) and the artdark smoke's shot-survival legs
+## fail by name. Empty in every real run.
+static var debug_fix124_nc: String = ""
+
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
@@ -1436,6 +1448,7 @@ var _pinemhi_best_rows: Dictionary = {} ## BACKFINE: PINemHi TOP10_Best full row
 var _pinemhi_unsupported: Dictionary = {} ## STRUCKLIGHT: the unsupported title-key set (PINemHi's own NOT SUPPORTED markers, joined through romfind), pushed by Main (set_pinemhi_unsupported); the front corner's STRUCK state reads it
 var _pinemhi_stamp: int = 0 ## PINEMHI1: the rows' name - bumped by set_pinemhi_rows when the pushed rows differ; it rides _card_back_key so a standing back heals under its new key
 var _wovp_shots_folder: String = "" ## ROOMSUBMIT: the config's screenshots folder, pushed by Main with the boards - the submit panel reads its photos from there
+var _wovp_shot_urls: Dictionary = {} ## FIX124: challenge_id -> the db shot URL Main resolved for that challenge, pushed with the boards - a synthetic unowned entry is BORN wearing its shot URL, so no tournament rebuild (the PINemHi weekly push included) can strip it back to the bare title face
 var _wovp_fetched_at: int = 0 ## unix time the standing boards landed (0 = never)
 var _wovp_live: bool = false ## the standing boards came from a fetch this session (false = the disk cache's)
 var _wovp_fetch_error: String = "" ## the last fetch's failure, in words, when it failed - the wall says so rather than dressing stale boards as live
@@ -2730,6 +2743,12 @@ func set_wovp_data(d: Dictionary) -> void:
 	_wovp_live = bool(d.get("live", false))
 	_wovp_fetch_error = str(d.get("fetch_error", ""))
 	_wovp_fetch_seq = int(d.get("fetch_seq", 0))
+	# FIX124: the per-challenge shot URLs ride the same
+	# push, stored BEFORE the recompute below rebuilds
+	# the rows - a synthetic unowned entry reads its URL
+	# from this map at birth (see _tournament_unowned_game).
+	if d.has("shot_urls") and d.get("shot_urls") is Dictionary:
+		_wovp_shot_urls = (d.get("shot_urls") as Dictionary).duplicate()
 	if _tournament:
 		# RETURN round: the player's place survives a boards
 		# landing. _rebuild_wall drops the focus to nothing,
@@ -3215,13 +3234,72 @@ func _tournament_unowned_game(ch: WovpChallenge) -> GameEntry:
 	game.title = ch.table_name if ch.table_name != "" else ch.name
 	game.manufacturer = ch.table_manufacturer
 	game.year = ch.table_year
+	# FIX124: the entry is born wearing the shot URL the
+	# WoVP push resolved for this challenge (see
+	# _wovp_shot_urls). Rows are re-created on EVERY
+	# tournament rebuild; a URL stapled on afterwards (the
+	# pre-FIX124 way) died with the entry at the next
+	# rebuild - the PINemHi weekly push rebuilds without
+	# re-resolving - and the card fell back to its title
+	# face for good. As row data the URL survives every
+	# rebuild, in any push order.
+	if debug_fix124_nc != "nostaple":
+		game.shot_url = str(_wovp_shot_urls.get(ch.challenge_id, ""))
 	return game
 
 
 func _match_challenge(ch: WovpChallenge) -> GameEntry:
-	if _scanner == null or ch.table_external_id == "":
+	if _scanner == null:
 		return null
-	return _scanner.game_by_id(ch.table_external_id)
+	if ch.table_external_id != "":
+		var by_id: GameEntry = _scanner.game_by_id(ch.table_external_id)
+		if by_id != null:
+			return by_id
+	# FIX124: the id join missed. His file can be in the
+	# library, fully playable, and still carry a local:
+	# id the join can never hit (the scanner's tier chain
+	# refused it a db identity) - the field case (Batman
+	# Stern 2008, Spider-Man Vault Edition, 2026-11-15:
+	# owned tables flagged NOT IN YOUR LIBRARY). Second
+	# chance: the identity the challenge itself carries.
+	return _match_challenge_by_identity(ch)
+
+
+## FIX124: the fallback join - the challenge's own
+## name + manufacturer + year against the library's
+## games, all three agreeing under the db's name
+## normalization. Conservative by design: it claims
+## owned ONLY on a unique match. Two candidates, a
+## year mismatch, or a maker mismatch all stay unowned,
+## exactly as the bare id join left them - the fallback
+## must never claim a table he does not have.
+func _match_challenge_by_identity(ch: WovpChallenge) -> GameEntry:
+	if debug_fix124_nc == "nofallback":
+		return null
+	if ch.table_name == "" or ch.table_year == 0 or ch.table_manufacturer == "":
+		return null
+	var want_name: String = VpsDatabase.normalize_name(ch.table_name)
+	var want_maker: String = VpsDatabase.normalize_name(ch.table_manufacturer)
+	if want_name == "" or want_maker == "":
+		return null
+	var found: GameEntry = null
+	for g: GameEntry in _scanner.games:
+		if g.year != ch.table_year:
+			continue
+		if VpsDatabase.normalize_name(g.title) != want_name:
+			continue
+		if VpsDatabase.normalize_name(g.manufacturer) != want_maker:
+			continue
+		if found != null:
+			# A second game carries the same identity:
+			# ambiguous - stays unowned rather than
+			# claiming the wrong table his.
+			return null
+		found = g
+	if found != null:
+		print("TOURNAMENT MATCH: challenge %s (%s, %s %d) missed the id join; joined by name+maker+year to '%s' (%s)" % [
+			ch.challenge_id, ch.table_name, ch.table_manufacturer, ch.table_year, found.title, found.game_id])
+	return found
 
 
 ## Whether any of his builds of this game IS the challenge's

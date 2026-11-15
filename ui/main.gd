@@ -246,6 +246,9 @@ var _tournament_smoke_deadline_msec: int = 0
 var _tournament_validate_count_seen: int = 0 ## the stub's validate count when the panel length legs begin (their no-send witness)
 var _tournament_weekly_baseline: Array = [] ## PINEMHI2 harness contract: the standing WoVP boards' keys/seats before the full boot's weekly-present push (phases 17/18), for the WoVP-unaffected leg
 var _tournament_smoke_mode: String = "full" ## PVLDS_WOVP_SMOKE_MODE: full | nokey | failfetch | errbody | errempty | cache | layout - which harness boot this is
+var _artdark_shot_url: String = "" ## FIX124 artdark mode: the db shot URL the unowned fixture challenge resolves to (read off Main's own resolver in phase 0)
+var _artdark_pushed_msec: int = 0 ## FIX124 artdark mode: when the current phase's push landed (the settle clock the shot-survival legs judge after)
+var _artdark_match_judged: bool = false ## FIX124 artdark mode: the match legs run once, on the first standing rows
 var _tournament_pairing_stage: int = 0 ## full mode phase 13 (the standing-pair proof): step out, verify, step back, verify
 var _tournament_rendered_flip: int = 0 ## full mode phase 3: 0 seat the season card, 1 centre + Y-inert judge, 2 judged on its standing board
 var _tournament_entry_msec: int = 0 ## GRADFIX6 item 3: first-entry stamps - when the rail press landed
@@ -1095,6 +1098,13 @@ func _ready() -> void:
 	# cache-served board is live. Either way the pinemhi2
 	# smoke's named leg fails.
 	PinemhiWeeklyClient.debug_nc = OS.get_environment("PVLDS_PINEMHI2_NC")
+	# The FIX124 negative-control seam (PVLDS_FIX124_NC):
+	# "nofallback" - the tournament join never falls back
+	# to name+maker+year; "nostaple" - a synthetic unowned
+	# entry ignores the pushed shot URL and is reborn
+	# virgin on every rebuild. Either way the artdark
+	# smoke's named legs fail.
+	RoomView.debug_fix124_nc = OS.get_environment("PVLDS_FIX124_NC")
 	RoomSpecs.cardback_nc = OS.get_environment("PVLDS_CARDBACK_NC")
 	# BACKTRIM's negative-control seam (PVLDS_BACKTRIM_NC=
 	# notrim): the grid regains the rows the trim cut, and
@@ -2087,6 +2097,22 @@ func _push_wovp_data() -> void:
 	if _room == null:
 		return
 	_room.set_submission_lines(_submission_history_lines())
+	# FIX124: every challenge's db shot URL is resolved
+	# HERE and rides the push as row data (challenge_id ->
+	# url), so the room's synthetic unowned entries are
+	# born wearing it and no later rebuild - the PINemHi
+	# weekly push rebuilds the wall without re-resolving -
+	# can strip it (the artdark field fault: the picture
+	# loaded, then went dark for good).
+	var shot_urls: Dictionary = {}
+	if _db != null:
+		for cv: Variant in _wovp_challenges:
+			var ch: WovpChallenge = cv as WovpChallenge
+			if ch == null or ch.table_external_id == "":
+				continue
+			var u: String = _db_shot_url_for(ch)
+			if u != "":
+				shot_urls[ch.challenge_id] = u
 	_room.set_wovp_data({
 		"has_key": _config != null and _config.wovp_api_key != "",
 		"user_id": _wovp_user_id,
@@ -2096,6 +2122,7 @@ func _push_wovp_data() -> void:
 		"live": _wovp_boards_live,
 		"fetch_error": _wovp_fetch_error,
 		"shots_folder": _config.screenshots_folder if _config != null else "", ## ROOMSUBMIT: the submit panel's photo shelf rides the same push
+		"shot_urls": shot_urls, ## FIX124: the unowned cards' shot URLs as row data (see above)
 	})
 	# NEXTROUND (item 4): the PINemHi bests ride the same
 	# push - re-read from the player's own install each
@@ -2153,6 +2180,11 @@ func _push_wovp_data() -> void:
 ## same ShotFetcher the library uses and worn by the
 ## synthetic entry's face chain. No db art: the card wears
 ## its generated title face - never another table's art.
+## FIX124: the URL itself now rides the boards push as row
+## data (see _push_wovp_data) - this function's remaining
+## job is queueing the download for shots not yet cached;
+## its empty-URL lookup below is a backstop for an entry
+## the push's map somehow missed.
 func _resolve_unowned_shots() -> void:
 	if _db == null or _shot_fetcher == null or _room == null:
 		return
@@ -21455,6 +21487,8 @@ func _drive_tournament_smoke() -> void:
 			_drive_tournament_submissions()
 		"pinemhi":
 			_drive_tournament_pinemhi()
+		"artdark":
+			_drive_tournament_artdark()
 		"nokey":
 			_drive_tournament_state_mode(false)
 		"failfetch", "errbody", "errempty":
@@ -21658,6 +21692,217 @@ func _drive_tournament_pinemhi() -> void:
 			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
 				_tournament_fail("pinemhi: the restored board never re-rendered")
 				_finish_tournament_smoke()
+
+
+## artdark mode (FIX124): the tournament match fallback and
+## the unowned card's shot surviving every rebuild. No stub:
+## a fabricated LibraryScanner is adopted into the room and
+## fabricated challenges are pushed through Main's own
+## pushes; the one genuinely unowned challenge names a real
+## letter-db game (Medieval Madness), whose db shot the
+## harness serves under PVLDS_SHOT_BASE - fetched over real
+## HTTP, exactly as production fetches it.
+## Legs (all "artdark:"):
+##   - the match: an id-miss challenge whose name+maker+
+##     year uniquely matches a library game is owned (the
+##     fallback); two candidates, a year mismatch and a
+##     maker mismatch all stay unowned; an id-hit challenge
+##     is owned by the id join, unchanged.
+##   - the shot: after the WoVP push the unowned card wears
+##     its db shot (the standing face key names the shot's
+##     cache path and the row's shot_url is the resolved
+##     URL); after a PINemHi weekly push - the field bug's
+##     killing blow - and after WoVP/weekly pushes in both
+##     orders, it still wears it.
+## PVLDS_FIX124_NC=nofallback fails the fallback leg by
+## name; =nostaple fails the shot-survival legs by name.
+func _drive_tournament_artdark() -> void:
+	match _tournament_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				var fab: LibraryScanner = LibraryScanner.new()
+				var g_fb: GameEntry = _artdark_fab_game("local:fallbackunique", "Fallback Unique", "Williams", 1997)
+				var g_twin_a: GameEntry = _artdark_fab_game("local:twinone", "Twin Table", "Bally", 1990)
+				var g_twin_b: GameEntry = _artdark_fab_game("local:twintwo", "Twin Table", "Bally", 1990)
+				var g_year: GameEntry = _artdark_fab_game("local:yearoff", "Year Off", "Stern", 2001)
+				var g_idhit: GameEntry = _artdark_fab_game("fix124-idhit-db", "Id Hit Table", "Williams", 1993)
+				var fab_games: Array[GameEntry] = [g_fb, g_twin_a, g_twin_b, g_year, g_idhit]
+				fab.games = fab_games
+				_room.adopt_library(fab)
+				var ch_fb: WovpChallenge = _artdark_fab_challenge("fix124-fb", "fix124-db-absent", "Fallback Unique", "Williams", 1997)
+				var ch_twin: WovpChallenge = _artdark_fab_challenge("fix124-twin", "fix124-db-absent2", "Twin Table", "Bally", 1990)
+				var ch_year: WovpChallenge = _artdark_fab_challenge("fix124-year", "fix124-db-absent3", "Year Off", "Stern", 2002)
+				var ch_maker: WovpChallenge = _artdark_fab_challenge("fix124-maker", "fix124-db-absent4", "Year Off", "Gottlieb", 2001)
+				var ch_idhit: WovpChallenge = _artdark_fab_challenge("fix124-idhit", "fix124-idhit-db", "Id Hit Table", "Williams", 1993)
+				var ch_art: WovpChallenge = _artdark_fab_challenge("fix124-art", "-5yMpqSy", "Medieval Madness", "Williams", 1997)
+				_wovp_challenges = [ch_fb, ch_twin, ch_year, ch_maker, ch_idhit, ch_art]
+				_wovp_user_id = "smoke-user"
+				_wovp_boards_live = true
+				_wovp_fetched_at = int(Time.get_unix_time_from_system())
+				_artdark_shot_url = _db_shot_url_for(ch_art) if _db != null else ""
+				_tournament_expect(_artdark_shot_url != "",
+					"artdark: the unowned fixture challenge resolves a db shot URL (got '%s')" % _artdark_shot_url)
+				_push_wovp_data()
+				_room._handle_rail("tournament")
+				_tournament_expect(_room.tournament_active(), "artdark: the TOURNAMENT stop raises the Tournament Room")
+				_tournament_smoke_deadline_msec = Time.get_ticks_msec() + 60000
+				_tournament_smoke_phase = 1
+			else:
+				_tournament_smoke_wait += 1
+				if _tournament_smoke_wait > 3600:
+					_tournament_fail("artdark: the room never came up")
+					_finish_tournament_smoke()
+		1:
+			# The boards stand; judge the match legs once,
+			# then wait for the shot to land and be worn.
+			var rows1: Array = _room.tournament_rows()
+			var art_row: Dictionary = _artdark_row(rows1, "fix124-art")
+			if not art_row.is_empty():
+				if not _artdark_match_judged:
+					_artdark_match_judged = true
+					_artdark_judge_match(rows1)
+				var url: String = _artdark_shot_url
+				if url != "" and ArtProvider.shot_is_cached(url) \
+						and str(_room._panel_face_key.get("wovp:none:fix124-art", "")).contains(ArtProvider.shot_cache_path_for(url)):
+					_tournament_expect(str((art_row.get("game") as GameEntry).shot_url) == url,
+						"artdark: after the WoVP push the unowned row carries its shot URL as data")
+					_tournament_expect(true,
+						"artdark: after the WoVP push the unowned card wears its db shot")
+					_artdark_push_weekly()
+					_tournament_smoke_phase = 2
+				elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+					_tournament_fail("artdark: the unowned card's shot never landed after the WoVP push")
+					_finish_tournament_smoke()
+			elif Time.get_ticks_msec() > _tournament_smoke_deadline_msec:
+				_tournament_fail("artdark: the challenge rows never stood")
+				_finish_tournament_smoke()
+		2:
+			# The weekly push landed (the field bug's killing
+			# blow): settle, then the shot must still stand.
+			if Time.get_ticks_msec() > _artdark_pushed_msec + 4000:
+				_artdark_judge_shot_standing("after the PINemHi weekly push")
+				_push_wovp_data()
+				_artdark_pushed_msec = Time.get_ticks_msec()
+				_tournament_smoke_phase = 3
+		3:
+			# WoVP last this time: the mirror order ends with
+			# the shot standing too.
+			if Time.get_ticks_msec() > _artdark_pushed_msec + 3000:
+				_artdark_judge_shot_standing("after a WoVP push that followed the weekly push")
+				_artdark_push_weekly()
+				_tournament_smoke_phase = 4
+		4:
+			if Time.get_ticks_msec() > _artdark_pushed_msec + 4000:
+				_artdark_judge_shot_standing("after a second weekly-last sequence")
+				_finish_tournament_smoke()
+
+
+## One fabricated library game for the artdark mode: a bare
+## entry with exactly the identity the legs judge by.
+func _artdark_fab_game(gid: String, title: String, maker: String, year: int) -> GameEntry:
+	var g: GameEntry = GameEntry.new()
+	g.game_id = gid
+	g.title = title
+	g.manufacturer = maker
+	g.year = year
+	return g
+
+
+## One fabricated challenge for the artdark mode: two league
+## rows, the second his, on a season board ending in 3 days.
+func _artdark_fab_challenge(cid: String, ext_id: String, table: String, maker: String, year: int) -> WovpChallenge:
+	var ch: WovpChallenge = WovpChallenge.new()
+	ch.challenge_id = cid
+	ch.name = table + " - Season Challenge"
+	ch.table_name = table
+	ch.table_manufacturer = maker
+	ch.table_year = year
+	ch.table_external_id = ext_id
+	ch.type_code = WovpChallenge.TYPE_SEASON
+	ch.end_unix = int(Time.get_unix_time_from_system()) + 3 * 86400
+	var r1: WovpScoreRow = WovpScoreRow.new()
+	r1.position = 1
+	r1.participant_name = "Leader"
+	r1.score = 2000000000.0
+	var r2: WovpScoreRow = WovpScoreRow.new()
+	r2.position = 2
+	r2.participant_name = "Smoke"
+	r2.score = 1000000000.0
+	r2.user_id = "smoke-user"
+	ch.rows = [r1, r2]
+	return ch
+
+
+## The artdark mode's row for one challenge id ({} when the
+## row does not stand).
+func _artdark_row(rows: Array, cid: String) -> Dictionary:
+	for rv: Variant in rows:
+		var row: Dictionary = rv as Dictionary
+		if str(row.get("kind", "")) != "challenge":
+			continue
+		var ch: WovpChallenge = row.get("challenge") as WovpChallenge
+		if ch != null and ch.challenge_id == cid:
+			return row
+	return {}
+
+
+## The artdark match legs, judged on the standing rows.
+func _artdark_judge_match(rows: Array) -> void:
+	var fb: Dictionary = _artdark_row(rows, "fix124-fb")
+	_tournament_expect(not fb.is_empty() and bool(fb.get("owned", false)) \
+			and (fb.get("game") as GameEntry) != null and (fb.get("game") as GameEntry).game_id == "local:fallbackunique",
+		"artdark: an id-miss challenge with a unique name+maker+year match is owned by the fallback (no NOT IN YOUR LIBRARY)")
+	var twin: Dictionary = _artdark_row(rows, "fix124-twin")
+	_tournament_expect(not twin.is_empty() and not bool(twin.get("owned", true)),
+		"artdark: two library games with the same name+maker+year - the fallback claims neither, the challenge stays unowned")
+	var yr: Dictionary = _artdark_row(rows, "fix124-year")
+	_tournament_expect(not yr.is_empty() and not bool(yr.get("owned", true)),
+		"artdark: a year mismatch stays unowned - the fallback never guesses")
+	var mk: Dictionary = _artdark_row(rows, "fix124-maker")
+	_tournament_expect(not mk.is_empty() and not bool(mk.get("owned", true)),
+		"artdark: a maker mismatch stays unowned - the fallback never guesses")
+	var ih: Dictionary = _artdark_row(rows, "fix124-idhit")
+	_tournament_expect(not ih.is_empty() and bool(ih.get("owned", false)) \
+			and (ih.get("game") as GameEntry) != null and (ih.get("game") as GameEntry).game_id == "fix124-idhit-db",
+		"artdark: an id-hit challenge is owned by the id join, exactly as before")
+	var art: Dictionary = _artdark_row(rows, "fix124-art")
+	_tournament_expect(not art.is_empty() and not bool(art.get("owned", true)),
+		"artdark: the shot fixture challenge matches nothing in the fabricated library and stays unowned")
+
+
+## The artdark mode's weekly push, the full driver's own
+## road (fixture contests through Main's push).
+func _artdark_push_weekly() -> void:
+	var contests: Array = _pinemhi2_fixture_contests()
+	_tournament_expect(contests.size() == 3, "artdark: the fixture weekly contests load (got %d)" % contests.size())
+	if contests.size() == 3:
+		_pinemhi2_contests = contests
+		_pinemhi2_fetched_at = int(Time.get_unix_time_from_system())
+		_pinemhi2_live = true
+		_pinemhi2_fetch_error = ""
+		_push_pinemhi2_data()
+	_artdark_pushed_msec = Time.get_ticks_msec()
+
+
+## The artdark shot-survival legs at one settled moment:
+## the row's data still carries the URL, the standing face
+## key still names the shot's cache path, and the room's
+## own standing test agrees the face is honest.
+func _artdark_judge_shot_standing(moment: String) -> void:
+	var url: String = _artdark_shot_url
+	var row: Dictionary = _artdark_row(_room.tournament_rows(), "fix124-art")
+	_tournament_expect(not row.is_empty() and (row.get("game") as GameEntry) != null \
+			and str((row.get("game") as GameEntry).shot_url) == url,
+		"artdark: %s the unowned row still carries its shot URL as data" % moment)
+	_tournament_expect(url != "" and str(_room._panel_face_key.get("wovp:none:fix124-art", "")).contains(ArtProvider.shot_cache_path_for(url)),
+		"artdark: %s the unowned card still wears its db shot (never the title face)" % moment)
+	var idx: int = -1
+	for i: int in range(_room._visible_games.size()):
+		if _room._visible_games[i].game_id == "wovp:none:fix124-art":
+			idx = i
+			break
+	_tournament_expect(idx >= 0 and _room._face_is_standing(idx),
+		"artdark: %s the unowned card's standing face is honestly its key's face" % moment)
 
 
 ## One fabricated challenge for the pinemhi mode: two league
