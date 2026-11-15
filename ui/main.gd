@@ -23784,16 +23784,17 @@ func _sweep_sample_faces() -> void:
 
 # -------------------------------------------------- desk smoke
 
-## --pvlds-smoke-desk: the desk's session switch is a live
-## setting - flipping it must rewrite the config file on disk
+## --pvlds-smoke-desk: the desk's session switches are live
+## settings - flipping one must rewrite the config file on disk
 ## immediately, with no Save & Scan. The boot route with this
 ## flag lands on the desk and stays there (no scan, no room).
 ## The driver asserts the stricken close/hold controls are
-## absent, flips the herding checkbox through its real toggled
-## signal, then re-reads the config FILE with a fresh
-## PvldsConfig and asserts what landed - plus that the fields a
-## flip does not own (exe path, folders) survived, and that the
-## saved file carries none of the stricken keys.
+## absent, flips the herding and (FIX123) edge-arrows checkboxes
+## through their real toggled signals, then re-reads the config
+## FILE with a fresh PvldsConfig and asserts what landed - plus
+## that the fields a flip does not own (exe path, folders)
+## survived, and that the saved file carries none of the
+## stricken keys.
 func _drive_desk_smoke() -> void:
 	match _desk_smoke_phase:
 		0:
@@ -23813,9 +23814,20 @@ func _drive_desk_smoke() -> void:
 				_desk_expect(_desk._close_check == null, "the desk has no Close VPX checkbox")
 				_desk_expect(_desk._hold_check == null, "the desk has no Hold-to-exit checkbox")
 				_desk_expect(_desk._hold_button_picker == null, "the desk has no hold-button picker")
-				# Flip the one surviving switch through its real
-				# control and signal.
+				# FIX123: the Edge arrows switch stands on the
+				# desktop screen too - the desktop face of the
+				# config's edge_arrows key (FIX122 put the dial
+				# on the in-room SETUP panel only). The scratch
+				# config carries no key, so it loads OFF, and
+				# the switch stands off.
+				_desk_expect(not before.edge_arrows, "the scratch config loads edge arrows off (no key, the default)")
+				_desk_expect(_desk._edge_arrows_check != null, "the desk has an Edge arrows switch")
+				_desk_expect(_desk._edge_arrows_check != null and not _desk._edge_arrows_check.button_pressed,
+					"the Edge arrows switch starts off")
+				# Flip the surviving switches through their real
+				# controls and signals.
 				_desk._herding_check.button_pressed = true
+				_desk._edge_arrows_check.button_pressed = true
 				_desk_smoke_wait = 0
 				_desk_smoke_phase = 1
 			else:
@@ -23829,10 +23841,12 @@ func _drive_desk_smoke() -> void:
 				# In memory first: Main's own config is the truth
 				# the contract mirrors at the next launch.
 				_desk_expect(_config.focus_herding, "the herding flip is in Main's config immediately")
+				_desk_expect(_config.edge_arrows, "the edge arrows flip is in Main's config immediately")
 				# Then the file itself - the whole point of the round.
 				var after: PvldsConfig = PvldsConfig.new()
 				_desk_expect(after.load_from_disk(), "the config file still loads after the flip")
 				_desk_expect(after.focus_herding, "the config FILE has herding on, no Save & Scan pressed")
+				_desk_expect(after.edge_arrows, "the config FILE has edge arrows on, no Save & Scan pressed")
 				_desk_expect(after.vpx_exe_path == _config.vpx_exe_path and after.table_folders == _config.table_folders,
 					"fields the flip does not own (exe path, folders) are untouched on disk")
 				# And the save carries the live toggle but none of
@@ -23842,6 +23856,20 @@ func _drive_desk_smoke() -> void:
 				_desk_expect(not raw.contains("close_vpx_on_table_exit"), "the saved config carries no close_vpx_on_table_exit key")
 				_desk_expect(raw.contains("hold_exit_enabled"), "the saved config carries the hold_exit_enabled key")
 				_desk_expect(not raw.contains("hold_exit_button"), "the saved config carries no hold_exit_button key")
+				_desk_expect(raw.contains("edge_arrows"), "the saved config carries the edge_arrows key")
+				# FIX123 round-trip, the other way: flip the
+				# desktop switch back off through the real
+				# control and the file follows at once - and
+				# Main's config, the very value room entry
+				# pushes into the room (set_edge_arrows at
+				# entry, FIX122), follows with it. The desk
+				# and the room dial can never disagree: both
+				# faces write this one key.
+				_desk._edge_arrows_check.button_pressed = false
+				_desk_expect(not _config.edge_arrows, "Main's config follows the edge arrows flip back off")
+				var arrows_off: PvldsConfig = PvldsConfig.new()
+				_desk_expect(arrows_off.load_from_disk() and not arrows_off.edge_arrows,
+					"the config FILE has edge arrows off again (round-trip both ways, desk left as found)")
 				# Missing-backglass row (this round): the count
 				# line + Open list button beside the scan summary.
 				# This boot never runs a scan, so the driver feeds

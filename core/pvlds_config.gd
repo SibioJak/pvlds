@@ -109,9 +109,12 @@ const WALL_MOTION_MODES: Array[String] = ["stepped"]
 ## droscoe added at the wall's edges (1.1.11) mark which way the
 ## wall can scroll; the player hates them, so they are an option
 ## and OFF by default - a config without the key loads OFF, an
-## explicit true is honoured. The toggle lives on the in-room
-## SETUP panel (EDGE ARROWS: ON/OFF); edge scrolling itself
-## never consults this key - only the chevrons do.
+## explicit true is honoured. The toggle lives on BOTH setup
+## surfaces - the in-room SETUP panel (EDGE ARROWS: ON/OFF)
+## and the desktop Initial Setup screen (FIX123, a session
+## switch beside Focus Herding) - over this one key; edge
+## scrolling itself never consults this key - only the
+## chevrons do.
 var edge_arrows: bool = false
 ## HOLD-EXIT: the hold-to-exit toggle. Holding D-pad right for
 ## 1.5 s during a table session shuts the whole works down

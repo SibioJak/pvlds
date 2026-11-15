@@ -21,6 +21,7 @@ var _filling_from_config: bool = false ## true while _fill_from_config sets widg
 var _exe_edit: LineEdit
 var _args_edit: LineEdit
 var _herding_check: CheckBox
+var _edge_arrows_check: CheckBox ## FIX123: the Edge Arrows session switch - the desktop face of the config's edge_arrows key (FIX122 put the dial on the in-room SETUP panel)
 var _db_edit: LineEdit
 var _folder_rows: VBoxContainer
 var _folder_edits: Array[LineEdit] = []
@@ -865,6 +866,23 @@ func _build_ui() -> void:
 	_herding_tag.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_herding_tag.add_theme_color_override("font_color", HERDING_TAG_GREEN)
 	step4.add_child(_herding_tag)
+	# FIX123: the Edge Arrows switch - the desktop face of
+	# the config's edge_arrows key. FIX122 put the dial on
+	# the in-room SETUP panel only, and Chris looked for it
+	# here: the desk is where a player at the PC (the
+	# arrows' pointer audience) looks. Same switch, same
+	# key, one truth - a session switch like Focus Herding,
+	# so the flip saves on the spot through the same apply.
+	_edge_arrows_check = CheckBox.new()
+	_edge_arrows_check.text = "Edge arrows"
+	_edge_arrows_check.tooltip_text = "Amber arrows stand at the left and right edges of the game wall in the headset room when the wall can scroll that way. The wall scrolls exactly the same either way — the arrows only mark it. The same switch stands on the in-VR setup panel."
+	_edge_arrows_check.toggled.connect(func(_on: bool) -> void: _apply_session_settings())
+	step4.add_child(_edge_arrows_check)
+	var edge_arrows_note: Label = Label.new()
+	edge_arrows_note.text = "In the headset room, arrows at the game wall's edges show which way it can scroll — off by default."
+	edge_arrows_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	edge_arrows_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	step4.add_child(edge_arrows_note)
 
 	# CHECKLIST: the optional steps' way out, at each
 	# step's foot - "Skip for now", shown only in checklist
@@ -1055,14 +1073,15 @@ func _fill_from_config() -> void:
 	_filling_from_config = false
 
 
-## The session widget from the config - the fill half of the
-## live-settings pair (see _apply_session_settings). Focus herding
-## is the only session switch left: the close duty lost its
-## checkbox when the exit model was simplified (the watchdog
-## closes the editor unconditionally now), and hold-to-exit was
-## stricken outright (2026-10-22).
+## The session widgets from the config - the fill half of the
+## live-settings pair (see _apply_session_settings). Two session
+## switches stand: Focus herding, and (FIX123) Edge arrows. (The
+## close duty lost its checkbox when the exit model was
+## simplified - the watchdog closes the editor unconditionally
+## now - and hold-to-exit was stricken outright, 2026-10-22.)
 func _fill_session_widgets() -> void:
 	_herding_check.button_pressed = _config.focus_herding
+	_edge_arrows_check.button_pressed = _config.edge_arrows
 
 
 func _on_use_dummy() -> void:
@@ -1092,32 +1111,36 @@ func _collect_into_config() -> void:
 			_config.table_folders.append(f)
 
 
-## Just the session switch out of the widget - shared by the
+## Just the session switches out of the widgets - shared by the
 ## full Save & Scan collect and the live apply below.
 func _collect_session_settings() -> void:
 	_config.focus_herding = _herding_check.button_pressed
+	_config.edge_arrows = _edge_arrows_check.button_pressed
 
 
-## The session switch (focus herding) is a live setting, not form
-## data: it applies the moment it is flipped - collect just that
-## field and save, no scan, no other side effects. Everything
-## else on this desk (paths, template, folders) stays on the
-## Save & Scan model, so half-typed text never half-saves.
+## The session switches (focus herding, edge arrows) are live
+## settings, not form data: a flip applies the moment it is
+## flipped - collect just those fields and save, no scan, no
+## other side effects. Everything else on this desk (paths,
+## template, folders) stays on the Save & Scan model, so
+## half-typed text never half-saves.
 ## (Before this, the switches were only read at save-and-scan, so a
 ## flip followed by Enter the Room silently did nothing - Chris's
 ## isolation test, 2026-10-21.) A failed save restores the config
-## and the widget to exactly what they were and says so in the
+## and the widgets to exactly what they were and says so in the
 ## stats area: a switch that did not save must not look - or act -
 ## flipped.
 func _apply_session_settings() -> void:
 	if _filling_from_config or _config == null:
 		return
 	var prev_herding: bool = _config.focus_herding
+	var prev_edge_arrows: bool = _config.edge_arrows
 	_collect_session_settings()
 	if _config.save_to_disk():
 		_mark_step_done(3)
 		return
 	_config.focus_herding = prev_herding
+	_config.edge_arrows = prev_edge_arrows
 	_filling_from_config = true
 	_fill_session_widgets()
 	_filling_from_config = false
