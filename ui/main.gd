@@ -344,6 +344,10 @@ var _smoke_deskcolor: bool = false ## --pvlds-smoke-deskcolor: DESKCOLOR census 
 var _deskcolor_phase: int = 0
 var _deskcolor_wait: int = 0
 var _deskcolor_failures: int = 0
+var _smoke_desk127: bool = false ## --pvlds-smoke-desk127: FIX127 desk overhaul proof driver (lights, stateful saves, scan area, pinned bar, IPDB auto-apply)
+var _desk127_phase: int = 0
+var _desk127_wait: int = 0
+var _desk127_failures: int = 0
 var _config_file_existed: bool = false ## AUTOFIND: a config FILE stood on disk at boot (load_from_disk's raw answer, captured before any seeding) - the desk hunt's trigger fact, threaded to the desk at its creation
 var _update_info: Dictionary = {} ## AUTOFIND: the standing update ({version, url}) once the feed answers newer; empty = no update stands
 var _update_dismissed: bool = false ## AUTOFIND: Later pressed this session - gates the desk banner and the room's segment alike (dismisses it for this session)
@@ -887,6 +891,8 @@ func _ready() -> void:
 		_smoke_deskcenter = true
 	if user_args.has("--pvlds-smoke-deskcolor"):
 		_smoke_deskcolor = true
+	if user_args.has("--pvlds-smoke-desk127"):
+		_smoke_desk127 = true
 	if user_args.has("--pvlds-smoke-autofind"):
 		_smoke_autofind = true
 		_autofind_mode = OS.get_environment("PVLDS_AUTOFIND_MODE")
@@ -1582,6 +1588,8 @@ func _process(_delta: float) -> void:
 		_drive_deskcenter_smoke()
 	if _smoke_deskcolor:
 		_drive_deskcolor_smoke()
+	if _smoke_desk127:
+		_drive_desk127_smoke()
 	if _smoke_autofind:
 		_drive_autofind_smoke()
 	if _smoke_dpadexit:
@@ -1770,6 +1778,9 @@ func _finish_scan() -> void:
 		_state.save_to_disk()
 	if _desk != null:
 		_desk.apply_scan_summary(build_scan_summary(), build_scan_details())
+		# FIX127: the scan area's IPDB coverage line counts
+		# THIS scan's library - refresh it as the summary lands.
+		_set_ipdb_status(_ipdb_health_line())
 	# The scan changed the library the submit rows join
 	# against (the SUBMIT round).
 	_push_submit_data()
@@ -2024,12 +2035,25 @@ func _push_ipdb_data() -> void:
 ## Under PVLDS_IPDBFIX_NC=noseed the seed is skipped -
 ## the negative control that fails the seed legs by name.
 ## Returns the number of games that gained facts.
+## FIX127 (decision 9): the merge is MARKER-GATED - the
+## snapshot applies itself. The cache file carries the
+## applied snapshot's marker (IpdbFacts.snapshot_marker);
+## when it already names the bundled snapshot, the seed
+## is a no-op. A PVLDS update ships a new snapshot, the
+## marker differs, and the merge runs exactly once. The
+## room panel's explicit RE-APPLY rides this same door:
+## with a current marker it honestly reports the
+## snapshot already applied.
 func _seed_ipdb_from_snapshot() -> int:
 	if OS.get_environment("PVLDS_IPDBFIX_NC") == "noseed":
 		return 0
-	var gained: int = IpdbFacts.seed_from_snapshot(_ipdb_cache, IpdbFacts.load_snapshot())
-	if gained > 0:
-		IpdbFacts.save_cache(_ipdb_cache)
+	var snapshot: Dictionary = IpdbFacts.load_snapshot()
+	var marker: String = IpdbFacts.snapshot_marker(snapshot)
+	if str(_ipdb_cache.get("snapshot_marker", "")) == marker:
+		return 0
+	var gained: int = IpdbFacts.seed_from_snapshot(_ipdb_cache, snapshot)
+	_ipdb_cache["snapshot_marker"] = marker
+	IpdbFacts.save_cache(_ipdb_cache)
 	return gained
 
 
@@ -2696,7 +2720,7 @@ func build_scan_summary() -> String:
 	if _last_db_kind == "sample":
 		lines.append("!! SAMPLE DATABASE ACTIVE !!")
 		lines.append("The bundled database is 10 invented games for testing LaunchPin itself - it cannot identify real tables. Use 'Download VPS database' above to fetch the real one; until then tables are identified from file names only (no VR tags, designers, or known builds).")
-		lines.append("LaunchPin also tries to fetch the real database itself when it starts. Without one the room still opens - on file names only, with a warning standing in it - but names, art, and VR tags wait for the real database: download it above, then Save Options and Scan for Tables.")
+		lines.append("LaunchPin also tries to fetch the real database itself when it starts. Without one the room still opens - on file names only, with a warning standing in it - but names, art, and VR tags wait for the real database: download it on the desk, then Scan for Tables.")
 	lines.append("Scanned %d table files in %d folder(s): %d games (%d with multiple builds)." % [
 		s.total_files, _config.table_folders.size(), s.games.size(), s.duplicate_group_count()])
 	if _last_db_ok:
@@ -4261,7 +4285,6 @@ func _show_desk(message: String = "") -> void:
 		_desk.wovp_test_requested.connect(_on_desk_wovp_test_requested)
 		_desk.pinemhi_settings_saved.connect(_push_wovp_data)
 		_desk.screenshots_settings_saved.connect(_push_wovp_data)
-		_desk.ipdb_snapshot_requested.connect(_apply_ipdb_snapshot)
 		_desk.set_ipdb_status(_ipdb_health_line())
 		_push_submit_data()
 	# DESKEXIT: a desk shown while a completed scan's results
@@ -4279,6 +4302,8 @@ func _show_desk(message: String = "") -> void:
 		_desk.apply_scan_summary(build_scan_summary(), build_scan_details())
 		_desk.apply_missing_b2s(_scanner.missing_b2s_files.size())
 		_desk.apply_unplaced(_scanner.unplaced_files.size())
+		# FIX127: the standing scan's IPDB coverage line too.
+		_set_ipdb_status(_ipdb_health_line())
 	# AUTOFIND: a desk standing after the feed answered
 	# wears the update state as it stands.
 	_apply_update_banner()
@@ -5428,7 +5453,7 @@ func _drive_scanwall_smoke() -> void:
 				_scanwall_expect(_desk != null and _desk.visible and not _room.visible,
 					"desk add: the desk shows and the room hides, as before")
 				_scanwall_copy_in(SCANWALL_REM_NAME)
-				_desk._on_save_and_scan()
+				_desk._on_scan_pressed()
 				_scanwall_deadline_msec = Time.get_ticks_msec() + 60000
 				_scanwall_phase = 6
 		6:
@@ -24204,8 +24229,14 @@ func _drive_desk_smoke() -> void:
 				var wovp_after: PvldsConfig = PvldsConfig.new()
 				_desk_expect(wovp_after.load_from_disk() and wovp_after.wovp_api_key == "PVLDS-WOVP-SENTINEL-KEY-00000001",
 					"wovp: Save key writes the key to the config FILE immediately (no full save)")
-				_desk_expect(_desk._wovp_label.text.contains("saved"),
-					"wovp: the desk says the key saved, in words")
+				# FIX127: the saved state moved off the sentence
+				# - the button's label and the field's light
+				# carry it now (the census reads both).
+				var wovp_cen: Dictionary = _desk.fix127_census()
+				_desk_expect(str(wovp_cen["wovp_save_text"]) == "Key saved",
+					"wovp: the save button reads Key saved once the key stands saved (got '%s')" % str(wovp_cen["wovp_save_text"]))
+				_desk_expect(str(wovp_cen["wovp_light"]) == "good",
+					"wovp: the key's health light is green on the saved key (got '%s')" % str(wovp_cen["wovp_light"]))
 				if OS.has_environment("PVLDS_WOVP_BASE_URL"):
 					_desk._wovp_test_button.pressed.emit()
 					_desk_smoke_wait = 0
@@ -24493,9 +24524,9 @@ func _drive_bootface_smoke() -> void:
 					"reopen: the desk shows again")
 				_bootface_expect(_desk._scanned and not _desk._enter_button.disabled,
 					"reopen: the exit is still armed (the standing summary re-applied)")
-				_desk._on_save_and_scan()
+				_desk._on_scan_pressed()
 				_bootface_expect(_scan_active,
-					"desk scan: Save Options and Scan for Tables starts the scan")
+					"desk scan: Scan for Tables starts the scan")
 				_bootface_expect(_desk._enter_button.disabled,
 					"desk scan: Enter LaunchPin VR disables while the scan runs")
 				_bootface_expect(not _desk._scanned,
@@ -24902,8 +24933,10 @@ func _drive_deskedit_firstrun() -> void:
 					"checklist: in step 4 the Advanced fold's own toggle hides - the step is the fold")
 				_deskedit_expect(bool(cen["advanced_expanded"]),
 					"checklist: the Advanced fold stands open inside its step")
-				_deskedit_expect(str(chk["scan_text"]) == "Save Options and Scan for Tables",
-					"checklist: the scan button carries its new full name (got '%s')" % str(chk["scan_text"]))
+				_deskedit_expect(str(chk["scan_text"]) == "Scan for Tables",
+					"checklist: the scan button is named for its one job (got '%s')" % str(chk["scan_text"]))
+				_deskedit_expect(str(chk["save_text"]) == "Options Saved",
+					"checklist: Save Options stands clean on a fresh fill (got '%s')" % str(chk["save_text"]))
 				_deskedit_expect(str(chk["enter_text"]) == "Enter LaunchPin VR",
 					"checklist: the door is named for the product (got '%s')" % str(chk["enter_text"]))
 				_deskedit_expect(bool(chk["enter_disabled"]) and not bool(chk["enter_dressed"]),
@@ -25083,8 +25116,8 @@ func _drive_deskedit_desk() -> void:
 					"desk: every section stands in the full desk")
 				_deskedit_expect(bool(chkd["folders_in_step1"]),
 					"desk: the table folders stand under the VPX block in the full desk too")
-				_deskedit_expect(str(chkd["scan_text"]) == "Save Options and Scan for Tables",
-					"desk: the scan button carries its new full name")
+				_deskedit_expect(str(chkd["scan_text"]) == "Scan for Tables",
+					"desk: the scan button is named for its one job")
 				_deskedit_expect(str(chkd["enter_text"]) == "Enter LaunchPin VR" and not bool(chkd["enter_disabled"]) and bool(chkd["enter_dressed"]),
 					"desk: Enter LaunchPin VR stands armed in the confirm green on a configured stand")
 				_deskedit_scroll_to(_desk._details_fold.toggle)
@@ -25395,34 +25428,30 @@ func _drive_deskcolor_smoke() -> void:
 func _deskcolor_census_legs() -> void:
 	var cen: Dictionary = _desk.deskcolor_census()
 	var plain_mid: Color = (cen["scan"] as Dictionary)["mid"]
-	# The family headings: colour on the bar, tint in the
-	# title, the gradient itself leaning family-ward (the
-	# IPDB bar's plain middle is the graphite reference).
-	var plain_hdr_mid: Color = (cen["hdr_ipdb"] as Dictionary)["mid"]
-	_deskcolor_expect_header(cen["hdr_wovp"], DeskTheme.FAMILY_WOVP, plain_hdr_mid, "WoVP boards header")
-	_deskcolor_expect_header(cen["hdr_shots"], DeskTheme.FAMILY_WOVP, plain_hdr_mid, "Screenshots header")
-	# CHECKLIST: the High Score Setup heading over them is
-	# a PLAIN bar (the IPDB pattern) - it groups the score
-	# families without joining one.
-	var hs: Dictionary = cen["hdr_highscore"]
-	_deskcolor_expect(bool(hs["found"]), "High Score Setup header: found")
-	_deskcolor_expect(not _deskcolor_near_any_family(hs["bar"]), "High Score Setup header: no family colour on its bar row")
-	_deskcolor_expect((hs["tint"] as Color).is_equal_approx(RoomSpecs.STRIP_LABEL_ACCENT),
-		"High Score Setup header: the title keeps the plain accent tint")
-	_deskcolor_expect_header(cen["hdr_pinemhi"], DeskTheme.FAMILY_PINEMHI, plain_hdr_mid, "PINemHi header")
-	_deskcolor_expect_header(cen["hdr_folders"], DeskTheme.FAMILY_AMBER, plain_hdr_mid, "Table folders header")
-	# The IPDB header stands in NO family.
-	var ipdb: Dictionary = cen["hdr_ipdb"]
-	_deskcolor_expect(bool(ipdb["found"]), "IPDB header: found")
-	_deskcolor_expect(not _deskcolor_near_any_family(ipdb["bar"]), "IPDB header: no family colour on its bar row")
-	_deskcolor_expect((ipdb["tint"] as Color).is_equal_approx(RoomSpecs.STRIP_LABEL_ACCENT),
-		"IPDB header: the title keeps the plain accent tint")
-	# The family buttons.
+	# FIX127 (decision 2): the section headers are TYPE
+	# ONLY - each stands as a Label in the plain accent
+	# tint, no panel, no family colour. The DESKCOLOR
+	# header families are abolished; what survives of
+	# that round is the buttons' dress, below.
+	for key: String in ["hdr_highscore", "hdr_wovp", "hdr_shots", "hdr_pinemhi", "hdr_folders"]:
+		var h: Dictionary = cen[key]
+		_deskcolor_expect(bool(h["found"]), "%s: the header stands" % key)
+		_deskcolor_expect(bool(h["is_label"]) and not bool(h["has_panel"]),
+			"%s: the header is type only - a label, no bar" % key)
+		_deskcolor_expect((h["tint"] as Color).is_equal_approx(RoomSpecs.STRIP_LABEL_ACCENT),
+			"%s: the header keeps the plain accent tint" % key)
+	# The IPDB header and its Re-apply button are GONE
+	# with the section (decision 9).
+	_deskcolor_expect(not bool((cen["hdr_ipdb"] as Dictionary)["found"]),
+		"IPDB header: deleted with its section (FIX127)")
+	_deskcolor_expect(not bool((cen["ipdb_apply"] as Dictionary)["found"]),
+		"IPDB Re-apply button: deleted (FIX127)")
+	# The family buttons (buttons keep their dress -
+	# the costume belongs to them alone now).
 	_deskcolor_expect_button(cen["browse"], DeskTheme.FAMILY_PICKER, plain_mid, "a Browse button")
 	_deskcolor_expect(int(cen["browse_count"]) >= 3 and bool(cen["browse_all_picker"]),
 		"every Browse button wears the picker slate (%d standing)" % int(cen["browse_count"]))
 	_deskcolor_expect_button(cen["shots_browse"], DeskTheme.FAMILY_PICKER, plain_mid, "the Screenshots Browse button")
-	_deskcolor_expect_button(cen["add_folder"], DeskTheme.FAMILY_PICKER, plain_mid, "Add table folder")
 	_deskcolor_expect_button(cen["download"], DeskTheme.FAMILY_PICKER, plain_mid, "Download VPS database")
 	_deskcolor_expect_button(cen["save_key"], DeskTheme.FAMILY_CONFIRM, plain_mid, "Save key")
 	_deskcolor_expect_button(cen["test_key"], DeskTheme.FAMILY_CONFIRM, plain_mid, "Test key")
@@ -25430,8 +25459,12 @@ func _deskcolor_census_legs() -> void:
 	# wears the confirm green (its unarmed dress is plain -
 	# the deskedit checklist legs carry that side).
 	_deskcolor_expect_button(cen["enter"], DeskTheme.FAMILY_CONFIRM, plain_mid, "Enter LaunchPin VR (armed)")
+	# FIX127 (decision 3): add-folder is a quiet text line.
+	var af: Dictionary = cen["add_folder"]
+	_deskcolor_expect(bool(af["found"]) and bool(af["is_link"]) and str(af["text"]) == "+ add another folder",
+		"add folder: a quiet '+ add another folder' line, not a button")
 	# The rest of the desk carries NO family colour.
-	for key: String in ["scan", "open_b2s", "open_unplaced", "shots_save", "pinemhi_save", "ipdb_apply", "advanced_toggle", "details_toggle"]:
+	for key: String in ["scan", "open_b2s", "open_unplaced", "shots_save", "pinemhi_save", "advanced_toggle", "details_toggle"]:
 		_deskcolor_expect_plain(cen[key], key)
 
 
@@ -25516,6 +25549,264 @@ func _finish_deskcolor_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS DESKCOLOR SMOKE: FAIL (%d)" % _deskcolor_failures)
+		get_tree().quit(1)
+
+
+# -------------------------------------------------- desk127 smoke
+
+## --pvlds-smoke-desk127: FIX127's proof driver. The
+## runner stages a configured letter library on a virgin
+## HOME plus two exe fixtures (a GL64-named file and a
+## non-GL one) named through PVLDS_DESK127_* env. Legs:
+##   ipdb    - the boot seed applied the bundled snapshot
+##             ITSELF (marker stamped, games gained); a
+##             current marker makes the seed a no-op even
+##             over a thinned cache; a stale marker runs
+##             the merge and re-stamps.
+##   stand   - the stood desk's census: type-only
+##             headers, no dummy button, Enter exactly
+##             once in the pinned bar, the scan block in
+##             order with the IPDB line riding in it, and
+##             the staged stand's lights.
+##   exe     - the exe light's four verdicts driven
+##             through the field's own signal.
+##   saves   - the four stateful save labels flipping on
+##             edit / save / edit, with the file as the
+##             witness for Save Options.
+##   grabs   - the desk top and scrolled bottom, the
+##             pinned bar standing in both
+##             (PVLDS_DESK127_GRAB_DIR).
+func _drive_desk127_smoke() -> void:
+	match _desk127_phase:
+		0:
+			var cache: Dictionary = IpdbFacts.load_cache()
+			var want_marker: String = IpdbFacts.snapshot_marker(IpdbFacts.load_snapshot())
+			_desk127_expect(str(cache.get("snapshot_marker", "")) == want_marker,
+				"ipdb: the boot seed stamped the cache with the bundled snapshot's marker")
+			_desk127_expect((cache.get("facts", {}) as Dictionary).size() > 0,
+				"ipdb: the boot seed applied the bundled snapshot itself (%d games)" % (cache.get("facts", {}) as Dictionary).size())
+			_desk127_expect(_ipdb_seeded > 0,
+				"ipdb: the boot seed reports games gained (%d)" % _ipdb_seeded)
+			var facts: Dictionary = _ipdb_cache.get("facts", {}) as Dictionary
+			var victim: String = ""
+			for k: Variant in facts.keys():
+				victim = str(k)
+				break
+			var held: Variant = facts.get(victim)
+			facts.erase(victim)
+			_desk127_expect(_seed_ipdb_from_snapshot() == 0 and not facts.has(victim),
+				"ipdb: a current marker makes the seed a no-op (the thinned game stays thinned)")
+			_ipdb_cache["snapshot_marker"] = "stale"
+			var gained: int = _seed_ipdb_from_snapshot()
+			_desk127_expect(gained >= 1 and facts.has(victim),
+				"ipdb: a stale marker runs the merge (gained %d)" % gained)
+			_desk127_expect(str(_ipdb_cache.get("snapshot_marker", "")) == want_marker,
+				"ipdb: the merge re-stamps the current marker")
+			if not facts.has(victim):
+				facts[victim] = held
+			_desk127_phase = 1
+		1:
+			if _room != null and _room.visible:
+				_show_desk()
+				_desk127_wait = 0
+				_desk127_phase = 2
+			else:
+				_desk127_wait += 1
+				if _desk127_wait > 7200:
+					_desk127_fail("the room never stood")
+					_finish_desk127_smoke()
+		2:
+			_desk127_wait += 1
+			if _desk127_wait >= 6:
+				_desk127_standing_legs()
+				_desk127_phase = 3
+		3:
+			_desk127_exe_legs()
+			_desk127_phase = 4
+		4:
+			_desk127_save_legs()
+			_desk127_phase = 5
+		5:
+			_desk._scroll.scroll_vertical = 0
+			_desk127_wait = 0
+			_desk127_phase = 6
+		6:
+			_desk127_wait += 1
+			if _desk127_wait >= 4:
+				_desk127_grab("fix127_desk_top.png")
+				_desk._scroll.scroll_vertical = int(_desk._scroll.get_v_scroll_bar().max_value)
+				_desk127_wait = 0
+				_desk127_phase = 7
+		7:
+			_desk127_wait += 1
+			if _desk127_wait >= 4:
+				_desk127_grab("fix127_desk_bottom.png")
+				_finish_desk127_smoke()
+
+
+func _desk127_standing_legs() -> void:
+	var cen: Dictionary = _desk.fix127_census()
+	_desk127_expect(bool(cen["headers_all_labels"]),
+		"headers: every section header is a type-only label, no bar")
+	_desk127_expect(not bool(cen["dummy_present"]),
+		"dummy: no dummy-library button stands on the desk")
+	_desk127_expect(int(cen["enter_count"]) == 1,
+		"enter: exactly one Enter LaunchPin VR button stands")
+	_desk127_expect(bool(cen["enter_in_bar"]) and bool(cen["bar_outside_scroll"]),
+		"enter: it stands in the pinned bar, outside the scroll")
+	_desk127_expect(bool(cen["version_in_bar"]),
+		"enter: the version line rides in the pinned bar")
+	_desk127_expect(str(cen["scan_text"]) == "Scan for Tables",
+		"scan: the button is named for its one job")
+	_desk127_expect(str(cen["save_text"]) == "Options Saved",
+		"save: a freshly filled desk reads Options Saved (got '%s')" % str(cen["save_text"]))
+	var order: Array = cen["scan_block_order"]
+	var ordered: bool = order.size() == 6
+	for i: int in range(order.size()):
+		if int(order[i]) < 0 or (i > 0 and int(order[i]) <= int(order[i - 1])):
+			ordered = false
+	_desk127_expect(ordered,
+		"scan area: button, headline, IPDB line, details, backglass, unplaced stand in order (got %s)" % str(order))
+	_desk127_expect(str(cen["scan_ipdb_text"]).begins_with("IPDB data:"),
+		"scan area: the IPDB coverage line rides in the scan block (got '%s')" % str(cen["scan_ipdb_text"]))
+	_desk127_expect(str(cen["exe_light"]) == "bad",
+		"exe light: the staged stand's binary (no GL64 in its name) reads bad")
+	_desk127_expect(str(cen["exe_reason"]).contains("GL64"),
+		"exe light: the non-GL reason stands under the field (got '%s')" % str(cen["exe_reason"]))
+	_desk127_expect((cen["folder_lights"] as Array).size() >= 1 and str((cen["folder_lights"] as Array)[0]) == "good",
+		"folder light: the staged tables folder reads good")
+	_desk127_expect(str(cen["db_light"]) == "good",
+		"db light: the staged own-copy path reads good")
+	_desk127_expect(str(cen["pinemhi_light"]) == "neutral",
+		"pinemhi light: an empty folder (auto-detect) reads neutral")
+	_desk127_expect(str(cen["shots_light"]) == "neutral",
+		"shots light: an unset folder reads neutral")
+	_desk127_expect(str(cen["wovp_light"]) == "neutral",
+		"wovp light: no key saved reads neutral")
+	_desk127_expect(str(cen["add_link_text"]) == "+ add another folder" and bool(cen["add_link_is_link"]),
+		"add folder: the quiet line stands (got '%s')" % str(cen["add_link_text"]))
+
+
+func _desk127_set_exe(path: String) -> void:
+	_desk._exe_edit.text = path
+	_desk._exe_edit.text_changed.emit(path)
+
+
+func _desk127_exe_legs() -> void:
+	var gl_path: String = OS.get_environment("PVLDS_DESK127_GL_EXE")
+	var nongl_path: String = OS.get_environment("PVLDS_DESK127_NONGL_EXE")
+	_desk127_expect(gl_path != "" and FileAccess.file_exists(gl_path) and FileAccess.file_exists(nongl_path),
+		"exe legs: the runner planted both exe fixtures")
+	_desk127_set_exe(gl_path)
+	var cen: Dictionary = _desk.fix127_census()
+	_desk127_expect(str(cen["exe_light"]) == "good",
+		"exe light: a GL64 build reads good")
+	_desk127_expect(str(cen["exe_reason"]) == "" and not bool(cen["exe_reason_visible"]),
+		"exe light: no reason line under a fit build")
+	_desk127_set_exe(nongl_path)
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["exe_light"]) == "bad",
+		"exe light: a non-GL build reads bad")
+	_desk127_expect(str(cen["exe_reason"]) == "This build can't do VR — pick the file with GL64 in its name.",
+		"exe light: the non-GL reason is the plain sentence (got '%s')" % str(cen["exe_reason"]))
+	_desk127_set_exe("/no/such/VPinballX_GL64.exe")
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["exe_light"]) == "bad" and str(cen["exe_reason"]) == "That file doesn't exist.",
+		"exe light: a missing file reads bad with its reason")
+	_desk127_set_exe("")
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["exe_light"]) == "bad" and str(cen["exe_reason"]) == "",
+		"exe light: an empty field reads bad, no reason line")
+	_desk._folder_edits[0].text = "/no/such/folder"
+	_desk._folder_edits[0].text_changed.emit("/no/such/folder")
+	cen = _desk.fix127_census()
+	_desk127_expect(str((cen["folder_lights"] as Array)[0]) == "bad",
+		"folder light: a missing folder reads bad")
+	_desk._folder_edits[0].text = ""
+	_desk._folder_edits[0].text_changed.emit("")
+	cen = _desk.fix127_census()
+	_desk127_expect(str((cen["folder_lights"] as Array)[0]) == "neutral",
+		"folder light: an empty row reads neutral")
+
+
+func _desk127_save_legs() -> void:
+	# Restore the staged fields the exe legs disturbed,
+	# through the real Save Options press.
+	_desk._exe_edit.text = OS.get_environment("PVLDS_DESK127_STAGED_EXE")
+	_desk._folder_edits[0].text = OS.get_environment("PVLDS_DESK127_TABLES")
+	_desk._save_button.pressed.emit()
+	var cen: Dictionary = _desk.fix127_census()
+	_desk127_expect(str(cen["save_text"]) == "Options Saved",
+		"save: Save Options lands clean (got '%s')" % str(cen["save_text"]))
+	_desk127_set_exe(OS.get_environment("PVLDS_DESK127_GL_EXE"))
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["save_text"]) == "Save Options",
+		"save: an edit flips the label back to Save Options")
+	_desk._save_button.pressed.emit()
+	var after: PvldsConfig = PvldsConfig.new()
+	_desk127_expect(after.load_from_disk() and after.vpx_exe_path == OS.get_environment("PVLDS_DESK127_GL_EXE"),
+		"save: Save Options wrote the new exe path to the config FILE (no scan ran)")
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["save_text"]) == "Options Saved",
+		"save: clean again after the press")
+	# The section saves wear the same pattern.
+	_desk._wovp_edit.text = "DESK127-SENTINEL-KEY-00000001234"
+	_desk._wovp_edit.text_changed.emit(_desk._wovp_edit.text)
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["wovp_save_text"]) == "Save key" and str(cen["wovp_light"]) == "neutral",
+		"wovp save: an unsaved key reads Save key, light neutral")
+	_desk._wovp_save_button.pressed.emit()
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["wovp_save_text"]) == "Key saved" and str(cen["wovp_light"]) == "good",
+		"wovp save: the saved key reads Key saved, light green")
+	var dir: String = OS.get_environment("PVLDS_DESK127_TABLES")
+	_desk._shots_edit.text = dir
+	_desk._shots_edit.text_changed.emit(dir)
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["shots_save_text"]) == "Save screenshots folder" and str(cen["shots_light"]) == "good",
+		"shots save: a set folder reads the dirty label, light green on the standing folder")
+	_desk._shots_save_button.pressed.emit()
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["shots_save_text"]) == "Screenshots folder saved",
+		"shots save: the saved folder reads Screenshots folder saved")
+	_desk._pinemhi_edit.text = dir
+	_desk._pinemhi_edit.text_changed.emit(dir)
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["pinemhi_save_text"]) == "Save PINemHi settings" and str(cen["pinemhi_light"]) == "good",
+		"pinemhi save: a set folder reads the dirty label, light green")
+	_desk._pinemhi_save_button.pressed.emit()
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["pinemhi_save_text"]) == "PINemHi settings saved",
+		"pinemhi save: the saved settings read PINemHi settings saved")
+
+
+func _desk127_grab(file_name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_DESK127_GRAB_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	if img != null:
+		img.save_png(dir.path_join(file_name))
+
+
+func _desk127_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - desk127 smoke: ", label)
+	else:
+		_desk127_fail(label)
+
+
+func _desk127_fail(label: String) -> void:
+	_desk127_failures += 1
+	printerr("  FAIL - desk127 smoke: ", label)
+
+
+func _finish_desk127_smoke() -> void:
+	if _desk127_failures == 0:
+		print("PVLDS DESK127 SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS DESK127 SMOKE: FAIL (%d)" % _desk127_failures)
 		get_tree().quit(1)
 
 

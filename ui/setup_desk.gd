@@ -11,7 +11,6 @@ signal enter_room_requested
 signal wovp_key_saved ## the WoVP key was saved from this desk: Main refreshes the Tournament Room's boards
 signal pinemhi_settings_saved ## NEXTROUND (item 4): the PINemHi folder/toggle was saved from this desk: Main re-reads the bests and re-pushes them to the room
 signal screenshots_settings_saved ## ROOMSUBMIT: the screenshots folder was saved from this desk: Main re-pushes the config's folder to the room, whose submit panel reads its photos from there
-signal ipdb_snapshot_requested ## IPDBFIX: re-apply the bundled IPDB snapshot to the cache (the CARDBACK live fetch is retired - IPDB's site refuses app requests): Main owns the cache and answers on the IPDB status line
 signal update_get_requested(url: String) ## AUTOFIND: the update banner's Get - Main opens the url (a browser is a PC act, and Main owns the update state)
 signal update_later_pressed ## AUTOFIND: the update banner's Later - Main holds the session dismissal (it gates the room's segment too)
 signal wovp_test_requested(api_key: String) ## Test key: Main validates this text against WoVP and answers on the status line
@@ -25,8 +24,11 @@ var _edge_arrows_check: CheckBox ## FIX123: the Edge Arrows session switch - the
 var _db_edit: LineEdit
 var _folder_rows: VBoxContainer
 var _folder_edits: Array[LineEdit] = []
+var _folder_lights: Array[Label] = [] ## FIX127: one health light per folder row, parallel to _folder_edits
+var _save_button: Button ## FIX127: Save Options - stateful (Save Options / Options Saved)
 var _scan_button: Button
 var _stats_label: Label
+var _scan_ipdb_label: Label ## FIX127: the IPDB coverage line, riding in the Scan area (decision 9)
 var _b2s_label: Label
 var _b2s_button: Button
 var _unplaced_label: Label
@@ -46,11 +48,12 @@ var _pinemhi_edit: LineEdit
 var _pinemhi_check: CheckBox
 var _pinemhi_manage_check: CheckBox ## PINEMHI2 (Part B): the watcher-management toggle - saved with the PINemHi section's Save, read by the watchdog via the contract mirror
 var _pinemhi_label: Label
+var _pinemhi_save_button: Button ## FIX127: member (was a build local) - its label is stateful
 var _shots_edit: LineEdit
 var _shots_label: Label
-var _ipdb_label: Label
+var _shots_save_button: Button ## FIX127: member (was a build local) - its label is stateful
 var _title_label: Label ## the title block: "Initial Setup" (DESKHEAD: renamed from FIRST SETUP)
-var _title_box: VBoxContainer ## DESKEDIT: the head panel's box - holds the title ALONE (census: title_dress)
+var _title_box: VBoxContainer ## the head's box - holds the title ALONE (census: title_dress). FIX127: a bare box now - the gradient name-plate panel went with the section bars (decision 2)
 var _advanced_fold: _Fold ## DESKEDIT: the Advanced fold (the Launch arguments template's home)
 var _db_note: Label ## DESKEDIT: the VPS database explanation line under the field
 var _intro_label: Label ## DESKHEAD: the one-sentence intro under the head (census: deskedit_census)
@@ -64,7 +67,15 @@ var _details_fold: _Fold ## DESKEDIT: the Scan details fold (the scan summary's 
 var _details_label: Label ## DESKEDIT: the folded diagnostics text inside the Scan details fold
 var _browse_buttons: Array[Button] = [] ## DESKCOLOR: every Browse... button (path rows + folder rows) - the picker family
 var _shots_browse_button: Button ## DESKCOLOR: the Screenshots section's Browse... (picker family)
-var _add_folder_button: Button ## DESKCOLOR: Add table folder... (picker family - it opens the picker)
+var _add_folder_link: LinkButton ## FIX127: "+ add another folder" - a quiet text line now (decision 3), not a button
+var _exe_light: Label ## FIX127: the VPX executable's health light
+var _exe_reason: Label ## FIX127: the exe light's plain reason line (stands only when the light has words to say)
+var _db_light: Label ## FIX127: the own-copy VPS database path's health light
+var _wovp_light: Label ## FIX127: the WoVP key's health light (green = the field holds the saved key)
+var _shots_light: Label ## FIX127: the screenshots folder's health light
+var _pinemhi_light: Label ## FIX127: the PINemHi folder's health light
+var _bottom_bar: PanelContainer ## FIX127: the pinned foot bar - Enter + the version line, outside the scroll (decision 10)
+var _saved_snapshot: Dictionary = {} ## FIX127: every desk field's value as last written to the config file - the dirty judge for the stateful save labels
 var config_file_existed: bool = true ## AUTOFIND: Main sets this before setup() - half of the hunt's trigger (the other half is the config's own exe path). Default true: a desk nobody briefed never hunts.
 var _exe_note: Label ## AUTOFIND: the hunt's word under the VPX executable field
 var _folders_note: Label ## AUTOFIND: the hunt's word under the table folder rows
@@ -111,6 +122,21 @@ const MAX_LAYOUT_FACTOR: float = 1.5
 ## the margin box's global rect at factor 1.5 measured 1140 =
 ## 760 x 1.5 (the deskcenter census leg).
 const FORM_COLUMN_WIDTH: float = 760.0
+
+## FIX127 (decision 10): the pinned foot bar's height in
+## window pixels. It stands OUTSIDE the scroll (a direct
+## child of the desk), so the layout pass leaves exactly
+## this much of the window to it at every factor.
+const BOTTOM_BAR_H: float = 56.0
+
+## FIX127 (decision 1): the health lights' three inks and
+## their state words (the census reads the words off the
+## light's meta). Green = verified good; red = required
+## but empty, missing, or unfit; the dim neutral = an
+## optional field standing empty, which is a fine state.
+const LIGHT_GOOD: Color = Color(0.38, 0.85, 0.47)
+const LIGHT_BAD: Color = Color(0.93, 0.36, 0.33)
+const LIGHT_NEUTRAL: Color = Color(0.42, 0.45, 0.52)
 
 
 ## The pure layout factor for a window size: how much bigger
@@ -159,6 +185,168 @@ class _Fold:
 		return content.visible
 
 
+## FIX127: one health light - a plain coloured dot whose
+## state word rides in its meta for the census.
+func _make_light() -> Label:
+	var l: Label = Label.new()
+	l.text = "●"
+	l.add_theme_font_size_override("font_size", 15)
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.set_meta("light_state", "neutral")
+	l.add_theme_color_override("font_color", LIGHT_NEUTRAL)
+	return l
+
+
+func _set_light(l: Label, state: String) -> void:
+	if l == null:
+		return
+	l.set_meta("light_state", state)
+	l.add_theme_color_override("font_color",
+		LIGHT_GOOD if state == "good" else LIGHT_BAD if state == "bad" else LIGHT_NEUTRAL)
+
+
+static func _light_state(l: Label) -> String:
+	if l == null:
+		return ""
+	return str(l.get_meta("light_state", ""))
+
+
+## FIX127: the VPX executable's fitness, judged - the
+## light's whole point (decision 1): existence alone is
+## not good enough, because the non-GL build cannot do
+## VR. A name carrying GL64 is the fit build (the config's
+## own default name, VPinball_GL64.exe, and the 10.8 name,
+## VPinballX_GL64.exe, both carry it).
+static func exe_light_state(path: String) -> String:
+	var p: String = path.strip_edges()
+	if p == "" or not FileAccess.file_exists(p):
+		return "bad"
+	return "good" if p.get_file().to_lower().contains("gl64") else "bad"
+
+
+## The exe light's reason line: stands only when there
+## are plain words worth saying - the missing file, or
+## the brief's own sentence for a non-GL pick.
+static func exe_reason(path: String) -> String:
+	var p: String = path.strip_edges()
+	if p == "":
+		return ""
+	if not FileAccess.file_exists(p):
+		return "That file doesn't exist."
+	if not p.get_file().to_lower().contains("gl64"):
+		return "This build can't do VR — pick the file with GL64 in its name."
+	return ""
+
+
+## A folder field's light: empty is neutral (an optional
+## or not-yet-filled field is not an error), a standing
+## folder is good, a named-but-missing one is bad.
+static func dir_light_state(path: String) -> String:
+	var p: String = path.strip_edges()
+	if p == "":
+		return "neutral"
+	return "good" if DirAccess.dir_exists_absolute(p) else "bad"
+
+
+## A file field's light, same shape (the own-copy db path).
+static func file_light_state(path: String) -> String:
+	var p: String = path.strip_edges()
+	if p == "":
+		return "neutral"
+	return "good" if FileAccess.file_exists(p) else "bad"
+
+
+## FIX127: remember every field's value as the config
+## file last held it. Called at the fill and after every
+## successful save this desk drives (Save Options, the
+## section saves, the session applies, the scan's save) -
+## save_to_disk writes the whole config object, so the
+## config IS what the file holds at each of those moments.
+func _take_snapshot() -> void:
+	if _config == null:
+		return
+	_saved_snapshot = {
+		"exe": _config.vpx_exe_path,
+		"db": _config.vpsdb_path,
+		"args": _config.launch_args_template,
+		"wovp": _config.wovp_api_key,
+		"pinemhi_folder": _config.pinemhi_folder,
+		"pinemhi_enabled": _config.pinemhi_enabled,
+		"pinemhi_manage": _config.pinemhi_manage_watcher,
+		"shots": _config.screenshots_folder,
+		"folders": _config.table_folders.duplicate(),
+	}
+
+
+## FIX127: re-judge every light and every stateful save
+## label from the widgets as they stand against the
+## snapshot. Wired to every field's text_changed and the
+## PINemHi checks' toggled, and called after fills, hunts,
+## dialog picks and saves. The session switches are NOT
+## judged here - they save live, on their own pattern.
+func _refresh_field_states() -> void:
+	if _config == null or _exe_edit == null:
+		return
+	_set_light(_exe_light, exe_light_state(_exe_edit.text))
+	if _exe_reason != null:
+		var reason: String = exe_reason(_exe_edit.text)
+		_exe_reason.text = reason
+		_exe_reason.visible = reason != ""
+	for i: int in range(_folder_edits.size()):
+		if i < _folder_lights.size():
+			_set_light(_folder_lights[i], dir_light_state(_folder_edits[i].text))
+	_set_light(_db_light, file_light_state(_db_edit.text))
+	# The key's light judges SAVEDNESS, not content: green
+	# only when the field holds exactly the key the file
+	# holds (and there is one); anything else is neutral -
+	# the key is optional, so unsaved or absent is no error.
+	var snap_wovp: String = str(_saved_snapshot.get("wovp", ""))
+	_set_light(_wovp_light, "good" if snap_wovp != "" and _wovp_edit.text.strip_edges() == snap_wovp else "neutral")
+	_set_light(_shots_light, dir_light_state(_shots_edit.text))
+	_set_light(_pinemhi_light, dir_light_state(_pinemhi_edit.text))
+	if _save_button != null:
+		_save_button.text = "Options Saved" if not _any_dirty() else "Save Options"
+	if _wovp_save_button != null:
+		_wovp_save_button.text = "Key saved" if snap_wovp != "" and not _wovp_dirty() else "Save key"
+	if _shots_save_button != null:
+		_shots_save_button.text = "Screenshots folder saved" if not _shots_dirty() else "Save screenshots folder"
+	if _pinemhi_save_button != null:
+		_pinemhi_save_button.text = "PINemHi settings saved" if not _pinemhi_dirty() else "Save PINemHi settings"
+
+
+func _wovp_dirty() -> bool:
+	return _wovp_edit.text.strip_edges() != str(_saved_snapshot.get("wovp", ""))
+
+
+func _shots_dirty() -> bool:
+	return _shots_edit.text.strip_edges() != str(_saved_snapshot.get("shots", ""))
+
+
+func _pinemhi_dirty() -> bool:
+	return _pinemhi_edit.text.strip_edges() != str(_saved_snapshot.get("pinemhi_folder", "")) \
+		or _pinemhi_check.button_pressed != bool(_saved_snapshot.get("pinemhi_enabled", false)) \
+		or _pinemhi_manage_check.button_pressed != bool(_saved_snapshot.get("pinemhi_manage", false))
+
+
+func _main_dirty() -> bool:
+	if _exe_edit.text.strip_edges() != str(_saved_snapshot.get("exe", "")):
+		return true
+	if _db_edit.text.strip_edges() != str(_saved_snapshot.get("db", "")):
+		return true
+	if _args_edit.text.strip_edges() != str(_saved_snapshot.get("args", "")):
+		return true
+	var folders: Array = []
+	for e: LineEdit in _folder_edits:
+		var f: String = e.text.strip_edges()
+		if f != "":
+			folders.append(f)
+	return folders != (_saved_snapshot.get("folders", []) as Array)
+
+
+func _any_dirty() -> bool:
+	return _main_dirty() or _wovp_dirty() or _shots_dirty() or _pinemhi_dirty()
+
+
 func setup(config: PvldsConfig) -> void:
 	_config = config
 	_build_ui()
@@ -167,6 +355,11 @@ func setup(config: PvldsConfig) -> void:
 	# once, after the fill (it only ever fills what the
 	# fill left empty - see _apply_hunt).
 	_apply_hunt()
+	# FIX127: settle the lights and the save labels on the
+	# standing fields (the hunt's pre-fills are unsaved
+	# proposals, so Save Options honestly reads dirty
+	# after a hunt that found things).
+	_refresh_field_states()
 	# DESKEDIT: both folds start collapsed on EVERY desk
 	# show, not just the first - leaving to the room and
 	# coming back re-folds what was opened.
@@ -224,7 +417,10 @@ func _apply_window_layout() -> void:
 	var layout: Dictionary = desk_layout(win_size, _layout_factor)
 	var area: Vector2 = layout["area"] as Vector2
 	_scroll.position = Vector2.ZERO
-	_scroll.size = area
+	# FIX127: the scroll's footprint leaves the pinned
+	# foot bar its BOTTOM_BAR_H window pixels at every
+	# factor (the bar stands outside the scroll, unscaled).
+	_scroll.size = Vector2(area.x, area.y - BOTTOM_BAR_H / maxf(_layout_factor, 0.01))
 	_scroll.scale = Vector2(_layout_factor, _layout_factor)
 	if _center != null:
 		_center.custom_minimum_size = Vector2(area.x, 0.0)
@@ -424,16 +620,14 @@ func _build_ui() -> void:
 	vbox.add_theme_constant_override("separation", 12)
 	margin.add_child(vbox)
 
-	# SETUPLOOK: the title block stands in a machined header
-	# panel - the desk's name plate, worn like a strip stop
-	# (accent gradient, the standing underline, the title in
-	# the house display type).
-	var title_panel: PanelContainer = PanelContainer.new()
-	title_panel.add_theme_stylebox_override("panel", DeskTheme.title_header_box())
-	vbox.add_child(title_panel)
+	# FIX127 (decision 2): the title stands as TYPE alone -
+	# the machined name-plate panel wore the same gradient
+	# costume as the section bars, and the costume is gone
+	# from everything that is not a button. The box holds
+	# the title alone, exactly as the census reads it.
 	_title_box = VBoxContainer.new()
 	_title_box.add_theme_constant_override("separation", 4)
-	title_panel.add_child(_title_box)
+	vbox.add_child(_title_box)
 	_title_label = Label.new()
 	# ENDGAME (Part A): the two setups carry two names. This
 	# desk is Initial Setup - the one-time, important initial
@@ -532,7 +726,17 @@ func _build_ui() -> void:
 	# under the VPX block in BOTH modes (CHECKLIST item 2:
 	# the regroup is permanent - they used to stand at the
 	# desk's far end, far from the sentence naming them).
-	_exe_edit = _add_path_row(step1, "VPX executable", "Browse...", "exe")
+	_exe_edit = _add_path_row(step1, "VPX executable", "Browse...", "exe", true)
+	_exe_light = _row_light
+	_exe_edit.text_changed.connect(func(_t: String) -> void: _refresh_field_states())
+	# FIX127: the exe light's reason line - stands only
+	# when the light has words (a missing file, a non-GL
+	# pick). Empty otherwise; the light alone speaks.
+	_exe_reason = Label.new()
+	_exe_reason.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_exe_reason.add_theme_color_override("font_color", LIGHT_BAD)
+	_exe_reason.visible = false
+	step1.add_child(_exe_reason)
 	# AUTOFIND: the hunt's word under the exe field - what
 	# it found, or the plain not-found guidance. Stands
 	# only when the hunt ran (see _apply_hunt).
@@ -553,31 +757,56 @@ func _build_ui() -> void:
 	_folders_note.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
 	_folders_note.visible = false
 	step1.add_child(_folders_note)
-	var add_folder: Button = Button.new()
-	add_folder.text = "Add table folder..."
-	# DESKCOLOR: Add folder opens the picker, so it wears
-	# the picker slate too.
-	DeskTheme.dress_button_family(add_folder, DeskTheme.FAMILY_PICKER)
-	_add_folder_button = add_folder
-	add_folder.pressed.connect(_on_add_folder_row)
-	step1.add_child(add_folder)
+	# FIX127 (decision 3): adding a folder is a quiet text
+	# line under the list now, not a banner button - the
+	# capability stays, the front-row seat goes.
+	_add_folder_link = LinkButton.new()
+	_add_folder_link.text = "+ add another folder"
+	_add_folder_link.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	_add_folder_link.add_theme_color_override("font_hover_color", RoomSpecs.STRIP_LABEL_ACCENT)
+	_add_folder_link.add_theme_color_override("font_pressed_color", RoomSpecs.STRIP_LABEL_ACCENT)
+	_add_folder_link.add_theme_color_override("font_focus_color", RoomSpecs.STRIP_LABEL_ACCENT)
+	_add_folder_link.pressed.connect(_on_add_folder_row)
+	step1.add_child(_add_folder_link)
 
-	var dummy_button: Button = Button.new()
-	dummy_button.text = "Use the bundled dummy library (invented tables, for judging the flow)"
-	dummy_button.pressed.connect(_on_use_dummy)
-	step1.add_child(dummy_button)
+	# FIX127 (decision 4): the bundled dummy library button
+	# is GONE from the desk - it was a development judging
+	# tool standing in the middle of the player's one path.
 
+	# FIX127 (decisions 5+6): the old combined button
+	# splits. Save Options stands here, stateful - its
+	# label IS the form's dirty state.
+	_save_button = Button.new()
+	_save_button.text = "Save Options"
+	_save_button.pressed.connect(_on_save_options_pressed)
+	step1.add_child(_save_button)
+
+	# FIX127 (decision 7): the Scan area - its own block
+	# under a breath of space: the button, then EVERYTHING
+	# the scan produces, in order - the headline, the IPDB
+	# coverage line, the folded diagnostics, the two list
+	# rows. Nothing scan-made lives anywhere else now.
+	var scan_spacer: Control = Control.new()
+	scan_spacer.custom_minimum_size = Vector2(0, 10)
+	step1.add_child(scan_spacer)
 	_scan_button = Button.new()
-	# CHECKLIST: the action renamed to say the whole job -
-	# it saves every option on the desk, then scans.
-	_scan_button.text = "Save Options and Scan for Tables"
-	_scan_button.pressed.connect(_on_save_and_scan)
+	_scan_button.text = "Scan for Tables"
+	_scan_button.pressed.connect(_on_scan_pressed)
 	step1.add_child(_scan_button)
 
 	_stats_label = Label.new()
 	_stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_stats_label.text = "Not scanned yet."
 	step1.add_child(_stats_label)
+
+	# FIX127 (decision 9): the IPDB coverage line rides
+	# here, one line among the scan's counts - Main feeds
+	# it through set_ipdb_status, as it fed the old
+	# section's line.
+	_scan_ipdb_label = Label.new()
+	_scan_ipdb_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_scan_ipdb_label.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	step1.add_child(_scan_ipdb_label)
 
 	# DESKEDIT: the scan summary's diagnostics live in a
 	# Scan details fold under the stats area - the standing
@@ -637,17 +866,26 @@ func _build_ui() -> void:
 	# validates the field's text and names whose key it
 	# is. The field is masked - it is a secret, and it is
 	# never printed.
-	step2.add_child(_section_header("World of Virtual Pinball (WoVP) - the Tournament Room's boards", DeskTheme.FAMILY_WOVP))
+	step2.add_child(_section_header("World of Virtual Pinball (WoVP) - the Tournament Room's boards"))
 	var wovp_intro: Label = Label.new()
 	# CHECKLIST: the key directions, telling a first-timer
 	# where the key actually lives (the brief's wording).
 	wovp_intro.text = "Your WoVP API key shows your live league boards in the Tournament Room. Get your key from WoVP: open your profile page and look under Settings. Stored only in the config file on this PC."
 	wovp_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	step2.add_child(wovp_intro)
+	var wovp_field_row: HBoxContainer = HBoxContainer.new()
+	wovp_field_row.add_theme_constant_override("separation", 8)
+	step2.add_child(wovp_field_row)
+	# FIX127: the key's health light - green when the field
+	# holds the saved key (see _refresh_field_states).
+	_wovp_light = _make_light()
+	wovp_field_row.add_child(_wovp_light)
 	_wovp_edit = LineEdit.new()
 	_wovp_edit.secret = true
 	_wovp_edit.placeholder_text = "Paste your WoVP API key here"
-	step2.add_child(_wovp_edit)
+	_wovp_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_wovp_edit.text_changed.connect(func(_t: String) -> void: _refresh_field_states())
+	wovp_field_row.add_child(_wovp_edit)
 	var wovp_row: HBoxContainer = HBoxContainer.new()
 	wovp_row.add_theme_constant_override("separation", 8)
 	step2.add_child(wovp_row)
@@ -682,7 +920,12 @@ func _build_ui() -> void:
 	# the PINemHi settings, this is a live setting: Save
 	# writes the config on the spot. No toggle: an unset
 	# folder is the off state, and the panel says so.
-	step2.add_child(_section_header("Screenshots - the folder your score photos land in", DeskTheme.FAMILY_WOVP))
+	# FIX127 (decision 8): air between the score blocks -
+	# space is the divider now.
+	var shots_spacer: Control = Control.new()
+	shots_spacer.custom_minimum_size = Vector2(0, 12)
+	step2.add_child(shots_spacer)
+	step2.add_child(_section_header("Screenshots - the folder your score photos land in"))
 	var shots_intro: Label = Label.new()
 	# CHECKLIST: Chris's own words for what this folder is.
 	shots_intro.text = "Please select the folder your VR headset screenshots appear on PC. Submit screenshots in Tournament Room while in VR."
@@ -691,9 +934,12 @@ func _build_ui() -> void:
 	var shots_row: HBoxContainer = HBoxContainer.new()
 	shots_row.add_theme_constant_override("separation", 8)
 	step2.add_child(shots_row)
+	_shots_light = _make_light()
+	shots_row.add_child(_shots_light)
 	_shots_edit = LineEdit.new()
 	_shots_edit.placeholder_text = "Screenshots folder - where your headset shots land"
 	_shots_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_shots_edit.text_changed.connect(func(_t: String) -> void: _refresh_field_states())
 	shots_row.add_child(_shots_edit)
 	var shots_browse: Button = Button.new()
 	shots_browse.text = "Browse..."
@@ -706,10 +952,10 @@ func _build_ui() -> void:
 	var shots_save_row: HBoxContainer = HBoxContainer.new()
 	shots_save_row.add_theme_constant_override("separation", 8)
 	step2.add_child(shots_save_row)
-	var shots_save: Button = Button.new()
-	shots_save.text = "Save screenshots folder"
-	shots_save.pressed.connect(_on_shots_save_pressed)
-	shots_save_row.add_child(shots_save)
+	_shots_save_button = Button.new()
+	_shots_save_button.text = "Save screenshots folder"
+	_shots_save_button.pressed.connect(_on_shots_save_pressed)
+	shots_save_row.add_child(_shots_save_button)
 	_shots_label = Label.new()
 	_shots_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_shots_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -727,28 +973,40 @@ func _build_ui() -> void:
 	# the app's open hours - see its label). Like the key,
 	# these are live settings: Save writes the config on
 	# the spot.
-	step2.add_child(_section_header("PINemHi - your personal bests on the tournament boards", DeskTheme.FAMILY_PINEMHI))
+	var pinemhi_spacer: Control = Control.new()
+	pinemhi_spacer.custom_minimum_size = Vector2(0, 12)
+	step2.add_child(pinemhi_spacer)
+	step2.add_child(_section_header("PINemHi - your personal bests on the tournament boards"))
 	var pinemhi_intro: Label = Label.new()
 	pinemhi_intro.text = "If you use PINemHi, LaunchPin can read its TOP10_Personal files and show your best beneath the league scores on a tournament board. That's all it does by default - it never runs PINemHi or its watcher unless you opt in below. Leave the folder empty to auto-detect the usual install places (D:\\vPinball\\Pinemhi and friends)."
 	pinemhi_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	step2.add_child(pinemhi_intro)
 	_pinemhi_check = CheckBox.new()
 	_pinemhi_check.text = "Show my PINemHi personal bests on tournament boards"
+	_pinemhi_check.toggled.connect(func(_on: bool) -> void: _refresh_field_states())
 	step2.add_child(_pinemhi_check)
 	_pinemhi_manage_check = CheckBox.new()
 	_pinemhi_manage_check.text = "Let LaunchPin run the PINemHi watcher while a table is playing"
 	_pinemhi_manage_check.tooltip_text = "Off (the default): LaunchPin never touches the watcher. On: the watchdog starts pinemhi_rom_monitor.exe when a table starts (if it isn't already running) and closes it shortly after the table exits - or when LaunchPin exits, if that comes first. A watcher already running is left running: LaunchPin only ever closes one it started itself."
+	_pinemhi_manage_check.toggled.connect(func(_on: bool) -> void: _refresh_field_states())
 	step2.add_child(_pinemhi_manage_check)
+	var pinemhi_field_row: HBoxContainer = HBoxContainer.new()
+	pinemhi_field_row.add_theme_constant_override("separation", 8)
+	step2.add_child(pinemhi_field_row)
+	_pinemhi_light = _make_light()
+	pinemhi_field_row.add_child(_pinemhi_light)
 	_pinemhi_edit = LineEdit.new()
 	_pinemhi_edit.placeholder_text = "PINemHi folder - empty = auto-detect"
-	step2.add_child(_pinemhi_edit)
+	_pinemhi_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pinemhi_edit.text_changed.connect(func(_t: String) -> void: _refresh_field_states())
+	pinemhi_field_row.add_child(_pinemhi_edit)
 	var pinemhi_row: HBoxContainer = HBoxContainer.new()
 	pinemhi_row.add_theme_constant_override("separation", 8)
 	step2.add_child(pinemhi_row)
-	var pinemhi_save: Button = Button.new()
-	pinemhi_save.text = "Save PINemHi settings"
-	pinemhi_save.pressed.connect(_on_pinemhi_save_pressed)
-	pinemhi_row.add_child(pinemhi_save)
+	_pinemhi_save_button = Button.new()
+	_pinemhi_save_button.text = "Save PINemHi settings"
+	_pinemhi_save_button.pressed.connect(_on_pinemhi_save_pressed)
+	pinemhi_row.add_child(_pinemhi_save_button)
 	_pinemhi_label = Label.new()
 	_pinemhi_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_pinemhi_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -759,9 +1017,9 @@ func _build_ui() -> void:
 	# then the Download as the primary action, then the
 	# field for a player's own copy. The bundled copy
 	# covers scanning, so nothing here blocks; the
-	# download is offered, never silent. The IPDB block
-	# rides the same step - it is the library's other
-	# well of facts and art.
+	# download is offered, never silent. (FIX127: the
+	# IPDB block that rode this step is deleted - see the
+	# note at the step's foot.)
 	# DESKEDIT: say what the thing IS - a first-timer is
 	# otherwise asked to point at a file he has never heard
 	# of (Chris's wording, FINAL).
@@ -796,34 +1054,15 @@ func _build_ui() -> void:
 	# CHECKLIST: the own-copy path, labelled as exactly
 	# that - the exception under the download, not the
 	# front door.
-	_db_edit = _add_path_row(step3, "Only for using your own copy instead:", "Browse...", "db")
+	_db_edit = _add_path_row(step3, "Only for using your own copy instead:", "Browse...", "db", true)
+	_db_light = _row_light
+	_db_edit.text_changed.connect(func(_t: String) -> void: _refresh_field_states())
 
-	# The IPDB section (CARDBACK, reshaped by IPDBFIX):
-	# the card backs' second well. The facts ship BUNDLED
-	# with PVLDS - a snapshot of the Internet Pinball
-	# Database taken when the app was built - and seed the
-	# cache at boot; the app never fetches from IPDB
-	# directly (its site refuses requests from apps). The
-	# button re-applies the bundled snapshot, the useful
-	# move after a cache clear; a snapshot refresh rides
-	# a PVLDS update.
-	step3.add_child(_section_header("IPDB data - the card backs' second well"))
-	var ipdb_intro: Label = Label.new()
-	ipdb_intro.text = "Each card's back mixes the database's facts with the Internet Pinball Database's (production run, fun rating, full credits, notable features), each row dotted with its source. The IPDB facts ship bundled as a snapshot and apply automatically; the backs read the saved copy and never go online. Games with no IPDB link in the database show database rows only."
-	ipdb_intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	step3.add_child(ipdb_intro)
-	var ipdb_row: HBoxContainer = HBoxContainer.new()
-	ipdb_row.add_theme_constant_override("separation", 8)
-	step3.add_child(ipdb_row)
-	var ipdb_apply: Button = Button.new()
-	ipdb_apply.text = "Re-apply bundled IPDB data"
-	ipdb_apply.pressed.connect(func() -> void: ipdb_snapshot_requested.emit())
-	ipdb_row.add_child(ipdb_apply)
-	_ipdb_label = Label.new()
-	_ipdb_label.text = "IPDB data: bundled snapshot not applied yet."
-	_ipdb_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_ipdb_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	ipdb_row.add_child(_ipdb_label)
+	# FIX127 (decision 9): the IPDB section is DELETED -
+	# header, paragraph and Re-apply button all gone. The
+	# bundled snapshot applies itself (Main's boot seed,
+	# marker-gated), and the coverage count rides as one
+	# line in step 1's Scan area. Nothing IPDB stands here.
 
 	# -- Step 4: Advanced. The Launch Arguments fold and
 	# Focus Herding. In the FULL desk the fold behaves as
@@ -839,6 +1078,7 @@ func _build_ui() -> void:
 	# goes under the fold, nothing else is swept in.
 	_advanced_fold = _make_fold(step4, "Advanced")
 	_args_edit = _add_field(_advanced_fold.content, "Launch arguments template ({table} is the table file; quotes group arguments)")
+	_args_edit.text_changed.connect(func(_t: String) -> void: _refresh_field_states())
 	var args_note: Label = Label.new()
 	args_note.text = "The command line VPX is started with. The default starts the table you picked — change it only if your VPX setup needs special switches."
 	args_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -896,21 +1136,49 @@ func _build_ui() -> void:
 		_step_contents[i].add_child(skip)
 		_step_skips.append(skip)
 
-	# The foot stands outside the steps in both modes.
+	# FIX127 (decision 10): the foot is a PINNED BAR now -
+	# one Enter button, fixed at the window's bottom edge,
+	# outside the scroll, visible at any scroll position
+	# and never duplicated. The version line rides quietly
+	# at the bar's left. The bar is a direct child of the
+	# desk (added last, so it draws over the scroll's foot)
+	# and the layout pass reserves its height (see
+	# _apply_window_layout).
+	_bottom_bar = PanelContainer.new()
+	_bottom_bar.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	_bottom_bar.offset_top = -BOTTOM_BAR_H
+	_bottom_bar.offset_bottom = 0.0
+	var bar_box: StyleBoxFlat = StyleBoxFlat.new()
+	bar_box.bg_color = Color8(24, 26, 32)
+	bar_box.border_color = RoomSpecs.STRIP_BORDER
+	bar_box.border_width_top = 1
+	bar_box.content_margin_left = 16
+	bar_box.content_margin_right = 16
+	bar_box.content_margin_top = 8
+	bar_box.content_margin_bottom = 8
+	_bottom_bar.add_theme_stylebox_override("panel", bar_box)
+	_bottom_bar.theme = DeskTheme.build()
+	add_child(_bottom_bar)
+	var bar_row: HBoxContainer = HBoxContainer.new()
+	bar_row.add_theme_constant_override("separation", 12)
+	_bottom_bar.add_child(bar_row)
+	# AUTOFIND: the product's name and version, quiet. One
+	# constant, one home (AppInfo); the update check
+	# compares against the same string.
+	_version_label = Label.new()
+	_version_label.text = "%s — version %s" % [AppInfo.PRODUCT_NAME, AppInfo.PRODUCT_VERSION]
+	_version_label.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
+	_version_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	bar_row.add_child(_version_label)
+	var bar_spacer: Control = Control.new()
+	bar_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar_row.add_child(bar_spacer)
 	_enter_button = Button.new()
 	# CHECKLIST: the door renamed for the product it opens.
 	_enter_button.text = "Enter LaunchPin VR"
 	_enter_button.disabled = true
 	_enter_button.pressed.connect(func() -> void: enter_room_requested.emit())
-	vbox.add_child(_enter_button)
-
-	# AUTOFIND: the form's foot - the product's name and
-	# version, quiet. One constant, one home (AppInfo);
-	# the update check compares against the same string.
-	_version_label = Label.new()
-	_version_label.text = "%s — version %s" % [AppInfo.PRODUCT_NAME, AppInfo.PRODUCT_VERSION]
-	_version_label.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
-	vbox.add_child(_version_label)
+	bar_row.add_child(_enter_button)
 
 	_dialog = FileDialog.new()
 	_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -919,34 +1187,25 @@ func _build_ui() -> void:
 	add_child(_dialog)
 
 
-func _folder_label() -> PanelContainer:
-	return _section_header("Table folders", DeskTheme.FAMILY_AMBER)
+func _folder_label() -> Label:
+	return _section_header("Table folders")
 
 
-## SETUPLOOK: a section header bar - the section's name in
-## the house display type on the resting graphite gradient,
-## in the strip segment's manner, instead of a plain bold
-## label. Dress only: the words and the order never move.
-## DESKCOLOR: a section in a colour family passes its
-## family - the bar's gradient tints toward it, the accent
-## underline and edges wear it, and the title takes its
-## lightened tint. No family (the default) is the plain
-## graphite bar, exactly as SETUPLOOK built it.
-func _section_header(text: String, family: Color = Color(0, 0, 0, 0)) -> PanelContainer:
-	var p: PanelContainer = PanelContainer.new()
-	var tint: Color = RoomSpecs.STRIP_LABEL_ACCENT
-	if family.a > 0.0:
-		p.add_theme_stylebox_override("panel", DeskTheme.section_header_box_family(family))
-		tint = DeskTheme.section_title_tint(family)
-	else:
-		p.add_theme_stylebox_override("panel", DeskTheme.section_header_box())
+## FIX127 (decision 2): a section header is TYPE ONLY -
+## the section's name in the house display type, no
+## gradient bar, no box, no colour family. The button
+## costume belongs to buttons alone now. The header
+## carries a meta mark so the censuses can find the
+## family of headers as headers (and prove none of them
+## is a panel any more).
+func _section_header(text: String) -> Label:
 	var l: Label = Label.new()
 	l.text = text
+	l.set_meta("section_header", true)
 	l.add_theme_font_override("font", DeskTheme.FONT_MEDIUM)
 	l.add_theme_font_size_override("font_size", 20)
-	l.add_theme_color_override("font_color", tint)
-	p.add_child(l)
-	return p
+	l.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_ACCENT)
+	return l
 
 
 func _add_field(parent: VBoxContainer, label_text: String) -> LineEdit:
@@ -960,7 +1219,12 @@ func _add_field(parent: VBoxContainer, label_text: String) -> LineEdit:
 	return edit
 
 
-func _add_path_row(parent: VBoxContainer, label_text: String, button_text: String, target: String) -> LineEdit:
+## FIX127: _row_light carries the light _add_path_row
+## built for its row (null when the row is unlit) - the
+## caller reads it straight after the call.
+var _row_light: Label
+
+func _add_path_row(parent: VBoxContainer, label_text: String, button_text: String, target: String, lit: bool = false) -> LineEdit:
 	var l: Label = Label.new()
 	l.text = label_text
 	l.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
@@ -968,6 +1232,10 @@ func _add_path_row(parent: VBoxContainer, label_text: String, button_text: Strin
 	var row: HBoxContainer = HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	parent.add_child(row)
+	_row_light = null
+	if lit:
+		_row_light = _make_light()
+		row.add_child(_row_light)
 	var edit: LineEdit = LineEdit.new()
 	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(edit)
@@ -987,10 +1255,15 @@ func _add_folder_row(prefill: String) -> void:
 		return
 	var row: HBoxContainer = HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
+	# FIX127: every folder row carries its health light.
+	var light: Label = _make_light()
+	row.add_child(light)
+	_folder_lights.append(light)
 	var edit: LineEdit = LineEdit.new()
 	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	edit.text = prefill
 	edit.placeholder_text = "C:/Visual Pinball/Tables"
+	edit.text_changed.connect(func(_t: String) -> void: _refresh_field_states())
 	row.add_child(edit)
 	var idx: int = _folder_edits.size()
 	var b: Button = Button.new()
@@ -1041,6 +1314,7 @@ func _on_dialog_file(path: String) -> void:
 		_exe_edit.text = path
 	elif _dialog_target == "db":
 		_db_edit.text = path
+	_refresh_field_states()
 
 
 func _on_dialog_dir(path: String) -> void:
@@ -1050,6 +1324,7 @@ func _on_dialog_dir(path: String) -> void:
 		var idx: int = _dialog_target.trim_prefix("folder:").to_int()
 		if idx >= 0 and idx < _folder_edits.size():
 			_folder_edits[idx].text = path
+	_refresh_field_states()
 
 
 func _fill_from_config() -> void:
@@ -1058,7 +1333,10 @@ func _fill_from_config() -> void:
 	_db_edit.text = _config.vpsdb_path
 	_args_edit.text = _config.launch_args_template
 	_wovp_edit.text = _config.wovp_api_key
-	_wovp_label.text = "A key is saved on this PC." if _config.wovp_api_key != "" else "No key saved yet."
+	# FIX127: no saved-state sentence - the light and the
+	# save button's label carry it. The line starts with
+	# only the length warning, if the saved key has one.
+	_wovp_label.text = _wovp_length_note(_config.wovp_api_key)
 	_pinemhi_edit.text = _config.pinemhi_folder
 	_pinemhi_check.button_pressed = _config.pinemhi_enabled
 	_pinemhi_manage_check.button_pressed = _config.pinemhi_manage_watcher
@@ -1071,6 +1349,10 @@ func _fill_from_config() -> void:
 	if _folder_edits.is_empty():
 		_add_folder_row("")
 	_filling_from_config = false
+	# FIX127: the fill IS the file's truth - snapshot it
+	# for the dirty judge, then settle lights and labels.
+	_take_snapshot()
+	_refresh_field_states()
 
 
 ## The session widgets from the config - the fill half of the
@@ -1082,14 +1364,6 @@ func _fill_from_config() -> void:
 func _fill_session_widgets() -> void:
 	_herding_check.button_pressed = _config.focus_herding
 	_edge_arrows_check.button_pressed = _config.edge_arrows
-
-
-func _on_use_dummy() -> void:
-	_exe_edit.text = PvldsConfig.DEFAULT_EXE_NAME
-	_db_edit.text = ProjectSettings.globalize_path("res://data/vpsdb.json")
-	for edit: LineEdit in _folder_edits:
-		edit.text = ""
-	_folder_edits[0].text = ProjectSettings.globalize_path("res://dummy_data/tables")
 
 
 func _collect_into_config() -> void:
@@ -1138,6 +1412,9 @@ func _apply_session_settings() -> void:
 	_collect_session_settings()
 	if _config.save_to_disk():
 		_mark_step_done(3)
+		# FIX127: the file moved - re-snapshot, re-judge.
+		_take_snapshot()
+		_refresh_field_states()
 		return
 	_config.focus_herding = prev_herding
 	_config.edge_arrows = prev_edge_arrows
@@ -1157,24 +1434,35 @@ func _apply_session_settings() -> void:
 ## words (WoVP's keys are 32 characters; the client would
 ## refuse to test this one). The emit lets Main refresh the
 ## Tournament Room's boards with the new key.
+## FIX127: the WoVP length warning for a key that exists
+## (an empty field is no key at all, not a 0-character
+## one - the note stays silent for it).
+static func _wovp_length_note(api_key: String) -> String:
+	if api_key.strip_edges() == "":
+		return ""
+	return WovpClient.key_length_note(api_key)
+
+
 func _on_wovp_save_pressed() -> void:
 	if _config == null:
 		return
 	var prev: String = _config.wovp_api_key
 	_config.wovp_api_key = _wovp_edit.text.strip_edges()
 	if _config.save_to_disk():
-		if _config.wovp_api_key == "":
-			_wovp_label.text = "Key cleared - the Tournament Room will ask for one."
-		else:
-			_wovp_label.text = "Key saved on this PC."
-			var length_note: String = WovpClient.key_length_note(_config.wovp_api_key)
-			if length_note != "":
-				_wovp_label.text += " " + length_note
+		# FIX127: the saved STATE now lives on the light
+		# (green = the saved key stands in the field) and
+		# the button's own label (Key saved) - the status
+		# line keeps only real information: the length
+		# warning, when the key breaks WoVP's 32 rule.
+		_wovp_label.text = _wovp_length_note(_config.wovp_api_key)
+		_take_snapshot()
+		_refresh_field_states()
 		_mark_step_done(1)
 		wovp_key_saved.emit()
 		return
 	_config.wovp_api_key = prev
 	_wovp_edit.text = prev
+	_refresh_field_states()
 	_wovp_label.text = "That key could NOT be saved - the config file is not writable, so nothing changed. Fix the config file, then save it again."
 
 
@@ -1222,6 +1510,8 @@ func _on_pinemhi_save_pressed() -> void:
 	_config.pinemhi_manage_watcher = _pinemhi_manage_check.button_pressed
 	if _config.save_to_disk():
 		_pinemhi_label.text = PinemhiScores.status_line(_config)
+		_take_snapshot()
+		_refresh_field_states()
 		_mark_step_done(1)
 		pinemhi_settings_saved.emit()
 		return
@@ -1229,8 +1519,11 @@ func _on_pinemhi_save_pressed() -> void:
 	_config.pinemhi_enabled = prev_enabled
 	_config.pinemhi_manage_watcher = prev_manage
 	_pinemhi_edit.text = prev_folder
+	_filling_from_config = true
 	_pinemhi_check.button_pressed = prev_enabled
 	_pinemhi_manage_check.button_pressed = prev_manage
+	_filling_from_config = false
+	_refresh_field_states()
 	_pinemhi_label.text = "Those PINemHi settings could NOT be saved - the config file is not writable, so nothing changed. Fix the config file, then save again."
 
 
@@ -1248,19 +1541,23 @@ func _on_shots_save_pressed() -> void:
 	_config.screenshots_folder = _shots_edit.text.strip_edges()
 	if _config.save_to_disk():
 		_shots_label.text = ShotsFolder.status_line(_config)
+		_take_snapshot()
+		_refresh_field_states()
 		_mark_step_done(1)
 		screenshots_settings_saved.emit()
 		return
 	_config.screenshots_folder = prev_folder
 	_shots_edit.text = prev_folder
+	_refresh_field_states()
 	_shots_label.text = "That screenshots folder could NOT be saved - the config file is not writable, so nothing changed. Fix the config file, then save again."
 
 
-## CARDBACK/IPDBFIX: Main drives the IPDB status line
-## (coverage, the bundled snapshot's apply verdict).
+## FIX127: Main drives the IPDB coverage line - it rides
+## in the Scan area now (decision 9), fed by the same
+## health line the in-room panel reads.
 func set_ipdb_status(text: String) -> void:
-	if _ipdb_label != null:
-		_ipdb_label.text = text
+	if _scan_ipdb_label != null:
+		_scan_ipdb_label.text = text
 
 
 func wovp_key_text() -> String:
@@ -1286,11 +1583,33 @@ func _on_download_finished(ok: bool, message: String, downloaded_path: String) -
 		_mark_step_done(2)
 		if _db_edit.text.strip_edges() == "":
 			_db_edit.text = downloaded_path
+			_refresh_field_states()
 	else:
 		_dl_label.text = message
 
 
-func _on_save_and_scan() -> void:
+## FIX127 (decision 5): Save Options - one job: collect
+## the form and write the config file. No scan. The
+## button's own label reports the outcome (it re-judges
+## to "Options Saved" off the fresh snapshot).
+func _on_save_options_pressed() -> void:
+	_collect_into_config()
+	if not _config.save_to_disk():
+		_stats_label.text = "Config save failed - check the folder is writable, then try again."
+		return
+	_take_snapshot()
+	_refresh_field_states()
+
+
+## FIX127 (decision 5): Scan for Tables - one job: scan
+## the library these fields name. The save rides inside
+## it, as it always has: the checklist walk, the boot
+## and the room all read the config FILE, so a scan that
+## did not persist would strand the setup it just proved
+## (the desk's re-show law: "the setup the scan just
+## saved makes this stand a configured one"). Save
+## Options is the persist-without-scanning door.
+func _on_scan_pressed() -> void:
 	_collect_into_config()
 	if _config.table_folders.is_empty():
 		_stats_label.text = "Add at least one table folder first."
@@ -1298,6 +1617,8 @@ func _on_save_and_scan() -> void:
 	if not _config.save_to_disk():
 		_stats_label.text = "Config save failed - check the folder is writable, then try again."
 		return
+	_take_snapshot()
+	_refresh_field_states()
 	# The scan runs on Main's worker thread; this form stays live and
 	# Main paints progress into the stats label until the summary lands.
 	var main: Node = get_parent()
@@ -1502,6 +1823,7 @@ func checklist_census() -> Dictionary:
 		"args_in_step4": _args_edit != null and _step_contents[3].is_ancestor_of(_args_edit),
 		"advanced_toggle_visible": _advanced_fold.toggle.visible if _advanced_fold != null else true,
 		"scan_text": _scan_button.text if _scan_button != null else "",
+		"save_text": _save_button.text if _save_button != null else "",
 		"enter_text": _enter_button.text if _enter_button != null else "",
 		"enter_disabled": _enter_button.disabled if _enter_button != null else true,
 		"enter_dressed": _enter_button != null and _enter_button.has_theme_stylebox_override("normal"),
@@ -1526,13 +1848,71 @@ func deskedit_census() -> Dictionary:
 	}
 
 
-## Smoke census of the DESKCOLOR dress: for each named
-## heading bar and button, the colours sampled off the
-## stylebox it actually wears (the patch texture's middle
-## and its accent-underline row) plus its font colour -
-## the stylebox's own colours, never screen pixels. A
-## control with no family dress reports dressed=false and
-## the plain theme box's samples.
+## Smoke census of the FIX127 overhaul: the health
+## lights' state words, the exe reason line, the four
+## stateful save labels, the scan area's contents and
+## their standing order inside step 1, the dummy
+## button's absence, the headers' kind, and the pinned
+## bar's structure (Enter exactly once, inside the bar,
+## the bar outside the scroll).
+func fix127_census() -> Dictionary:
+	var folder_states: Array = []
+	for l: Label in _folder_lights:
+		folder_states.append(_light_state(l))
+	var order: Array = []
+	if _step_contents.size() > 0:
+		var step1: VBoxContainer = _step_contents[0]
+		for c: Control in [_scan_button, _stats_label, _scan_ipdb_label, _details_fold.root if _details_fold != null else null, _b2s_label.get_parent() if _b2s_label != null else null, _unplaced_label.get_parent() if _unplaced_label != null else null]:
+			order.append(step1.get_children().find(c) if c != null else -1)
+	var dummy_present: bool = false
+	var enter_count: int = 0
+	var headers_all_labels: bool = true
+	var stack: Array[Node] = [self]
+	while not stack.is_empty():
+		var nd: Node = stack.pop_back() as Node
+		var b: Button = nd as Button
+		if b != null:
+			if b.text.to_lower().contains("dummy"):
+				dummy_present = true
+			if b.text == "Enter LaunchPin VR":
+				enter_count += 1
+		if nd.has_meta("section_header") and not (nd is Label):
+			headers_all_labels = false
+		for ch: Node in nd.get_children():
+			stack.append(ch)
+	return {
+		"exe_light": _light_state(_exe_light),
+		"exe_reason": _exe_reason.text if _exe_reason != null else "",
+		"exe_reason_visible": _exe_reason.visible if _exe_reason != null else false,
+		"folder_lights": folder_states,
+		"db_light": _light_state(_db_light),
+		"wovp_light": _light_state(_wovp_light),
+		"shots_light": _light_state(_shots_light),
+		"pinemhi_light": _light_state(_pinemhi_light),
+		"save_text": _save_button.text if _save_button != null else "",
+		"scan_text": _scan_button.text if _scan_button != null else "",
+		"wovp_save_text": _wovp_save_button.text if _wovp_save_button != null else "",
+		"shots_save_text": _shots_save_button.text if _shots_save_button != null else "",
+		"pinemhi_save_text": _pinemhi_save_button.text if _pinemhi_save_button != null else "",
+		"add_link_text": _add_folder_link.text if _add_folder_link != null else "",
+		"add_link_is_link": _add_folder_link is LinkButton,
+		"dummy_present": dummy_present,
+		"headers_all_labels": headers_all_labels,
+		"enter_count": enter_count,
+		"enter_in_bar": _bottom_bar != null and _enter_button != null and _bottom_bar.is_ancestor_of(_enter_button),
+		"bar_outside_scroll": _bottom_bar != null and _scroll != null and not _scroll.is_ancestor_of(_bottom_bar),
+		"version_in_bar": _bottom_bar != null and _version_label != null and _bottom_bar.is_ancestor_of(_version_label),
+		"scan_ipdb_text": _scan_ipdb_label.text if _scan_ipdb_label != null else "",
+		"scan_block_order": order,
+	}
+
+
+## Smoke census of the desk's dress after FIX127: the
+## section headers are type-only Labels now (found, a
+## label, the plain accent tint, NO panel anywhere), the
+## buttons keep their DESKCOLOR families where they had
+## them, and the furniture the overhaul deleted (the
+## IPDB Re-apply button) reports absent.
 func deskcolor_census() -> Dictionary:
 	var browse_ok: bool = not _browse_buttons.is_empty()
 	for b: Button in _browse_buttons:
@@ -1550,7 +1930,7 @@ func deskcolor_census() -> Dictionary:
 		"browse_all_picker": browse_ok,
 		"browse": _sample_button(_browse_buttons[0] if not _browse_buttons.is_empty() else null),
 		"shots_browse": _sample_button(_shots_browse_button),
-		"add_folder": _sample_button(_add_folder_button),
+		"add_folder": {"found": _add_folder_link != null, "is_link": _add_folder_link is LinkButton, "text": _add_folder_link.text if _add_folder_link != null else ""},
 		"download": _sample_button(_dl_button),
 		"save_key": _sample_button(_wovp_save_button),
 		"test_key": _sample_button(_wovp_test_button),
@@ -1558,9 +1938,9 @@ func deskcolor_census() -> Dictionary:
 		"enter": _sample_button(_enter_button),
 		"open_b2s": _sample_button(_b2s_button),
 		"open_unplaced": _sample_button(_unplaced_button),
-		"shots_save": _sample_button(_find_button("Save screenshots folder")),
-		"pinemhi_save": _sample_button(_find_button("Save PINemHi settings")),
-		"ipdb_apply": _sample_button(_find_button("Re-apply bundled IPDB data")),
+		"shots_save": _sample_button(_shots_save_button),
+		"pinemhi_save": _sample_button(_pinemhi_save_button),
+		"ipdb_apply": {"found": _find_button("Re-apply bundled IPDB data") != null},
 		"advanced_toggle": _sample_button(_advanced_fold.toggle if _advanced_fold != null else null),
 		"details_toggle": _sample_button(_details_fold.toggle if _details_fold != null else null),
 	}
@@ -1583,17 +1963,20 @@ func _sample_button(b: Button) -> Dictionary:
 	return out
 
 
-func _sample_header(p: PanelContainer) -> Dictionary:
-	if p == null:
-		return {"found": false, "mid": Color.TRANSPARENT, "bar": Color.TRANSPARENT, "tint": Color.TRANSPARENT}
-	var out: Dictionary = _sample_stylebox(p.get_theme_stylebox("panel", "PanelContainer"))
-	out["found"] = true
-	out["tint"] = Color.TRANSPARENT
-	for ch: Node in p.get_children():
-		var l: Label = ch as Label
-		if l != null:
-			out["tint"] = l.get_theme_color("font_color", "Label")
-	return out
+## FIX127: a section header sample - after the overhaul
+## a header is a Label and nothing else: found, is_label,
+## its font tint, and has_panel (which must be false -
+## the bar is gone).
+func _sample_header(c: Control) -> Dictionary:
+	if c == null:
+		return {"found": false, "is_label": false, "tint": Color.TRANSPARENT, "has_panel": false}
+	var l: Label = c as Label
+	return {
+		"found": true,
+		"is_label": l != null,
+		"tint": l.get_theme_color("font_color", "Label") if l != null else Color.TRANSPARENT,
+		"has_panel": c is PanelContainer,
+	}
 
 
 ## A patch stylebox's colours: the gradient's middle row
@@ -1609,16 +1992,16 @@ func _sample_stylebox(sb: StyleBox) -> Dictionary:
 	return out
 
 
-func _find_header(text: String) -> PanelContainer:
+## FIX127: find a section header by its words - a header
+## is the Label _section_header made (meta-marked), not
+## a panel any more. Returns the Label as a Control.
+func _find_header(text: String) -> Control:
 	var stack: Array[Node] = [self]
 	while not stack.is_empty():
 		var nd: Node = stack.pop_back() as Node
-		var pc: PanelContainer = nd as PanelContainer
-		if pc != null:
-			for ch: Node in pc.get_children():
-				var l: Label = ch as Label
-				if l != null and l.text == text:
-					return pc
+		var l: Label = nd as Label
+		if l != null and l.text == text and l.has_meta("section_header"):
+			return l
 		for ch: Node in nd.get_children():
 			stack.append(ch)
 	return null

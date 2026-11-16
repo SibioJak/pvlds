@@ -152,6 +152,10 @@ static func _first_match(text: String, pattern: String) -> String:
 ## A missing or unreadable file is an empty cache, not an
 ## error - the backs simply show db rows until the bundled
 ## snapshot seeds it (Main seeds at boot).
+## FIX127: an applied-snapshot marker rides the file too
+## ("snapshot_marker", written by Main's seed) and is
+## carried through here so a load/save round-trip never
+## drops it.
 static func load_cache(path: String = CACHE_PATH) -> Dictionary:
 	var out: Dictionary = {"facts": {}, "failed": {}}
 	if not FileAccess.file_exists(path):
@@ -167,7 +171,21 @@ static func load_cache(path: String = CACHE_PATH) -> Dictionary:
 		out["facts"] = d["facts"]
 	if d.get("failed") is Dictionary:
 		out["failed"] = d["failed"]
+	if d.get("snapshot_marker") is String:
+		out["snapshot_marker"] = d["snapshot_marker"]
 	return out
+
+
+## FIX127: the bundled snapshot's identity - a hash of
+## its facts payload. The desk's Re-apply button is gone;
+## the snapshot applies ITSELF: Main compares the cache's
+## stored marker against this and merges only when they
+## differ (a PVLDS update ships a new snapshot, the hash
+## moves, the merge runs once). JSON stringification of
+## the same parsed file is stable, so the hash is too.
+static func snapshot_marker(snapshot: Dictionary) -> String:
+	var facts: Dictionary = snapshot.get("facts", {}) as Dictionary
+	return str(JSON.stringify(facts).hash())
 
 
 static func save_cache(cache: Dictionary, path: String = CACHE_PATH) -> bool:
