@@ -127,7 +127,9 @@ const FORM_COLUMN_WIDTH: float = 760.0
 ## window pixels. It stands OUTSIDE the scroll (a direct
 ## child of the desk), so the layout pass leaves exactly
 ## this much of the window to it at every factor.
-const BOTTOM_BAR_H: float = 56.0
+## FIX128: 76 now - the bar carries the main door, and
+## the door stands tall in it (Chris's field verdict).
+const BOTTOM_BAR_H: float = 76.0
 
 ## FIX127 (decision 1): the health lights' three inks and
 ## their state words (the census reads the words off the
@@ -1159,26 +1161,42 @@ func _build_ui() -> void:
 	_bottom_bar.add_theme_stylebox_override("panel", bar_box)
 	_bottom_bar.theme = DeskTheme.build()
 	add_child(_bottom_bar)
-	var bar_row: HBoxContainer = HBoxContainer.new()
-	bar_row.add_theme_constant_override("separation", 12)
-	_bottom_bar.add_child(bar_row)
 	# AUTOFIND: the product's name and version, quiet. One
 	# constant, one home (AppInfo); the update check
-	# compares against the same string.
+	# compares against the same string. FIX128: the label
+	# is the bar's own child, spread over the bar's full
+	# width with its text at the left edge - the row below
+	# belongs to Enter alone, so the door can ride the
+	# bar's exact middle (in FIX127 the label and a single
+	# spacer pushed the door into the right corner, where
+	# Chris never spotted it).
 	_version_label = Label.new()
 	_version_label.text = "%s — version %s" % [AppInfo.PRODUCT_NAME, AppInfo.PRODUCT_VERSION]
 	_version_label.add_theme_color_override("font_color", RoomSpecs.STRIP_LABEL_REST)
 	_version_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	bar_row.add_child(_version_label)
-	var bar_spacer: Control = Control.new()
-	bar_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar_row.add_child(bar_spacer)
+	_version_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_bottom_bar.add_child(_version_label)
+	var bar_row: HBoxContainer = HBoxContainer.new()
+	bar_row.add_theme_constant_override("separation", 12)
+	_bottom_bar.add_child(bar_row)
+	var bar_spacer_l: Control = Control.new()
+	bar_spacer_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar_row.add_child(bar_spacer_l)
 	_enter_button = Button.new()
 	# CHECKLIST: the door renamed for the product it opens.
 	_enter_button.text = "Enter LaunchPin VR"
 	_enter_button.disabled = true
 	_enter_button.pressed.connect(func() -> void: enter_room_requested.emit())
+	# FIX128: the main door's presence - wide, standing
+	# the bar's full height, in the desk's largest
+	# button type.
+	_enter_button.custom_minimum_size = Vector2(380, 52)
+	_enter_button.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_enter_button.add_theme_font_size_override("font_size", 22)
 	bar_row.add_child(_enter_button)
+	var bar_spacer_r: Control = Control.new()
+	bar_spacer_r.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar_row.add_child(bar_spacer_r)
 
 	_dialog = FileDialog.new()
 	_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -1854,7 +1872,9 @@ func deskedit_census() -> Dictionary:
 ## their standing order inside step 1, the dummy
 ## button's absence, the headers' kind, and the pinned
 ## bar's structure (Enter exactly once, inside the bar,
-## the bar outside the scroll).
+## the bar outside the scroll; FIX128 adds the door's
+## and the bar's rects so the smoke can judge the door
+## centred and big).
 func fix127_census() -> Dictionary:
 	var folder_states: Array = []
 	for l: Label in _folder_lights:
@@ -1900,6 +1920,8 @@ func fix127_census() -> Dictionary:
 		"headers_all_labels": headers_all_labels,
 		"enter_count": enter_count,
 		"enter_in_bar": _bottom_bar != null and _enter_button != null and _bottom_bar.is_ancestor_of(_enter_button),
+		"enter_rect": _enter_button.get_global_rect() if _enter_button != null else Rect2(),
+		"bar_rect": _bottom_bar.get_global_rect() if _bottom_bar != null else Rect2(),
 		"bar_outside_scroll": _bottom_bar != null and _scroll != null and not _scroll.is_ancestor_of(_bottom_bar),
 		"version_in_bar": _bottom_bar != null and _version_label != null and _bottom_bar.is_ancestor_of(_version_label),
 		"scan_ipdb_text": _scan_ipdb_label.text if _scan_ipdb_label != null else "",

@@ -25654,6 +25654,12 @@ func _desk127_standing_legs() -> void:
 		"enter: exactly one Enter LaunchPin VR button stands")
 	_desk127_expect(bool(cen["enter_in_bar"]) and bool(cen["bar_outside_scroll"]),
 		"enter: it stands in the pinned bar, outside the scroll")
+	var enter_rect: Rect2 = cen["enter_rect"]
+	var bar_rect: Rect2 = cen["bar_rect"]
+	_desk127_expect(absf(enter_rect.get_center().x - bar_rect.get_center().x) <= 4.0,
+		"enter: the door rides the bar's middle (enter centre %.0f, bar centre %.0f)" % [enter_rect.get_center().x, bar_rect.get_center().x])
+	_desk127_expect(enter_rect.size.x >= 300.0 and enter_rect.size.y >= 48.0,
+		"enter: the door stands big, the main door's presence (got %s)" % str(enter_rect.size))
 	_desk127_expect(bool(cen["version_in_bar"]),
 		"enter: the version line rides in the pinned bar")
 	_desk127_expect(str(cen["scan_text"]) == "Scan for Tables",
