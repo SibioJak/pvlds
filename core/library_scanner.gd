@@ -40,6 +40,10 @@ var unplaced_files: Array[String] = [] ## IDENTITY: .vpx files still local: afte
 var inherited_shot_games: int = 0 ## IDENTITY: games whose recorded shot came from inheritance on the last scan (see _inherit_shot).
 var rescued_files: int = 0 ## IDENTITY: files the rescue tier landed on the last scan (also visible in match_tier_counts under "rescue").
 var rom_witness_files: int = 0 ## FIX125: files the ROM witness regrouped on the last scan (also visible in match_tier_counts under "rom").
+var witness_verdicts: Array[String] = [] ## FIX126: every ROM WITNESS VERDICT line the last scan printed, verbatim - the witness speaks for every file it opens, and the scan's log (and any probe) can hold it to its words.
+var _witness_opened: int = 0 ## FIX126: files the witness opened on the last scan (== verdict lines printed == regrouped + kept + abstained).
+var _witness_kept: int = 0 ## FIX126: opened files whose testimony confirmed the filename claim.
+var _witness_abstained: int = 0 ## FIX126: opened files the witness could not conclude from (each with its printed reason).
 var _rom_sibling_cache: Dictionary = {} ## FIX125: game id -> bool, the witness trigger's sibling verdict per claimed game, computed once per scan.
 var _family_index: Dictionary = {} ## FIX125: first name token -> Array of [game id, token stream, ROM key set], built lazily on the scan's first witness question (one tokenization pass over the db, then every family question is a small-group compare - a naive per-file walk of the whole db cost ~11.5 s on the 360-file bench corpus; the index brings the witness's total scan overhead back under the noise).
 var _family_index_built: bool = false
@@ -67,6 +71,10 @@ func scan(folders: Array[String], db: VpsDatabase, progress: ScanProgress = null
 	inherited_shot_games = 0
 	rescued_files = 0
 	rom_witness_files = 0
+	witness_verdicts.clear()
+	_witness_opened = 0
+	_witness_kept = 0
+	_witness_abstained = 0
 	_rom_sibling_cache.clear()
 	_family_index.clear()
 	_family_index_built = false
@@ -149,6 +157,13 @@ func scan(folders: Array[String], db: VpsDatabase, progress: ScanProgress = null
 		# the scan summary's pre-extraction baseline.
 		if entry.art_path != "" or entry.art_source_path.get_extension().to_lower() == "directb2s":
 			art_covered_games += 1
+	# FIX126: the witness's own summary - printed whenever
+	# it opened at least one file, so a scan's log states
+	# the round's whole testimony in one line (and its
+	# absence states the witness never opened a file).
+	if _witness_opened > 0:
+		print("ROM WITNESS SUMMARY: opened %d - regrouped %d, kept %d, abstained %d" % [
+			_witness_opened, rom_witness_files, _witness_kept, _witness_abstained])
 	if progress != null:
 		progress.report_match(files.size())
 		progress.finish()
@@ -508,8 +523,25 @@ static func _fix125_nc() -> String:
 ## Owners outside the family therefore do not block a
 ## verdict, and the target is always a family member -
 ## the file stays within the name its owner gave it.
-## A regroup prints a ROM WITNESS line - a file moved by
-## evidence inside itself must never move silently.
+## FIX126: the witness speaks for EVERY file it opens -
+## one ROM WITNESS VERDICT line per opened file, printed
+## and recorded verbatim on the scan (witness_verdicts):
+## regrouped, kept, or abstained with a plain reason.
+## A field case is diagnosable from the log alone: a
+## verdict line means the witness fired and this is
+## what it concluded; no line at all means a gate above
+## refused the file before it was ever opened.
+func _record_witness_verdict(b: TableBuild, outcome: String, kind: String) -> void:
+	var line: String = "ROM WITNESS VERDICT: '%s' - %s" % [b.file_name, outcome]
+	print(line)
+	witness_verdicts.append(line)
+	_witness_opened += 1
+	if kind == "kept":
+		_witness_kept += 1
+	elif kind == "abstained":
+		_witness_abstained += 1
+
+
 func _rom_witness(b: TableBuild, db: VpsDatabase) -> void:
 	if db == null or not db.loaded or _fix125_nc() == "norom":
 		return
@@ -521,11 +553,15 @@ func _rom_witness(b: TableBuild, db: VpsDatabase) -> void:
 	if not _rom_sibling_exists(db, claimed):
 		return
 	var identity: Dictionary = VpxIdentity.read_identity(b.file_path)
+	if not bool(identity.get("opened", false)):
+		_record_witness_verdict(b, "ABSTAINED: unreadable-file", "abstained")
+		return
 	var rom: String = str(identity.get("rom", ""))
 	if rom != "":
 		var owners: Array[String] = db.rom_owners(rom)
 		if owners.has(claimed):
-			return # the file's testimony confirms the claim
+			_record_witness_verdict(b, "KEPT claim, ROM %s agrees" % rom, "kept")
+			return
 		var my_toks: PackedStringArray = VpsDatabase.scrub_tokens(str(db.game_dict(claimed).get("name", "")))
 		var family: Dictionary = {}
 		for entry_v: Variant in _family_group(db, claimed):
@@ -533,30 +569,49 @@ func _rom_witness(b: TableBuild, db: VpsDatabase) -> void:
 			if _token_family(my_toks, entry[1]):
 				family[str(entry[0])] = true
 		var verdict: String = ""
+		var family_owners: int = 0
 		for oid: String in owners:
 			if family.has(oid):
-				if verdict != "":
-					return # two family owners - ambiguous
+				family_owners += 1
 				verdict = oid
-		if verdict != "":
+		if family_owners > 1:
+			_record_witness_verdict(b, "ABSTAINED: rom-shared-in-family", "abstained")
+			return
+		if family_owners == 1:
 			_apply_rom_verdict(b, db, verdict, "ROM " + rom)
+			_record_witness_verdict(b, "REGROUPED to %s via ROM %s" % [verdict, rom], "regrouped")
+			return
+		_record_witness_verdict(b, "ABSTAINED: rom-not-in-family", "abstained")
+		return
+	var rom_status: String = str(identity.get("rom_status", ""))
+	if rom_status == VpxIdentity.ROM_MULTIPLE:
+		_record_witness_verdict(b, "ABSTAINED: multiple-live-roms", "abstained")
+		return
+	if rom_status == VpxIdentity.ROM_VARIABLE:
+		_record_witness_verdict(b, "ABSTAINED: variable-held-unreadable", "abstained")
 		return
 	var tname: String = str(identity.get("table_name", ""))
-	if tname != "":
-		var want: String = VpsDatabase.normalize_name(tname)
-		if want != "":
-			var hits: Array[String] = db.find_game_ids_by_name(want)
-			if hits.size() == 1 and hits[0] != claimed:
-				_apply_rom_verdict(b, db, hits[0], "internal name '" + tname + "'")
+	if tname == "":
+		_record_witness_verdict(b, "ABSTAINED: no-rom-in-script", "abstained")
+		return
+	var want: String = VpsDatabase.normalize_name(tname)
+	var hits: Array[String] = []
+	if want != "":
+		hits = db.find_game_ids_by_name(want)
+	if hits.size() == 1 and hits[0] != claimed:
+		_apply_rom_verdict(b, db, hits[0], "internal name '" + tname + "'")
+		_record_witness_verdict(b, "REGROUPED to %s via internal name '%s'" % [hits[0], tname], "regrouped")
+		return
+	if hits.size() == 1 and hits[0] == claimed:
+		_record_witness_verdict(b, "KEPT claim, internal name agrees", "kept")
+		return
+	_record_witness_verdict(b, "ABSTAINED: table-name-ambiguous", "abstained")
 
 
 ## The regroup itself: the within-game ladder under the
-## ROM's record, tier "rom", with the move printed.
+## ROM's record, tier "rom". (The move is announced by
+## the caller's ROM WITNESS VERDICT line - FIX126.)
 func _apply_rom_verdict(b: TableBuild, db: VpsDatabase, owner: String, evidence: String) -> void:
-	var claimed_name: String = str(db.game_dict(b.game_key).get("name", ""))
-	var owner_name: String = str(db.game_dict(owner).get("name", ""))
-	print("ROM WITNESS: '%s' - filename claimed '%s' (%s); %s belongs to '%s' (%s) - regrouped" % [
-		b.file_name, claimed_name, b.game_key, evidence, owner_name, owner])
 	_finish_game_match(b, db, owner, "rom", _guess_version(b.file_name))
 	rom_witness_files += 1
 
