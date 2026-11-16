@@ -39,6 +39,10 @@ var missing_b2s_files: Array[String] = [] ## .vpx files with no same-stem .direc
 var unplaced_files: Array[String] = [] ## IDENTITY: .vpx files still local: after every tier, rescue included - the "files I couldn't place" list's raw material (see UnplacedFilesList).
 var inherited_shot_games: int = 0 ## IDENTITY: games whose recorded shot came from inheritance on the last scan (see _inherit_shot).
 var rescued_files: int = 0 ## IDENTITY: files the rescue tier landed on the last scan (also visible in match_tier_counts under "rescue").
+var rom_witness_files: int = 0 ## FIX125: files the ROM witness regrouped on the last scan (also visible in match_tier_counts under "rom").
+var _rom_sibling_cache: Dictionary = {} ## FIX125: game id -> bool, the witness trigger's sibling verdict per claimed game, computed once per scan.
+var _family_index: Dictionary = {} ## FIX125: first name token -> Array of [game id, token stream, ROM key set], built lazily on the scan's first witness question (one tokenization pass over the db, then every family question is a small-group compare - a naive per-file walk of the whole db cost ~11.5 s on the 360-file bench corpus; the index brings the witness's total scan overhead back under the noise).
+var _family_index_built: bool = false
 
 var _version_re: RegEx = null
 var _witness_re: RegEx = null ## IDENTITY: like _version_re but tolerates a trailing letter ("1.08a") - the version witness's net.
@@ -62,6 +66,10 @@ func scan(folders: Array[String], db: VpsDatabase, progress: ScanProgress = null
 	unplaced_files.clear()
 	inherited_shot_games = 0
 	rescued_files = 0
+	rom_witness_files = 0
+	_rom_sibling_cache.clear()
+	_family_index.clear()
+	_family_index_built = false
 	if progress != null:
 		progress.begin("collecting", folders.size())
 	var files: Array[String] = []
@@ -272,6 +280,7 @@ func _make_build(path: String, db: VpsDatabase) -> TableBuild:
 	_match_build(b, db)
 	if b.match_tier == "rescue":
 		rescued_files += 1
+	_rom_witness(b, db)
 	return b
 
 
@@ -309,20 +318,55 @@ func _match_build(b: TableBuild, db: VpsDatabase) -> void:
 					claimant_games[cg] = true
 		if claimant_games.size() == 1:
 			var slug_game_id: String = str(claimant_games.keys()[0])
-			var only_tf: Dictionary = {}
-			if claimants.size() == 1:
-				for item2: Variant in claimants:
-					if item2 is Dictionary:
-						var cd2: Dictionary = item2
-						var tfv: Variant = cd2.get("table_file", {})
-						if tfv is Dictionary:
-							only_tf = tfv
-			if not only_tf.is_empty() and (version_guess == "" or version_guess == str(only_tf.get("version", ""))):
-				_apply_table_file(b, slug_game_id, only_tf)
-				b.match_tier = "slug"
+			# FIX125 (the Batman class): the slug road's sole
+			# claimant is refereed, like every other road's
+			# candidates. The key sheds maker+year on BOTH
+			# sides by design, so a shed key can be claimed by
+			# the wrong same-name game outright - "Batman [The
+			# Dark Knight] (Stern 2008)" keys as "batman", and
+			# the Data East 1991 build's slug sheds to the same
+			# key, so the road build-matched a Stern file to
+			# the 1991 game at full confidence, and the
+			# refereed roads below never ran. The referee is
+			# the per-game unit every road ends at
+			# (_meta_consistent: a paren year vetoes a game
+			# whose year disagrees, maker tokens must overlap
+			# when both sides state them) - NOT
+			# _referee_survivors' set-level engagement gloss,
+			# whose premise fails here: with a sole claimant
+			# there is no rival in the set whose maker could
+			# engage the paren, so the gloss would judge the
+			# paren "not evidence" and pass the wrong game
+			# forever. Scope, deliberately: the referee judges
+			# only the sole-claimant claim. A key claimed by
+			# TWO games stays ambiguous and falls through
+			# untouched, exactly as before - separating
+			# colliding twins is the refereed roads' standing
+			# work (the core fixture pins it). And a claimant
+			# vetoed here is not convicted: the chain
+			# continues, and a later road's referee judges it
+			# in a set that can engage it (the "(Original
+			# 2022)" shape still lands via those roads, as it
+			# always has). No stated paren fact -> the unit
+			# passes -> the road behaves exactly as before.
+			if _fix125_nc() == "noslugref" or _meta_consistent(db, slug_game_id, b.file_name):
+				var only_tf: Dictionary = {}
+				if claimants.size() == 1:
+					for item2: Variant in claimants:
+						if item2 is Dictionary:
+							var cd2: Dictionary = item2
+							var tfv: Variant = cd2.get("table_file", {})
+							if tfv is Dictionary:
+								only_tf = tfv
+				if not only_tf.is_empty() and (version_guess == "" or version_guess == str(only_tf.get("version", ""))):
+					_apply_table_file(b, slug_game_id, only_tf)
+					b.match_tier = "slug"
+					return
+				_finish_game_match(b, db, slug_game_id, "slug", version_guess)
 				return
-			_finish_game_match(b, db, slug_game_id, "slug", version_guess)
-			return
+			# The sole claimant positively disagrees with the
+			# file's own stated maker/year: the slug road does
+			# not land - the chain continues to the name road.
 		# 2) Game by title (with/without a leading "The").
 		var game_id: String = _match_game_id(db, title_guess, b.file_name)
 		if game_id != "":
@@ -402,6 +446,193 @@ func _finish_game_match(b: TableBuild, db: VpsDatabase, game_id: String, tier: S
 ## stand shotless). Production runs with the env unset.
 static func _identity_nc() -> String:
 	return OS.get_environment("PVLDS_IDENTITY_NC")
+
+
+## The FIX125 round's negative-control seam, read the same
+## way: "noslugref" restores the pre-FIX125 slug road (no
+## referee - the Batman fixture build-matches the wrong
+## game again), "norom" disables the ROM witness (the
+## Spider-Man fixture stays on the base record).
+## Production runs with the env unset.
+static func _fix125_nc() -> String:
+	return OS.get_environment("PVLDS_FIX125_NC")
+
+
+## FIX125 (the Spider-Man class): the ROM witness. The
+## filename chain can be told a lie no referee can catch -
+## a shipped .vpx that kept another record's name, so the
+## filename honestly describes a DIFFERENT real build of a
+## sibling record (the field case: the Vault Edition
+## tourney table shipping as "Spider-Man Classic (Stern
+## 2007) VPW Mod 2.1", the base record's own Classic mod's
+## name). The one witness that separates the records is
+## inside the file: the ROM its script declares (the two
+## records' db romFiles are disjoint - smanve_101 vs
+## sman_261).
+##
+## The witness is deliberately narrow - it opens a file
+## ONLY when the claim is genuinely contested:
+##   * the chain claimed a db game at GAME level only. A
+##     build-exact match is the db's own record of that
+##     very file (its download slug, its version) and is
+##     never second-guessed;
+##   * the claimed game has a name-family sibling in the
+##     db (one name's token stream a prefix of the
+##     other's, or equal) whose ROM name set DIFFERS from
+##     the claimed game's - only then can a ROM reading
+##     separate the claim from a sibling's.
+## Everything else - the overwhelming majority of any
+## library - is never opened, exactly as before.
+##
+## Verdicts (all conservative; silence unless one fires):
+##   * the file's ROM belongs, among the records this
+##     filename could mean (the claimed record's name
+##     family), to exactly ONE other record -> the ROM
+##     wins: the build regroups under that record
+##     through the within-game ladder (tier "rom"), so
+##     its stated version can still build-match there;
+##   * the ROM is in no record's romFiles, is shared by
+##     several records OF THE FAMILY, or confirms the
+##     claimed game -> nothing changes;
+##   * the file declares no ROM -> its internal table
+##     name is the fallback witness, and regroups only
+##     when it uniquely names exactly one other game.
+## Uniqueness is judged INSIDE the contest, not globally:
+## the db shares smanve_101 between the Vault Edition
+## record and "JP's Spider-Man" (Original 2018), an
+## unrelated original table emulating the same machine -
+## globally the field ROM is "shared" and a global rule
+## would leave the convicted case broken forever. Inside
+## the family the VE record is its only owner, and JP's
+## record is not a record this filename could mean.
+## Owners outside the family therefore do not block a
+## verdict, and the target is always a family member -
+## the file stays within the name its owner gave it.
+## A regroup prints a ROM WITNESS line - a file moved by
+## evidence inside itself must never move silently.
+func _rom_witness(b: TableBuild, db: VpsDatabase) -> void:
+	if db == null or not db.loaded or _fix125_nc() == "norom":
+		return
+	if b.matched_db or b.game_key == "" or b.game_key.begins_with("local:"):
+		return
+	if not db.games_by_id.has(b.game_key):
+		return
+	var claimed: String = b.game_key
+	if not _rom_sibling_exists(db, claimed):
+		return
+	var identity: Dictionary = VpxIdentity.read_identity(b.file_path)
+	var rom: String = str(identity.get("rom", ""))
+	if rom != "":
+		var owners: Array[String] = db.rom_owners(rom)
+		if owners.has(claimed):
+			return # the file's testimony confirms the claim
+		var my_toks: PackedStringArray = VpsDatabase.scrub_tokens(str(db.game_dict(claimed).get("name", "")))
+		var family: Dictionary = {}
+		for entry_v: Variant in _family_group(db, claimed):
+			var entry: Array = entry_v
+			if _token_family(my_toks, entry[1]):
+				family[str(entry[0])] = true
+		var verdict: String = ""
+		for oid: String in owners:
+			if family.has(oid):
+				if verdict != "":
+					return # two family owners - ambiguous
+				verdict = oid
+		if verdict != "":
+			_apply_rom_verdict(b, db, verdict, "ROM " + rom)
+		return
+	var tname: String = str(identity.get("table_name", ""))
+	if tname != "":
+		var want: String = VpsDatabase.normalize_name(tname)
+		if want != "":
+			var hits: Array[String] = db.find_game_ids_by_name(want)
+			if hits.size() == 1 and hits[0] != claimed:
+				_apply_rom_verdict(b, db, hits[0], "internal name '" + tname + "'")
+
+
+## The regroup itself: the within-game ladder under the
+## ROM's record, tier "rom", with the move printed.
+func _apply_rom_verdict(b: TableBuild, db: VpsDatabase, owner: String, evidence: String) -> void:
+	var claimed_name: String = str(db.game_dict(b.game_key).get("name", ""))
+	var owner_name: String = str(db.game_dict(owner).get("name", ""))
+	print("ROM WITNESS: '%s' - filename claimed '%s' (%s); %s belongs to '%s' (%s) - regrouped" % [
+		b.file_name, claimed_name, b.game_key, evidence, owner_name, owner])
+	_finish_game_match(b, db, owner, "rom", _guess_version(b.file_name))
+	rom_witness_files += 1
+
+
+## The scan's family index, built once on first use:
+## game ids grouped by their name's first scrub token,
+## each entry [game id, token stream, ROM key set].
+## Family (prefix) relations only exist inside a
+## first-token group, so every family question becomes a
+## small-group compare instead of a whole-db walk per
+## file - the walk cost ~11.5 s on the 360-file bench
+## corpus (a fresh tokenization of all 2,669 names for
+## every distinct claimed game); the index pays one
+## tokenization pass per scan and compares after that.
+func _family_group(db: VpsDatabase, game_id: String) -> Array:
+	if not _family_index_built:
+		_family_index_built = true
+		for gid_v: Variant in db.games_by_id.keys():
+			var gid: String = str(gid_v)
+			var toks: PackedStringArray = VpsDatabase.scrub_tokens(str(db.game_dict(gid).get("name", "")))
+			if toks.is_empty():
+				continue
+			var roms: Dictionary = {}
+			for k: String in db.rom_keys_of(gid):
+				roms[k] = true
+			var group: Array = _family_index.get(toks[0], [])
+			group.append([gid, toks, roms])
+			_family_index[toks[0]] = group
+	var my_toks: PackedStringArray = VpsDatabase.scrub_tokens(str(db.game_dict(game_id).get("name", "")))
+	if my_toks.is_empty():
+		return []
+	return _family_index.get(my_toks[0], [])
+
+
+## Whether the claimed game has a name-family sibling
+## whose ROM set differs from its own - the trigger's
+## contest test, cached per game per scan.
+func _rom_sibling_exists(db: VpsDatabase, game_id: String) -> bool:
+	if _rom_sibling_cache.has(game_id):
+		return bool(_rom_sibling_cache[game_id])
+	var verdict: bool = false
+	var my_toks: PackedStringArray = VpsDatabase.scrub_tokens(str(db.game_dict(game_id).get("name", "")))
+	if not my_toks.is_empty():
+		var my_roms: Dictionary = {}
+		for k: String in db.rom_keys_of(game_id):
+			my_roms[k] = true
+		for entry_v: Variant in _family_group(db, game_id):
+			var entry: Array = entry_v
+			if str(entry[0]) == game_id:
+				continue
+			if _token_family(my_toks, entry[1]) and not _same_key_set(my_roms, entry[2]):
+				verdict = true
+				break
+	_rom_sibling_cache[game_id] = verdict
+	return verdict
+
+
+## Name-family: one token stream is a prefix of the other
+## (or they are equal) - the edition-sibling shape
+## ("Spider-Man" / "Spider-Man (Vault Edition)") and the
+## same-name twin shape alike.
+static func _token_family(a: PackedStringArray, b: PackedStringArray) -> bool:
+	var n: int = mini(a.size(), b.size())
+	for i: int in range(n):
+		if a[i] != b[i]:
+			return false
+	return true
+
+
+static func _same_key_set(a: Dictionary, b: Dictionary) -> bool:
+	if a.size() != b.size():
+		return false
+	for k: Variant in a.keys():
+		if not b.has(k):
+			return false
+	return true
 
 
 ## ---------------------------------------------------------------

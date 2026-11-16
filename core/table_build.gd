@@ -30,7 +30,7 @@ var first_seen_unix: int = 0 ## When this file first appeared in a scan (seeded 
 var last_changed_unix: int = 0 ## When this file's mtime/size signature last changed between scans.
 var features: PackedStringArray = PackedStringArray()
 var matched_db: bool = false ## True when this exact build exists in the VPS db.
-var match_tier: String = "" ## How the scan identified this build's game: "slug" (the db's download-page slug for the build) | "name" (title) | "scrubbed" (cleaned title) | "edition" (full name, edition words included) | "local" (db does not know it). "" until matched.
+var match_tier: String = "" ## How the scan identified this build's game: "slug" (the db's download-page slug for the build) | "name" (title) | "scrubbed" (cleaned title) | "edition" (full name, edition words included) | "rescue" (smeared-evidence roads) | "rom" (FIX125: regrouped by the ROM witness - the ROM inside the file outranked its filename claim) | "local" (db does not know it). "" until matched.
 
 
 func display_version() -> String:

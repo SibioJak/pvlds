@@ -22,6 +22,7 @@ var _games_by_edition_key: Dictionary = {} ## edition key (full name, edition wo
 var _games_by_squish_key: Dictionary = {} ## IDENTITY rescue: joined-letters key (scrub tokens concatenated, NO author removal) of a db game name -> Array of game ids
 var _games_by_initials: Dictionary = {} ## IDENTITY rescue: initials of a db game's name tokens (names of 3+ tokens) -> Array of game ids
 var _builds_by_version: Dictionary = {} ## IDENTITY rescue: a VPX table file's exact version string -> Array of {game_id, table_file}
+var _games_by_rom: Dictionary = {} ## FIX125 (ROM witness): a game's romFiles carry the ROM name as their "version" ("smanve_101") -> rom key -> Array of game ids carrying it (a name can be shared by several games - clones and re-releases - and the index keeps them all so the caller can count the owners)
 var loaded: bool = false
 var source_path: String = ""
 
@@ -436,6 +437,7 @@ func load_db(path: String) -> bool:
 	_games_by_squish_key.clear()
 	_games_by_initials.clear()
 	_builds_by_version.clear()
+	_games_by_rom.clear()
 	if path == "" or not FileAccess.file_exists(path):
 		return false
 	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
@@ -463,6 +465,26 @@ func load_db(path: String) -> bool:
 		if gid == "":
 			continue
 		games_by_id[gid] = game
+		# FIX125: the rom index - each game's romFiles name the
+		# ROM(s) the physical table runs, in their "version"
+		# field. Indexed per game once (a game can list the
+		# same ROM twice - the VE record lists smanve_101 in
+		# two romFiles - and must still count as ONE owner).
+		var rom_seen: Dictionary = {}
+		var roms_v: Variant = game.get("romFiles", [])
+		if roms_v is Array:
+			var rom_list: Array = roms_v
+			for rom_item: Variant in rom_list:
+				if rom_item is Dictionary:
+					var rk: String = rom_key(str((rom_item as Dictionary).get("version", "")))
+					if rk != "" and not rom_seen.has(rk):
+						rom_seen[rk] = true
+						var owners: Array = []
+						var existing_owners: Variant = _games_by_rom.get(rk, [])
+						if existing_owners is Array:
+							owners = existing_owners
+						owners.append(gid)
+						_games_by_rom[rk] = owners
 		var norm: String = VpsDatabase.normalize_name(str(game.get("name", "")))
 		if norm != "":
 			var ids: Array = []
@@ -725,3 +747,55 @@ func find_builds_by_version(version: String) -> Array:
 	if v is Array:
 		return v
 	return []
+
+
+## FIX125 (ROM witness): a ROM name's key - lowercased, with
+## only the characters ROM names are spelled in kept
+## (letters, digits, underscore: "smanve_101"). Both sides of
+## the comparison (a db romFile's "version", a table script's
+## declared cGameName) reduce through this, so case and
+## spelling noise cannot split one ROM into two keys.
+static func rom_key(s: String) -> String:
+	var out: String = ""
+	var lowered: String = s.strip_edges().to_lower()
+	for i: int in range(lowered.length()):
+		var code: int = lowered.unicode_at(i)
+		if (code >= 97 and code <= 122) or (code >= 48 and code <= 57) or code == 95:
+			out += lowered[i]
+	return out
+
+
+## FIX125 (ROM witness): the game ids whose romFiles carry
+## this ROM name. Empty when no record knows the ROM; more
+## than one when records share it (188 of the fixture db's
+## 673 ROM names are shared). The witness judges
+## uniqueness inside the claimed record's name family -
+## see LibraryScanner._rom_witness for why the contest,
+## not the globe, is the frame.
+func rom_owners(rom: String) -> Array[String]:
+	var out: Array[String] = []
+	var key: String = rom_key(rom)
+	if key == "":
+		return out
+	var v: Variant = _games_by_rom.get(key, [])
+	if v is Array:
+		var arr: Array = v
+		for item: Variant in arr:
+			out.append(str(item))
+	return out
+
+
+## FIX125 (ROM witness): the ROM name keys one game carries
+## (its romFiles' versions, reduced and deduplicated).
+func rom_keys_of(game_id: String) -> Array[String]:
+	var out: Array[String] = []
+	var g: Dictionary = game_dict(game_id)
+	var roms_v: Variant = g.get("romFiles", [])
+	if roms_v is Array:
+		var rom_list: Array = roms_v
+		for rom_item: Variant in rom_list:
+			if rom_item is Dictionary:
+				var rk: String = rom_key(str((rom_item as Dictionary).get("version", "")))
+				if rk != "" and not out.has(rk):
+					out.append(rk)
+	return out

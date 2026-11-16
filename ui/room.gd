@@ -1161,6 +1161,8 @@ static var debug_compose_nc: String = ""
 ## fail by name. Empty in every real run.
 static var debug_fix124_nc: String = ""
 
+var _tournament_miss_logged: Dictionary = {} ## FIX125: challenge ids whose TOURNAMENT MISS line has already printed in this room - the match runs on every tournament rebuild and again for the border map, and a miss must be readable in the log, not spammed by it
+
 var _border_shader: Shader = null ## the tournie border's one shader (GRADFIX8 item 4)
 var _border_mats: Dictionary = {} ## type_code -> ShaderMaterial: ONE shared material per challenge type, its colour baked in; every bordered card of that type draws with it (TIME-driven, no per-card material, no per-frame CPU)
 var _bg_root: Node3D = null ## the background stack's holder (a Room child - world-locked; the drum is its only moving neighbour)
@@ -3262,7 +3264,21 @@ func _match_challenge(ch: WovpChallenge) -> GameEntry:
 	# Stern 2008, Spider-Man Vault Edition, 2026-11-15:
 	# owned tables flagged NOT IN YOUR LIBRARY). Second
 	# chance: the identity the challenge itself carries.
-	return _match_challenge_by_identity(ch)
+	var by_identity: GameEntry = _match_challenge_by_identity(ch)
+	if by_identity != null:
+		return by_identity
+	# FIX125: both joins missed. Until now every miss path
+	# was silent - the field log could not distinguish
+	# "the fallback never ran" from "ran, no candidate"
+	# from "ran, ambiguous" (INVESTIGATION2). One line per
+	# challenge, carrying the wanted identity, so the next
+	# field case is readable from the log alone.
+	if not _tournament_miss_logged.has(ch.challenge_id):
+		_tournament_miss_logged[ch.challenge_id] = true
+		print("TOURNAMENT MISS: challenge %s (%s, %s %d, ext %s) matched no library game" % [
+			ch.challenge_id, ch.table_name, ch.table_manufacturer, ch.table_year,
+			ch.table_external_id if ch.table_external_id != "" else "-"])
+	return null
 
 
 ## FIX124: the fallback join - the challenge's own
