@@ -1211,6 +1211,8 @@ var _board_tex_cache: Dictionary = {} ## standing key -> Texture2D: real board c
 var _board_heal_msec: int = 0 ## the board heal's throttle stamp (one sweep per BOARD_TEX_RETRY_MS)
 var _board_fill_busy: bool = false ## a tournament board fill pass is running (request coalescing, like the window fill)
 var _board_fill_dirty: bool = false
+var _state_fill_busy: bool = false ## FIX136: a tournament state-face fill pass is running (same coalescing as the board fill)
+var _state_fill_dirty: bool = false
 const BOARD_TEX_MAX_RETRIES: int = 5 ## the blank-face heal's bound per standing key
 const BOARD_TEX_RETRY_MS: int = 600 ## the heal's minimum interval between re-renders
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
@@ -6227,9 +6229,20 @@ func _fill_wall_textures(gen: int) -> void:
 				bench_renders += 1
 				var spx: Vector2i = Vector2i(maxi(96, int(round(float(_rail_def_w.get(k, 0.2)) * RAIL_STRIP_PX_PER_M))), int(round(RAIL_TILE_H * RAIL_STRIP_PX_PER_M)))
 				var stex: Texture2D = await _factory.render_texture(RoomSpecs.strip_section_spec(label, accent, lifted_v, k != _rail_last_key), spx)
+				# FIX136: cache the completed capture BEFORE the
+				# gen check. The texture is keyed by content
+				# (label/accent/lift), not by gen - a rebuild
+				# landing mid-capture used to throw the finished
+				# render away, so the entry-time rebuild pile-up
+				# re-rendered the same strip sections endlessly
+				# through the one serial factory and the entry
+				# frames paid for every duplicate. The gen still
+				# guards the APPLY below (the standing wall may
+				# have moved on); it no longer discards the work.
+				if stex != null:
+					_rail_tex_cache[sck] = stex
 				if gen != _gen:
 					return
-				_rail_tex_cache[sck] = stex
 			_apply_rail_texture_for(k)
 			continue
 		var ck: String = _rail_cache_key(label, accent)
@@ -6238,9 +6251,13 @@ func _fill_wall_textures(gen: int) -> void:
 			continue
 		bench_renders += 1
 		var btex: Texture2D = await _factory.render_texture(RoomSpecs.button_spec(label, accent), Vector2i(512, 150))
+		# FIX136: cache before the gen check, as at the strip
+		# sections above - the capture is content-keyed and
+		# stays valid for every later wall.
+		if btex != null:
+			_rail_tex_cache[ck] = btex
 		if gen != _gen:
 			return
-		_rail_tex_cache[ck] = btex
 		quad.set_texture(btex)
 	# Strip slots THIRD - same furniture family as the rail:
 	# cache hits already dressed in _refresh_strip; a
@@ -6266,9 +6283,13 @@ func _fill_wall_textures(gen: int) -> void:
 		var spx: Vector2i = Vector2i(500, 250) if skey == "THE" else Vector2i(229, 250) ## the Console pads' own aspect (pass 2: 0.170/0.085 and 0.078/0.085), so the glyphs are not stretched (GRADFIX5's rule, GRADFIX6's numbers)
 		bench_renders += 1
 		var stex: Texture2D = await _factory.render_texture(RoomSpecs.letter_spec(str(ls[0]), str(ls[1])), spx)
+		# FIX136: cache before the gen check, as at the rail
+		# sites above - a discarded letter render is paid for
+		# again by the next rebuild through the serial factory.
+		if stex != null:
+			_strip_tex_cache[sck] = stex
 		if gen != _gen:
 			return
-		_strip_tex_cache[sck] = stex
 		squad.set_texture(stex)
 		_strip_worn_state[skey] = str(ls[1]) ## NEXTROUND (item 1): the worn-state record
 	var bench_t_furniture: int = Time.get_ticks_msec()
@@ -7822,6 +7843,28 @@ func landing_census() -> Dictionary:
 ## through _fill_one_face; a challenge's scoreboard stands
 ## on its card's back (the flip - see _render_card_back).
 func _fill_tournament_state_faces(gen: int) -> void:
+	# FIX136: coalesced like the board fill. Every rebuild
+	# used to start its own parallel pass, and the passes
+	# stacked duplicate captures of the same few faces in
+	# the serial factory queue - worst exactly at entry,
+	# where the pushes rebuild several times in seconds. A
+	# request landing mid-pass now marks dirty and returns;
+	# the pass's end re-runs once at the standing gen if it
+	# was dirtied. A caller that awaits this still awaits
+	# the pass it started (or returns promptly when its
+	# request was coalesced into the dirty re-run).
+	if _state_fill_busy:
+		_state_fill_dirty = true
+		return
+	_state_fill_busy = true
+	await _run_state_face_pass(gen)
+	_state_fill_busy = false
+	if _state_fill_dirty:
+		_state_fill_dirty = false
+		_fill_tournament_state_faces(_gen)
+
+
+func _run_state_face_pass(gen: int) -> void:
 	for i: int in range(_panels.size()):
 		var row: Dictionary = _tournament_rows[i]
 		var kind: String = str(row.get("kind", ""))
@@ -8016,7 +8059,14 @@ func _run_tournament_board_fill() -> void:
 			break
 		await _render_tournament_board(idx)
 	_board_fill_busy = false
-	if _board_fill_dirty and gen == _gen:
+	# FIX136: the re-run no longer requires the pass's gen to
+	# still stand. A request that landed mid-pass came from
+	# the NEWER rebuild - dropping its re-run because the gen
+	# moved (the very thing the request announced) left the
+	# newer wall's boards unrendered with no request pending
+	# anywhere. The re-run reads the standing gen at its own
+	# start, like every other coalesced fill.
+	if _board_fill_dirty and _tournament:
 		_run_tournament_board_fill()
 
 
@@ -8064,6 +8114,7 @@ func _render_tournament_board(idx: int) -> void:
 		book["tex_real"] = true
 		return
 	book["render_key"] = key
+	book["attempt_key"] = key ## FIX136: a render was attempted under this key (the heal's budget reads it)
 	var spec: Dictionary = RoomSpecs.tournament_board_spec(
 		ch, bool(row.get("owned", false)), _wovp_user_id, int(Time.get_unix_time_from_system()),
 		bool(row.get("build_owned", false)),
@@ -8135,6 +8186,7 @@ func _heal_tournament_boards() -> void:
 			book["tex_key"] = ""
 			book["tex_real"] = false
 			book["render_key"] = ""
+			book["attempt_key"] = ""
 			book["retry_key"] = ""
 			book["retries"] = 0
 			book["retry_msec"] = 0
@@ -8148,6 +8200,18 @@ func _heal_tournament_boards() -> void:
 		if str(book.get("tex_key", "")) == key and bool(book.get("tex_real", false)):
 			continue
 		if str(book.get("render_key", "")) != "":
+			continue
+		if str(book.get("attempt_key", "")) != key:
+			# FIX136: no render has been attempted under this
+			# key yet - the board is not failed, it is QUEUED
+			# behind the one serial factory. Ask for a pass
+			# WITHOUT spending the retry budget: the budget
+			# bounds re-renders of captures that were attempted
+			# and still left the board unreal. On a slow GPU
+			# the queue alone used to burn all five retries
+			# (one per heal sweep) while the first board's
+			# capture crawled, abandoning the rest for good.
+			needs_pass = true
 			continue
 		if str(book.get("retry_key", "")) != key:
 			book["retry_key"] = key

@@ -21847,11 +21847,17 @@ func _fix135_refresh() -> void:
 		2:
 			# The boot fetch (the stub's v1 generation) must
 			# land the v1 contests before the wall is judged.
+			# FIX136: the board spec's score rows carry the
+			# player name under "name_text" (the field every
+			# other reader uses - fix134's legs, the room
+			# legs); this wait read "name", which no spec row
+			# carries, so it could never satisfy and the stage
+			# died on the deadline with the fetch long landed.
 			_fix135_wait += 1
 			var spec: Dictionary = _fix134_spec("main")
 			if not spec.is_empty():
 				var first: Dictionary = _fix134_first_score(spec)
-				if str(first.get("name", "")) == "AlphaOne":
+				if str(first.get("name_text", "")) == "AlphaOne":
 					_pinemhi2_expect(true, "fix135 refresh: the boot fetch stands the v1 standings on the wall")
 					_fix135_wait = 0
 					_pinemhi2_smoke_phase = 3
@@ -21887,7 +21893,7 @@ func _fix135_refresh() -> void:
 			var spec: Dictionary = _fix134_spec("main")
 			if not spec.is_empty():
 				var first: Dictionary = _fix134_first_score(spec)
-				if str(first.get("name", "")) == "BravoTwo":
+				if str(first.get("name_text", "")) == "BravoTwo":
 					_pinemhi2_expect(true, "fix135 refresh: a real REFRESH press moved the main board to the v2 standings")
 					_fix135_wait = 0
 					_pinemhi2_smoke_phase = 6
