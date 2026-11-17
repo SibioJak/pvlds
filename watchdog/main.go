@@ -121,7 +121,7 @@ import (
 // session header line alongside the launcher version the
 // contract carries, so a field log names both halves of the
 // pair that produced it.
-const WatchdogVersion = "1.1.18"
+const WatchdogVersion = "1.1.19"
 
 type Contract struct {
 	Version int  `json:"version"`
@@ -157,9 +157,11 @@ type Contract struct {
 	// check-in / launch write, like FocusHerding above.
 	// PinemhiWatcherPID + PinemhiWatcherState are owned by
 	// THIS process: "" = un-owned, "started" = PVLDS started
-	// the watcher (and closes it when the session's life ends,
-	// or at true exit inside that life), "adopted" = a watcher
-	// was already running (used, never closed). All
+	// the watcher at the run's first session, "adopted" = a
+	// watcher was already running then and the run took it
+	// over. Under APPRUN (2026-11-17) either state lives for
+	// the whole app run and is closed at true app exit - the
+	// deferred close in main() - never at a table's end. All
 	// four ride every merged write so neither side's writes
 	// ever drop the other's facts. Absent in contracts written
 	// before the fields existed: manage=false, state="" -
@@ -213,6 +215,7 @@ const (
 	maxStrikes        = 3     // fast-death strikes before disarm + exit
 	staleTimeoutSec   = 86400 // 24h without a launcher check-in
 	settleWindowSec   = 30    // herding is most active right after spawn
+	contractGoneTicks = 3     // consecutive missing-contract polls before "contract file gone" is believed (~1.2s)
 )
 
 var (
@@ -415,10 +418,14 @@ func main() {
 	os.WriteFile(lockPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
 	defer os.Remove(lockPath)
 	// PINemHi exit close (pinemhi.go): registered once the lock
-	// is held - i.e. this process IS the session's watchdog -
-	// and deferred past every return below, so disarm, contract
-	// gone, stale watch and the loop cap all count as TRUE exit
-	// and close a watcher PVLDS started. (The twin-instance
+	// is held - i.e. this process IS the run's watchdog - and
+	// deferred past every return below. Under APPRUN every
+	// stand-down path means the app itself is gone (disarm is
+	// written only by a launcher quitting in the same breath;
+	// the stale watch needs the launcher dead; a contract gone
+	// for good has passed the debounce below), so standing
+	// down IS the true app exit, and the close covers a
+	// started or adopted watcher alike. (The twin-instance
 	// return above never reaches here: a twin owns nothing.)
 	defer closePinemhiWatcher()
 	logf("watchdog: on duty (pid %d), contract %s", os.Getpid(), contractPath)
@@ -448,7 +455,8 @@ func main() {
 		actRuntimeMs      int64             // first tick the session's runtime stamp was observed (the focus sequence's anchor)
 		pinemhiMissingLog bool              // the manage-on-but-no-exe line has been logged this duty spell (no retry spam)
 		pinemhiLatch      pinemhiStartLatch // WATCHERFIX: a failed watcher start logs once per spell, then latches
-		pinemhiLife       pinemhiLifetime   // WATCHERLIFE: the session/tail tracker - the watcher is up only inside a session or its extraction tail
+		pinemhiRun        pinemhiRunLatch   // APPRUN: once a session makes the watcher wanted, it stays wanted for the whole app run
+		contractGoneCount int               // consecutive polls with the contract file missing (the stand-down debounce)
 	)
 
 	relaunch := func(c *Contract, why string) {
@@ -483,11 +491,29 @@ func main() {
 		c, err := readContract()
 		if err != nil {
 			if os.IsNotExist(err) {
-				logf("watchdog: contract file gone; standing down")
-				return
+				// Debounced (FIX130): the launcher's contract
+				// save is remove+rename, so a poll can land in
+				// the gap and see a run that is very much alive
+				// as "gone" - the field log holds one such hit
+				// (2026-11-14), which stood a watchdog down and
+				// closed a watcher mid-run. A save gap straddles
+				// at most one poll; only a contract missing on
+				// contractGoneTicks consecutive polls is gone
+				// (three polls ~1.2s - still prompt enough for
+				// the sweep's contract-gone leg, which allows
+				// the stand-down two seconds). Under APPRUN
+				// this read is an app-exit signal (the deferred
+				// PINemHi close rides on it), so it has to be
+				// true.
+				contractGoneCount++
+				if contractGoneCount >= contractGoneTicks {
+					logf("watchdog: contract file gone; standing down")
+					return
+				}
 			}
 			continue // mid-write or transient: retry next tick
 		}
+		contractGoneCount = 0
 		if !c.Armed {
 			reason := c.DisarmReason
 			if reason == "" {
@@ -970,16 +996,18 @@ func main() {
 		}
 
 		// ---- PINemHi watcher duty (pinemhi.go) ------------------
-		// WATCHERLIFE: the watcher lives only while a table
-		// session is live or in its extraction tail. The lifetime
-		// tracker is fed every tick; the start/adopt duty below
-		// runs only while the watcher is wanted, and the first
-		// unwanted tick past the tail is the end of its life.
+		// APPRUN (2026-11-17): the watcher starts - or is
+		// adopted - at the run's FIRST table session and then
+		// stays up for the whole app run: across tables, room
+		// idles and desk sojourns. Nothing in this duty ever
+		// closes it; the only close is the deferred exit close
+		// at stand-down (true app exit), which covers started
+		// and adopted alike. The run latch is fed every tick.
 		// Off means this block does nothing at all.
 		// WATCHERFIX: the failed-start latch follows the contract's
 		// manage/folder values - a change to either is a new spell.
 		pinemhiLatch.sync(c.PinemhiManage, c.PinemhiFolder)
-		pinemhiWanted := pinemhiLife.wanted(sessionActive, now, pinemhiTail())
+		pinemhiWanted := pinemhiRun.wanted(sessionActive)
 		if c.PinemhiManage && pinemhiWanted && c.PinemhiWatcherState == "" {
 			exe := pinemhiExePath(c.PinemhiFolder)
 			if !pinemhiFileExists(exe) {
@@ -998,7 +1026,7 @@ func main() {
 				switch pinemhiDecide(c.PinemhiManage, c.PinemhiWatcherState, running) {
 				case pinemhiAdopt:
 					pid := pids[0]
-					logf("watchdog: pinemhi: watcher already running (pid %d); adopted - PVLDS will not close it", pid)
+					logf("watchdog: pinemhi: watcher already running (pid %d); adopted - PVLDS closes it when the app exits, like one it started", pid)
 					writeContractMerged(func(mc *Contract) {
 						if mc.PinemhiWatcherState == "" {
 							mc.PinemhiWatcherState = "adopted"
@@ -1018,7 +1046,7 @@ func main() {
 						pinemhiLatch.recordFailure()
 						logf("watchdog: pinemhi: could not start the watcher at %s: %v", exe, serr)
 					} else {
-						logf("watchdog: pinemhi: started the watcher (pid %d) for the session; PVLDS will close it after the session's extraction tail", pid)
+						logf("watchdog: pinemhi: started the watcher (pid %d); it stays up for the whole app run - PVLDS closes it when the app exits", pid)
 						writeContractMerged(func(mc *Contract) {
 							if mc.PinemhiWatcherState == "" {
 								mc.PinemhiWatcherState = "started"
@@ -1029,47 +1057,37 @@ func main() {
 				}
 			}
 		}
-		if c.PinemhiManage && !pinemhiWanted {
-			// End of life: the session is over and the extraction
-			// tail has run. A watcher PVLDS started is closed and
-			// its ownership cleared; an adopted watcher is NEVER
-			// closed - only its ownership record is cleared, so
-			// the contract never claims a watcher outside a
-			// session. A leftover "started" from a watchdog that
-			// died without its exit close lands here too, on an
-			// early idle tick.
-			switch c.PinemhiWatcherState {
-			case "started":
-				if c.PinemhiWatcherPID > 0 && processAlive(c.PinemhiWatcherPID) {
-					closePinemhiProcess(c.PinemhiWatcherPID, "session over")
-				} else {
-					logf("watchdog: pinemhi: session over; the watcher PVLDS started is already gone - clearing ownership")
-				}
-				writeContractMerged(func(mc *Contract) {
-					if mc.PinemhiWatcherState == "started" {
-						mc.PinemhiWatcherState = ""
-						mc.PinemhiWatcherPID = 0
-					}
-				})
-			case "adopted":
-				logf("watchdog: pinemhi: session over; clearing the adopted watcher's record (pid %d stays running - it was never PVLDS's to close)", c.PinemhiWatcherPID)
-				writeContractMerged(func(mc *Contract) {
-					if mc.PinemhiWatcherState == "adopted" {
-						mc.PinemhiWatcherState = ""
-						mc.PinemhiWatcherPID = 0
-					}
-				})
+		// The NC seam's session-end close (pinemhi.go): under
+		// the law pinemhiCloseAtSessionEnd always answers false
+		// and this block never fires - a table's end closes
+		// nothing. Under PVLDS_PINEMHI_NC=closeearly an adopted
+		// watcher is closed the moment no session is active,
+		// and the integration smoke's no-early-close leg fails
+		// by name. Production never sets the seam.
+		if c.PinemhiManage && !sessionActive && pinemhiCloseAtSessionEnd(c.PinemhiManage, c.PinemhiWatcherState) {
+			if c.PinemhiWatcherPID > 0 && processAlive(c.PinemhiWatcherPID) {
+				closePinemhiProcess(c.PinemhiWatcherPID, "session over")
 			}
-		}
-		// A watcher PVLDS started that died on its own inside its
-		// life: clear the ownership so the duty above re-decides
-		// next tick (it will start a fresh one - a session or its
-		// tail is still running). Outside that life the end-of-
-		// life block above has already cleared the record.
-		if pinemhiWanted && c.PinemhiWatcherState == "started" && c.PinemhiWatcherPID > 0 && !processAlive(c.PinemhiWatcherPID) {
-			logf("watchdog: pinemhi: the watcher PVLDS started (pid %d) is gone; clearing ownership", c.PinemhiWatcherPID)
 			writeContractMerged(func(mc *Contract) {
-				if mc.PinemhiWatcherState == "started" {
+				if mc.PinemhiWatcherState == "adopted" {
+					mc.PinemhiWatcherState = ""
+					mc.PinemhiWatcherPID = 0
+				}
+			})
+		}
+		// A watcher on record that died on its own - started or
+		// adopted, mid-session or at idle: the record is a stale
+		// fact. Clear it (under management only - off means the
+		// record is never touched either) so the duty above
+		// re-decides: with the run latch set, a fresh watcher is
+		// started or adopted in its place, keeping the run's
+		// watch continuous even when the process was not. A
+		// leftover record from a crashed run clears the same
+		// way on this watchdog's first ticks.
+		if c.PinemhiManage && c.PinemhiWatcherState != "" && c.PinemhiWatcherPID > 0 && !processAlive(c.PinemhiWatcherPID) {
+			logf("watchdog: pinemhi: the watcher on record (pid %d, %s) is gone; clearing ownership", c.PinemhiWatcherPID, c.PinemhiWatcherState)
+			writeContractMerged(func(mc *Contract) {
+				if mc.PinemhiWatcherState != "" && mc.PinemhiWatcherPID > 0 && !processAlive(mc.PinemhiWatcherPID) {
 					mc.PinemhiWatcherState = ""
 					mc.PinemhiWatcherPID = 0
 				}

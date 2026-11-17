@@ -2,10 +2,13 @@ package main
 
 import "testing"
 
-// PINEMHI2 Part B: the watcher-management decisions. The law in
-// one table: off never acts; un-owned + running adopts; un-owned
-// + not running starts; any settled state never re-decides; and
-// only a started watcher under management is ever closed.
+// PINEMHI2 Part B: the watcher-management decisions under
+// APPRUN (2026-11-17). The law in one table: off never acts;
+// un-owned + running adopts; un-owned + not running starts;
+// any settled state never re-decides; nothing ever closes at
+// a session's end; and at true exit a watcher under
+// management is closed whether PVLDS started it or adopted
+// it - the app owned its lifetime for the run either way.
 
 func TestPinemhiDecide(t *testing.T) {
 	cases := []struct {
@@ -43,8 +46,8 @@ func TestPinemhiShouldClose(t *testing.T) {
 		{"off, started", false, "started", false},
 		{"off, adopted", false, "adopted", false},
 		{"off, none", false, "", false},
-		{"on, started - ours, close it", true, "started", true},
-		{"on, adopted - never ours to close", true, "adopted", false},
+		{"on, started - ours, close it at exit", true, "started", true},
+		{"on, adopted - the run owned its lifetime, close it at exit", true, "adopted", true},
 		{"on, none - nothing was started", true, "", false},
 	}
 	for _, tc := range cases {
@@ -55,90 +58,104 @@ func TestPinemhiShouldClose(t *testing.T) {
 	}
 }
 
-// The NC seam is the negative control's whole mechanism: with
-// PVLDS_PINEMHI_NC=closeadopted the close decision ignores the
-// ownership state, so an adopted watcher would be closed - the
-// adoption smoke leg must fail by name under it. Pin the seam's
-// behaviour here so it can never silently stop breaking the law.
-func TestPinemhiShouldCloseNCSeam(t *testing.T) {
+// APPRUN's load-bearing wall: NOTHING closes at a session's
+// end. The decision answers false for every input - and the
+// NC seam is the negative control's whole mechanism: with
+// PVLDS_PINEMHI_NC=closeearly it answers true for an adopted
+// watcher, the tick duty closes that watcher at session end,
+// and the integration smoke's no-early-close leg must fail by
+// name under it. Pin both halves here so the seam can never
+// silently stop breaking the law - or start.
+func TestPinemhiCloseAtSessionEnd(t *testing.T) {
+	for _, tc := range []struct {
+		manage bool
+		state  string
+	}{
+		{false, "started"}, {false, "adopted"}, {false, ""},
+		{true, "started"}, {true, "adopted"}, {true, ""},
+	} {
+		if pinemhiCloseAtSessionEnd(tc.manage, tc.state) {
+			t.Errorf("no seam: pinemhiCloseAtSessionEnd(manage=%v, state=%q) = true, want false (nothing closes at session end)", tc.manage, tc.state)
+		}
+	}
+	t.Setenv("PVLDS_PINEMHI_NC", "closeearly")
+	if !pinemhiCloseAtSessionEnd(true, "adopted") {
+		t.Error("NC closeearly: an adopted watcher must read as session-end-closable (that is the break)")
+	}
+	if pinemhiCloseAtSessionEnd(true, "started") {
+		t.Error("NC closeearly: the seam targets adopted watchers only - a started one must stay unclosable at session end")
+	}
+	if pinemhiCloseAtSessionEnd(false, "adopted") {
+		t.Error("NC closeearly: management off must still never close")
+	}
+}
+
+// The retired seam value must be inert now: closeadopted
+// broke the OLD law (adopted unclosable even at exit); under
+// APPRUN adopted closes at exit by law, so the old value
+// arming anything would be a seam nobody owns.
+func TestPinemhiCloseEarlyIgnoresRetiredSeam(t *testing.T) {
 	t.Setenv("PVLDS_PINEMHI_NC", "closeadopted")
-	if !pinemhiShouldClose(true, "adopted") {
-		t.Error("NC closeadopted: an adopted watcher must read as closable (that is the break)")
-	}
-	if pinemhiShouldClose(false, "adopted") {
-		t.Error("NC closeadopted: management off must still never close")
+	if pinemhiCloseAtSessionEnd(true, "adopted") {
+		t.Error("retired seam value closeadopted must not arm the session-end close")
 	}
 }
 
-// WATCHERLIFE: the session/tail tracker. The watcher is wanted
-// inside a session and through the extraction tail that follows
-// it - and nowhere else: not at boot, not at idle, and the tail
-// is not extended by idling. A session inside the tail cancels
-// it outright.
-func TestPinemhiLifetime(t *testing.T) {
-	const tail = 90
-	var l pinemhiLifetime
-	// Boot / idle: never wanted, no matter how long the app sits.
-	for now := int64(0); now < 10000; now += 37 {
-		if l.wanted(false, now, tail) {
-			t.Fatalf("idle at %d: wanted = true, want false (the watcher never exists at idle)", now)
+// APPRUN: the run latch. Before the run's first session the
+// watcher is not wanted, no matter how long the app sits at
+// the desk or in the room. From that session on it is wanted
+// on every tick for the rest of the run - across table exits,
+// idle gaps and desk sojourns, with no clock and no tail.
+func TestPinemhiRunLatch(t *testing.T) {
+	var l pinemhiRunLatch
+	// Boot / desk / idle room: never wanted.
+	for i := 0; i < 1000; i++ {
+		if l.wanted(false) {
+			t.Fatalf("idle tick %d: wanted = true, want false (no session has run yet)", i)
 		}
 	}
-	// A session starts: wanted from its first tick.
-	if !l.wanted(true, 20000, tail) {
-		t.Fatal("session start: wanted = false, want true")
+	// The first session starts: wanted from its first tick.
+	if !l.wanted(true) {
+		t.Fatal("first session: wanted = false, want true")
 	}
-	// The session runs: wanted throughout.
-	for now := int64(20001); now < 21000; now += 41 {
-		if !l.wanted(true, now, tail) {
-			t.Fatalf("in session at %d: wanted = false, want true", now)
+	// The table exits; the app idles on. Wanted forever.
+	for i := 0; i < 1000; i++ {
+		if !l.wanted(false) {
+			t.Fatalf("post-session idle tick %d: wanted = false, want true (the run latch holds)", i)
 		}
 	}
-	// VPX exits at 21000: the tail runs to 21090 - wanted through
-	// it, not one tick past it.
-	if !l.wanted(false, 21000, tail) {
-		t.Fatal("first tick after the session: wanted = false, want true (the tail starts)")
+	// Later sessions change nothing.
+	if !l.wanted(true) {
+		t.Fatal("second session: wanted = false, want true")
 	}
-	if !l.wanted(false, 21089, tail) {
-		t.Fatal("inside the tail: wanted = false, want true")
-	}
-	if l.wanted(false, 21090, tail) {
-		t.Fatal("tail end: wanted = true, want false (the watcher closes here)")
-	}
-	if l.wanted(false, 99999, tail) {
-		t.Fatal("long past the tail: wanted = true, want false")
+	if !l.wanted(false) {
+		t.Fatal("after the second session: wanted = false, want true")
 	}
 }
 
-func TestPinemhiLifetimeSessionInsideTail(t *testing.T) {
-	const tail = 90
-	var l pinemhiLifetime
-	// Session 1 runs and ends at 1000; the tail would end at 1090.
-	l.wanted(true, 900, tail)
-	l.wanted(false, 1000, tail)
-	// Session 2 starts at 1050, inside the tail: wanted, and the
-	// tail is CANCELLED - session 2's own end starts a fresh one.
-	if !l.wanted(true, 1050, tail) {
-		t.Fatal("second session inside the tail: wanted = false, want true")
+// The exit close's identity check: the recorded pid must be
+// among the watcher exe's own pids. A pid the OS reused for a
+// stranger - or a dead watcher, whose pid appears nowhere -
+// does not verify, and pid 0 never does.
+func TestPinemhiRecordVerified(t *testing.T) {
+	cases := []struct {
+		name string
+		pid  int
+		exe  []int
+		want bool
+	}{
+		{"the watcher itself", 4240, []int{4240, 99}, true},
+		{"only the watcher running", 4240, []int{4240}, true},
+		{"a stranger holds the pid now", 4240, []int{99, 100}, false},
+		{"no watcher running at all", 4240, nil, false},
+		{"no pid recorded", 0, []int{4240}, false},
+		{"negative pid", -3, []int{-3}, false},
 	}
-	if !l.wanted(false, 1095, tail) {
-		t.Fatal("past the first tail's end but inside session 2's tail: wanted = false, want true")
-	}
-	if !l.wanted(false, 1184, tail) {
-		t.Fatal("inside session 2's tail (ends 1185): wanted = false, want true")
-	}
-	if l.wanted(false, 1185, tail) {
-		t.Fatal("session 2's tail end: wanted = true, want false")
-	}
-}
-
-func TestPinemhiLifetimeZeroTail(t *testing.T) {
-	// A zero tail (the bench seam's floor) ends the life on the
-	// very tick the session ends - no tick of grace.
-	var l pinemhiLifetime
-	l.wanted(true, 500, 0)
-	if l.wanted(false, 500, 0) {
-		t.Fatal("zero tail: wanted = true on the session's end tick, want false")
+	for _, tc := range cases {
+		if got := pinemhiRecordVerified(tc.pid, tc.exe); got != tc.want {
+			t.Errorf("%s: pinemhiRecordVerified(pid=%d, exe=%v) = %v, want %v",
+				tc.name, tc.pid, tc.exe, got, tc.want)
+		}
 	}
 }
 

@@ -988,8 +988,8 @@ func _build_ui() -> void:
 	_pinemhi_check.toggled.connect(func(_on: bool) -> void: _refresh_field_states())
 	step2.add_child(_pinemhi_check)
 	_pinemhi_manage_check = CheckBox.new()
-	_pinemhi_manage_check.text = "Let LaunchPin run the PINemHi watcher while a table is playing"
-	_pinemhi_manage_check.tooltip_text = "Off (the default): LaunchPin never touches the watcher. On: the watchdog starts pinemhi_rom_monitor.exe when a table starts (if it isn't already running) and closes it shortly after the table exits - or when LaunchPin exits, if that comes first. A watcher already running is left running: LaunchPin only ever closes one it started itself."
+	_pinemhi_manage_check.text = "Let LaunchPin run the PINemHi watcher while LaunchPin is open"
+	_pinemhi_manage_check.tooltip_text = "Off (the default): LaunchPin never touches the watcher. On: LaunchPin starts pinemhi_rom_monitor.exe when your first table starts (if it isn't already running) and keeps it running the whole time LaunchPin is open; when LaunchPin exits, it closes the watcher - one it started or one that was already running alike."
 	_pinemhi_manage_check.toggled.connect(func(_on: bool) -> void: _refresh_field_states())
 	step2.add_child(_pinemhi_manage_check)
 	var pinemhi_field_row: HBoxContainer = HBoxContainer.new()
