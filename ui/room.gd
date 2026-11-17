@@ -1452,6 +1452,7 @@ var _pinemhi2_fetch_error: String = "" ## the last weekly fetch's failure, in wo
 var _pinemhi2_player_name: String = "" ## his PINemHi registration name (from his own TOP10_Personal files, via Main) - the weekly boards accent his row by exact match
 var _pinemhi2_bests: Dictionary = {} ## FIX132: his PINemHi personal best per weekly contest ({contest_id: record}), resolved by Main from his shelf files (PinemhiScores.resolve_weekly_bests) - the weekly boards' best line reads it
 var _pinemhi2_shots: Dictionary = {} ## FIX132: the VPS author-shot URL per weekly contest ({contest_id: url}), resolved by Main from the db (the WoVP cards' own art source) - stapled onto each weekly row's entry at build, FIX124's row-data discipline
+var _pinemhi2_games: Dictionary = {} ## FIX134: the db game id per weekly contest ({contest_id: game_id}), resolved by Main by ROM (PinemhiScores.resolve_weekly_games) - a contest whose id the scanner maps to a library entry seats its board on that entry, owned, and launches like a WoVP card
 var _pinemhi2_art_cache: Dictionary = {} ## FIX132: shot URL -> the decoded art texture the weekly board headers wear (the fill loads each URL once)
 var _centre_index: int = 0 ## the shelf index the drum is centred on: the popped card's index in _visible_games (the pop target and the power-on follow it; it is NOT the pad focus - focus may sit on the rail or the strip while the drum stays centred where browsing left it; a letter pick both swings the drum AND lands focus on the centred card: the INTENT law at _jump_to_letter)
 var _columns: int = 1 ## the standing view's column count: ceil(visible / 3 bands)
@@ -2856,6 +2857,7 @@ func set_pinemhi_weekly(d: Dictionary) -> void:
 	_pinemhi2_player_name = str(d.get("player_name", ""))
 	_pinemhi2_bests = (d.get("bests", {}) as Dictionary).duplicate() ## FIX132: the weekly boards' best lines ride the same push
 	_pinemhi2_shots = (d.get("shots", {}) as Dictionary).duplicate() ## FIX132: and their tables' author-shot URLs
+	_pinemhi2_games = (d.get("games", {}) as Dictionary).duplicate() ## FIX134: and their tables' db game ids (the launch resolution)
 	if _tournament:
 		# The place law, carried from set_wovp_data: the
 		# focused card's game (or the rail stop) is read
@@ -2909,23 +2911,59 @@ func pinemhi_board_spec_for(idx: int) -> Dictionary:
 	var contest: Dictionary = row.get("contest", {}) as Dictionary
 	if contest.is_empty():
 		return RoomSpecs.pinemhi_state_spec(row.get("lines", []))
+	# FIX134: the board's freshness is its OWN contest's
+	# (Main stamps a per-contest "live" on the push), and
+	# its launch standing rides too - an unowned board
+	# wears the NOT IN YOUR LIBRARY chip.
 	var spec: Dictionary = RoomSpecs.pinemhi_weekly_board_spec(contest, _pinemhi2_player_name,
-		_pinemhi2_fetched_at, _pinemhi2_live,
-		_pinemhi2_bests.get(str(contest.get("id", "")), {}) as Dictionary) ## FIX132: his best, resolved by Main
+		_pinemhi2_fetched_at, bool(contest.get("live", _pinemhi2_live)),
+		_pinemhi2_bests.get(str(contest.get("id", "")), {}) as Dictionary, ## FIX132: his best, resolved by Main
+		bool(row.get("owned", false)))
 	# FIX132: the table's author shot, when the shot
 	# cache already holds it, rides the spec as the
 	# board's framed art header (the WoVP cards' own art
 	# source). An uncached shot simply leaves the header
 	# off; its arrival heals the face (refresh_shot_faces).
+	# FIX134: the contest's own shot (Main's map) wins over
+	# the row game's - an owned row's game is the shared
+	# library entry, whose shot is the library's business.
 	var game: GameEntry = row.get("game") as GameEntry
-	if game != null and game.shot_url != "" and ArtProvider.shot_is_cached(game.shot_url):
-		var tex: Texture2D = _pinemhi2_art_cache.get(game.shot_url, null) as Texture2D
+	var shot_url: String = str(_pinemhi2_shots.get(str(contest.get("id", "")), ""))
+	if shot_url == "" and game != null:
+		shot_url = game.shot_url
+	if shot_url != "" and ArtProvider.shot_is_cached(shot_url):
+		var tex: Texture2D = _pinemhi2_art_cache.get(shot_url, null) as Texture2D
 		if tex == null:
-			tex = TextureFactory.load_art_texture(ArtProvider.shot_cache_path_for(game.shot_url))
+			tex = TextureFactory.load_art_texture(ArtProvider.shot_cache_path_for(shot_url))
 			if tex != null:
-				_pinemhi2_art_cache[game.shot_url] = tex
+				_pinemhi2_art_cache[shot_url] = tex
 		if tex != null:
 			spec["art_texture"] = tex
+			# FIX134 (Part C): the fit law. A weekly board
+			# wearing its art header plus a full standings
+			# page outgrows the face: measured on the live
+			# Sorcerer board, 8 score rows ended at 1095 of
+			# 1080 (the last row cut at the panel's edge)
+			# and a 10-row board at 1225, while the 6-row
+			# Elvis board ended at 1008 and stood clean -
+			# the field's garbled card and its clean
+			# neighbour are the same board at different
+			# lengths. When the contest runs long, the
+			# header gives back pixels and the section gaps
+			# tighten (the ONETEN back's row_separation
+			# door), so every weekly kind ends on the face
+			# with its art still standing. Six rows or
+			# fewer: the layout is exactly FIX132's.
+			var score_rows: int = 0
+			for rv2: Variant in (spec.get("rows", []) as Array):
+				if str((rv2 as Dictionary).get("kind", "")) == "score":
+					score_rows += 1
+			if score_rows >= 9:
+				spec["art_height_px"] = 140
+				spec["row_separation"] = 2
+			elif score_rows >= 7:
+				spec["art_height_px"] = 210
+				spec["row_separation"] = 2
 	return spec
 
 
@@ -3212,12 +3250,14 @@ func _build_tournament_rows() -> Array:
 
 ## PINEMHI2 (Part A): the weekly rows from the standing
 ## push. One row per contest, in the client's order, its
-## panel a board-mode panel (like the state row's) whose
-## game is a synthetic stand-in named for the contest's
-## table - a fact on a board, not a launch path: the game
-## has no builds, matches nothing in the library, and the
-## tournament launch law (challenge rows he owns, only)
-## leaves its A-press inert. No contests and a failed
+## panel a board-mode panel (like the state row's).
+## PINEMHI2 stood these as facts on boards, never launch
+## paths (a synthetic stand-in game, the launch law
+## leaving A inert); FIX134 (Part B, Chris's order)
+## reverses that for contests whose table is in his
+## library - those seat on the library entry itself and
+## launch like WoVP cards, and the rest keep the stand-in
+## and say NOT IN YOUR LIBRARY on their board. No contests and a failed
 ## first fetch stand ONE failure row in plain words; no
 ## contests and no failure (never fetched - the boot
 ## fetch makes it transient) stand nothing.
@@ -3235,14 +3275,31 @@ func _build_pinemhi_rows() -> Array:
 			"build_owned": false, "lines": []})
 		for cv: Variant in _pinemhi2_contests:
 			var c: Dictionary = cv as Dictionary
-			var game: GameEntry = GameEntry.new()
-			game.game_id = "pinemhi:" + str(c.get("id", ""))
-			game.title = str(c.get("table", ""))
-			# FIX132: the table's author shot rides the row
-			# as data (FIX124's discipline), so no later
-			# rebuild can strip it.
-			game.shot_url = str(_pinemhi2_shots.get(str(c.get("id", "")), ""))
-			out.append({"kind": "pinemhi", "contest": c, "game": game, "owned": false,
+			var cid: String = str(c.get("id", ""))
+			# FIX134 (Part B): a contest Main resolved to a
+			# db game that the scanner maps into his library
+			# seats its board on THAT entry, owned - the WoVP
+			# challenge treatment: the panel click opens the
+			# entry's detail view, its Play launches, A
+			# launches. A contest unresolved (or resolved to
+			# a game his library does not hold) keeps the
+			# synthetic stand-in, unowned, and its board
+			# carries the NOT IN YOUR LIBRARY chip.
+			var game: GameEntry = null
+			var owned: bool = false
+			var db_id: String = str(_pinemhi2_games.get(cid, ""))
+			if db_id != "" and _scanner != null:
+				game = _scanner.game_by_id(db_id)
+				owned = game != null
+			if game == null:
+				game = GameEntry.new()
+				game.game_id = "pinemhi:" + cid
+				game.title = str(c.get("table", ""))
+				# FIX132: the table's author shot rides the
+				# row as data (FIX124's discipline), so no
+				# later rebuild can strip it.
+				game.shot_url = str(_pinemhi2_shots.get(cid, ""))
+			out.append({"kind": "pinemhi", "contest": c, "game": game, "owned": owned,
 				"build_owned": false, "lines": []})
 	elif _pinemhi2_fetch_error != "" and _pinemhi2_fetched_at == 0:
 		var fgame: GameEntry = GameEntry.new()
@@ -4628,7 +4685,12 @@ func _tournament_launchable(idx: int) -> bool:
 	if idx < 0 or idx >= _tournament_rows.size():
 		return false
 	var row: Dictionary = _tournament_rows[idx] as Dictionary
-	return str(row.get("kind", "")) == "challenge" and bool(row.get("owned", false))
+	var kind: String = str(row.get("kind", ""))
+	# FIX134 (Part B): an owned weekly board launches too -
+	# its row's game IS the library entry (see
+	# _build_pinemhi_rows). The weekly state row (no
+	# contest, never owned) and the separator stay inert.
+	return (kind == "challenge" or kind == "pinemhi") and bool(row.get("owned", false))
 
 
 ## Whether REFRESH stands as a live rail stop right now

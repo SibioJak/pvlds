@@ -735,6 +735,14 @@ func apply_spec(spec: Dictionary) -> void:
 	_board_art_frame.visible = kind == "board" and board_art is Texture2D
 	if _board_art_frame.visible:
 		_board_art.texture = board_art as Texture2D
+		# FIX134: a spec may shorten its own art header
+		# ("art_height_px") - the weekly boards spend the
+		# reclaimed pixels on standings rows when a contest
+		# runs long, so a full board still ends on the face.
+		# Re-asserted on every spec (one CardFace serves all
+		# renders): no key, the stock 300 stands.
+		_board_art.custom_minimum_size = Vector2(0, clampi(
+			int(spec.get("art_height_px", BOARD_ART_HEIGHT_PX)), 80, BOARD_ART_HEIGHT_PX))
 		_board_art_frame.add_theme_stylebox_override("panel",
 			_art_frame_box(_color_of(spec, "art_frame_color", Color(0.14, 0.45, 0.36))))
 	_band_panel.visible = kind == "panel" or kind == "info" or kind == "board"

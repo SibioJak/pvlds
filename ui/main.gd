@@ -214,6 +214,7 @@ var _pinemhi2_live: bool = false ## the standing weekly boards came from a fetch
 var _pinemhi2_fetch_error: String = "" ## the last weekly fetch's failure in words, while it stands
 var _pinemhi2_player_name: String = "" ## his PINemHi name, derived at push time from his TOP10_Personal files (PinemhiScores.player_name_for_config)
 var _pinemhi_best_notes: Dictionary = {} ## FIX132: the bests resolvers' last-logged notes ({challenge/contest key: line}) - a note is printed when it changes, so every resolution (and every absence, with its reason) is on the record exactly once per change
+var _pinemhi_game_notes: Dictionary = {} ## FIX134: the weekly game resolver's last-logged notes, same discipline as _pinemhi_best_notes (its own map - the keys share the "weekly:" shape but the lines are a different family's verdicts)
 var _pinemhi2_probe: bool = false ## --pvlds-pinemhi2-probe: the fetch gate - one real fetch through the app's HTTP path, the per-contest census printed, then quit
 var _smoke_pinemhi2: bool = false ## --pvlds-smoke-pinemhi2: drive the PINEMHI2 contract (env PVLDS_PINEMHI2_MODE: parse|stub|cache|room)
 var _smoke_starfield: bool = false ## --pvlds-smoke-starfield: drive the STARFIELD contract (env PVLDS_STARFIELD_MODE: field|gate)
@@ -239,6 +240,12 @@ var _pinemhi2_smoke_boot_boards: Array = [] ## room mode: the standing board key
 var _pinemhi2_smoke_baseline_done: bool = false
 var _pinemhi2_smoke_baseline_reset: bool = false ## room mode: the clean no-weekly-data state has been re-pushed AFTER the boot fetch settled (its failure push otherwise re-seeds the room's failure row mid-baseline)
 var _pinemhi2_launch_seen: bool = false ## room mode: a launch_requested arrived while a weekly panel was centred (must never happen)
+var _fix134_launches: Array = [] ## FIX134 launch stage: the game ids launch_requested carried, in order
+var _fix134_wait: int = 0 ## FIX134 stages: the standing poll budget, in frames
+var _fix134_reset_done: bool = false ## FIX134 stages: the clean no-weekly-data reset has been re-pushed after the boot fetch settled
+var _fix134_killed: bool = false ## FIX134 launch stage: the spawned "table" process has been killed so Main's own settle can land
+var _fix134_probe_busy: bool = false ## FIX134 layout stage: a board_layout_probe run is in flight
+var _fix134_probe_results: Dictionary = {} ## FIX134 layout stage: contest id -> {rows, tex} from the probe run
 var _wovp_validating_for: String = "" ## who a running validation answers to: "fetch" | "room" | "desk"
 var _wovp_validating_key_hash: int = 0 ## the hash of the key a running validation is about (a desk test may name a key that is not the saved one)
 var _smoke_tournament: bool = false ## --pvlds-smoke-tournament: drive the Tournament Room contract once the room is up
@@ -1387,7 +1394,16 @@ func _ready() -> void:
 	if bool(pinemhi_cache.get("ok", false)):
 		var pc: Variant = pinemhi_cache.get("contests", [])
 		if pc is Array:
-			_pinemhi2_contests = pc
+			# FIX134: cache-served contests carry their
+			# freshness on their face - the push turns it
+			# into each board's own live flag, so one
+			# kind's failed refresh can never borrow
+			# another kind's freshness (and vice versa).
+			_pinemhi2_contests = []
+			for cv2: Variant in pc:
+				var cc2: Dictionary = cv2 as Dictionary
+				cc2["from_cache"] = true
+				_pinemhi2_contests.append(cc2)
 		_pinemhi2_fetched_at = int(pinemhi_cache.get("fetched_at", 0))
 	_pinemhi2_probe = user_args.has("--pvlds-pinemhi2-probe")
 	_pinemhi_client.fetch_weekly()
@@ -2320,6 +2336,22 @@ func _log_pinemhi_best_notes(notes: Dictionary) -> void:
 			_pinemhi_best_notes.erase(k2)
 
 
+## FIX134: the weekly game resolver's notes, printed on
+## change like the bests notes - every contest's launch
+## resolution (the road it took, or the plain reason no
+## library game stands behind its board) is on the
+## record exactly once per change.
+func _log_pinemhi_game_notes(notes: Dictionary) -> void:
+	for k: Variant in notes.keys():
+		var line: String = str(notes[k])
+		if str(_pinemhi_game_notes.get(k, "")) != line:
+			_pinemhi_game_notes[k] = line
+			print("PVLDS PINEMHI GAME: ", line)
+	for k2: Variant in _pinemhi_game_notes.keys():
+		if not notes.has(k2):
+			_pinemhi_game_notes.erase(k2)
+
+
 ## FIX132: the db's author-shot URL for one weekly
 ## contest's table, resolved by the table's name - the
 ## same art source the WoVP cards use (the game record's
@@ -2357,17 +2389,37 @@ func _push_pinemhi2_data() -> void:
 		var cid: String = str(c.get("id", ""))
 		if cid != "":
 			shot_map[cid] = _db_shot_url_for_contest(str(c.get("table", "")))
+	# FIX134: each contest's own freshness rides the push
+	# as its "live" flag - a board's saved-standings note
+	# answers to ITS contest's freshness, not the family's
+	# (the stale NC above still bites here: it forces the
+	# family live, so cache-served boards read as fresh
+	# and the stale legs fail by name). The standing
+	# contests keep the from_cache truth; the push sends
+	# copies wearing the computed flag.
+	var push_contests: Array = []
+	for cv2: Variant in _pinemhi2_contests:
+		var c2: Dictionary = (cv2 as Dictionary).duplicate()
+		c2["live"] = live and not bool(c2.get("from_cache", false))
+		push_contests.append(c2)
+	# FIX134 (Part B): the contests' tables resolved to
+	# db games (by ROM, name as fallback - PinemhiScores),
+	# so the room can seat a weekly board on its library
+	# entry and launch it like a WoVP card.
+	var games_res: Dictionary = PinemhiScores.resolve_weekly_games(_db, _pinemhi2_contests)
 	if _room != null and _room.has_method("set_pinemhi_weekly"):
 		_room.set_pinemhi_weekly({
-			"contests": _pinemhi2_contests,
+			"contests": push_contests,
 			"fetched_at": _pinemhi2_fetched_at,
 			"live": live,
 			"fetch_error": _pinemhi2_fetch_error,
 			"player_name": _pinemhi2_player_name,
 			"bests": weekly_res.get("bests", {}) as Dictionary,
 			"shots": shot_map,
+			"games": games_res.get("games", {}) as Dictionary,
 		})
 	_log_pinemhi_best_notes(weekly_res.get("notes", {}) as Dictionary)
+	_log_pinemhi_game_notes(games_res.get("notes", {}) as Dictionary)
 	# FIX132: queue the contest shots the cache does not
 	# hold yet, through the same fetcher the library and
 	# the unowned challenge cards use; an arrival heals
@@ -2417,17 +2469,88 @@ func _on_pinemhi_weekly_finished(ok: bool, message: String, contests: Array, raw
 		get_tree().quit(0 if ok else 1)
 		return
 	if ok:
-		_pinemhi2_contests = contests
+		_pinemhi2_contests = []
+		for cv3: Variant in contests:
+			var cc3: Dictionary = cv3 as Dictionary
+			cc3["from_cache"] = false
+			_pinemhi2_contests.append(cc3)
 		_pinemhi2_fetched_at = int(Time.get_unix_time_from_system())
 		_pinemhi2_live = true
 		_pinemhi2_fetch_error = ""
 		PinemhiWeeklyClient.save_cache(raw_pages, _pinemhi2_fetched_at)
+		print("PVLDS PINEMHI WEEKLY: the fetch landed - all three weekly boards are live.")
 	else:
+		# FIX134: adopt PER KIND. Before this road, any
+		# page's failure discarded the whole answer - the
+		# contests that HAD parsed were thrown away, the
+		# cache was never rewritten, and every board froze
+		# at the last all-green fetch (the field case: the
+		# golf page's empty week failed the parser at the
+		# Nov 16 rollover and the main + five boards froze
+		# with it, silently). Now the kinds that read
+		# cleanly replace their standing boards, the kinds
+		# that failed keep their last-good boards (and
+		# their saved-standings note), the cache is
+		# rewritten as an overlay of the fresh pages over
+		# the cached ones, and the outcome is printed in
+		# plain words either way - no silent verdicts.
+		var adopted: Array = []
+		if not contests.is_empty():
+			var by_id: Dictionary = {}
+			var order: Array = []
+			for cv4: Variant in _pinemhi2_contests:
+				var cc4: Dictionary = cv4 as Dictionary
+				var cid4: String = str(cc4.get("id", ""))
+				by_id[cid4] = cc4
+				order.append(cid4)
+			for cv5: Variant in contests:
+				var cc5: Dictionary = cv5 as Dictionary
+				var cid5: String = str(cc5.get("id", ""))
+				if cid5 == "":
+					continue
+				cc5["from_cache"] = false
+				if not by_id.has(cid5):
+					order.append(cid5)
+				by_id[cid5] = cc5
+				adopted.append(str(cc5.get("label", cid5)))
+			var merged_contests: Array = []
+			for cid6: Variant in order:
+				merged_contests.append(by_id[cid6])
+			_pinemhi2_contests = merged_contests
+		# Whatever this fetch did not refresh now stands on
+		# last-good data, adopted or not: mark every standing
+		# contest the fetch did not adopt as saved, so its
+		# board carries the saved-standings note (the kept
+		# golf board in the partial-refresh field shape).
+		# Adopted contests were flagged fresh in the merge.
+		if contests.is_empty():
+			for cv7: Variant in _pinemhi2_contests:
+				(cv7 as Dictionary)["from_cache"] = true
+		else:
+			var adopted_ids: Array = []
+			for cv8: Variant in contests:
+				adopted_ids.append(str((cv8 as Dictionary).get("id", "")))
+			for cv9: Variant in _pinemhi2_contests:
+				var cc9: Dictionary = cv9 as Dictionary
+				if not adopted_ids.has(str(cc9.get("id", ""))):
+					cc9["from_cache"] = true
+		if not adopted.is_empty():
+			_pinemhi2_live = true
+			_pinemhi2_fetched_at = int(Time.get_unix_time_from_system())
+			var merged_pages: Dictionary = {}
+			var cached: Dictionary = PinemhiWeeklyClient.load_cache()
+			if bool(cached.get("ok", false)):
+				merged_pages = (cached.get("pages", {}) as Dictionary).duplicate()
+			for pk: Variant in raw_pages.keys():
+				merged_pages[pk] = raw_pages[pk]
+			PinemhiWeeklyClient.save_cache(merged_pages, _pinemhi2_fetched_at)
 		# The standing boards (the cache's, when there are
 		# any) keep standing; the failure is recorded and
 		# the push carries it - with no cache the room's
 		# failure row says it in plain words.
 		_pinemhi2_fetch_error = message
+		var adopted_words: String = "none" if adopted.is_empty() else ", ".join(PackedStringArray(adopted))
+		print("PVLDS PINEMHI WEEKLY: the fetch did not land in full - ", message, " Boards updated: ", adopted_words, ".")
 	_push_pinemhi2_data()
 
 
@@ -20575,6 +20698,8 @@ func _drive_pinemhi2_smoke() -> void:
 			_drive_pinemhi2_room()
 		"failstate":
 			_drive_pinemhi2_failstate()
+		"fix134":
+			_drive_pinemhi2_fix134()
 
 
 func _pinemhi2_expect(cond: bool, label: String) -> void:
@@ -20588,6 +20713,655 @@ func _pinemhi2_expect(cond: bool, label: String) -> void:
 func _finish_pinemhi2_smoke() -> void:
 	print("PVLDS PINEMHI2 SMOKE RESULT: ", "PASS" if _pinemhi2_smoke_failures == 0 else "FAIL (%d)" % _pinemhi2_smoke_failures)
 	get_tree().quit(0 if _pinemhi2_smoke_failures == 0 else 1)
+
+
+## FIX134 smoke (PVLDS_PINEMHI2_MODE=fix134; the stage rides
+## PVLDS_FIX134_STAGE): live - the parser and the boot fetch
+## against the day's real pinemhi.com pages (fixtures-live in
+## the dossier; golf's empty week is the convicted shape);
+## refresh - the stateful stub serves three generations of
+## fixture pages: a real REFRESH press must move every board
+## to the new standings, and a refresh whose golf page fails
+## must move the other two and keep golf's last-good board,
+## marked saved, with the failure stated; launch - weekly
+## contests resolved by ROM against the letter library: an
+## owned contest's panel launches through the A-press and
+## through its detail's Play, an unowned contest carries the
+## NOT IN YOUR LIBRARY chip and stays inert; layout - the
+## live contests (the 8-row main) with seeded art: every
+## weekly face's rows measured against its art header, a
+## 10-row stress board, and the grabs.
+func _drive_pinemhi2_fix134() -> void:
+	match OS.get_environment("PVLDS_FIX134_STAGE"):
+		"live":
+			_fix134_live()
+		"refresh":
+			_fix134_refresh()
+		"launch":
+			_fix134_launch()
+		"layout":
+			_fix134_layout()
+		_:
+			_pinemhi2_expect(false, "fix134: unknown stage '%s'" % OS.get_environment("PVLDS_FIX134_STAGE"))
+			_finish_pinemhi2_smoke()
+
+
+func _fix134_write_ctl(name: String, content: String) -> void:
+	_write_text_file(OS.get_environment("PVLDS_FIX134_DIR").path_join(name), content)
+
+
+func _fix134_contest(contest_id: String) -> Dictionary:
+	for cv: Variant in _pinemhi2_contests:
+		var c: Dictionary = cv as Dictionary
+		if str(c.get("id", "")) == contest_id:
+			return c
+	return {}
+
+
+func _fix134_spec(contest_id: String) -> Dictionary:
+	if _room == null:
+		return {}
+	var rows: Array = _room.tournament_rows()
+	for i: int in range(rows.size()):
+		var row: Dictionary = rows[i] as Dictionary
+		if str(row.get("kind", "")) != "pinemhi":
+			continue
+		var contest: Dictionary = row.get("contest", {}) as Dictionary
+		if str(contest.get("id", "")) == contest_id:
+			return _room.pinemhi_board_spec_for(i)
+	return {}
+
+
+func _fix134_first_score(spec: Dictionary) -> Dictionary:
+	for rv: Variant in (spec.get("rows", []) as Array):
+		var r: Dictionary = rv as Dictionary
+		if str(r.get("kind", "")) == "score":
+			return r
+	return {}
+
+
+func _fix134_enter_room() -> void:
+	_wovp_challenges = [
+		_pinemhi_fab_challenge("pinemhi2-alpha", "Apollo 13"),
+		_pinemhi_fab_challenge("pinemhi2-beta", "Medieval Madness"),
+		_pinemhi_fab_challenge("pinemhi2-gamma", "Twilight Zone"),
+	]
+	_wovp_user_id = "smoke-user"
+	_wovp_boards_live = true
+	_wovp_fetched_at = int(Time.get_unix_time_from_system())
+	_push_wovp_data()
+	_room._handle_rail("tournament")
+
+
+func _fix134_panels_real() -> bool:
+	if _room == null:
+		return false
+	var rows: Array = _room.tournament_rows()
+	var seen: int = 0
+	for i: int in range(rows.size()):
+		if str((rows[i] as Dictionary).get("kind", "")) != "pinemhi":
+			continue
+		seen += 1
+		if i >= _room._panels.size():
+			return false
+		var tex: Texture2D = _room._panels[i].current_texture()
+		if tex == null or tex.get_size() != Vector2(RoomSpecs.board_face_px()):
+			return false
+	return seen == 3
+
+
+func _fix134_live() -> void:
+	match _pinemhi2_smoke_phase:
+		1:
+			var live_dir: String = OS.get_environment("PVLDS_FIX134_LIVE_DIR")
+			var pages: Dictionary = {
+				"main": "week_challenge.html",
+				"five": "week_challenge_5min.html",
+				"golf": "week_challenge_golf.html",
+			}
+			for cid: String in pages:
+				var body: String = FileAccess.get_file_as_string(live_dir.path_join(str(pages[cid])))
+				var parsed: Dictionary = PinemhiWeeklyClient.parse_page(body, cid)
+				_pinemhi2_expect(bool(parsed.get("ok", false)),
+					"fix134 live parse: the %s page parses (got '%s')" % [cid, str(parsed.get("error", ""))])
+				if not bool(parsed.get("ok", false)):
+					continue
+				var contest: Dictionary = parsed.get("contest", {}) as Dictionary
+				var rows: Array = contest.get("rows", []) as Array
+				if cid == "main":
+					_pinemhi2_expect(str(contest.get("table", "")) == "Sorcerer",
+						"fix134 live parse: main is Sorcerer (got '%s')" % str(contest.get("table", "")))
+					_pinemhi2_expect(rows.size() == 8,
+						"fix134 live parse: main carries 8 interim rows (got %d)" % rows.size())
+					if rows.size() >= 2:
+						var r1: Dictionary = rows[0] as Dictionary
+						var r2: Dictionary = rows[1] as Dictionary
+						_pinemhi2_expect(str(r1.get("name", "")) == "DJTOYS" and int(r1.get("value", 0)) == 2526460,
+							"fix134 live parse: main row 1 is DJTOYS 2.526.460 (got '%s' %d)" % [str(r1.get("name", "")), int(r1.get("value", 0))])
+						_pinemhi2_expect(str(r2.get("name", "")) == "Kubrick" and int(r2.get("value", 0)) == 2252640,
+							"fix134 live parse: main row 2 is Kubrick 2.252.640 (got '%s' %d)" % [str(r2.get("name", "")), int(r2.get("value", 0))])
+				elif cid == "five":
+					_pinemhi2_expect(str(contest.get("table", "")) == "Elvis",
+						"fix134 live parse: five is Elvis (got '%s')" % str(contest.get("table", "")))
+					_pinemhi2_expect(rows.size() == 6,
+						"fix134 live parse: five carries 6 interim rows (got %d)" % rows.size())
+				else:
+					_pinemhi2_expect(str(contest.get("table", "")).begins_with("Ripleys"),
+						"fix134 live parse: golf is Ripleys (got '%s')" % str(contest.get("table", "")))
+					_pinemhi2_expect(rows.is_empty(),
+						"fix134 live parse: golf's no-scores-yet page parses to a valid contest with zero rows")
+					_pinemhi2_expect(str(contest.get("pin", "")).replace(".", "") == "1596900",
+						"fix134 live parse: golf's standing pin reads 1.596.900 (got '%s')" % str(contest.get("pin", "")))
+			_pinemhi2_smoke_phase = 2
+		2:
+			if _pinemhi2_live and _room != null and _room.visible and _room.wall_ready:
+				_pinemhi2_expect(_pinemhi2_contests.size() == 3,
+					"fix134 live fetch: the boot fetch lands all three contests (got %d)" % _pinemhi2_contests.size())
+				var golf: Dictionary = _fix134_contest("golf")
+				_pinemhi2_expect(not golf.is_empty() and (golf.get("rows", []) as Array).is_empty(),
+					"fix134 live fetch: the fetched golf contest stands with zero rows")
+				_pinemhi2_expect(FileAccess.file_exists(PinemhiWeeklyClient.cache_path()),
+					"fix134 live fetch: the fetch wrote the weekly cache")
+				var loaded: Dictionary = PinemhiWeeklyClient.load_cache()
+				_pinemhi2_expect(bool(loaded.get("ok", false)), "fix134 live fetch: the written cache reads back")
+				if bool(loaded.get("ok", false)):
+					var lc: Array = loaded.get("contests", []) as Array
+					_pinemhi2_expect(lc.size() == 3, "fix134 live fetch: the cache holds three contests (got %d)" % lc.size())
+					for cv: Variant in lc:
+						var c: Dictionary = cv as Dictionary
+						if str(c.get("id", "")) == "golf":
+							_pinemhi2_expect((c.get("rows", []) as Array).is_empty(),
+								"fix134 live fetch: the cached golf contest keeps its zero rows")
+				_fix134_enter_room()
+				_pinemhi2_smoke_phase = 3
+		3:
+			if _fix134_panels_real():
+				var main_spec: Dictionary = _fix134_spec("main")
+				var r1: Dictionary = _fix134_first_score(main_spec)
+				_pinemhi2_expect(str(r1.get("name_text", "")) == "DJTOYS" and str(r1.get("score_text", "")) == "2,526,460",
+					"fix134 live board: the main board's row 1 is DJTOYS 2,526,460 (got '%s' '%s')" % [str(r1.get("name_text", "")), str(r1.get("score_text", ""))])
+				_pinemhi2_expect(not _pinemhi2_spec_has_note(main_spec, "Saved standings - not yet refreshed"),
+					"fix134 live board: the live main board carries no saved note")
+				var golf_spec: Dictionary = _fix134_spec("golf")
+				_pinemhi2_expect(_pinemhi2_spec_score_rows(golf_spec).is_empty(),
+					"fix134 live board: the empty golf board carries no score rows")
+				_pinemhi2_expect(_pinemhi2_spec_has_note(golf_spec, "Pin is set at 1,596,900 - closest to the pin wins"),
+					"fix134 live board: the golf board carries its pin line")
+				_pinemhi2_expect(not _pinemhi2_spec_has_note(golf_spec, "Saved standings - not yet refreshed"),
+					"fix134 live board: the live golf board carries no saved note")
+				var five_spec: Dictionary = _fix134_spec("five")
+				var f1: Dictionary = _fix134_first_score(five_spec)
+				_pinemhi2_expect(str(f1.get("name_text", "")) == "ReneGNR",
+					"fix134 live board: the five board's row 1 is ReneGNR (got '%s')" % str(f1.get("name_text", "")))
+				_finish_pinemhi2_smoke()
+
+
+func _fix134_refresh() -> void:
+	match _pinemhi2_smoke_phase:
+		1:
+			if _pinemhi2_live and _room != null and _room.visible and _room.wall_ready:
+				var main: Dictionary = _fix134_contest("main")
+				var r1: Dictionary = {}
+				if not main.is_empty() and not (main.get("rows", []) as Array).is_empty():
+					r1 = (main.get("rows", []) as Array)[0] as Dictionary
+				if str(r1.get("name", "")) == "RetroGeek":
+					_fix134_enter_room()
+					_pinemhi2_smoke_phase = 2
+		2:
+			if _fix134_panels_real():
+				_pinemhi2_expect(_fix134_board_row1_is("main", "RetroGeek", "8,014,130"),
+					"fix134 refresh v1: the main board opens on the v1 standings")
+				_pinemhi2_expect(_fix134_board_row1_is("five", "JB1980", "10,725,280"),
+					"fix134 refresh v1: the five board opens on the v1 standings")
+				_pinemhi2_expect(_fix134_board_row1_is("golf", "Tucidides", "-620"),
+					"fix134 refresh v1: the golf board opens on the v1 standings")
+				_pinemhi2_expect(not _fix134_any_saved_note(),
+					"fix134 refresh v1: no weekly board carries the saved note while live")
+				_fix134_write_ctl("gen.txt", "v2")
+				_room._handle_rail("wovp_refresh")
+				_fix134_wait = 0
+				_pinemhi2_smoke_phase = 3
+		3:
+			_fix134_wait += 1
+			if _fix134_board_row1_is("main", "ZetaPrime", "9,214,130") \
+					and _fix134_board_row1_is("five", "FiveAlive", "11,725,280") \
+					and _fix134_board_row1_is("golf", "Tucidides", "-310"):
+				_pinemhi2_expect(true, "fix134 refresh v2: a real REFRESH press moved all three boards to the v2 standings")
+				_pinemhi2_expect(not _fix134_any_saved_note(),
+					"fix134 refresh v2: the saved note is gone from every weekly board after the refresh")
+				_pinemhi2_expect(_pinemhi2_fetch_error == "",
+					"fix134 refresh v2: no fetch failure stands after a full refresh (got '%s')" % _pinemhi2_fetch_error)
+				_fix134_write_ctl("gen.txt", "v3")
+				_fix134_write_ctl("fail_golf", "1")
+				_room._handle_rail("wovp_refresh")
+				_fix134_wait = 0
+				_pinemhi2_smoke_phase = 4
+			elif _fix134_wait > 3600:
+				_pinemhi2_expect(false, "fix134 refresh v2: the boards never reached the v2 standings after REFRESH")
+				_finish_pinemhi2_smoke()
+		4:
+			_fix134_wait += 1
+			if _fix134_board_row1_is("main", "ThirdWave", "9,514,130") \
+					and _fix134_board_row1_is("five", "ThirdFive", "12,725,280"):
+				_pinemhi2_expect(true, "fix134 refresh partial: the main and five boards moved to v3 while golf's page failed")
+				_pinemhi2_expect(_fix134_board_row1_is("golf", "Tucidides", "-310"),
+					"fix134 refresh partial: the golf board keeps its last-good (v2) standings")
+				_pinemhi2_expect(_pinemhi2_spec_has_note(_fix134_spec("golf"), "Saved standings - not yet refreshed"),
+					"fix134 refresh partial: the kept golf board is marked saved")
+				_pinemhi2_expect(not _pinemhi2_spec_has_note(_fix134_spec("main"), "Saved standings - not yet refreshed"),
+					"fix134 refresh partial: the refreshed main board carries no saved note")
+				_pinemhi2_expect(_pinemhi2_fetch_error.contains("Weekly Golf"),
+					"fix134 refresh partial: the failure is stated and names the Weekly Golf page (got '%s')" % _pinemhi2_fetch_error)
+				_finish_pinemhi2_smoke()
+			elif _fix134_wait > 3600:
+				_pinemhi2_expect(false, "fix134 refresh partial: the main/five boards never reached v3")
+				_finish_pinemhi2_smoke()
+
+
+func _fix134_board_row1_is(contest_id: String, name: String, score_text: String) -> bool:
+	var spec: Dictionary = _fix134_spec(contest_id)
+	if spec.is_empty():
+		return false
+	var r1: Dictionary = _fix134_first_score(spec)
+	return str(r1.get("name_text", "")) == name and str(r1.get("score_text", "")) == score_text
+
+
+func _fix134_any_saved_note() -> bool:
+	for cid: String in ["main", "five", "golf"]:
+		var spec: Dictionary = _fix134_spec(cid)
+		if not spec.is_empty() and _pinemhi2_spec_has_note(spec, "Saved standings - not yet refreshed"):
+			return true
+	return false
+
+
+func _fix134_row_of(contest_id: String) -> Dictionary:
+	if _room == null:
+		return {}
+	for rv: Variant in _room.tournament_rows():
+		var row: Dictionary = rv as Dictionary
+		if str(row.get("kind", "")) != "pinemhi":
+			continue
+		var contest: Dictionary = row.get("contest", {}) as Dictionary
+		if str(contest.get("id", "")) == contest_id:
+			return row
+	return {}
+
+
+func _fix134_panel_idx(contest_id: String) -> int:
+	if _room == null:
+		return -1
+	var rows: Array = _room.tournament_rows()
+	for i: int in range(rows.size()):
+		var row: Dictionary = rows[i] as Dictionary
+		if str(row.get("kind", "")) != "pinemhi":
+			continue
+		var contest: Dictionary = row.get("contest", {}) as Dictionary
+		if str(contest.get("id", "")) == contest_id:
+			return i
+	return -1
+
+
+func _fix134_launch() -> void:
+	match _pinemhi2_smoke_phase:
+		1:
+			if _room != null and _room.visible and _room.wall_ready:
+				_fix134_enter_room()
+				_pinemhi2_expect(_room.tournament_active(), "fix134 launch: the TOURNAMENT stop raises the Tournament Room")
+				_pinemhi2_smoke_phase = 2
+		2:
+			if _pinemhi_client != null and _pinemhi_client.is_busy():
+				return
+			if not _fix134_reset_done:
+				_pinemhi2_contests = []
+				_pinemhi2_fetched_at = 0
+				_pinemhi2_live = false
+				_pinemhi2_fetch_error = ""
+				_push_pinemhi2_data()
+				_fix134_reset_done = true
+				return
+			# The synthetic contests: Medieval Madness
+			# standings played on mm_109c (in the letter
+			# library by ROM), Sorcerer on sorcr_l2 (absent),
+			# Ripleys with no rows yet (absent).
+			_pinemhi2_contests = [
+				{
+					"id": "main", "label": "Weekly Competition", "table": "Medieval Madness",
+					"window_start": "2026-11-15 22:00:04", "window_end": "2026-11-22 22:00:04", "pin": "",
+					"rows": [
+						{"pos": 1, "name": "JB1980", "value": 50250000, "value_text": "50.250.000", "rom": "mm_109c", "date": "2026-11-16 10:00:00"},
+					],
+				},
+				{
+					"id": "five", "label": "Weekly 5-Minute", "table": "Sorcerer",
+					"window_start": "2026-11-11 22:00:03", "window_end": "2026-11-18 22:00:03", "pin": "",
+					"rows": [
+						{"pos": 1, "name": "DJTOYS", "value": 2526460, "value_text": "2.526.460", "rom": "sorcr_l2", "date": "2026-11-15 23:42:20"},
+						{"pos": 2, "name": "JB1980", "value": 2252640, "value_text": "2.252.640", "rom": "sorcr_l2", "date": "2026-11-17 13:40:44"},
+					],
+				},
+				{
+					"id": "golf", "label": "Weekly Golf", "table": "Ripleys Believe It or Not!",
+					"window_start": "2026-11-16 22:00:05", "window_end": "2026-11-23 22:00:05", "pin": "1596900",
+					"rows": [],
+				},
+			]
+			_pinemhi2_fetched_at = int(Time.get_unix_time_from_system())
+			_pinemhi2_live = true
+			_pinemhi2_fetch_error = ""
+			_push_pinemhi2_data()
+			if not _room.launch_requested.is_connected(_fix134_record_launch):
+				_room.launch_requested.connect(_fix134_record_launch)
+			_pinemhi2_smoke_phase = 3
+		3:
+			if _fix134_panels_real():
+				var owners: Array[String] = _db.rom_owners("mm_109c")
+				_pinemhi2_expect(owners.size() == 1, "fix134 launch: the letter db resolves mm_109c to exactly one library game (got %d)" % owners.size())
+				var main_row: Dictionary = _fix134_row_of("main")
+				_pinemhi2_expect(bool(main_row.get("owned", false)),
+					"fix134 launch: the Medieval Madness contest row stands owned (resolved by ROM)")
+				_pinemhi2_expect(str(((main_row.get("game", null) as GameEntry).game_id if main_row.get("game", null) is GameEntry else "")) == (owners[0] if owners.size() == 1 else "<none>"),
+					"fix134 launch: the owned contest seats the library game its ROM names (got '%s')" % str(((main_row.get("game", null) as GameEntry).game_id if main_row.get("game", null) is GameEntry else "")))
+				_pinemhi2_expect(not bool(_fix134_row_of("five").get("owned", true)),
+					"fix134 launch: the Sorcerer contest row stands unowned (its table is not in the library)")
+				_pinemhi2_expect(not bool(_fix134_row_of("golf").get("owned", true)),
+					"fix134 launch: the Ripleys contest row stands unowned")
+				var five_spec: Dictionary = _fix134_spec("five")
+				var chip_texts: Array = []
+				for cv: Variant in (five_spec.get("chips", []) as Array):
+					chip_texts.append(str((cv as Dictionary).get("text", "")))
+				_pinemhi2_expect(chip_texts.has("NOT IN YOUR LIBRARY"),
+					"fix134 launch: the unowned weekly board says NOT IN YOUR LIBRARY (chips %s)" % str(chip_texts))
+				var main_spec: Dictionary = _fix134_spec("main")
+				var main_chips: Array = []
+				for cv2: Variant in (main_spec.get("chips", []) as Array):
+					main_chips.append(str((cv2 as Dictionary).get("text", "")))
+				_pinemhi2_expect(not main_chips.has("NOT IN YOUR LIBRARY"),
+					"fix134 launch: the owned weekly board carries no NOT IN YOUR LIBRARY chip")
+				# The A-press on the centred owned panel.
+				var idx: int = _fix134_panel_idx("main")
+				_pinemhi2_expect(idx >= 0, "fix134 launch: the owned weekly panel stands in the room")
+				if idx >= 0:
+					_room._set_centre(idx, true)
+					_room._set_focused(_room._panels[idx])
+					_room._a_press()
+					_pinemhi2_expect(_fix134_launches.size() == 1 and str(_fix134_launches[0]) == (owners[0] if owners.size() == 1 else "<none>"),
+						"fix134 launch: the A-press on the owned weekly panel launches its library game (got %s)" % str(_fix134_launches))
+				_fix134_wait = 0
+				_pinemhi2_smoke_phase = 4
+		4:
+			# Let the launch settle: kill the spawned
+			# "table" (the harness binary itself) so Main's
+			# own settle path lands the failed load and the
+			# room leaves its load wait.
+			if _launch_pid > 0 and not _fix134_killed:
+				OS.kill(_launch_pid)
+				_fix134_killed = true
+			_fix134_wait += 1
+			if not _launch_pending and _room != null and _room._mode == "wall":
+				# The detail path: open the owned panel's
+				# detail and press its Play.
+				var idx: int = _fix134_panel_idx("main")
+				_room._activate(_room._panels[idx])
+				_pinemhi2_expect(_room._mode == "detail",
+					"fix134 launch: activating the owned weekly panel opens its detail (mode '%s')" % _room._mode)
+				var play_quad: ClickableQuad = null
+				for q: ClickableQuad in _room._detail.get_clickables():
+					if q.action_id == "detail_play":
+						play_quad = q
+				_pinemhi2_expect(play_quad != null, "fix134 launch: the detail carries its Play quad")
+				if play_quad != null:
+					_room._activate(play_quad)
+					_pinemhi2_expect(_fix134_launches.size() == 2,
+						"fix134 launch: the detail's Play launches the table (launches %s)" % str(_fix134_launches))
+				_fix134_killed = false
+				_fix134_wait = 0
+				_pinemhi2_smoke_phase = 5
+			elif _fix134_wait > 3600:
+				_pinemhi2_expect(false, "fix134 launch: the A-press launch never settled")
+				_finish_pinemhi2_smoke()
+		5:
+			if _launch_pid > 0 and not _fix134_killed:
+				OS.kill(_launch_pid)
+				_fix134_killed = true
+			_fix134_wait += 1
+			if not _launch_pending and _room != null:
+				# A launch fired from the detail settles
+				# back onto the detail; back out of it,
+				# then the unowned panel: A-press inert,
+				# activation inert.
+				if _room._mode == "detail":
+					var back_quad: ClickableQuad = null
+					for q: ClickableQuad in _room._detail.get_clickables():
+						if q.action_id == "detail_back":
+							back_quad = q
+					_pinemhi2_expect(back_quad != null, "fix134 launch: the detail carries its Back quad")
+					if back_quad != null:
+						_room._activate(back_quad)
+					_pinemhi2_expect(_room._mode == "wall",
+						"fix134 launch: Back leaves the detail (mode '%s')" % _room._mode)
+				var five_idx: int = _fix134_panel_idx("five")
+				_pinemhi2_expect(five_idx >= 0, "fix134 launch: the unowned weekly panel stands in the room")
+				if five_idx >= 0:
+					_room._set_centre(five_idx, true)
+					_room._set_focused(_room._panels[five_idx])
+					_room._a_press()
+					_pinemhi2_expect(_fix134_launches.size() == 2,
+						"fix134 launch: the A-press on the unowned weekly panel launches nothing (launches %s)" % str(_fix134_launches))
+					_room._activate(_room._panels[five_idx])
+					_pinemhi2_expect(_room._mode == "wall",
+						"fix134 launch: activating the unowned weekly panel opens no detail (mode '%s')" % _room._mode)
+				_finish_pinemhi2_smoke()
+			elif _fix134_wait > 3600:
+				_pinemhi2_expect(false, "fix134 launch: the detail Play launch never settled")
+				_finish_pinemhi2_smoke()
+
+
+func _fix134_record_launch(game: GameEntry, _build: TableBuild) -> void:
+	_fix134_launches.append(game.game_id)
+
+
+func _fix134_layout() -> void:
+	match _pinemhi2_smoke_phase:
+		1:
+			if _room != null and _room.visible and _room.wall_ready:
+				_fix134_enter_room()
+				_pinemhi2_smoke_phase = 2
+		2:
+			if _pinemhi_client != null and _pinemhi_client.is_busy():
+				return
+			if not _fix134_reset_done:
+				_pinemhi2_contests = []
+				_pinemhi2_fetched_at = 0
+				_pinemhi2_live = false
+				_pinemhi2_fetch_error = ""
+				_push_pinemhi2_data()
+				_fix134_reset_done = true
+				return
+			_fix134_layout_setup()
+			_pinemhi2_smoke_phase = 3
+		3:
+			if _fix134_panels_real() and not _fix134_probe_busy and _fix134_probe_results.is_empty():
+				_fix134_run_probes(["main", "five", "golf"])
+			elif not _fix134_probe_busy and not _fix134_probe_results.is_empty():
+				_fix134_layout_judge("layout")
+				_fix134_layout_grab()
+				# The 10-row stress: the main contest with
+				# two more standings rows than the site's
+				# cap, art still present.
+				var contests: Array = []
+				for cv: Variant in _pinemhi2_contests:
+					var c: Dictionary = (cv as Dictionary).duplicate(true)
+					if str(c.get("id", "")) == "main":
+						var rows: Array = c.get("rows", []) as Array
+						rows.append({"pos": 9, "name": "ExtraNine", "value": 900000, "value_text": "900.000", "rom": "sorcr_l2", "date": "2026-11-17 09:00:00"})
+						rows.append({"pos": 10, "name": "ExtraTen", "value": 800000, "value_text": "800.000", "rom": "sorcr_l2", "date": "2026-11-17 09:05:00"})
+						c["rows"] = rows
+					contests.append(c)
+				_pinemhi2_contests = contests
+				_push_pinemhi2_data()
+				_fix134_probe_results = {}
+				_pinemhi2_smoke_phase = 4
+		4:
+			if _fix134_panels_real() and not _fix134_probe_busy and _fix134_probe_results.is_empty():
+				_fix134_run_probes(["main"])
+			elif not _fix134_probe_busy and not _fix134_probe_results.is_empty():
+				_fix134_layout_judge("stress10")
+				_finish_pinemhi2_smoke()
+
+
+## FIX134 layout: a fixture db carrying the three live
+## tables, each with its own flat-coloured shot pre-seeded in
+## the art cache (a flat seed makes any foreign ink inside
+## the art header measurable), and the day's real contests
+## parsed from the live pages and pushed live.
+func _fix134_layout_setup() -> void:
+	var seeds: Dictionary = {
+		"Sorcerer": ["https://example.invalid/fix134/sorcerer.jpg", Color(0.85, 0.25, 0.45), "sorcr_l2"],
+		"Elvis": ["https://example.invalid/fix134/elvis.jpg", Color(0.2, 0.6, 0.85), "elv_300"],
+		"Ripleys Believe It or Not!": ["https://example.invalid/fix134/ripleys.jpg", Color(0.25, 0.75, 0.35), "rbion_200"],
+	}
+	var entries: Array = []
+	var n: int = 0
+	for table: String in seeds:
+		n += 1
+		var info: Array = seeds[table] as Array
+		entries.append({
+			"id": "fx134-%d" % n, "name": table, "manufacturer": "Williams", "year": 2000,
+			"romFiles": [{"version": str(info[2])}], "tableFiles": [], "imgUrl": str(info[0]),
+		})
+		var seed: Image = Image.create(720, 300, false, Image.FORMAT_RGB8)
+		seed.fill(info[1] as Color)
+		var cache_path: String = ArtProvider.shot_cache_path_for(str(info[0]))
+		DirAccess.make_dir_recursive_absolute(cache_path.get_base_dir())
+		_pinemhi2_expect(seed.save_png(cache_path) == OK, "fix134 layout: the %s shot is seeded" % table)
+	_pinemhi2_expect(_write_text_file("user://fix134_db.json", JSON.stringify(entries)),
+		"fix134 layout: the fixture db writes")
+	var fxdb: VpsDatabase = VpsDatabase.new()
+	_pinemhi2_expect(fxdb.load_db(ProjectSettings.globalize_path("user://fix134_db.json")),
+		"fix134 layout: the fixture db loads")
+	_db = fxdb
+	var live_dir: String = OS.get_environment("PVLDS_FIX134_LIVE_DIR")
+	var pages: Dictionary = {"main": "week_challenge.html", "five": "week_challenge_5min.html", "golf": "week_challenge_golf.html"}
+	_pinemhi2_contests = []
+	for cid: String in pages:
+		var body: String = FileAccess.get_file_as_string(live_dir.path_join(str(pages[cid])))
+		var parsed: Dictionary = PinemhiWeeklyClient.parse_page(body, cid)
+		if bool(parsed.get("ok", false)):
+			_pinemhi2_contests.append(parsed.get("contest", {}))
+	_pinemhi2_expect(_pinemhi2_contests.size() == 3, "fix134 layout: the three live contests stand (got %d)" % _pinemhi2_contests.size())
+	_pinemhi2_fetched_at = int(Time.get_unix_time_from_system())
+	_pinemhi2_live = true
+	_pinemhi2_fetch_error = ""
+	_push_pinemhi2_data()
+
+
+func _fix134_run_probes(kinds: Array) -> void:
+	_fix134_probe_busy = true
+	_fix134_probe_results = {}
+	for kv: Variant in kinds:
+		var kind: String = str(kv)
+		var spec: Dictionary = _fix134_spec(kind)
+		if spec.is_empty():
+			continue
+		var probe: Dictionary = await _room.board_layout_probe(spec)
+		var rec: Dictionary = {"rows": probe.get("rows", [])}
+		var tex: Texture2D = probe.get("texture", null) as Texture2D
+		if tex != null:
+			rec["tex"] = tex
+		_fix134_probe_results[kind] = rec
+	_fix134_probe_busy = false
+
+
+## The layout law, judged off the probe's measured rects and
+## the rendered pixels: the art header's flat seed region is
+## found in the texture; no measured row or face part may
+## intersect it, no foreign ink may stand inside it, and the
+## last row must end on the face.
+func _fix134_layout_judge(tag: String) -> void:
+	var seeds: Dictionary = {
+		"main": Color(0.85, 0.25, 0.45),
+		"five": Color(0.2, 0.6, 0.85),
+		"golf": Color(0.25, 0.75, 0.35),
+	}
+	for kind: String in _fix134_probe_results:
+		var rec: Dictionary = _fix134_probe_results[kind] as Dictionary
+		var tex: Texture2D = rec.get("tex", null) as Texture2D
+		_pinemhi2_expect(tex != null, "fix134 %s: the %s board probe rendered" % [tag, kind])
+		if tex == null:
+			continue
+		var img: Image = tex.get_image()
+		var seed_col: Color = seeds.get(kind, Color(0, 0, 0)) as Color
+		var box: Rect2i = _fix134_art_box(img, seed_col)
+		_pinemhi2_expect(box.size.y >= 120,
+			"fix134 %s: the %s board wears its art header (seed region %s)" % [tag, kind, str(box)])
+		if box.size.y < 50:
+			continue
+		var inner: Rect2i = box.grow(-12)
+		var foreign: int = _fix134_foreign_ink(img, inner, seed_col)
+		_pinemhi2_expect(foreign == 0,
+			"fix134 %s: no foreign ink stands inside the %s art header (got %d sampled)" % [tag, kind, foreign])
+		var rows: Array = rec.get("rows", []) as Array
+		var hits: int = 0
+		var last_bottom: float = 0.0
+		for rv: Variant in rows:
+			var rd: Dictionary = rv as Dictionary
+			var rect: Rect2 = rd.get("rect", Rect2()) as Rect2
+			if Rect2(box).intersection(rect).get_area() > 1.0:
+				hits += 1
+			last_bottom = maxf(last_bottom, rect.position.y + rect.size.y)
+		_pinemhi2_expect(hits == 0,
+			"fix134 %s: no standings row intersects the %s art header (got %d)" % [tag, kind, hits])
+		_pinemhi2_expect(last_bottom <= 1081.0,
+			"fix134 %s: the %s board's last row ends on the face (bottom %.0f of 1080)" % [tag, kind, last_bottom])
+
+
+func _fix134_art_box(img: Image, seed_col: Color) -> Rect2i:
+	var minx: int = 1 << 30
+	var miny: int = 1 << 30
+	var maxx: int = -1
+	var maxy: int = -1
+	var w: int = img.get_width()
+	var h: int = img.get_height()
+	for y: int in range(0, h, 2):
+		for x: int in range(0, w, 2):
+			var p: Color = img.get_pixel(x, y)
+			if p.a > 0.9 and absf(p.r - seed_col.r) < 0.06 and absf(p.g - seed_col.g) < 0.06 and absf(p.b - seed_col.b) < 0.06:
+				minx = mini(minx, x)
+				miny = mini(miny, y)
+				maxx = maxi(maxx, x)
+				maxy = maxi(maxy, y)
+	if maxx < 0:
+		return Rect2i()
+	return Rect2i(minx, miny, maxx - minx + 1, maxy - miny + 1)
+
+
+func _fix134_foreign_ink(img: Image, inner: Rect2i, seed_col: Color) -> int:
+	var hits: int = 0
+	for y: int in range(inner.position.y, inner.position.y + inner.size.y, 2):
+		for x: int in range(inner.position.x, inner.position.x + inner.size.x, 2):
+			if x < 0 or y < 0 or x >= img.get_width() or y >= img.get_height():
+				continue
+			var p: Color = img.get_pixel(x, y)
+			if p.a > 0.5 and maxf(absf(p.r - seed_col.r), maxf(absf(p.g - seed_col.g), absf(p.b - seed_col.b))) > 0.3:
+				hits += 1
+	return hits
+
+
+func _fix134_layout_grab() -> void:
+	var grab_dir: String = OS.get_environment("PVLDS_FIX134_GRAB")
+	if grab_dir == "":
+		return
+	DirAccess.make_dir_recursive_absolute(grab_dir)
+	for cid: String in ["main", "five", "golf"]:
+		var idx: int = _fix134_panel_idx(cid)
+		if idx < 0 or idx >= _room._panels.size():
+			continue
+		var tex: Texture2D = _room._panels[idx].current_texture()
+		if tex != null:
+			tex.get_image().save_png(grab_dir.path_join("face_%s.png" % cid))
+	var vp: Image = get_viewport().get_texture().get_image()
+	if vp != null and not vp.is_empty():
+		vp.save_png(grab_dir.path_join("wall.png"))
 
 
 ## STARFIELD smoke (--pvlds-smoke-starfield, harness env

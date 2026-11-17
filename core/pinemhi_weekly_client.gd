@@ -268,6 +268,21 @@ static func parse_page(html: String, contest_id: String) -> Dictionary:
 	var rows: Array = []
 	for ri: int in range(1, trs.size()):
 		var cells: Array[String] = _row_cells(trs[ri].get_string(1), td_re)
+		if cells.size() == 1 and trs.size() == 2:
+			# FIX134: the site's no-scores-yet shape - the
+			# standings table's ONLY data row is one cell
+			# carrying a message ("NO ONE HAS TEE'D OFF
+			# YET" on the golf page at a week's start).
+			# That is a valid contest with zero rows, not
+			# a malformed page: before this road existed,
+			# the golf page failed closed at every week
+			# rollover until someone posted a score, and
+			# the all-or-nothing fetch froze EVERY weekly
+			# board at its last all-green snapshot (the
+			# field case, 2026-11-17). A single-cell row
+			# anywhere else (or beside real rows) still
+			# fails closed below.
+			continue
 		if cells.size() < 6:
 			return _fail("a standings row on the %s page carried too few columns" % label)
 		if not cells[0].is_valid_int():

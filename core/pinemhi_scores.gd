@@ -405,6 +405,61 @@ static func resolve_weekly_bests(cfg: PvldsConfig, contests: Array) -> Dictionar
 	return {"bests": out, "notes": notes}
 
 
+## FIX134: the weekly contests' tables resolved to db
+## games: {contest_id: game_id}. The launch door (Part B)
+## needs the contest's table as a library identity, and
+## the identity that cannot confuse two same-named games
+## is the ROM: the standings state the ROM each score was
+## played on, so the db record whose romFiles carry a
+## contest ROM is the contest's game. The ROM road must
+## name exactly ONE record across all the contest's ROMs;
+## shared or split ownership falls through to the name
+## road (the db's normalized name index, exactly one
+## record), and anything else stays unresolved with the
+## reason stated in the notes Main logs on change - the
+## board then stands unowned and says so, never launches.
+static func resolve_weekly_games(db: VpsDatabase, contests: Array) -> Dictionary:
+	var out: Dictionary = {}
+	var notes: Dictionary = {}
+	if db == null or contests.is_empty():
+		return {"games": out, "notes": notes}
+	for cv: Variant in contests:
+		var c: Dictionary = cv as Dictionary
+		if c.is_empty():
+			continue
+		var cid: String = str(c.get("id", ""))
+		var table: String = str(c.get("table", ""))
+		if cid == "":
+			continue
+		var roms: Array = []
+		for rv: Variant in (c.get("rows", []) as Array):
+			var r: Dictionary = rv as Dictionary
+			var rk: String = stem_key(str(r.get("rom", "")))
+			if rk != "" and not roms.has(rk):
+				roms.append(rk)
+		var owners: Array = []
+		for rk2: Variant in roms:
+			for oid: Variant in db.rom_owners(str(rk2)):
+				if not owners.has(str(oid)):
+					owners.append(str(oid))
+		if owners.size() == 1:
+			out[cid] = str(owners[0])
+			notes["weekly:" + cid] = "%s (weekly): library game %s via ROM %s (contest standings)" % [
+				table, str(owners[0]), ", ".join(PackedStringArray(roms))]
+			continue
+		var rom_why: String = "the contest standings carry no ROM" if roms.is_empty() \
+			else "ROMs [%s] name %d db records" % [", ".join(PackedStringArray(roms)), owners.size()]
+		var by_name: Array[String] = db.find_game_ids_by_name(VpsDatabase.normalize_name(table))
+		if by_name.size() == 1:
+			out[cid] = by_name[0]
+			notes["weekly:" + cid] = "%s (weekly): library game %s via name (%s)" % [
+				table, by_name[0], rom_why]
+		else:
+			notes["weekly:" + cid] = "%s (weekly): no library game (%s; the name names %d db records) - the board cannot launch it" % [
+				table, rom_why, by_name.size()]
+	return {"games": out, "notes": notes}
+
+
 ## PINEMHI2: the player's own PINemHi name, derived from
 ## his TOP10_Personal files: each file's #1 row is a best
 ## row (load_folder's records ARE the files' best rows),

@@ -967,7 +967,7 @@ static func tournament_state_spec(lines: Array) -> Dictionary:
 ## and the pin note stands first in the site's words.
 ## A board served from the cache says so in its last
 ## line, in the banner's own words.
-static func pinemhi_weekly_board_spec(contest: Dictionary, player_name: String, fetched_at: int, live: bool, personal_best: Dictionary = {}) -> Dictionary:
+static func pinemhi_weekly_board_spec(contest: Dictionary, player_name: String, fetched_at: int, live: bool, personal_best: Dictionary = {}, in_library: bool = true) -> Dictionary:
 	var cid: String = str(contest.get("id", ""))
 	var band_text: String = "PINEMHI - WEEKLY COMPETITION"
 	match cid:
@@ -1032,7 +1032,11 @@ static func pinemhi_weekly_board_spec(contest: Dictionary, player_name: String, 
 		"sub_size": 30, ## LOADING (item 3) + ENDGAME (Part D): the window line takes the deadline line's treatment (was 26, then 28)
 		"sub_bold": true,
 		"sub_max_lines": 1,
-		"chips": [],
+		# FIX134 (Part B): a contest whose table is not in
+		# his library says so on its board, in the WoVP
+		# boards' own chip - the plain statement that
+		# stands where a launch would.
+		"chips": [] if in_library else [{"text": "NOT IN YOUR LIBRARY", "accent": true}],
 		"rows": rows,
 		"footer_px": 0,
 		"ink_centre": true,
