@@ -1372,35 +1372,14 @@ static func _pinemhi_score_row(r: Dictionary, world1: bool, personal: bool) -> D
 	}
 
 
-## PINEMHI1 (Milestone 2): the loading marquee's fact
-## lines - the salvage of the nuked Spec Sheet (Chris:
-## "expand whats mentioned on the table loading screen").
-## The pick of the old grid, one value per label: the
-## IPDB value when the bundled snapshot / cache holds
-## one, else the db value (the db carries a Designer
-## only; the other four live in the IPDB well alone).
-## Empty labels are skipped entirely and the list caps
-## at five - the marquee drops a line rather than
-## shrink its type.
-static func marquee_fact_lines(game: GameEntry, ipdb: Dictionary) -> Array:
-	var db_designer: String = ", ".join(game.designers)
-	var picks: Array = [
-		["Designer", str(ipdb.get("design", "")), db_designer],
-		["Art", str(ipdb.get("art", "")), ""],
-		["Music", str(ipdb.get("music", "")), ""],
-		["Software", str(ipdb.get("software", "")), ""],
-		["Units produced", str(ipdb.get("units", "")), ""],
-	]
-	var lines: Array = []
-	for pv: Variant in picks:
-		var p: Array = pv as Array
-		var v: String = str(p[1]) if str(p[1]) != "" else str(p[2])
-		if v == "":
-			continue
-		lines.append(str(p[0]) + ": " + v)
-		if lines.size() >= 5:
-			break
-	return lines
+## FIX131: marquee_fact_lines stood here - the loading
+## marquee's fact lines, the Spec Sheet's salvage. The
+## marquee is abolished (Chris's ruling, 2026-11-17: the
+## loading text had no honest utility left), and with it
+## the facts' last surface; the function is deleted with
+## its only caller. The IPDB cache itself stays - Main
+## still applies the bundled snapshot - it simply has no
+## loading-screen tenant any more.
 
 
 static func banner_spec(line: String) -> Dictionary:

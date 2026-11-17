@@ -30,6 +30,7 @@ signal wovp_submit_requested(challenge_id: String, photo_path: String) ## ROOMSU
 signal display_settings_changed ## a SETUP display dial turned (the starfield): Main persists the room's standing values to the config
 signal pinemhi_watcher_toggled(on: bool) ## PINEMHI2 (Part B): the SETUP panel's PINEMHI WATCHER dial flipped: Main flips + saves the config's watcher-management toggle (the room never holds config)
 signal edge_arrows_toggled(on: bool) ## FIX122: the SETUP panel's EDGE ARROWS dial flipped: Main flips + saves the config's edge-arrows toggle (the room never holds config)
+signal hyper_spin_changed(mode: String) ## FIX131: the SETUP panel's HYPERSPACE dial turned: Main saves the config's hyper_spin mode (the room never holds config)
 
 const PAGE_COLS: int = 4
 const PAGE_ROWS: int = 3
@@ -42,77 +43,33 @@ const FILTER_LABELS: Dictionary = {"all": "ALL", "vr": "VR", "favorites": "FAVOR
 const SORTS: Array[String] = ["name", "year", "manufacturer", "designer"]
 const SORT_LABELS: Dictionary = {"name": "NAME", "year": "YEAR", "manufacturer": "MAKER", "designer": "DESIGNER"}
 
-# ------------------------------------------------------- loading marquee
-## The load wait's headline. Chris: "I have 50 years of hating
-## loading screens" - so this is NOT a loading screen: no spinner,
-## no progress bar, no percentage, no LOADING text. While a table
-## loads, the wall of cards fades down and the launched table's
-## year, with its designer beneath, flies in from the wall in big
-## marquee letters, settles at reading distance, and holds still
-## until the wait settles. Every feel knob is a constant here, for
-## one-line retunes after Chris's verdict. PINEMHI1: the settled
-## marquee also carries the table's fact lines (below), and the
-## settle PULSE is gone (Chris, 2026-11-07: the fonts
-## embiggen-and-shrink was dropped - "the starfield is visual
-## indicator enough that nothing is frozen"). Only the
-## PVLDS_PINEMHI1_NC=pulse seam restores it, so the pulse leg
-## can fail against it by name.
-const MARQUEE_FADE_SEC: float = 0.6 ## wall fade-down duration
-const MARQUEE_WALL_ALPHA: float = 0.16 ## the wall's alpha while the marquee stands
-const MARQUEE_FLY_IN_SEC: float = 1.4 ## the letters' travel time, wall -> settle
-static var MARQUEE_START_Z: float = -3.60 ## fly-in start depth (at the wall - tracks WALL_RADIUS; a static beside it so the oldwall NC restores both)
-const MARQUEE_SETTLE_POS: Vector3 = Vector3(0.0, 1.42, -2.30) ## reading distance, on the view axis (retuned 2026-10-22: first pass sat too close)
-const MARQUEE_PIXEL_SIZE: float = 0.005 ## Label3D world scale (the fit's ceiling - see _marquee_fit)
-## LOADING (item 1): the restyle - the marquee joins the
-## app's quiet register. The old display sizes (year 110,
-## name 56, facts 30) put a 0.755 m year and a 3.3 m-wide
-## name line in the player's face (Chris's field capture,
-## 2026-11-08: "loading screen is ugly... font in your
-## face, not elegant"), and the stack's fixed single-line
-## seats (name at -0.34, facts from -0.66 stepping 0.17)
-## let autowrap bury lines: a fact wider than the labels'
-## 700 px wrap width wrapped INSIDE its label and its
-## second row landed on the next label's seat (measured on
-## the Deadly Weapon fixture: the Art line at exactly 2x
-## its one-line height, clearances -0.145 m into both
-## neighbours). The new law: NO label ever wraps (autowrap
-## off everywhere), every line is FIT to the width cap by
-## scaling its pixel size down (never up), and the stack
-## is seated from MEASURED line heights with real gaps
-## between the labels' own boxes - collision-proof at any
-## content length by construction, judged off the rendered
-## AABBs by the LOADING smoke.
-const MARQUEE_YEAR_FONT_SIZE: int = 52 ## the year leads, quietly (was 110)
-const MARQUEE_NAME_FONT_SIZE: int = 32 ## the designer/title line (was 56)
-const MARQUEE_FACT_FONT_SIZE: int = 23 ## the fact lines under the headline (was 30)
-## FONT: the marquee's letterforms are Space Grotesk
-## (OFL, assets/fonts/) - static instances instanced
-## from the variable source: Medium for the year/name
-## headline, Regular for the fact lines. MARQUEE ONLY:
-## every other surface keeps the house font. No letter
-## tracking (the specimen carried a touch): Label3D
-## has no letter-spacing property, so none is faked.
-const MARQUEE_FONT_MEDIUM: Font = preload("res://assets/fonts/SpaceGrotesk-Medium.ttf")
-const MARQUEE_FONT_REGULAR: Font = preload("res://assets/fonts/SpaceGrotesk-Regular.ttf")
-const MARQUEE_MAX_LINE_W: float = 2.30 ## the widest a marquee line may stand at the settle seat; a longer line scales down to fit
-const MARQUEE_BLOCK_TOP: float = 0.48 ## the stack's top edge in holder space (the year's seat is constant; the stack hangs from here)
-const MARQUEE_GAP_YEAR_NAME: float = 0.055 ## clear air between the year and name boxes
-const MARQUEE_GAP_NAME_FACTS: float = 0.085 ## clear air between the headline and the first fact box
-const MARQUEE_GAP_FACT: float = 0.042 ## clear air between fact boxes
-## NEXTROUND (item 2): the marquee's type treatment joins
-## the frameless graphite house look (the filter strip /
-## SETUP furniture language) - the year takes the strip's
-## lifted-label white and the designer line its resting
-## label grey (RoomSpecs.STRIP_LABEL_ACCENT / _REST, the
-## same values), and the heavy display outline gives way
-## to a graphite hairline that only keeps the letters
-## defined over bright art. Presentational only: sizes,
-## positions and the fly-in are untouched. (Its pulse
-## clause is history since PINEMHI1 removed the pulse.)
-const MARQUEE_YEAR_COLOR: Color = Color(0.847, 0.867, 0.910) ## = RoomSpecs.STRIP_LABEL_ACCENT (#d8dde8)
-const MARQUEE_NAME_COLOR: Color = Color(0.659, 0.678, 0.722) ## = RoomSpecs.STRIP_LABEL_REST (#a8adb8)
-const MARQUEE_OUTLINE_COLOR: Color = Color(0.102, 0.106, 0.122) ## the strip gradient's deep graphite family (#1a1c20)
-const MARQUEE_OUTLINE_SIZE: int = 8
+# ------------------------------------------------------- hyperspace (FIX131)
+## The load wait's face. The fact-sheet marquee that stood
+## here (year, designer, IPDB fact lines in flying letters)
+## is ABOLISHED by Chris's ruling, 2026-11-17: the text had
+## no honest utility left once the starfield became the
+## loading indicator - its rotation already said "alive and
+## working". What stands in its place is the starfield
+## itself, turned up: while a table loads, the volume's
+## stars stretch into radial streaks and the field rolls
+## around the view axis - the Lucas jump, spin included
+## (Chris: what made the effect effective was not just the
+## streak but the spin). In VR the roll could be wonderful
+## or nauseating, so the attempts are a SETUP dial
+## (HYPERSPACE: CLASSIC / STREAKS / GENTLE SPIN / FULL SPIN,
+## config key hyper_spin, judging default GENTLE SPIN) and
+## every feel number is a constant here, in one place, for
+## one-line retunes after his headset verdict. The wait's
+## wall dim survives the marquee: it is the warp's dim now,
+## driven by the engagement both ways - no snap back.
+const HYPER_RAMP_IN_SEC: float = 1.1 ## the warp's ease-in: amount 0 -> 1 after a launch begins
+const HYPER_RAMP_OUT_SEC: float = 0.9 ## the warp's ease-out: amount -> 0 as the wait settles (failure, or Main's runtime-up cue ahead of the hand-off)
+const HYPER_LOAD_WALL_ALPHA: float = 0.16 ## the wall's alpha at full warp (the marquee fade's standing value, re-homed)
+const HYPER_STREAK_GROWTH: float = 26.0 ## a star's radial growth at 45 degrees off the view axis, at full amount (centre stars stay points - the films' own law); the shader clamps the angle term at 1.5
+const HYPER_ROLL_GENTLE_DEG_S: float = 6.0 ## GENTLE SPIN: the field's roll rate around the view axis at full amount
+const HYPER_ROLL_FULL_DEG_S: float = 20.0 ## FULL SPIN: the full Lucas roll rate at full amount
+const HYPER_DRIFT_MULT: float = 2.0 ## the bands' standing yaw drift multiplier at full amount - the field's motion ramps with the warp
+const HYPER_SPIN_LABELS: Dictionary = {"classic": "CLASSIC", "streaks": "STREAKS", "gentle": "GENTLE SPIN", "full": "FULL SPIN"} ## the dial's display names by mode
 
 ## Card pop-out (Chris, 2026-10-22): the card under the pointer -
 ## or holding gamepad/keyboard focus - lifts off the wall toward
@@ -674,6 +631,40 @@ void fragment() {
 const BG_VOLUME_STAR_SHADER: String = """
 shader_type spatial;
 render_mode unshaded, cull_disabled, blend_mix, depth_draw_never;
+uniform float hyper_amount = 0.0;
+uniform float hyper_roll = 0.0;
+uniform float hyper_streak = 0.0;
+void vertex() {
+	// FIX131 HYPERSPACE: at rest (amount 0, roll 0) this pass
+	// is the identity and the field stands exactly as built.
+	// Engaged, it works in view space, where the Lucas look
+	// lives: the roll rotates every star around the view axis
+	// (the z axis here, through the camera), and the streak
+	// stretches each vertex's offset from its star's centre
+	// along the screen-radial direction, growing with the
+	// star's angle off that axis - centre stars stay points,
+	// edge stars smear. POSITION is written directly (clip
+	// space) so no matrix inverse is needed; UV and COLOR
+	// pass through untouched, so the fragment's round falloff
+	// simply stretches with the quad.
+	vec4 v_vert = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
+	vec4 v_cent = MODELVIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0);
+	float ca = cos(hyper_roll);
+	float sa = sin(hyper_roll);
+	mat2 rot = mat2(vec2(ca, sa), vec2(-sa, ca));
+	v_vert.xy = rot * v_vert.xy;
+	v_cent.xy = rot * v_cent.xy;
+	vec2 radial = v_cent.xy;
+	float rlen = length(radial);
+	vec2 rdir = rlen > 0.00001 ? radial / rlen : vec2(0.0, 1.0);
+	vec2 off = v_vert.xy - v_cent.xy;
+	float along = dot(off, rdir);
+	vec2 tang = off - rdir * along;
+	float tanang = rlen / max(0.05, -v_cent.z);
+	float grow = 1.0 + hyper_amount * hyper_streak * clamp(tanang, 0.0, 1.5);
+	v_vert.xy = v_cent.xy + rdir * (along * grow) + tang;
+	POSITION = PROJECTION_MATRIX * v_vert;
+}
 void fragment() {
 	vec2 centred = (UV - vec2(0.5)) * 2.0;
 	float d = length(centred);
@@ -1246,12 +1237,11 @@ func set_db_warning_active(active: bool) -> void:
 	_db_warning_active = active
 	_refresh_banner()
 var _selected_game_id: String = "" ## last game opened/launched; restored + persisted as view state
-var _marquee: Node3D = null ## the loading marquee's holder; in the tree only during a load wait
-var _marquee_year: Label3D = null
-var _marquee_name: Label3D = null
-var _marquee_facts: Array[Label3D] = [] ## PINEMHI1: the fact-line labels under the headline (up to 5, hidden when unused)
-var _marquee_up: bool = false
-var _marquee_t: float = 0.0 ## seconds since the marquee rose
+var _hyper_mode: String = "gentle" ## FIX131: the HYPERSPACE dial's standing value, pushed by Main from the config (set_hyper_spin); a press cycles it here and reports via hyper_spin_changed - Main owns the save
+var _hyper_amount: float = 0.0 ## the warp's eased engagement, 0 at rest -> 1 at full warp; driven by _update_hyperspace toward _hyper_target
+var _hyper_target: float = 0.0 ## where the amount is headed: 1 while a load wait stands, 0 as it settles
+var _hyper_roll_rad: float = 0.0 ## the field's accumulated roll around the view axis, radians; accrues only while the warp is engaged, freezes where it stops, wraps at rest
+var _bg_volume_mat: ShaderMaterial = null ## the volume's ONE shared star material (built in _build_star_volume); the warp's uniforms ride it
 var _wall_alpha_applied: float = 1.0 ## the wall fade's last applied alpha (change guard)
 ## GRADFIX17 (item 2): the wall-alpha pass's write-on-change
 ## bookkeeping. The pass used to rewrite every panel's,
@@ -1310,6 +1300,7 @@ var _setup_panel_back_btn: ClickableQuad = null
 var _setup_panel_ipdb_btn: ClickableQuad = null ## CARDBACK/IPDBFIX: RE-APPLY IPDB DATA - Main re-applies the bundled snapshot, the panel's mirror of the desk's button
 var _setup_panel_watcher_btn: ClickableQuad = null ## PINEMHI2 (Part B): PINEMHI WATCHER: ON/OFF - the watcher-management dial, a full-width row under BACK's row (the panel's PINemHi presence is its face line; the dial stands beside it in the button stack)
 var _setup_panel_arrows_btn: ClickableQuad = null ## FIX122: EDGE ARROWS: ON/OFF - the edge-scroll chevron dial, a full-width row under the watcher row (OFF by default - the player hates the chevrons)
+var _setup_panel_hyper_btn: ClickableQuad = null ## FIX131: HYPERSPACE: CLASSIC/STREAKS/GENTLE SPIN/FULL SPIN - the loading warp dial, a full-width row under the arrows row (judging default GENTLE SPIN)
 var _edge_arrows: bool = false ## FIX122: the dial's standing value, pushed by Main from the config (set_edge_arrows); a press flips it here and reports via edge_arrows_toggled - Main owns the save
 var _setup_btn_tex: Dictionary = {} ## ENDGAME (Part B): panel button quad -> [rest_tex, lifted_tex] - both dresses rendered at fill time, swapped on focus (the strip's discipline: the material change must never wait on a render)
 var _setup_btn_home: Dictionary = {} ## ENDGAME (Part B): panel button quad -> its built position; the focused button lifts toward the eye off this home
@@ -2215,9 +2206,13 @@ func _update_background(delta: float) -> void:
 	# STARFIELD: each volume band turns at its own
 	# depth-scaled rate - one rotation increment per band,
 	# nothing allocated, nothing else touched.
+	# FIX131: at warp the drift ramps with the engagement
+	# (HYPER_DRIFT_MULT at full amount) - the field's motion
+	# rises with the streaks and the roll.
+	var drift_mult: float = 1.0 + (HYPER_DRIFT_MULT - 1.0) * _hyper_amount
 	for i: int in range(_bg_volume_bands.size()):
 		var band: MultiMeshInstance3D = _bg_volume_bands[i]
-		band.rotation.y += deg_to_rad(_volume_rate(BG_VOLUME_RADII[i])) * delta
+		band.rotation.y += deg_to_rad(_volume_rate(BG_VOLUME_RADII[i])) * drift_mult * delta
 
 
 ## The standing sky's measurable pair, far first: the two
@@ -2421,6 +2416,7 @@ func _build_star_volume() -> void:
 	qsh.code = BG_VOLUME_STAR_SHADER_FLAT if debug_fieldpass_nc == "squares" else BG_VOLUME_STAR_SHADER
 	qsm.shader = qsh
 	quad.material = qsm
+	_bg_volume_mat = qsm ## FIX131: the warp drives its uniforms on this one shared material
 	var r_min: float = BG_VOLUME_RADII[0]
 	for band_idx: int in range(BG_VOLUME_RADII.size()):
 		var radius: float = BG_VOLUME_RADII[band_idx]
@@ -8095,6 +8091,8 @@ func _refresh_focusables() -> void:
 			_focusables.append(_setup_panel_watcher_btn)
 		if _setup_panel_arrows_btn != null:
 			_focusables.append(_setup_panel_arrows_btn)
+		if _setup_panel_hyper_btn != null:
+			_focusables.append(_setup_panel_hyper_btn)
 		if _setup_panel_back_btn != null:
 			_focusables.append(_setup_panel_back_btn)
 	elif _submit_panel_up:
@@ -8184,7 +8182,7 @@ func _apply_setup_panel_button_dress() -> void:
 			_setup_panel_wovp_paste_btn, _setup_panel_wovp_test_btn,
 			_setup_panel_stars_btn,
 			_setup_panel_ipdb_btn, _setup_panel_back_btn, _setup_panel_watcher_btn,
-			_setup_panel_arrows_btn]:
+			_setup_panel_arrows_btn, _setup_panel_hyper_btn]:
 		if bq == null:
 			continue
 		var lifted: bool = bq == _focused
@@ -8252,6 +8250,8 @@ func _refresh_quad_states() -> void:
 		all.append(_setup_panel_watcher_btn)
 	if _setup_panel_arrows_btn != null:
 		all.append(_setup_panel_arrows_btn)
+	if _setup_panel_hyper_btn != null:
+		all.append(_setup_panel_hyper_btn)
 	if _setup_panel_back_btn != null:
 		all.append(_setup_panel_back_btn)
 	# ROOMSUBMIT: the submit panel's stops take visual
@@ -9119,6 +9119,13 @@ func _activate(quad: ClickableQuad) -> void:
 				set_setup_panel_message("Edge arrows: the wall's edge chevrons will show when a scroll is available - saving..." if _edge_arrows else "Edge arrows: the wall's edge chevrons will stay hidden - saving...")
 				edge_arrows_toggled.emit(_edge_arrows)
 				_update_scroll_arrows()
+				_request_setup_panel_render(true)
+			"setup_setting_hyper_spin":
+				quad.pulse()
+				var modes: Array[String] = PvldsConfig.HYPER_SPIN_MODES
+				_hyper_mode = modes[(modes.find(_hyper_mode) + 1) % modes.size()]
+				set_setup_panel_message("Hyperspace: %s while a table loads - saving..." % HYPER_SPIN_LABELS[_hyper_mode])
+				hyper_spin_changed.emit(_hyper_mode)
 				_request_setup_panel_render(true)
 		return
 	if _submit_panel_up:
@@ -10330,6 +10337,7 @@ func clear_setup_panel() -> void:
 		_setup_panel_ipdb_btn = null
 		_setup_panel_watcher_btn = null
 		_setup_panel_arrows_btn = null
+		_setup_panel_hyper_btn = null
 		_setup_panel_back_btn = null
 		_setup_btn_tex.clear()
 		_setup_btn_home.clear()
@@ -10394,6 +10402,10 @@ func setup_panel_watcher_quad() -> ClickableQuad:
 
 func setup_panel_arrows_quad() -> ClickableQuad:
 	return _setup_panel_arrows_btn
+
+
+func setup_panel_hyper_quad() -> ClickableQuad:
+	return _setup_panel_hyper_btn
 
 
 ## PINEMHI2 (Part B): the watcher dial's standing value -
@@ -10627,6 +10639,18 @@ func _build_setup_panel() -> void:
 	_setup_panel_arrows_btn.setup("setup_setting_edge_arrows", "", placeholder, Vector2(2.01, 0.17))
 	_setup_panel_arrows_btn.position = Vector3(0.0, -1.05, 0.0)
 	_setup_panel.add_child(_setup_panel_arrows_btn)
+	# The hyperspace row (FIX131): one full-width dial under
+	# the arrows row - HYPERSPACE: CLASSIC/STREAKS/GENTLE
+	# SPIN/FULL SPIN, the STARS dial's terms (the label states
+	# the standing value; a press cycles it in the room at
+	# once and Main persists it via hyper_spin_changed). The
+	# loading warp it tunes replaced the marquee outright -
+	# this dial is where Chris walks the spin attempts from
+	# inside the headset.
+	_setup_panel_hyper_btn = ClickableQuad.new()
+	_setup_panel_hyper_btn.setup("setup_setting_hyper_spin", "", placeholder, Vector2(2.01, 0.17))
+	_setup_panel_hyper_btn.position = Vector3(0.0, -1.26, 0.0)
+	_setup_panel.add_child(_setup_panel_hyper_btn)
 	# ENDGAME (Part B): the panel's buttons wear the machined
 	# dress - their focus read is the bevel-lift (lifted
 	# gradient + a step toward the eye), not the frame, so
@@ -10637,7 +10661,7 @@ func _build_setup_panel() -> void:
 			_setup_panel_wovp_paste_btn, _setup_panel_wovp_test_btn,
 			_setup_panel_stars_btn,
 			_setup_panel_ipdb_btn, _setup_panel_back_btn, _setup_panel_watcher_btn,
-			_setup_panel_arrows_btn]:
+			_setup_panel_arrows_btn, _setup_panel_hyper_btn]:
 		bq.suppress_frame = true
 		_setup_btn_home[bq] = bq.position
 	if _setup_downloader == null:
@@ -10706,6 +10730,7 @@ func _fill_setup_panel_textures(gen: int) -> void:
 		[_setup_panel_back_btn, "BACK", true, Vector2i(672, 116)],
 		[_setup_panel_watcher_btn, "PINEMHI WATCHER: " + ("ON" if _pinemhi_manage_watcher else "OFF"), false, Vector2i(1372, 116)],
 		[_setup_panel_arrows_btn, "EDGE ARROWS: " + ("ON" if _edge_arrows else "OFF"), false, Vector2i(1372, 116)],
+		[_setup_panel_hyper_btn, "HYPERSPACE: " + str(HYPER_SPIN_LABELS[_hyper_mode]), false, Vector2i(1372, 116)],
 	]
 	for lifted_pass: bool in [false, true]:
 		for b: Array in btns:
@@ -11544,7 +11569,7 @@ func _fill_submit_panel_textures(gen: int) -> void:
 func begin_launch(game: GameEntry) -> void:
 	_launching_game_id = game.game_id
 	_failed_game_id = ""
-	_snap_flip_shut() ## the wall freezes for the wait: no card stands turned behind the marquee
+	_snap_flip_shut() ## the wall freezes for the wait: no card stands turned while the warp engages
 	_status_note = "Launching %s... controls are locked while the table loads" % game.title
 	for q: ClickableQuad in _panels:
 		q.pick_enabled = false
@@ -11562,21 +11587,20 @@ func begin_launch(game: GameEntry) -> void:
 	# also swap the launching card's plinth texture to
 	# "LOADING..." (_swap_launch_textures, deleted with the
 	# plinths). The state's standing surfaces are the ones
-	# begin_launch already raises: the marquee (wall
-	# launches), the status banner's note above, and the
-	# detail view's own Play quad (detail launches, via
-	# set_launching just above) - the strip drops no state.
+	# begin_launch already raises: the status banner's note
+	# above, and the detail view's own Play quad (detail
+	# launches, via set_launching just above) - the strip
+	# drops no state.
 	_refresh_banner()
-	# The marquee is the WALL's loading display: it stands at
-	# the wall's settle depth, behind where the detail panel
-	# sits, so a launch begun FROM the detail view raised it
-	# straight into the panel's shadow - the year and designer
-	# letters lurking behind the info card for the whole wait
-	# (field report, 2026-10-26). The detail view carries its
-	# own launching state; a detail-initiated wait raises no
-	# marquee at all. Wall launches are untouched.
-	if not detail_open:
-		_raise_marquee(game)
+	# FIX131: the wait's face is the hyperspace warp, and it
+	# engages on EVERY launch, wall or detail. The marquee
+	# it replaces had to skip detail launches - its letters
+	# stood at the wall's settle depth, straight into the
+	# detail panel's shadow (field report, 2026-10-26). The
+	# warp is the sky itself: it occludes nothing, hides
+	# behind nothing, and the detail panel stands in front
+	# of a jumping sky exactly as it should.
+	_engage_hyperspace()
 
 
 ## VPX died during the load, with the launcher still resident to
@@ -11593,7 +11617,7 @@ func begin_launch(game: GameEntry) -> void:
 ## _failed_game_id is kept as the record the note derives
 ## from, no longer as a texture key.
 func end_launch_failed(game: GameEntry, reason: String) -> void:
-	_dismiss_marquee()
+	_release_hyperspace()
 	_launching_game_id = ""
 	_failed_game_id = game.game_id
 	_status_note = "Launch failed: %s - %s" % [game.title, reason]
@@ -11611,226 +11635,111 @@ func end_launch_failed(game: GameEntry, reason: String) -> void:
 	_rebuild_wall()
 
 
-## Raise the loading marquee for the wait begin_launch just
-## started. Line 1 is the year in big display letters; line 2 is
-## the designer beneath it. Fallbacks, per the brief: no year ->
-## line 1 falls back to the manufacturer (and then to the title);
-## no designer -> line 2 falls back to the title. An empty line
-## is HIDDEN - never an "Unknown designer" placeholder.
-func _raise_marquee(game: GameEntry) -> void:
-	_dismiss_marquee()
-	_build_marquee()
-	var top: String = ""
-	if game.year > 0:
-		top = str(game.year)
-	elif game.manufacturer != "":
-		top = game.manufacturer
-	var bottom: String = ""
-	if not game.designers.is_empty():
-		bottom = ", ".join(PackedStringArray(game.designers))
-	elif top != game.title:
-		bottom = game.title
-	if top == "":
-		top = game.title
-		bottom = ""
-	_marquee_year.text = top
-	_marquee_name.text = bottom
-	_marquee_name.visible = bottom != ""
-	# PINEMHI1: the fact lines - the pick of the retired
-	# Spec Sheet, read live from the pushed facts at raise
-	# time (never fetched here). Unused labels hide.
-	var facts: Array = RoomSpecs.marquee_fact_lines(game,
-		_ipdb_facts.get(game.game_id, {}) as Dictionary)
-	for i: int in range(_marquee_facts.size()):
-		var fl: Label3D = _marquee_facts[i]
-		if i < facts.size():
-			fl.text = str(facts[i])
-			fl.visible = true
-		else:
-			fl.text = ""
-			fl.visible = false
-	# LOADING (item 1): seat the stack - every visible
-	# label fitted to the width cap, then hung from the
-	# block's top edge by its MEASURED line height with
-	# the standing gaps between boxes. The year's seat
-	# never moves; a facts-light marquee is a shorter
-	# stack under the same headline.
-	# FONT: measure with each label's OWN font - the
-	# headline in Space Grotesk Medium, the facts in
-	# Regular; the fit and the seats follow the font
-	# that actually renders (the LOADING smoke judges
-	# the same way, off lbl.font).
-	var seq: Array = [[_marquee_year, 0.0, MARQUEE_FONT_MEDIUM]]
-	if bottom != "":
-		seq.append([_marquee_name, MARQUEE_GAP_YEAR_NAME, MARQUEE_FONT_MEDIUM])
-	for i2: int in range(facts.size()):
-		seq.append([_marquee_facts[i2], MARQUEE_GAP_NAME_FACTS if i2 == 0 else MARQUEE_GAP_FACT, MARQUEE_FONT_REGULAR])
-	var y_top: float = MARQUEE_BLOCK_TOP
-	for entry: Variant in seq:
-		var pair: Array = entry as Array
-		y_top -= float(pair[1])
-		y_top = _marquee_seat(pair[0] as Label3D, y_top, pair[2] as Font)
-	_marquee_t = 0.0
-	_marquee_up = true
-	add_child(_marquee)
-	ClickableQuad.face_point(_marquee, EYE)
+## FIX131: engage the hyperspace warp - begin_launch's call.
+## The amount eases up in _update_hyperspace; the roll starts
+## accruing with it. Nothing is built or torn down: the warp
+## is uniforms on the standing starfield, so engaging is a
+## target flip and the view is never broken.
+func _engage_hyperspace() -> void:
+	_hyper_target = 1.0
 
 
-## LOADING (item 1): fit one marquee label to the width
-## cap. The label never wraps (autowrap is off), so a line
-## longer than the cap scales its pixel size DOWN until
-## the whole line stands inside MARQUEE_MAX_LINE_W - the
-## longest line in the library (the census's 77-char
-## Designer line) reads smaller, never broken. Short
-## lines keep the stock pixel size untouched.
-func _marquee_fit(lbl: Label3D, font: Font) -> void:
-	var w: float = font.get_string_size(lbl.text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, lbl.font_size).x
-	w += float(lbl.outline_size) * 2.0 ## the outline's ink rides outside the shaped width on both sides
-	if w <= 0.0:
-		lbl.pixel_size = MARQUEE_PIXEL_SIZE
-		return
-	lbl.pixel_size = minf(MARQUEE_PIXEL_SIZE, MARQUEE_MAX_LINE_W / w)
+## FIX131: release the warp - the wait settled without a
+## hand-off (end_launch_failed), or Main's runtime-up cue
+## says the table is coming up and the hand-off is a settle
+## away (begin_launch_settle). The amount eases home and the
+## wall undims on the same curve; browsing resumes onto a
+## resting field.
+func _release_hyperspace() -> void:
+	_hyper_target = 0.0
 
 
-## LOADING (item 1): seat one marquee label with its
-## box's top edge at y_top (holder space) and return the
-## box's bottom edge. The box height is the font's own
-## line height at the label's fitted pixel size - exactly
-## the height the rendered AABB stands (the LOADING
-## smoke's geometry legs measure the same quantity), so
-## stacked boxes clear by the gaps the caller leaves
-## between them, at any content length.
-func _marquee_seat(lbl: Label3D, y_top: float, font: Font) -> float:
-	_marquee_fit(lbl, font)
-	var h: float = font.get_height(lbl.font_size) * lbl.pixel_size
-	lbl.position = Vector3(0.0, y_top - h * 0.5, 0.0)
-	return y_top - h
+## FIX131: Main's settle cue - VPX's runtime is up and the
+## hand-off follows after the settle beat, so the warp eases
+## out NOW and the player meets the table from a near-resting
+## field instead of mid-jump.
+func begin_launch_settle() -> void:
+	_release_hyperspace()
 
 
-func _build_marquee() -> void:
-	_marquee = Node3D.new()
-	_marquee.name = "LoadingMarquee"
-	_marquee.position = Vector3(MARQUEE_SETTLE_POS.x, MARQUEE_SETTLE_POS.y, MARQUEE_START_Z)
-	_marquee_year = Label3D.new()
-	_marquee_year.pixel_size = MARQUEE_PIXEL_SIZE
-	_marquee_year.font = MARQUEE_FONT_MEDIUM ## FONT: the headline stands in Space Grotesk Medium
-	_marquee_year.font_size = MARQUEE_YEAR_FONT_SIZE
-	_marquee_year.outline_size = MARQUEE_OUTLINE_SIZE
-	_marquee_year.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_marquee_year.modulate = Color(MARQUEE_YEAR_COLOR, 0.0)
-	_marquee_year.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, 0.0)
-	_marquee.add_child(_marquee_year)
-	_marquee_name = Label3D.new()
-	_marquee_name.pixel_size = MARQUEE_PIXEL_SIZE
-	_marquee_name.font = MARQUEE_FONT_MEDIUM ## FONT: Space Grotesk Medium, like the year
-	_marquee_name.font_size = MARQUEE_NAME_FONT_SIZE
-	_marquee_name.outline_size = MARQUEE_OUTLINE_SIZE
-	_marquee_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	# LOADING (item 1): no autowrap, no wrap width - the
-	# name stands on ONE line, fitted to the cap at raise
-	# (the old WORD_SMART + 700 px pair is what buried the
-	# fact lines under a wrapped second row).
-	_marquee_name.modulate = Color(MARQUEE_NAME_COLOR, 0.0)
-	_marquee_name.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, 0.0)
-	_marquee.add_child(_marquee_name)
-	# PINEMHI1: the fact-line labels stack under the name
-	# line - built hidden, filled (or left hidden) and
-	# seated by _raise_marquee.
-	_marquee_facts.clear()
-	for i: int in range(5):
-		var fl: Label3D = Label3D.new()
-		fl.pixel_size = MARQUEE_PIXEL_SIZE
-		fl.font = MARQUEE_FONT_REGULAR ## FONT: the facts stand in Space Grotesk Regular
-		fl.font_size = MARQUEE_FACT_FONT_SIZE
-		fl.outline_size = MARQUEE_OUTLINE_SIZE
-		fl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		# LOADING (item 1): no autowrap - one line, fitted.
-		fl.modulate = Color(MARQUEE_NAME_COLOR, 0.0)
-		fl.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, 0.0)
-		fl.visible = false
-		_marquee.add_child(fl)
-		_marquee_facts.append(fl)
-	# No face_point here: the holder is oriented in _raise_marquee,
-	# once it is inside the tree (the placard's lesson).
+## FIX131: the dial's two per-mode numbers, from the one
+## constants block: [streak growth, roll rate in deg/s].
+## CLASSIC is the resting field - both zero, the warp never
+## engages visually even while a wait stands.
+func _hyper_variant_params(mode: String) -> Array:
+	match mode:
+		"streaks":
+			return [HYPER_STREAK_GROWTH, 0.0]
+		"gentle":
+			return [HYPER_STREAK_GROWTH, HYPER_ROLL_GENTLE_DEG_S]
+		"full":
+			return [HYPER_STREAK_GROWTH, HYPER_ROLL_FULL_DEG_S]
+	return [0.0, 0.0]
 
 
-## Tear the marquee down and hand the wall its opacity back. The
-## holder is FREED, not parked - the placard's rule (renderer
-## teardown choked on parked holders at exit). On a successful
-## hand-off this never runs: the process exits with the marquee
-## standing, which is the point - it holds until the wait settles.
-## The marquee's current lines, [top, bottom] - the shot hook
-## prints them so a harness can assert what the marquee actually
-## SAYS (the clean-name rule) instead of eyeballing pixels alone.
-## [] while no marquee stands.
-func marquee_text() -> Array[String]:
-	if not _marquee_up or _marquee_year == null or _marquee_name == null:
-		return []
-	return [_marquee_year.text, _marquee_name.text]
+## FIX131: the HYPERSPACE dial's standing value - Main pushes
+## the config's mode in at room entry (the room never holds
+## config), a press on the dial cycles it here and reports
+## (hyper_spin_changed), and Main calls back here if its save
+## failed, so the dial never shows a state the config does
+## not hold. Turning it mid-wait retunes the standing warp at
+## once (the params are read every frame).
+func set_hyper_spin(mode: String) -> void:
+	_hyper_mode = mode if PvldsConfig.HYPER_SPIN_MODES.has(mode) else "gentle"
+	if _setup_panel_up:
+		_request_setup_panel_render(true)
 
 
-## PINEMHI1: the marquee's fact lines as they stand (the
-## visible labels' texts, in order). [] while no marquee
-## stands or no fact lines show.
-func marquee_fact_text() -> Array[String]:
-	var out: Array[String] = []
-	if not _marquee_up:
-		return out
-	for fl: Label3D in _marquee_facts:
-		if fl != null and fl.visible:
-			out.append(fl.text)
-	return out
+func hyper_spin() -> String:
+	return _hyper_mode
 
 
-func _dismiss_marquee() -> void:
-	_marquee_up = false
-	if _marquee != null:
-		if _marquee.get_parent() != null:
-			remove_child(_marquee)
-		_marquee.queue_free()
-		_marquee = null
-		_marquee_year = null
-		_marquee_name = null
-		_marquee_facts.clear()
-	_apply_wall_alpha(1.0)
+## FIX131: the warp's standing state - the proofs' read (the
+## shot hook prints it, the smokes judge by it).
+func hyper_state() -> Dictionary:
+	var params: Array = _hyper_variant_params(_hyper_mode)
+	return {
+		"mode": _hyper_mode,
+		"amount": _hyper_amount,
+		"target": _hyper_target,
+		"roll_deg": rad_to_deg(_hyper_roll_rad),
+		"streak_growth": float(params[0]),
+		"roll_rate_deg_s": float(params[1]),
+		"volume_standing": starfield_volume_standing(),
+	}
 
 
-## Per-frame marquee animation, driven from _process: the wall
-## fades down and stays down; the letters fly from the wall to
-## the settle point and hold there, STILL (PINEMHI1: the settle
-## pulse is removed - the scale below is the fly-in ease alone;
-## only the pulse NC seam breathes again).
-func _update_marquee(delta: float) -> void:
-	if not _marquee_up or _marquee == null:
-		return
-	_marquee_t += delta
-	var fade_p: float = clampf(_marquee_t / MARQUEE_FADE_SEC, 0.0, 1.0)
-	var fade_e: float = fade_p * fade_p * (3.0 - 2.0 * fade_p)
-	_apply_wall_alpha(lerpf(1.0, MARQUEE_WALL_ALPHA, fade_e))
-	var fly_p: float = clampf(_marquee_t / MARQUEE_FLY_IN_SEC, 0.0, 1.0)
-	var fly_e: float = 1.0 - pow(1.0 - fly_p, 3.0)
-	_marquee.position = Vector3(MARQUEE_SETTLE_POS.x, MARQUEE_SETTLE_POS.y,
-		lerpf(MARQUEE_START_Z, MARQUEE_SETTLE_POS.z, fly_e))
-	var settle_scale: float = lerpf(0.85, 1.0, fly_e)
-	if RoomSpecs.pinemhi1_nc == "pulse":
-		# NC seam (PVLDS_PINEMHI1_NC=pulse): the retired
-		# pulse, restored so the pulse leg fails by name.
-		settle_scale *= 1.0 + 0.025 * sin(_marquee_t * 1.6 * TAU) * fly_p
-	_marquee.scale = Vector3.ONE * settle_scale
-	var alpha: float = clampf(_marquee_t / (MARQUEE_FLY_IN_SEC * 0.4), 0.0, 1.0)
-	_marquee_year.modulate = Color(MARQUEE_YEAR_COLOR, alpha)
-	_marquee_year.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, alpha)
-	_marquee_name.modulate = Color(MARQUEE_NAME_COLOR, alpha)
-	_marquee_name.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, alpha)
-	for fl: Label3D in _marquee_facts:
-		if fl != null:
-			fl.modulate = Color(MARQUEE_NAME_COLOR, alpha)
-			fl.outline_modulate = Color(MARQUEE_OUTLINE_COLOR, alpha)
+## Per-frame hyperspace, driven from _process: the amount
+## eases toward its target (in on the launch, out on the
+## settle), the roll accrues at the dial's rate scaled by the
+## amount (so it spins up and down with the warp, never
+## snaps), the wall rides the same eased curve down to
+## HYPER_LOAD_WALL_ALPHA and back, and the three uniforms
+## land on the volume's shared material. At rest the roll
+## wraps to its own equivalent angle - cos/sin never see a
+## stale large value, and the frozen field does not move.
+func _update_hyperspace(delta: float) -> void:
+	if _hyper_target > _hyper_amount:
+		_hyper_amount = minf(_hyper_target, _hyper_amount + delta / HYPER_RAMP_IN_SEC)
+	elif _hyper_target < _hyper_amount:
+		_hyper_amount = maxf(_hyper_target, _hyper_amount - delta / HYPER_RAMP_OUT_SEC)
+	var params: Array = _hyper_variant_params(_hyper_mode)
+	if _hyper_amount > 0.0:
+		_hyper_roll_rad += deg_to_rad(float(params[1])) * _hyper_amount * delta
+	elif _hyper_roll_rad != 0.0:
+		_hyper_roll_rad = fmod(_hyper_roll_rad, TAU)
+	if _bg_volume_mat != null:
+		_bg_volume_mat.set_shader_parameter("hyper_amount", _hyper_amount)
+		_bg_volume_mat.set_shader_parameter("hyper_roll", _hyper_roll_rad)
+		_bg_volume_mat.set_shader_parameter("hyper_streak", float(params[0]))
+	var fade_e: float = _hyper_amount * _hyper_amount * (3.0 - 2.0 * _hyper_amount)
+	_apply_wall_alpha(lerpf(1.0, HYPER_LOAD_WALL_ALPHA, fade_e))
+
 
 
 ## The wall fade itself: panels, their Launch buttons, the rail,
-## and the banner. Change-guarded - _update_marquee calls this
-## every frame of the wait. Each card's fade is multiplied by
+## and the banner. Change-guarded - _update_hyperspace calls
+## this every frame of the wait. Each card's fade is multiplied by
 ## its haze (the background stack's fourth layer): the marquee
 ## dims the whole wall, the haze dims the far columns further.
 ## The wall-alpha write counter (the hitchhunt smoke reads
@@ -12847,7 +12756,7 @@ func _process(delta: float) -> void:
 	# moves no focus, activates nothing, and escapes nothing. On
 	# the SETUP placard the press also does nothing: BACK is the
 	# only way off the placard.
-	# The loading marquee animates on this same per-frame beat.
+	# The hyperspace warp animates on this same per-frame beat.
 	# Scroll telemetry (observation only): start the witness
 	# on the room's first visible frame, and snapshot the
 	# drum's motion state BEFORE this frame's swing update -
@@ -12855,8 +12764,8 @@ func _process(delta: float) -> void:
 	_telemetry_start_if_needed()
 	var telemetry_motion_was_active: bool = _swing_active or _nc_roll_dir != 0 or absf(_swing_vel) > 0.0001
 	var telemetry_applied_yaw_before: float = _wall.rotation.y if _wall != null else _drum_yaw
-	if _marquee_up:
-		_update_marquee(delta)
+	if _hyper_amount > 0.0 or _hyper_target > 0.0:
+		_update_hyperspace(delta)
 	_update_background(delta) ## the starfield drift (GRADFIX4 item 5d) - its own beat, ungated
 	_rb_update() ## SUBMITPANEL: the submit read-back's poll clock - asks Main for the next board fetch when one falls due
 	if _plates_pending:

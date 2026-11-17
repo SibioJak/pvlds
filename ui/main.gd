@@ -436,6 +436,7 @@ var _sm_judged: bool = false ## a judge coroutine is in flight (its legs land in
 var _pm1_samples: Array = []
 var _smoke_loading: bool = false ## --pvlds-smoke-loading: LOADING round - one boot judges all three items. (3) The tournie boards' deadline line: RoomSpecs' two board specs carry sub_size 30 + sub_bold (LOADING stood them at 28; ENDGAME Part D raised them). (2) The rail's working set: the library strip stands whole (11 sections), the Tournament Room's strip stands at exactly TOURNAMENT / REFRESH / SETUP / EXIT with the focus walk across the four (drawn focus == real focus at every step), and the B-door round trip restores the library strip. (1) The env-named target (PVLDS_LOADING_TARGET) launches through the real launch door and the SETTLED marquee is judged geometrically off the labels' rendered AABBs: contents exact, every label one line tall, consecutive labels' spans disjoint with clearance, no line wider than the marquee's 2.30 m cap. Grabs land in PVLDS_LOADING_GRAB_DIR
 var _ld_phase: int = 0
+var _ld_roll_first: float = -1.0 ## FIX131: the loading smoke's first roll sample at full warp (phase 4 -> 5 accrual window)
 var _ld_wait: int = 0
 var _ld_failures: int = 0
 var _ld_done: bool = false
@@ -1022,13 +1023,13 @@ func _ready() -> void:
 	# book-flush legs fail against it by name.
 	RoomSpecs.board_short_page = OS.get_environment("PVLDS_GRADFIX5_NC") == "shortpage"
 	# GRADFIX5 (item 4) NC seam: oldwall restores the shipped
-	# wall wholesale (radius 3.05, no lift, marquee start at
-	# the old wall) so the wall-reach leg fails on its own
-	# numbers.
+	# wall wholesale (radius 3.05, no lift) so the wall-reach
+	# leg fails on its own numbers. (Its third term restored
+	# the marquee's fly-in start at the old wall; the marquee
+	# is abolished - FIX131 - so the term is gone with it.)
 	if OS.get_environment("PVLDS_GRADFIX5_NC") == "oldwall":
 		RoomView.WALL_RADIUS = 3.05
 		RoomView.WALL_LIFT = 0.0
-		RoomView.MARQUEE_START_Z = -3.05
 	# The pick-latency bench seam (PVLDS_BENCH): the room's
 	# fills print their phase timings + render counts.
 	RoomView.debug_bench = OS.has_environment("PVLDS_BENCH")
@@ -2449,6 +2450,27 @@ func _on_room_edge_arrows_toggled(on: bool) -> void:
 		_room.set_setup_panel_message("That arrows setting could NOT be saved - the config file is not writable, so the switch has been put back as it was.")
 
 
+## FIX131: the room SETUP panel's HYPERSPACE dial - the
+## edge-arrows terms exactly (save, and a failed save
+## restores the config AND the dial, and says so on the
+## panel: a dial that did not save must not look - or act -
+## turned).
+func _on_room_hyper_spin_changed(mode: String) -> void:
+	if _config == null:
+		return
+	var before: String = _config.hyper_spin
+	_config.hyper_spin = mode
+	if _config.save_to_disk():
+		if _room != null:
+			_room.set_setup_panel_message("Hyperspace: %s while a table loads." % RoomView.HYPER_SPIN_LABELS[mode])
+		_refresh_setup_panel_health()
+		return
+	_config.hyper_spin = before
+	if _room != null:
+		_room.set_hyper_spin(before)
+		_room.set_setup_panel_message("That hyperspace setting could NOT be saved - the config file is not writable, so the dial has been put back as it was.")
+
+
 func _on_room_wovp_key_pasted(api_key: String) -> void:
 	if _config == null:
 		return
@@ -2816,12 +2838,14 @@ func _enter_room() -> void:
 		_room.wovp_key_pasted.connect(_on_room_wovp_key_pasted)
 		_room.pinemhi_watcher_toggled.connect(_on_room_pinemhi_watcher_toggled)
 		_room.edge_arrows_toggled.connect(_on_room_edge_arrows_toggled)
+		_room.hyper_spin_changed.connect(_on_room_hyper_spin_changed)
 		_room.wovp_submit_requested.connect(_on_room_wovp_submit_requested)
 		_room.wovp_key_test_requested.connect(_on_room_wovp_key_test)
 		_room.display_settings_changed.connect(_on_display_settings_changed)
 		_room.set_starfield_mode(_config.starfield_mode)
 		_room.set_pinemhi_manage_watcher(_config.pinemhi_manage_watcher) ## PINEMHI2 (Part B): the SETUP dial's standing value
 		_room.set_edge_arrows(_config.edge_arrows) ## FIX122: the SETUP dial's standing value (OFF by default)
+		_room.set_hyper_spin(_config.hyper_spin) ## FIX131: the HYPERSPACE dial's standing value (GENTLE SPIN by default)
 		_room.set_wall_motion_mode(_config.wall_motion_mode)
 		_room.launch_requested.connect(_on_launch_requested)
 		_room.exit_requested.connect(_on_exit_requested)
@@ -3004,6 +3028,11 @@ func _poll_launch() -> void:
 	if contract.session_id == _launch_session_id and contract.runtime_seen_unix > 0:
 		if _launch_runtime_seen_msec < 0:
 			_launch_runtime_seen_msec = now
+			# FIX131: the table is coming up - the warp eases
+			# out across the settle beat, so the hand-off is
+			# met from a near-resting field.
+			if _room != null:
+				_room.begin_launch_settle()
 		elif now - _launch_runtime_seen_msec >= LAUNCH_SETTLE_MSEC:
 			_settle_launch(true, "VPX's runtime is up")
 			return
@@ -3058,7 +3087,7 @@ func _settle_launch(ok: bool, reason: String) -> void:
 ## --pvlds-shot-launch: fire a real launch once the wall is ready,
 ## then capture the LOADING room ~1s into the wait and leave. The
 ## capture delay is retunable via PVLDS_SHOT_LAUNCH_DELAY_MS (the
-## marquee QA loop shoots mid-fly-in and settled frames).
+## hyperspace QA loop shoots mid-ramp and full-warp frames).
 func _poll_shot_launch() -> void:
 	if not _shot_launch_fired:
 		if _room != null and _room.visible and _room.wall_ready:
@@ -3072,9 +3101,10 @@ func _poll_shot_launch() -> void:
 		var path: String = _shot_launch_path
 		_shot_launch_path = ""
 		if _room != null:
-			var marquee_lines: Array[String] = _room.marquee_text()
-			if marquee_lines.size() == 2:
-				print("PVLDS SHOT LAUNCH MARQUEE top=\"%s\" bottom=\"%s\"" % [marquee_lines[0], marquee_lines[1]])
+			var hs: Dictionary = _room.hyper_state()
+			print("PVLDS SHOT LAUNCH HYPER mode=%s amount=%.3f roll_deg=%.2f streak=%.1f roll_rate=%.1f" % [
+				str(hs["mode"]), float(hs["amount"]), float(hs["roll_deg"]),
+				float(hs["streak_growth"]), float(hs["roll_rate_deg_s"])])
 		var img: Image = get_viewport().get_texture().get_image()
 		var err: Error = img.save_png(path)
 		print("PVLDS SHOT LAUNCH: ", path, " err=", err, " size=", img.get_size())
@@ -5070,9 +5100,24 @@ func _setup_panel_surface_assertions() -> void:
 	_room._activate(_room.setup_panel_arrows_quad())
 	_setup_panel_expect(_config != null and not _config.edge_arrows and not _room.edge_arrows(),
 		"edge arrows: a second press turns the dial (and the config) back OFF")
+	# FIX131: the HYPERSPACE dial cycles the loading-warp
+	# attempts and the config follows the room - pressed
+	# through the full cycle, so the panel is left as it
+	# was found.
+	var hyper_start: String = _room.hyper_spin()
+	var hyper_idx: int = PvldsConfig.HYPER_SPIN_MODES.find(hyper_start)
+	_room._activate(_room.setup_panel_hyper_quad())
+	var hyper_next: String = PvldsConfig.HYPER_SPIN_MODES[(hyper_idx + 1) % PvldsConfig.HYPER_SPIN_MODES.size()]
+	_setup_panel_expect(_room.hyper_spin() == hyper_next and _config != null and _config.hyper_spin == hyper_next,
+		"hyperspace: one press cycles the dial (and the config) %s -> %s" % [hyper_start, hyper_next])
+	for i: int in range(3):
+		_room._activate(_room.setup_panel_hyper_quad())
+	_setup_panel_expect(_room.hyper_spin() == hyper_start and _config != null and _config.hyper_spin == hyper_start,
+		"hyperspace: the full cycle returns the dial (and the config) to %s" % hyper_start)
 	_setup_panel_expect(_room.setup_panel_ipdb_quad() != null, "XR setup: the panel has RE-APPLY IPDB DATA")
 	_setup_panel_expect(_room.setup_panel_watcher_quad() != null, "XR setup: the panel has PINEMHI WATCHER (the watcher dial row)")
 	_setup_panel_expect(_room.setup_panel_arrows_quad() != null, "XR setup: the panel has EDGE ARROWS (the chevron dial row, FIX122)")
+	_setup_panel_expect(_room.setup_panel_hyper_quad() != null, "XR setup: the panel has HYPERSPACE (the loading-warp dial row, FIX131)")
 	_setup_panel_expect(_room.setup_panel_back_quad() != null, "XR setup: the panel has BACK")
 	# PANELFIT (item 1): the reseated panel's bottom clears
 	# the numbers line - the lowest panel quad's downward
@@ -5135,6 +5180,7 @@ func _setup_panel_surface_assertions() -> void:
 		and _room.setup_panel_ipdb_quad().pick_enabled
 		and _room.setup_panel_watcher_quad().pick_enabled
 		and _room.setup_panel_arrows_quad().pick_enabled
+		and _room.setup_panel_hyper_quad().pick_enabled
 		and _room.setup_panel_back_quad().pick_enabled,
 		"XR setup: the panel's own buttons are live")
 	# PANELFIT restatement: this leg was written when the
@@ -5145,7 +5191,8 @@ func _setup_panel_surface_assertions() -> void:
 	# same intent (focus is confined to the panel's own
 	# buttons), true census.
 	# FIX122: the EDGE ARROWS dial makes it NINE.
-	_setup_panel_expect(_room._focusables.size() == 9
+	# FIX131: the HYPERSPACE dial makes it TEN.
+	_setup_panel_expect(_room._focusables.size() == 10
 		and _room._focusables.has(_room.setup_panel_scan_quad())
 		and _room._focusables.has(_room.setup_panel_download_quad())
 		and _room._focusables.has(_room.setup_panel_wovp_paste_quad())
@@ -5154,8 +5201,9 @@ func _setup_panel_surface_assertions() -> void:
 		and _room._focusables.has(_room.setup_panel_ipdb_quad())
 		and _room._focusables.has(_room.setup_panel_watcher_quad())
 		and _room._focusables.has(_room.setup_panel_arrows_quad())
+		and _room._focusables.has(_room.setup_panel_hyper_quad())
 		and _room._focusables.has(_room.setup_panel_back_quad()),
-		"XR setup: focus navigation is confined to the panel's nine buttons")
+		"XR setup: focus navigation is confined to the panel's ten buttons")
 	_setup_panel_expect(_room._focused == _room.setup_panel_scan_quad(),
 		"XR setup: focus opens on SCAN LIBRARY")
 	# Confinement under travel: TAB around the stops and
@@ -11905,27 +11953,28 @@ func _nav_leg_ay_swap_async() -> void:
 	# (the card click) - where build picking lives now.
 	_room._on_select(_room._panels[2])
 	_nav_expect(_room._mode == "detail", "A/Y: a card click opens the detail view")
-	_nav_expect(_room.marquee_text().is_empty() and not _room._marquee_up,
-		"marquee: no marquee stands while the detail view is open")
+	_nav_expect(float(_room.hyper_state()["target"]) == 0.0 and float(_room.hyper_state()["amount"]) == 0.0,
+		"hyperspace: no warp stands while the detail view is open")
 	# Y in the detail view is inert.
 	await _nav_feed_button(JOY_BUTTON_Y)
 	_nav_expect(not _launch_pending and _room._mode == "detail",
 		"A/Y: a detail-view Y press does nothing")
 	# A launch begun from the detail view, through the
 	# detail's own Play path: the room enters the wait, the
-	# detail carries its launching state, and NO marquee
-	# rises behind the info card.
+	# detail carries its launching state, and the warp
+	# engages behind the info card (FIX131: the sky occludes
+	# nothing - the marquee's old exclusion died with it).
 	var build: TableBuild = game.resolve_default_build(_state)
-	_nav_expect(build != null, "marquee: the detail-leg game resolves a default build")
+	_nav_expect(build != null, "hyperspace: the detail-leg game resolves a default build")
 	_room._on_detail_play(game, build)
 	var guard: int = 0
 	while not _launch_pending and guard < 600:
 		await get_tree().process_frame
 		guard += 1
-	_nav_expect(_launch_pending, "marquee: a detail-view Play starts a launch")
-	_nav_expect(_room.is_launch_in_wait(), "marquee: the room is in the load wait")
-	_nav_expect(_room.marquee_text().is_empty() and not _room._marquee_up,
-		"marquee: no marquee stands during a detail-initiated launch")
+	_nav_expect(_launch_pending, "hyperspace: a detail-view Play starts a launch")
+	_nav_expect(_room.is_launch_in_wait(), "hyperspace: the room is in the load wait")
+	_nav_expect(float(_room.hyper_state()["target"]) == 1.0,
+		"hyperspace: a detail-initiated launch engages the warp")
 	# The dead stub settles it as a failure; the room hands
 	# the wait back to the detail view, which then closes
 	# to the wall as usual.
@@ -11933,9 +11982,11 @@ func _nav_leg_ay_swap_async() -> void:
 	while _launch_pending and guard < 3600:
 		await get_tree().process_frame
 		guard += 1
-	_nav_expect(not _launch_pending, "marquee: the detail-initiated launch settles")
+	_nav_expect(not _launch_pending, "hyperspace: the detail-initiated launch settles")
 	_nav_expect(_room._mode == "detail",
-		"marquee: the failed settle lands back on the detail view")
+		"hyperspace: the failed settle lands back on the detail view")
+	_nav_expect(float(_room.hyper_state()["target"]) == 0.0,
+		"hyperspace: the failed settle releases the warp")
 	# Close the way production does (the detail's own
 	# escape: hide + the closed signal), not by calling the
 	# room's handler directly - the handler alone leaves
@@ -11944,7 +11995,7 @@ func _nav_leg_ay_swap_async() -> void:
 	_room._detail.handle_escape()
 	_nav_expect(_room._mode == "wall", "A/Y: the detail view closes back to the wall")
 	# A on a focused card fires its default build - and a
-	# wall-initiated launch raises the marquee as always.
+	# wall-initiated launch engages the warp as always.
 	_room._set_focused(_room._panels[2])
 	await _nav_feed_button(JOY_BUTTON_A)
 	guard = 0
@@ -11956,8 +12007,8 @@ func _nav_leg_ay_swap_async() -> void:
 		"A/Y: the launch is the focused card's game")
 	_nav_expect(_room.is_launch_in_wait(), "A/Y: the room is in the load wait")
 	_nav_expect(_room.focusable_count() == 0, "A/Y: the wait's focusable set is empty")
-	_nav_expect(not _room.marquee_text().is_empty(),
-		"marquee: a wall-initiated launch raises the marquee again")
+	_nav_expect(float(_room.hyper_state()["target"]) == 1.0,
+		"hyperspace: a wall-initiated launch engages the warp again")
 	# A second A inside the wait fires nothing.
 	var session: int = _launch_session_id
 	await _nav_feed_button(JOY_BUTTON_A)
@@ -17114,18 +17165,20 @@ func _cb_expect(cond: bool, label: String) -> void:
 		_cb_fail(label)
 
 
-## PINEMHI1 smoke (--pvlds-smoke-pinemhi1): the loading
-## marquee, judged standing. The env-named target
+## PINEMHI1 smoke (--pvlds-smoke-pinemhi1): the launch
+## wait, judged standing. The env-named target
 ## (PVLDS_PINEMHI1_TARGET, default Indy) launches through
-## the real launch door against the harness stub VPX;
-## once the marquee has flown in and settled (its clock
-## past 2 s, deep inside the stub's 10 s load), the driver
-## samples the settled scale for 45 frames and judges:
-## the headline pair, the fact lines standing under it
-## (RoomSpecs.marquee_fact_lines' contract made visible),
-## and the scale holding at exactly 1.0 - the pulse is
-## GONE. Under PVLDS_PINEMHI1_NC=pulse the scale breathes
-## and the pulse leg fails by name. A grab lands at
+## the real launch door against the harness stub VPX.
+## FIX131 rework: this smoke judged the loading marquee
+## (headline, fact lines, the pulse's absence); the
+## marquee is abolished and the hyperspace warp carries
+## the wait now, so the legs judge the abolition and the
+## warp: NO marquee node stands and the room offers no
+## marquee text surface at all, the warp's amount rises
+## to full and holds CONSTANT there across 45 frames
+## (the pulse leg's successor - the settled warp does not
+## breathe either), and in a spin mode the roll has
+## accrued while it held. A grab lands at
 ## PVLDS_PINEMHI1_GRAB when set.
 func _drive_pinemhi1_smoke() -> void:
 	if _pm1_done:
@@ -17151,40 +17204,21 @@ func _drive_pinemhi1_smoke() -> void:
 					_finish_pinemhi1_smoke()
 		1:
 			_pm1_wait += 1
-			if _room != null and _room._marquee_up and _room._marquee != null and _room._marquee_t > 2.0:
-				_pm1_samples.append(_room._marquee.scale.x)
+			if _room != null and float(_room.hyper_state()["amount"]) >= 0.999:
+				_pm1_samples.append(float(_room.hyper_state()["amount"]))
 				if _pm1_samples.size() >= 45:
 					_pm1_judge(target)
 					_finish_pinemhi1_smoke()
 			elif _pm1_wait > 1800:
-				_pm1_fail("the marquee for %s never stood settled (up=%s)" % [target, str(_room != null and _room._marquee_up)])
+				_pm1_fail("the warp for %s never reached full (amount=%s)" % [target, str(_room.hyper_state()["amount"]) if _room != null else "<no room>"])
 				_finish_pinemhi1_smoke()
 
 
 func _pm1_judge(target: String) -> void:
-	var want: Dictionary = {}
-	match target:
-		"lkSumsrF":
-			want = {"top": "1993", "bottom": "Mark Ritchie", "facts": [
-				"Designer: Mark Ritchie, Doug Watson", "Art: Doug Watson",
-				"Music: Chris Granner", "Software: Brian Eddy", "Units produced: 12,716"]}
-		"1vJ_ZQYe":
-			want = {"top": "2021", "bottom": "Dan Langlois", "facts": ["Designer: Dan Langlois"]}
-	if want.is_empty():
-		_pm1_fail("no expectations stand for target %s" % target)
-		return
-	var lines: Array[String] = _room.marquee_text()
-	_pm1_expect(lines.size() == 2 and lines[0] == str(want["top"]) and lines[1] == str(want["bottom"]),
-		"PINEMHI1 marquee: %s's headline stands ('%s' / '%s')" % [target, lines[0] if lines.size() > 0 else "<none>", lines[1] if lines.size() > 1 else "<none>"])
-	var got_facts: Array[String] = _room.marquee_fact_text()
-	var want_facts: Array = want["facts"] as Array
-	var facts_ok: bool = got_facts.size() == want_facts.size()
-	if facts_ok:
-		for i: int in range(want_facts.size()):
-			if got_facts[i] != str(want_facts[i]):
-				facts_ok = false
-	_pm1_expect(facts_ok,
-		"PINEMHI1 marquee: %s's fact lines stand under the headline - IPDB values first, db fallback, empties skipped, cap 5 (got %s)" % [target, str(got_facts)])
+	_pm1_expect(_room.get_node_or_null("LoadingMarquee") == null,
+		"PINEMHI1 hyperspace: no marquee node stands in the room during %s's load wait - the text is abolished" % target)
+	_pm1_expect(not _room.has_method("marquee_text") and not _room.has_method("marquee_fact_text"),
+		"PINEMHI1 hyperspace: the room offers no marquee text surface - no headline, no fact lines, nothing to read")
 	var lo: float = 1e9
 	var hi: float = -1e9
 	for sv: Variant in _pm1_samples:
@@ -17192,12 +17226,16 @@ func _pm1_judge(target: String) -> void:
 		lo = minf(lo, s)
 		hi = maxf(hi, s)
 	_pm1_expect(hi - lo < 0.0001 and absf(hi - 1.0) < 0.0001,
-		"PINEMHI1 marquee: the settled scale holds CONSTANT at 1.0 across %d frames - the font pulse is gone (min %.4f, max %.4f)" % [_pm1_samples.size(), lo, hi])
+		"PINEMHI1 hyperspace: the engaged warp holds CONSTANT at full amount across %d frames - nothing breathes (min %.4f, max %.4f)" % [_pm1_samples.size(), lo, hi])
+	var hs: Dictionary = _room.hyper_state()
+	if float(hs["roll_rate_deg_s"]) > 0.0:
+		_pm1_expect(float(hs["roll_deg"]) > 1.0,
+			"PINEMHI1 hyperspace: in %s mode the field's roll accrued while the warp held (%.2f deg)" % [str(hs["mode"]), float(hs["roll_deg"])])
 	var grab: String = OS.get_environment("PVLDS_PINEMHI1_GRAB")
 	if grab != "":
 		var img: Image = get_viewport().get_texture().get_image()
 		img.save_png(grab)
-		print("  ok - pinemhi1 smoke: marquee grab saved to ", grab)
+		print("  ok - pinemhi1 smoke: hyperspace grab saved to ", grab)
 
 
 func _pm1_expect(cond: bool, label: String) -> void:
@@ -17364,62 +17402,26 @@ func _ld_judge_tournie_strip() -> void:
 	_ld_grab("tournie_strip.png")
 
 
-func _ld_judge_marquee(target: String) -> void:
-	var want: Dictionary = {}
-	match target:
-		"dwLOAD01":
-			want = {"top": "1990", "bottom": "John Trudeau, Jon Norris", "facts": [
-				"Designer: John Trudeau, Jon Norris",
-				"Art: David Moore, Constantino Mitchell, Jeanine Mitchell",
-				"Units produced: 803"]}
-		"wcLOAD01":
-			want = {"top": "1994", "bottom": "Lyman F. Sheats Jr., Tim Seckel, Joe Kaminkow, Ed Cebula, John Borg", "facts": [
-				"Designer: Lyman F. Sheats Jr., Tim Seckel, Joe Kaminkow, Ed Cebula, John Borg",
-				"Art: Markus Rothkranz", "Music: Brian Schmidt",
-				"Software: Lonnie D. Ropp, John Carpenter", "Units produced: 5,505"]}
-	if want.is_empty():
-		_ld_fail("no expectations stand for target %s" % target)
-		return
-	var lines: Array[String] = _room.marquee_text()
-	_ld_expect(lines.size() == 2 and lines[0] == str(want["top"]) and lines[1] == str(want["bottom"]),
-		"LOADING marquee: %s's headline stands ('%s' / '%s')" % [target, lines[0] if lines.size() > 0 else "<none>", lines[1] if lines.size() > 1 else "<none>"])
-	var got_facts: Array[String] = _room.marquee_fact_text()
-	var want_facts: Array = want["facts"] as Array
-	var facts_ok: bool = got_facts.size() == want_facts.size()
-	if facts_ok:
-		for i: int in range(want_facts.size()):
-			if got_facts[i] != str(want_facts[i]):
-				facts_ok = false
-	_ld_expect(facts_ok, "LOADING marquee: %s's fact lines stand exact (got %s)" % [target, str(got_facts)])
-	# The geometry, off the rendered AABBs in holder space:
-	# every label exactly one line tall, consecutive spans
-	# disjoint with clearance, no line wider than the cap.
-	var labels: Array[Label3D] = []
-	labels.append(_room._marquee_year)
-	if _room._marquee_name.visible:
-		labels.append(_room._marquee_name)
-	for fl: Label3D in _room._marquee_facts:
-		if fl.visible:
-			labels.append(fl)
-	var prev_lo: float = 1e9
-	for i: int in range(labels.size()):
-		var lbl: Label3D = labels[i]
-		var ab: AABB = lbl.get_aabb()
-		var hi: float = lbl.position.y + ab.position.y + ab.size.y
-		var lo: float = lbl.position.y + ab.position.y
-		var f: Font = lbl.font if lbl.font != null else ThemeDB.fallback_font
-		var one_line: float = f.get_height(lbl.font_size) * lbl.pixel_size
-		print("  .. loading smoke: marquee label %d '%s' span [%.3f, %.3f] h=%.3f one-line=%.3f w=%.3f autowrap=%d" % [
-			i, lbl.text, lo, hi, ab.size.y, one_line, ab.size.x, lbl.autowrap_mode])
-		_ld_expect(ab.size.y <= one_line * 1.35 + 0.01,
-			"LOADING marquee: label %d ('%s') stands ONE line tall (h %.3f vs one-line %.3f) - no wrap, ever" % [i, lbl.text, ab.size.y, one_line])
-		_ld_expect(ab.size.x <= 2.30 + 0.01,
-			"LOADING marquee: label %d ('%s') fits the marquee's width cap (w %.3f of 2.30)" % [i, lbl.text, ab.size.x])
-		if i > 0:
-			_ld_expect(prev_lo - hi >= 0.015,
-				"LOADING marquee: labels %d and %d stand clear of each other (gap %.3f)" % [i - 1, i, prev_lo - hi])
-		prev_lo = lo
-	_ld_grab("marquee_" + target + ".png")
+func _ld_judge_hyperspace(target: String) -> void:
+	# FIX131: this judge measured the marquee's labels (one
+	# line tall, clear of each other, inside the width cap)
+	# off their rendered AABBs. The text it measured is
+	# abolished; the legs below judge what stands instead -
+	# the warp, off the room's own state read.
+	_ld_expect(_room.get_node_or_null("LoadingMarquee") == null,
+		"LOADING hyperspace: no marquee node stands during %s's load wait - the loading text is gone" % target)
+	var hs: Dictionary = _room.hyper_state()
+	_ld_expect(float(hs["target"]) == 1.0 and float(hs["amount"]) >= 0.999,
+		"LOADING hyperspace: the warp stands fully engaged for %s's wait (amount %.3f)" % [target, float(hs["amount"])])
+	_ld_expect(PvldsConfig.HYPER_SPIN_MODES.has(str(hs["mode"])),
+		"LOADING hyperspace: the dial's mode reads back a real attempt ('%s')" % str(hs["mode"]))
+	if str(hs["mode"]) != "classic":
+		_ld_expect(float(hs["streak_growth"]) > 0.0,
+			"LOADING hyperspace: %s mode carries a streak (growth %.1f)" % [str(hs["mode"]), float(hs["streak_growth"])])
+	if float(hs["roll_rate_deg_s"]) > 0.0:
+		_ld_expect(float(hs["roll_deg"]) > _ld_roll_first + 0.5,
+			"LOADING hyperspace: the field rolled while the warp held (%.2f -> %.2f deg at %.1f deg/s)" % [_ld_roll_first, float(hs["roll_deg"]), float(hs["roll_rate_deg_s"])])
+	_ld_grab("hyper_warp.png")
 
 
 func _drive_loading_smoke() -> void:
@@ -17473,11 +17475,17 @@ func _drive_loading_smoke() -> void:
 					_finish_loading_smoke()
 		4:
 			_ld_wait += 1
-			if _room != null and _room._marquee_up and _room._marquee != null and _room._marquee_t > 2.0:
-				_ld_judge_marquee(target)
-				_finish_loading_smoke()
+			if _room != null and float(_room.hyper_state()["amount"]) >= 0.999:
+				_ld_roll_first = float(_room.hyper_state()["roll_deg"])
+				_ld_phase = 5
+				_ld_wait = 0
 			elif _ld_wait > 1800:
-				_ld_fail("the marquee for %s never stood settled (up=%s)" % [target, str(_room != null and _room._marquee_up)])
+				_ld_fail("the warp for %s never reached full (amount=%s)" % [target, str(_room.hyper_state()["amount"]) if _room != null else "<no room>"])
+				_finish_loading_smoke()
+		5:
+			_ld_wait += 1
+			if _ld_wait >= 45:
+				_ld_judge_hyperspace(target)
 				_finish_loading_smoke()
 
 
