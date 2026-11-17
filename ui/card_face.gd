@@ -51,6 +51,7 @@ const DISPLAY_FONT_REGULAR: Font = preload("res://assets/fonts/SpaceGrotesk-Regu
 
 const FACE_MARGIN_TOP_PX: int = 22 ## the shared face layout's top margin
 const FACE_MARGIN_BOTTOM_PX: int = 22 ## the shared face layout's bottom margin (a board's footer band takes the bottom over - see apply_spec)
+const BOARD_ART_HEIGHT_PX: int = 300 ## FIX132: the board kind's art header height (the PINemHi weekly boards' framed table picture, under the band)
 
 ## Title-card raise (Chris's field note, 2026-10-23): art faces are
 ## full-bleed - their content starts at the texture's top row -
@@ -136,6 +137,8 @@ var _sections_box: VBoxContainer ## PANEL112: the SETUP panel's sectioned body -
 var _footer_label: Label ## PANEL112: the sectioned face's quiet footer line (the SETUP panel's pointer line), standing under the bands, unbanded; same per-spec discipline as _sections_box
 var _chips_row: HBoxContainer
 var _rows_box: VBoxContainer ## the board kind's stacked rows (score / divider / note)
+var _board_art_frame: PanelContainer ## board kind (FIX132): the framed picture header under the band - stands only while a board spec carries "art_texture" (today only the PINemHi weekly boards: the table's author shot in the family's teal frame)
+var _board_art: TextureRect ## board kind (FIX132): the header's picture (aspect-covered inside the frame)
 var _top_spacer: Control ## board kind (GRADFIX8): the centring spacer above the band - shares the face's spare height with _footer_spacer so the content block centres (see apply_spec)
 var _footer_spacer: Control ## board kind: pushes the footer band to the face's bottom edge
 var _footer_panel: PanelContainer ## board kind: the footer plinth (spec "footer_px") - the flip back's Launch seat; standing boards reserve none since GRADFIX10
@@ -321,6 +324,19 @@ func _init() -> void:
 	_band_panel.add_child(_band_label)
 	_vbox.add_child(_band_panel)
 
+	# FIX132: the board kind's art header, built beside
+	# the band and hidden - it stands only while a board
+	# spec carries "art_texture" (see apply_spec).
+	_board_art_frame = PanelContainer.new()
+	_board_art = TextureRect.new()
+	_board_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_board_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_board_art.custom_minimum_size = Vector2(0, BOARD_ART_HEIGHT_PX)
+	_board_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_board_art_frame.add_child(_board_art)
+	_board_art_frame.visible = false
+	_vbox.add_child(_board_art_frame)
+
 	_title_label = Label.new()
 	_title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_title_label.add_theme_color_override("font_color", Color(0.96, 0.96, 0.98))
@@ -406,6 +422,23 @@ func _box(color: Color, radius: int) -> StyleBoxFlat:
 	sb.content_margin_right = 14
 	sb.content_margin_top = 6
 	sb.content_margin_bottom = 6
+	return sb
+
+
+## FIX132: the board art header's frame - a flat mat of
+## the spec's frame colour around the picture (10 px on
+## every side), corners at the band's own radius.
+func _art_frame_box(color: Color) -> StyleBoxFlat:
+	var sb: StyleBoxFlat = StyleBoxFlat.new()
+	sb.bg_color = color
+	sb.corner_radius_top_left = 6
+	sb.corner_radius_top_right = 6
+	sb.corner_radius_bottom_left = 6
+	sb.corner_radius_bottom_right = 6
+	sb.content_margin_left = 10
+	sb.content_margin_right = 10
+	sb.content_margin_top = 10
+	sb.content_margin_bottom = 10
 	return sb
 
 
@@ -642,6 +675,7 @@ func apply_spec(spec: Dictionary) -> void:
 	# the title itself - the dome room's cards wear a
 	# nameplate label on the card, and a second title inside
 	# the face would double it (the graduation round).
+	_board_art_frame.visible = false ## FIX132: re-asserted per spec below (board kind with an art_texture only)
 	_art_strip.visible = kind == "art" and bool(spec.get("strip", true))
 	_art_fav.visible = kind == "art" and bool(spec.get("favorite", false))
 	_art_pup.visible = kind == "art" and bool(spec.get("pup", false))
@@ -691,6 +725,18 @@ func apply_spec(spec: Dictionary) -> void:
 		return
 
 	_restore_labels()
+	# FIX132: a board spec carrying the table's art
+	# ("art_texture", attached by the room from the shot
+	# cache) stands the framed picture header under its
+	# band. Today only the PINemHi weekly boards carry
+	# it; every other board spec leaves the header hidden
+	# and its layout exactly as it was.
+	var board_art: Variant = spec.get("art_texture", null)
+	_board_art_frame.visible = kind == "board" and board_art is Texture2D
+	if _board_art_frame.visible:
+		_board_art.texture = board_art as Texture2D
+		_board_art_frame.add_theme_stylebox_override("panel",
+			_art_frame_box(_color_of(spec, "art_frame_color", Color(0.14, 0.45, 0.36))))
 	_band_panel.visible = kind == "panel" or kind == "info" or kind == "board"
 	# The Standing Book centres everything (GRADFIX3, the
 	# user's direction): a board's band text sits centred on

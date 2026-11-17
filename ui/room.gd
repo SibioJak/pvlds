@@ -1450,6 +1450,9 @@ var _pinemhi2_fetched_at: int = 0 ## unix time the standing weekly boards landed
 var _pinemhi2_live: bool = false ## the standing weekly boards came from a fetch this session (false = the disk cache's)
 var _pinemhi2_fetch_error: String = "" ## the last weekly fetch's failure, in words, when it failed
 var _pinemhi2_player_name: String = "" ## his PINemHi registration name (from his own TOP10_Personal files, via Main) - the weekly boards accent his row by exact match
+var _pinemhi2_bests: Dictionary = {} ## FIX132: his PINemHi personal best per weekly contest ({contest_id: record}), resolved by Main from his shelf files (PinemhiScores.resolve_weekly_bests) - the weekly boards' best line reads it
+var _pinemhi2_shots: Dictionary = {} ## FIX132: the VPS author-shot URL per weekly contest ({contest_id: url}), resolved by Main from the db (the WoVP cards' own art source) - stapled onto each weekly row's entry at build, FIX124's row-data discipline
+var _pinemhi2_art_cache: Dictionary = {} ## FIX132: shot URL -> the decoded art texture the weekly board headers wear (the fill loads each URL once)
 var _centre_index: int = 0 ## the shelf index the drum is centred on: the popped card's index in _visible_games (the pop target and the power-on follow it; it is NOT the pad focus - focus may sit on the rail or the strip while the drum stays centred where browsing left it; a letter pick both swings the drum AND lands focus on the centred card: the INTENT law at _jump_to_letter)
 var _columns: int = 1 ## the standing view's column count: ceil(visible / 3 bands)
 var _swing_to: float = 0.0 ## drum yaw the live swing is heading to (the centred column's angle)
@@ -2851,6 +2854,8 @@ func set_pinemhi_weekly(d: Dictionary) -> void:
 	_pinemhi2_live = bool(d.get("live", false))
 	_pinemhi2_fetch_error = str(d.get("fetch_error", ""))
 	_pinemhi2_player_name = str(d.get("player_name", ""))
+	_pinemhi2_bests = (d.get("bests", {}) as Dictionary).duplicate() ## FIX132: the weekly boards' best lines ride the same push
+	_pinemhi2_shots = (d.get("shots", {}) as Dictionary).duplicate() ## FIX132: and their tables' author-shot URLs
 	if _tournament:
 		# The place law, carried from set_wovp_data: the
 		# focused card's game (or the rail stop) is read
@@ -2896,12 +2901,32 @@ func pinemhi_board_spec_for(idx: int) -> Dictionary:
 	if idx < 0 or idx >= _tournament_rows.size():
 		return {}
 	var row: Dictionary = _tournament_rows[idx] as Dictionary
-	if str(row.get("kind", "")) != "pinemhi":
+	var kind: String = str(row.get("kind", ""))
+	if kind == "pinemhi_sep":
+		return RoomSpecs.pinemhi_separator_spec() ## FIX132: the family separator's face
+	if kind != "pinemhi":
 		return {}
 	var contest: Dictionary = row.get("contest", {}) as Dictionary
 	if contest.is_empty():
 		return RoomSpecs.pinemhi_state_spec(row.get("lines", []))
-	return RoomSpecs.pinemhi_weekly_board_spec(contest, _pinemhi2_player_name, _pinemhi2_fetched_at, _pinemhi2_live)
+	var spec: Dictionary = RoomSpecs.pinemhi_weekly_board_spec(contest, _pinemhi2_player_name,
+		_pinemhi2_fetched_at, _pinemhi2_live,
+		_pinemhi2_bests.get(str(contest.get("id", "")), {}) as Dictionary) ## FIX132: his best, resolved by Main
+	# FIX132: the table's author shot, when the shot
+	# cache already holds it, rides the spec as the
+	# board's framed art header (the WoVP cards' own art
+	# source). An uncached shot simply leaves the header
+	# off; its arrival heals the face (refresh_shot_faces).
+	var game: GameEntry = row.get("game") as GameEntry
+	if game != null and game.shot_url != "" and ArtProvider.shot_is_cached(game.shot_url):
+		var tex: Texture2D = _pinemhi2_art_cache.get(game.shot_url, null) as Texture2D
+		if tex == null:
+			tex = TextureFactory.load_art_texture(ArtProvider.shot_cache_path_for(game.shot_url))
+			if tex != null:
+				_pinemhi2_art_cache[game.shot_url] = tex
+		if tex != null:
+			spec["art_texture"] = tex
+	return spec
 
 
 ## PINEMHI2 smoke support: the standing weekly push, as
@@ -3199,11 +3224,24 @@ func _build_tournament_rows() -> Array:
 func _build_pinemhi_rows() -> Array:
 	var out: Array = []
 	if not _pinemhi2_contests.is_empty():
+		# FIX132: the family separator stands at the head
+		# of the weekly run - one deep-teal panel naming
+		# the family, so the WoVP boards and the PINemHi
+		# boards never blend on the wall (Chris's order).
+		var sep_game: GameEntry = GameEntry.new()
+		sep_game.game_id = "pinemhi:sep"
+		sep_game.title = "PINemHi Weekly"
+		out.append({"kind": "pinemhi_sep", "contest": {}, "game": sep_game, "owned": false,
+			"build_owned": false, "lines": []})
 		for cv: Variant in _pinemhi2_contests:
 			var c: Dictionary = cv as Dictionary
 			var game: GameEntry = GameEntry.new()
 			game.game_id = "pinemhi:" + str(c.get("id", ""))
 			game.title = str(c.get("table", ""))
+			# FIX132: the table's author shot rides the row
+			# as data (FIX124's discipline), so no later
+			# rebuild can strip it.
+			game.shot_url = str(_pinemhi2_shots.get(str(c.get("id", "")), ""))
 			out.append({"kind": "pinemhi", "contest": c, "game": game, "owned": false,
 				"build_owned": false, "lines": []})
 	elif _pinemhi2_fetch_error != "" and _pinemhi2_fetched_at == 0:
@@ -3792,7 +3830,7 @@ func _tourn_state_idx(idx: int) -> bool:
 ## never through the card-face pipeline.
 func _tourn_board_panel_idx(idx: int) -> bool:
 	return _tournament and idx >= 0 and idx < _tournament_rows.size() \
-		and str((_tournament_rows[idx] as Dictionary).get("kind", "")) in ["state", "pinemhi"]
+		and str((_tournament_rows[idx] as Dictionary).get("kind", "")) in ["state", "pinemhi", "pinemhi_sep"]
 
 
 ## PINEMHI2: how many of the standing tournament rows
@@ -7284,6 +7322,12 @@ func refresh_shot_faces(game: GameEntry) -> void:
 	var c: int = _grid_coord(idx).x
 	if c < _panel_window_lo or c > _panel_window_hi:
 		return
+	# FIX132: a weekly board panel wears its face from
+	# the state-face fill, never the card-face pipeline -
+	# a contest shot landing heals it through that door.
+	if _tourn_board_panel_idx(idx):
+		_fill_tournament_state_faces(_gen)
+		return
 	_fill_one_face(idx, _gen)
 
 
@@ -7671,14 +7715,16 @@ func _fill_tournament_state_faces(gen: int) -> void:
 	for i: int in range(_panels.size()):
 		var row: Dictionary = _tournament_rows[i]
 		var kind: String = str(row.get("kind", ""))
-		if kind != "state" and kind != "pinemhi":
+		if kind != "state" and kind != "pinemhi" and kind != "pinemhi_sep":
 			continue
 		var quad: ClickableQuad = _panels[i]
 		# PINEMHI2: a weekly row renders its contest's board
 		# face (or the PINemHi failure face when its contest
 		# is empty); the state row's face is unchanged.
+		# FIX132: the separator row renders its own face
+		# through the same door (pinemhi_board_spec_for).
 		var spec: Dictionary = {}
-		if kind == "pinemhi":
+		if kind == "pinemhi" or kind == "pinemhi_sep":
 			spec = pinemhi_board_spec_for(i)
 		else:
 			spec = RoomSpecs.tournament_state_spec(row.get("lines", []))

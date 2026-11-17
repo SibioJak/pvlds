@@ -967,7 +967,7 @@ static func tournament_state_spec(lines: Array) -> Dictionary:
 ## and the pin note stands first in the site's words.
 ## A board served from the cache says so in its last
 ## line, in the banner's own words.
-static func pinemhi_weekly_board_spec(contest: Dictionary, player_name: String, fetched_at: int, live: bool) -> Dictionary:
+static func pinemhi_weekly_board_spec(contest: Dictionary, player_name: String, fetched_at: int, live: bool, personal_best: Dictionary = {}) -> Dictionary:
 	var cid: String = str(contest.get("id", ""))
 	var band_text: String = "PINEMHI - WEEKLY COMPETITION"
 	match cid:
@@ -1003,6 +1003,22 @@ static func pinemhi_weekly_board_spec(contest: Dictionary, player_name: String, 
 		})
 	if not live and fetched_at > 0:
 		rows.append({"kind": "note", "text": "Saved standings - not yet refreshed", "size": 30})
+	# FIX132: the player's own PINemHi best rides the
+	# weekly board too - the same subordinate note line
+	# the WoVP boards carry (tournament_board_spec), in
+	# the same seat: the board's LAST row, never a score
+	# row. The best is resolved by Main from his own
+	# shelf files (PinemhiScores.resolve_weekly_bests);
+	# before FIX132 this spec was never handed one, so
+	# no weekly board could show it (the Sorcerer field
+	# case). The nobest NC seam darkens both families'
+	# lines together.
+	if not personal_best.is_empty() and pinemhi_nc != "nobest":
+		rows.append({
+			"kind": "note",
+			"text": "Your PINemHi best: %s" % str(personal_best.get("score_text", "")),
+			"size": 30,
+		})
 	return {
 		"kind": "board",
 		"bg": CARD_BG,
@@ -1021,6 +1037,12 @@ static func pinemhi_weekly_board_spec(contest: Dictionary, player_name: String, 
 		"footer_px": 0,
 		"ink_centre": true,
 		"spine_side": "left",
+		# FIX132: when the room hangs the table's author
+		# shot on this board (the spec's "art_texture",
+		# attached at fill time from the shot cache), the
+		# frame it wears is the family's teal - the weekly
+		# boards' art never borrows the WoVP cards' dress.
+		"art_frame_color": Color(0.14, 0.45, 0.36),
 	}
 
 
@@ -1063,6 +1085,36 @@ static func pinemhi_state_spec(lines: Array) -> Dictionary:
 	spec["band_text"] = "PINEMHI - WEEKLY"
 	spec["title"] = "PINemHi Weekly"
 	return spec
+
+
+## FIX132: the family separator - one panel standing at
+## the head of the PINemHi weekly run on the tournament
+## wall, so the two families never blend (Chris's order:
+## the weekly cards get table graphics like WoVP's, WITH
+## a visual separator). A deep-teal field under the
+## family's own band and name; no standings, no art - its
+## whole job is the boundary. Stands only when weekly
+## contests stand (RoomView._build_pinemhi_rows).
+static func pinemhi_separator_spec() -> Dictionary:
+	return {
+		"kind": "board",
+		"bg": Color(0.045, 0.13, 0.105),
+		"band": Color(0.14, 0.45, 0.36),
+		"band_text": "PINEMHI",
+		"band_size": 28,
+		"title": "PINemHi Weekly",
+		"title_size": 52,
+		"title_max_lines": 1,
+		"sub": "Weekly competitions from pinemhi.com",
+		"sub_size": 30,
+		"sub_bold": true,
+		"sub_max_lines": 1,
+		"chips": [],
+		"rows": [],
+		"footer_px": 0,
+		"ink_centre": true,
+		"spine_side": "left",
+	}
 
 
 ## The focused card's wing face (the graduation's Stage B):

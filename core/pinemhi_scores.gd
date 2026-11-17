@@ -73,8 +73,10 @@ static func resolve_folder(cfg: PvldsConfig) -> String:
 
 
 ## A parsed personal-best record for one game title:
-## {key, title, score_text, score, player} - score_text is
-## the file's own dotted rendering, shown verbatim.
+## {key, title, score_text, score, player, stem} -
+## score_text is the file's own dotted rendering, shown
+## verbatim; stem is the shelf file's own ROM stem (the
+## file's basename), the identity FIX132 resolves by.
 ## Returns {} when the file is not a parseable TOP10 file
 ## or carries no ranked rows.
 static func parse_file(path: String) -> Dictionary:
@@ -87,6 +89,7 @@ static func parse_file(path: String) -> Dictionary:
 	var best: Dictionary = (rows[0] as Dictionary).duplicate()
 	best["title"] = str(full.get("title", ""))
 	best["key"] = str(full.get("key", ""))
+	best["stem"] = str(full.get("stem", ""))
 	return best
 
 
@@ -117,7 +120,8 @@ static func parse_file_rows(path: String) -> Dictionary:
 			rows.append(row)
 	if title == "" or rows.is_empty():
 		return {}
-	return {"title": title, "key": title_key(title), "rows": rows}
+	return {"title": title, "key": title_key(title), "rows": rows,
+		"stem": path.get_file().get_basename().to_lower()}
 
 
 ## One ranked row -> {rank, score_text, score, player}.
@@ -223,6 +227,182 @@ static func load_folder(folder: String) -> Dictionary:
 ## The config-driven read Main pushes to the room.
 static func load_for_config(cfg: PvldsConfig) -> Dictionary:
 	return load_folder(resolve_folder(cfg))
+
+
+## FIX132: the negative-control seam, set by Main from
+## PVLDS_FIX132_NC. "titlejoin" restores the pre-FIX132
+## resolution road (the raw title-key map, no ROM road),
+## so the fix132 legs fail by name against the field
+## fault's own values.
+static var debug_nc: String = ""
+
+
+## FIX132: a ROM stem reduced to its lookup key -
+## lowercase, [a-z0-9_] kept - the same reduction
+## VpsDatabase.rom_key applies to the db's romFiles
+## versions, so a db stem and a shelf file's stem meet
+## on equal footing.
+static func stem_key(s: String) -> String:
+	var out: String = ""
+	var lowered: String = s.strip_edges().to_lower()
+	for i: int in range(lowered.length()):
+		var code: int = lowered.unicode_at(i)
+		if (code >= 97 and code <= 122) or (code >= 48 and code <= 57) or code == 95:
+			out += lowered[i]
+	return out
+
+
+## FIX132: every personal best under a PINemHi folder,
+## keyed by ROM stem (stem_key of the file's basename):
+## {stem_key: record}. The shelf files are NAMED by the
+## ROM they score, so this map is the install's own
+## identity index - the road that separates the two
+## Batmen the title key cannot. First file per stem
+## wins, the loaders' discipline.
+static func load_folder_by_stem(folder: String) -> Dictionary:
+	var out: Dictionary = {}
+	if folder == "":
+		return out
+	var dir_path: String = folder.path_join(LEADERBOARD_DIR).path_join(PERSONAL_DIR)
+	var da: DirAccess = DirAccess.open(dir_path)
+	if da == null:
+		return out
+	for file_name: String in da.get_files():
+		if not file_name.to_lower().ends_with(".txt"):
+			continue
+		var rec: Dictionary = parse_file(dir_path.path_join(file_name))
+		if rec.is_empty():
+			continue
+		var key: String = stem_key(str(rec.get("stem", "")))
+		if key != "" and not out.has(key):
+			out[key] = rec
+	return out
+
+
+## The config-driven by-stem read.
+static func load_by_stem_for_config(cfg: PvldsConfig) -> Dictionary:
+	return load_folder_by_stem(resolve_folder(cfg))
+
+
+## FIX132: the player's best over a set of ROM stems
+## (one game's revisions, already stem_key-reduced):
+## the highest #1 among the stems' shelf records; a
+## tie goes to the latest #1 date, then to the first
+## stem named. {} when no stem has a shelf file - the
+## caller states that reason, never a silent absence.
+static func best_for_stems(stem_map: Dictionary, stems: Array) -> Dictionary:
+	var best: Dictionary = {}
+	for sv: Variant in stems:
+		var rec: Dictionary = stem_map.get(stem_key(str(sv)), {}) as Dictionary
+		if rec.is_empty():
+			continue
+		if best.is_empty() or int(rec.get("score", 0)) > int(best.get("score", 0)) \
+				or (int(rec.get("score", 0)) == int(best.get("score", 0)) \
+					and str(rec.get("when", "")) > str(best.get("when", ""))):
+			best = rec
+	return best
+
+
+## FIX132: the tournament boards' bests map, resolved.
+## The pre-FIX132 road keyed everything by the shelf
+## file's own title and looked challenges up by WoVP's
+## short name - a join that bound the Stern "Batman"
+## challenge to the 1991 game's record (its title keys
+## exactly to "batman") while the Dark Knight record
+## sat unconsulted under "batman the dark knight", and
+## no refresh could move the wrong value because the
+## read was faithfully fresh. The resolved map starts
+## from the title map (every standing behaviour for
+## anything the ROM road does not touch), then, for
+## each challenge the db can identify, overrides its
+## key with the best over the db record's own ROM list
+## read from the shelf BY STEM - the identity that
+## separates same-named games. Returns {bests, notes}:
+## one note per challenge id stating the road taken and
+## the value it serves, or the plain reason no best
+## stands - Main logs every note that changes, so no
+## verdict on this path is ever silent.
+static func resolve_challenge_bests(cfg: PvldsConfig, db: VpsDatabase, challenges: Array) -> Dictionary:
+	var title_map: Dictionary = load_for_config(cfg)
+	if debug_nc == "titlejoin":
+		return {"bests": title_map, "notes": {}}
+	var out: Dictionary = title_map.duplicate()
+	var notes: Dictionary = {}
+	var folder: String = resolve_folder(cfg)
+	if folder == "":
+		return {"bests": out, "notes": notes}
+	var stem_map: Dictionary = load_folder_by_stem(folder)
+	for cv: Variant in challenges:
+		var ch: WovpChallenge = cv as WovpChallenge
+		if ch == null:
+			continue
+		var key: String = challenge_key(ch.table_name)
+		var stems: Array = []
+		if db != null and ch.table_external_id != "":
+			stems = db.rom_keys_of(ch.table_external_id)
+		var stem_rec: Dictionary = best_for_stems(stem_map, stems) if not stems.is_empty() else {}
+		if not stem_rec.is_empty():
+			out[key] = stem_rec
+			notes[ch.challenge_id] = "%s: best %s via ROM %s (db identity)" % [
+				ch.name, str(stem_rec.get("score_text", "")), str(stem_rec.get("stem", ""))]
+		elif title_map.has(key):
+			var trec: Dictionary = title_map[key] as Dictionary
+			var why: String = "no db identity" if stems.is_empty() \
+				else "db ROMs [%s] have no shelf files" % ", ".join(PackedStringArray(stems))
+			notes[ch.challenge_id] = "%s: best %s via title key '%s' (%s)" % [
+				ch.name, str(trec.get("score_text", "")), key, why]
+		else:
+			var why2: String = "no db identity; no title-key record for '%s'" % key if stems.is_empty() \
+				else "db ROMs [%s] have no shelf files; no title-key record for '%s'" % [", ".join(PackedStringArray(stems)), key]
+			notes[ch.challenge_id] = "%s: no personal best (%s)" % [ch.name, why2]
+	return {"bests": out, "notes": notes}
+
+
+## FIX132: the weekly boards' bests, resolved per
+## contest: {contest_id: record}. The weekly site's own
+## standings state the ROM each score was played on, so
+## a contest's ROM set is first-hand evidence - the
+## best over those stems is the contest table's best.
+## The title key (the contest's table name against the
+## shelf titles) is the fallback, stated in the notes
+## Main logs on change, same discipline as the
+## challenge road above.
+static func resolve_weekly_bests(cfg: PvldsConfig, contests: Array) -> Dictionary:
+	var out: Dictionary = {}
+	var notes: Dictionary = {}
+	var folder: String = resolve_folder(cfg)
+	if folder == "" or contests.is_empty():
+		return {"bests": out, "notes": notes}
+	var title_map: Dictionary = load_folder(folder)
+	var stem_map: Dictionary = load_folder_by_stem(folder)
+	for cv: Variant in contests:
+		var c: Dictionary = cv as Dictionary
+		if c.is_empty():
+			continue
+		var cid: String = str(c.get("id", ""))
+		var table: String = str(c.get("table", ""))
+		var stems: Array = []
+		for rv: Variant in (c.get("rows", []) as Array):
+			var r: Dictionary = rv as Dictionary
+			var rk: String = stem_key(str(r.get("rom", "")))
+			if rk != "" and not stems.has(rk):
+				stems.append(rk)
+		var rec: Dictionary = best_for_stems(stem_map, stems) if not stems.is_empty() else {}
+		if not rec.is_empty():
+			out[cid] = rec
+			notes["weekly:" + cid] = "%s (weekly): best %s via ROM %s (contest standings)" % [
+				table, str(rec.get("score_text", "")), str(rec.get("stem", ""))]
+			continue
+		var key: String = challenge_key(table)
+		var trec: Dictionary = title_map.get(key, {}) as Dictionary
+		if not trec.is_empty():
+			out[cid] = trec
+			notes["weekly:" + cid] = "%s (weekly): best %s via title key '%s' (contest ROMs [%s] have no shelf files)" % [
+				table, str(trec.get("score_text", "")), key, ", ".join(PackedStringArray(stems))]
+		else:
+			notes["weekly:" + cid] = "%s (weekly): no personal best (contest ROMs [%s] have no shelf files; no title-key record for '%s')" % [
+				table, ", ".join(PackedStringArray(stems)), key]
+	return {"bests": out, "notes": notes}
 
 
 ## PINEMHI2: the player's own PINemHi name, derived from

@@ -213,6 +213,7 @@ var _pinemhi2_fetched_at: int = 0 ## when the standing weekly boards landed (0 =
 var _pinemhi2_live: bool = false ## the standing weekly boards came from a fetch this session
 var _pinemhi2_fetch_error: String = "" ## the last weekly fetch's failure in words, while it stands
 var _pinemhi2_player_name: String = "" ## his PINemHi name, derived at push time from his TOP10_Personal files (PinemhiScores.player_name_for_config)
+var _pinemhi_best_notes: Dictionary = {} ## FIX132: the bests resolvers' last-logged notes ({challenge/contest key: line}) - a note is printed when it changes, so every resolution (and every absence, with its reason) is on the record exactly once per change
 var _pinemhi2_probe: bool = false ## --pvlds-pinemhi2-probe: the fetch gate - one real fetch through the app's HTTP path, the per-contest census printed, then quit
 var _smoke_pinemhi2: bool = false ## --pvlds-smoke-pinemhi2: drive the PINEMHI2 contract (env PVLDS_PINEMHI2_MODE: parse|stub|cache|room)
 var _smoke_starfield: bool = false ## --pvlds-smoke-starfield: drive the STARFIELD contract (env PVLDS_STARFIELD_MODE: field|gate)
@@ -232,6 +233,8 @@ var _pinemhi2_smoke_phase: int = 0
 var _pinemhi2_smoke_wait: int = 0
 var _pinemhi2_smoke_failures: int = 0
 var _pinemhi2_smoke_deadline_msec: int = 0
+var _fix132_shelf_dir: String = "" ## FIX132 room legs: the harness install's Personal shelf dir, laid by _pinemhi2_fix132_setup (the refresh leg rewrites a shelf file in it)
+var _fix132_refresh_fired: bool = false ## FIX132 room legs: the refresh leg's real REFRESH rail press has fired
 var _pinemhi2_smoke_boot_boards: Array = [] ## room mode: the standing board keys/specs from the no-weekly-data boot (the WoVP-unaffected leg's baseline)
 var _pinemhi2_smoke_baseline_done: bool = false
 var _pinemhi2_smoke_baseline_reset: bool = false ## room mode: the clean no-weekly-data state has been re-pushed AFTER the boot fetch settled (its failure push otherwise re-seeds the room's failure row mid-baseline)
@@ -1099,6 +1102,11 @@ func _ready() -> void:
 	# personal-best line even when a best was handed in -
 	# the tournament smoke's PINemHi legs fail by name.
 	RoomSpecs.pinemhi_nc = OS.get_environment("PVLDS_PINEMHI_NC")
+	# The FIX132 negative-control seam (PVLDS_FIX132_NC):
+	# "titlejoin" - the bests resolver restores the
+	# pre-FIX132 title-key road, so the fix132 legs fail
+	# by name against the field fault's own values.
+	PinemhiScores.debug_nc = OS.get_environment("PVLDS_FIX132_NC")
 	# The PINEMHI2 negative-control seam (PVLDS_PINEMHI2_NC):
 	# "golfscore" - the weekly parser reads golf distances
 	# as scores; "stale" - Main's weekly push claims a
@@ -2153,7 +2161,15 @@ func _push_wovp_data() -> void:
 	# push - re-read from the player's own install each
 	# time, so a folder/toggle change or fresh files land
 	# on the boards without a restart.
-	_room.set_pinemhi_bests(PinemhiScores.load_for_config(_config))
+	# FIX132: the map pushed is the RESOLVED one - each
+	# db-identified challenge's best read from the shelf
+	# by its game's ROMs, not by title shape alone (the
+	# title join bound the Stern Batman challenge to the
+	# 1991 game's record and no refresh could move it).
+	# Every resolution is noted; a changed note is logged.
+	var bests_res: Dictionary = PinemhiScores.resolve_challenge_bests(_config, _db, _wovp_challenges)
+	_room.set_pinemhi_bests(bests_res.get("bests", {}) as Dictionary)
+	_log_pinemhi_best_notes(bests_res.get("notes", {}) as Dictionary)
 	# PINEMHI1: the full Personal row lists ride the same
 	# push (the card back's read), re-read from the same
 	# install read - fresh files land on the backs, and a
@@ -2280,11 +2296,67 @@ func _wovp_fetch_boards() -> void:
 ## cache-served board reads as fresh and the pinemhi2
 ## smoke's stale leg (a cache push has live=false and its
 ## board carries the saved-standings note) fails by name.
+## FIX132: print the bests resolvers' notes that changed
+## since the last push (a new value, a new road, a new
+## absence with its reason). Unchanged notes stay silent;
+## a note that vanishes (the challenge/contest left) is
+## forgotten without a line.
+func _log_pinemhi_best_notes(notes: Dictionary) -> void:
+	# The two pushes carry disjoint families (challenge
+	# ids; "weekly:"-prefixed contest ids) - forgetting
+	# stays inside the family the push speaks for.
+	var weekly: bool = false
+	for k0: Variant in notes.keys():
+		if str(k0).begins_with("weekly:"):
+			weekly = true
+			break
+	for k: Variant in notes.keys():
+		var line: String = str(notes[k])
+		if str(_pinemhi_best_notes.get(k, "")) != line:
+			_pinemhi_best_notes[k] = line
+			print("PVLDS PINEMHI BEST: ", line)
+	for k2: Variant in _pinemhi_best_notes.keys():
+		if str(k2).begins_with("weekly:") == weekly and not notes.has(k2):
+			_pinemhi_best_notes.erase(k2)
+
+
+## FIX132: the db's author-shot URL for one weekly
+## contest's table, resolved by the table's name - the
+## same art source the WoVP cards use (the game record's
+## own image first, then any of its table files'). ""
+## when the db knows no such game or carries no art.
+func _db_shot_url_for_contest(table: String) -> String:
+	if _db == null or table.strip_edges() == "":
+		return ""
+	var ids: Array[String] = _db.find_game_ids_by_name(VpsDatabase.normalize_name(table))
+	for gid: String in ids:
+		var gd: Dictionary = _db.game_dict(gid)
+		var gu: String = str(gd.get("imgUrl", ""))
+		if gu != "":
+			return gu
+		for tfv: Variant in _db.table_files_of(gid):
+			var u: String = str((tfv as Dictionary).get("imgUrl", ""))
+			if u != "":
+				return u
+	return ""
+
+
 func _push_pinemhi2_data() -> void:
 	_pinemhi2_player_name = PinemhiScores.player_name_for_config(_config)
 	var live: bool = _pinemhi2_live
 	if PinemhiWeeklyClient.debug_nc == "stale":
 		live = true
+	# FIX132: the weekly boards' bests and their tables'
+	# author-shot URLs ride the same push, resolved fresh
+	# each time (his shelf files for the bests, the db for
+	# the art - the WoVP cards' own sources).
+	var weekly_res: Dictionary = PinemhiScores.resolve_weekly_bests(_config, _pinemhi2_contests)
+	var shot_map: Dictionary = {}
+	for cv: Variant in _pinemhi2_contests:
+		var c: Dictionary = cv as Dictionary
+		var cid: String = str(c.get("id", ""))
+		if cid != "":
+			shot_map[cid] = _db_shot_url_for_contest(str(c.get("table", "")))
 	if _room != null and _room.has_method("set_pinemhi_weekly"):
 		_room.set_pinemhi_weekly({
 			"contests": _pinemhi2_contests,
@@ -2292,7 +2364,28 @@ func _push_pinemhi2_data() -> void:
 			"live": live,
 			"fetch_error": _pinemhi2_fetch_error,
 			"player_name": _pinemhi2_player_name,
+			"bests": weekly_res.get("bests", {}) as Dictionary,
+			"shots": shot_map,
 		})
+	_log_pinemhi_best_notes(weekly_res.get("notes", {}) as Dictionary)
+	# FIX132: queue the contest shots the cache does not
+	# hold yet, through the same fetcher the library and
+	# the unowned challenge cards use; an arrival heals
+	# the weekly face (RoomView.refresh_shot_faces).
+	if _room != null and _shot_fetcher != null:
+		var want: Array[GameEntry] = []
+		for rv: Variant in _room.tournament_rows():
+			var row: Dictionary = rv as Dictionary
+			if str(row.get("kind", "")) != "pinemhi":
+				continue
+			var game: GameEntry = row.get("game") as GameEntry
+			if game == null or game.shot_url == "":
+				continue
+			if not ArtProvider.shot_is_cached(game.shot_url) \
+					and not ArtProvider.is_negative_outcome(ArtProvider.shot_outcome(game.shot_url)):
+				want.append(game)
+		if not want.is_empty():
+			_shot_fetcher.fetch_library(want)
 
 
 ## PINEMHI2: fetch the weekly boards now (boot, and the
@@ -21276,7 +21369,264 @@ func _drive_pinemhi2_room() -> void:
 						var fpath: String = grab.replace(".png", "-" + cid4 + ".png")
 						var ferr: Error = ftex.get_image().save_png(fpath)
 						print("PVLDS PINEMHI2 GRAB: ", fpath, " err=", ferr, " size=", ftex.get_size())
+				# FIX132 phases follow (6-8): the collision
+				# shelf, the ROM-road bests, the weekly art
+				# and separator, and the refresh leg.
+				_pinemhi2_fix132_setup()
+				_pinemhi2_smoke_deadline_msec = Time.get_ticks_msec() + 240000
+				_pinemhi2_smoke_phase = 6
+				_pinemhi2_smoke_wait = 0
+		6:
+			# FIX132: wait for the Sorcerer weekly panel's
+			# face to land (the state-face fill with the
+			# framed art), then judge the specs and grab.
+			var fx_idx: int = _fix132_row_index("pinemhi:fix132")
+			var fx_ready: bool = false
+			if fx_idx >= 0 and fx_idx < _room._panels.size():
+				var fx_tex: Texture2D = _room._panels[fx_idx].current_texture()
+				fx_ready = fx_tex != null and fx_tex.get_size() == Vector2(RoomSpecs.BOARD_FACE_PX)
+			if fx_ready or _pinemhi2_smoke_wait > 900:
+				_pinemhi2_fix132_legs()
+				if fx_idx >= 0 and fx_idx < _room._panels.size():
+					_room._set_centre(fx_idx, true)
+					_room._set_focused(_room._panels[fx_idx])
+				_pinemhi2_smoke_phase = 7
+				_pinemhi2_smoke_wait = 0
+		7:
+			# FIX132 grabs (the centred Sorcerer weekly
+			# panel in the room; the separator, Bad Cats
+			# and Sorcerer faces), then the refresh leg's
+			# setup: the Bad Cats shelf file's #1 improves
+			# and the real REFRESH rail press fires.
+			if _pinemhi2_smoke_wait > 25:
+				var grab7: String = OS.get_environment("PVLDS_PINEMHI2_GRAB")
+				if grab7 != "":
+					var img7: Image = get_viewport().get_texture().get_image()
+					var rpath: String = grab7.replace(".png", "-fix132-room.png")
+					var rerr: Error = img7.save_png(rpath)
+					print("PVLDS PINEMHI2 GRAB: ", rpath, " err=", rerr, " size=", img7.get_size())
+					var rows7: Array = _room.tournament_rows()
+					for i7: int in range(rows7.size()):
+						if i7 >= _room._panels.size():
+							continue
+						var kind7: String = str((rows7[i7] as Dictionary).get("kind", ""))
+						var tag7: String = ""
+						if kind7 == "pinemhi_sep":
+							tag7 = "sep"
+						elif kind7 == "pinemhi":
+							tag7 = str((_room._visible_games[i7] as GameEntry).game_id).trim_prefix("pinemhi:")
+						if tag7 == "":
+							continue
+						var ftex7: Texture2D = _room._panels[i7].current_texture()
+						if ftex7 == null:
+							continue
+						var fpath7: String = grab7.replace(".png", "-fix132-" + tag7 + ".png")
+						var ferr7: Error = ftex7.get_image().save_png(fpath7)
+						print("PVLDS PINEMHI2 GRAB: ", fpath7, " err=", ferr7, " size=", ftex7.get_size())
+				_write_text_file(_fix132_shelf_dir.path_join("badcats.txt"),
+					"PINEMHI ONLINE LEADERBOARD\n\n<<< Bad Cats >>>\n\n\nTOP 10 Personal Best Scores\n1   9.999.999      JB1980  2026-11-17 20:00:00\n2   8.014.130      JB1980  2026-11-07 08:00:00\n")
+				_room._handle_rail("wovp_refresh")
+				_fix132_refresh_fired = true
+				_pinemhi2_smoke_phase = 8
+				_pinemhi2_smoke_wait = 0
+		8:
+			# FIX132 refresh leg: the weekly fetch (the
+			# stub's contests) re-pushes through Main, the
+			# shelf is re-read, and the Bad Cats board's
+			# best line must show the improved number -
+			# the field's "Refresh does not move it"
+			# complaint, answered through the real door.
+			var five_idx: int = _fix132_row_index("pinemhi:five")
+			var moved: bool = false
+			if five_idx >= 0:
+				var five_spec: Dictionary = _room.pinemhi_board_spec_for(five_idx)
+				var frows: Array = five_spec.get("rows", []) as Array
+				if not frows.is_empty():
+					moved = str((frows[frows.size() - 1] as Dictionary).get("text", "")) == "Your PINemHi best: 9.999.999"
+			if moved:
+				_pinemhi2_expect(true, "fix132 refresh: after the shelf improved and REFRESH was pressed, the Bad Cats board shows the new best (9.999.999)")
 				_finish_pinemhi2_smoke()
+			elif _pinemhi2_smoke_wait > 2400:
+				_pinemhi2_expect(false, "fix132 refresh: the Bad Cats best line never moved to the improved shelf value")
+				_finish_pinemhi2_smoke()
+
+
+## FIX132 room-mode helpers (phases 6-8). The setup lays
+## the field case into the harness install Main already
+## reads: the player's REAL sorcr_l2.txt verbatim, the
+## two colliding Batman files, a fixture db carrying the
+## two Batmen and Sorcerer (with the VPS-style table
+## shot), and a Sorcerer weekly contest whose standings
+## carry the sorcr_l2 ROM. The pushes are Main's own
+## doors - the same ones the fetches land in.
+func _pinemhi2_fix132_setup() -> void:
+	var shelf: String = _config.pinemhi_folder.path_join("PINemHi LeaderBoard").path_join("TOP10_Personal")
+	_fix132_shelf_dir = shelf
+	_pinemhi2_expect(_write_text_file(shelf.path_join("sorcr_l2.txt"),
+		"PINEMHI ONLINE LEADERBOARD\r\n\r\n<<< Sorcerer >>>\r\n\r\n\r\nTOP 10 Personal Best Scores\r\n1   2.252.640      Kubrick  2026-11-17 13:40:44\r\n2     918.900      Kubrick  2026-04-07 20:17:32\r\n3     256.810      Kubrick  2026-11-17 13:23:02\r\n4     175.260      Kubrick  2026-11-17 14:21:53\r\n"),
+		"fix132: the real Sorcerer shelf file lands in the harness install")
+	_pinemhi2_expect(_write_text_file(shelf.path_join("bdk_294.txt"),
+		"PINEMHI ONLINE LEADERBOARD\r\n\r\n<<< Batman: The Dark Knight >>>\r\n\r\n\r\nTOP 10 Personal Best Scores\r\n1   52.656.630      Kubrick  2026-11-17 16:08:05\r\n2   41.000.000      Kubrick  2026-09-01 10:00:00\r\n"),
+		"fix132: the Dark Knight shelf file lands")
+	_pinemhi2_expect(_write_text_file(shelf.path_join("btmn_106.txt"),
+		"PINEMHI ONLINE LEADERBOARD\r\n\r\n<<< Batman >>>\r\n\r\n\r\nTOP 10 Personal Best Scores\r\n1   23.043.670      Kubrick  2026-05-02 20:00:00\r\n"),
+		"fix132: the 1991 Batman collision file lands")
+	var shot_url: String = "https://example.invalid/fix132/sorcerer.jpg"
+	_pinemhi2_expect(_write_text_file("user://fix132_db.json",
+		"[{\"id\": \"fx-stern-batman\", \"name\": \"Batman\", \"manufacturer\": \"Stern\", \"year\": 2008, \"romFiles\": [{\"version\": \"bdk_294\"}, {\"version\": \"bdk_113\"}], \"tableFiles\": [], \"imgUrl\": \"\"}, {\"id\": \"fx-de-batman\", \"name\": \"Batman\", \"manufacturer\": \"Data East\", \"year\": 1991, \"romFiles\": [{\"version\": \"btmn_106\"}], \"tableFiles\": [], \"imgUrl\": \"\"}, {\"id\": \"fx-sorcerer\", \"name\": \"Sorcerer\", \"manufacturer\": \"Williams\", \"year\": 1985, \"romFiles\": [{\"version\": \"sorcr_l2\"}], \"tableFiles\": [], \"imgUrl\": \"" + shot_url + "\"}]"),
+		"fix132: the fixture db writes")
+	var fxdb: VpsDatabase = VpsDatabase.new()
+	_pinemhi2_expect(fxdb.load_db(ProjectSettings.globalize_path("user://fix132_db.json")),
+		"fix132: the fixture db loads")
+	_db = fxdb
+	# The table shot pre-seeded in the art cache, so the
+	# weekly face can wear it without a network.
+	var seed: Image = Image.create(720, 300, false, Image.FORMAT_RGB8)
+	seed.fill(Color(0.85, 0.25, 0.45))
+	var cache_path: String = ArtProvider.shot_cache_path_for(shot_url)
+	DirAccess.make_dir_recursive_absolute(cache_path.get_base_dir())
+	_pinemhi2_expect(seed.save_png(cache_path) == OK, "fix132: the Sorcerer table shot is seeded in the art cache")
+	# The challenges: the standing three (their boards
+	# must stay best-less - no other board changes) plus
+	# the Stern Batman carrying its db identity.
+	_wovp_challenges = [
+		_pinemhi_fab_challenge("harn-alpha", "Apollo 13"),
+		_pinemhi_fab_challenge("harn-beta", "Medieval Madness"),
+		_pinemhi_fab_challenge("harn-gamma", "Twilight Zone"),
+	]
+	var batman: WovpChallenge = _pinemhi_fab_challenge("fix132-batman", "Batman")
+	batman.name = "Batman (Stern 2008)"
+	batman.table_external_id = "fx-stern-batman"
+	_wovp_challenges.append(batman)
+	# The contests: the captured fixtures plus Sorcerer,
+	# its standings carrying the ROM they were played on.
+	_pinemhi2_contests = _pinemhi2_fixture_contests()
+	_pinemhi2_contests.append({
+		"id": "fix132", "label": "Weekly Competition", "table": "Sorcerer",
+		"window_start": "2026-11-15 22:00:04", "window_end": "2026-11-22 22:00:04", "pin": "",
+		"rows": [
+			{"pos": 1, "name": "PESARO", "value": 1500410, "value_text": "1.500.410", "rom": "sorcr_l2", "date": "2026-11-16 10:00:00"},
+			{"pos": 2, "name": "Kubrick", "value": 1250000, "value_text": "1.250.000", "rom": "sorcr_l2", "date": "2026-11-16 11:00:00"},
+		],
+	})
+	_pinemhi2_fetched_at = int(Time.get_unix_time_from_system()) - 3600
+	_pinemhi2_live = false
+	_pinemhi2_fetch_error = ""
+	_push_wovp_data()
+	_push_pinemhi2_data()
+
+
+func _fix132_row_index(game_id: String) -> int:
+	var rows: Array = _room.tournament_rows()
+	for i: int in range(rows.size()):
+		if i < _room._visible_games.size() and (_room._visible_games[i] as GameEntry).game_id == game_id:
+			return i
+	return -1
+
+
+func _pinemhi2_fix132_legs() -> void:
+	# The Batman best, resolved by ROM through Main's
+	# push, stands in the room's map under the board's
+	# own key - the Dark Knight's value, not the 1991
+	# game's.
+	var bests: Dictionary = _room._pinemhi_bests
+	_pinemhi2_expect(str((bests.get("batman", {}) as Dictionary).get("score_text", "")) == "52.656.630",
+		"fix132: the room's Batman best is the Dark Knight's 52.656.630 (got '%s')" % str((bests.get("batman", {}) as Dictionary).get("score_text", "")))
+	# The board spec itself: the line stands, the wrong
+	# value is nowhere on the board.
+	var batman_ch: WovpChallenge = null
+	var apollo_ch: WovpChallenge = null
+	for cv: Variant in _wovp_challenges:
+		var c: WovpChallenge = cv as WovpChallenge
+		if c.challenge_id == "fix132-batman":
+			batman_ch = c
+		elif c.challenge_id == "harn-alpha":
+			apollo_ch = c
+	if batman_ch != null:
+		var bspec: Dictionary = RoomSpecs.tournament_board_spec(batman_ch, false, _wovp_user_id, int(Time.get_unix_time_from_system()), true,
+			bests.get(PinemhiScores.challenge_key(batman_ch.table_name), {}) as Dictionary)
+		var brows: Array = bspec.get("rows", []) as Array
+		_pinemhi2_expect(not brows.is_empty() and str((brows[brows.size() - 1] as Dictionary).get("text", "")) == "Your PINemHi best: 52.656.630",
+			"fix132: the Batman board's last line is the Dark Knight best")
+		var wrong_present: bool = false
+		for rv: Variant in brows:
+			if str((rv as Dictionary).get("text", "")).contains("23.043.670"):
+				wrong_present = true
+		_pinemhi2_expect(not wrong_present, "fix132: the 1991 game's value is nowhere on the Stern board")
+		_pinemhi2_expect(not bspec.has("art_texture"), "fix132: the WoVP board carries no art header - the families stay distinct")
+	if apollo_ch != null:
+		var aspec: Dictionary = RoomSpecs.tournament_board_spec(apollo_ch, false, _wovp_user_id, int(Time.get_unix_time_from_system()), true,
+			bests.get(PinemhiScores.challenge_key(apollo_ch.table_name), {}) as Dictionary)
+		var a_has: bool = false
+		for rv2: Variant in (aspec.get("rows", []) as Array):
+			if str((rv2 as Dictionary).get("text", "")).begins_with("Your PINemHi best"):
+				a_has = true
+		_pinemhi2_expect(not a_has, "fix132: no other board's line changes - Apollo still carries none (its shelf file does not exist)")
+	# The resolution was logged with its road - no
+	# silent verdicts.
+	_pinemhi2_expect(str(_pinemhi_best_notes.get("fix132-batman", "")).contains("via ROM bdk_294"),
+		"fix132: Main logged the Batman resolution and the ROM road it took (got '%s')" % str(_pinemhi_best_notes.get("fix132-batman", "")))
+	# The separator: exactly one, standing at the head
+	# of the PINemHi run.
+	var rows: Array = _room.tournament_rows()
+	var sep_count: int = 0
+	var sep_idx: int = -1
+	var first_pin_idx: int = -1
+	for i: int in range(rows.size()):
+		var kind: String = str((rows[i] as Dictionary).get("kind", ""))
+		if kind == "pinemhi_sep":
+			sep_count += 1
+			sep_idx = i
+		elif kind == "pinemhi" and first_pin_idx < 0:
+			first_pin_idx = i
+	_pinemhi2_expect(sep_count == 1 and sep_idx >= 0 and sep_idx < first_pin_idx,
+		"fix132: exactly one PINemHi separator stands, at the head of the family (count %d, at %d, family from %d)" % [sep_count, sep_idx, first_pin_idx])
+	if sep_idx >= 0:
+		var sep_spec: Dictionary = _room.pinemhi_board_spec_for(sep_idx)
+		_pinemhi2_expect(str(sep_spec.get("title", "")) == "PINemHi Weekly" and str(sep_spec.get("band_text", "")) == "PINEMHI",
+			"fix132: the separator wears the family's dress")
+	# The Sorcerer weekly board: the best line stands
+	# (the field's missing line), and the face carries
+	# the framed table art.
+	var fx_idx: int = _fix132_row_index("pinemhi:fix132")
+	_pinemhi2_expect(fx_idx >= 0, "fix132: the Sorcerer weekly panel stands")
+	if fx_idx >= 0:
+		var wspec: Dictionary = _room.pinemhi_board_spec_for(fx_idx)
+		var wrows: Array = wspec.get("rows", []) as Array
+		_pinemhi2_expect(not wrows.is_empty() and str((wrows[wrows.size() - 1] as Dictionary).get("text", "")) == "Your PINemHi best: 2.252.640",
+			"fix132: the Sorcerer weekly board carries his best line - the field's missing line (last row '%s')" % (str((wrows[wrows.size() - 1] as Dictionary).get("text", "")) if not wrows.is_empty() else "<none>"))
+		_pinemhi2_expect(wspec.get("art_texture", null) is Texture2D,
+			"fix132: the weekly board spec carries the table art")
+		_pinemhi2_expect(wspec.get("art_frame_color", Color.BLACK) == Color(0.14, 0.45, 0.36),
+			"fix132: the art wears the PINemHi teal frame")
+		# The pixels: the seeded shot's colour stands in
+		# the rendered face (sampled across the face).
+		if fx_idx < _room._panels.size():
+			var tex: Texture2D = _room._panels[fx_idx].current_texture()
+			if tex != null:
+				var img: Image = tex.get_image()
+				var hits: int = 0
+				var total: int = 0
+				var y: int = 0
+				while y < img.get_height():
+					var x: int = 0
+					while x < img.get_width():
+						var px: Color = img.get_pixel(x, y)
+						total += 1
+						if absf(px.r - 0.85) < 0.12 and absf(px.g - 0.25) < 0.12 and absf(px.b - 0.45) < 0.12:
+							hits += 1
+						x += 4
+					y += 4
+				_pinemhi2_expect(hits > 2000,
+					"fix132: the rendered weekly face carries the table art's pixels (%d sampled hits)" % hits)
+	# The Bad Cats board's standing line - the refresh
+	# leg's "before".
+	var five_idx: int = _fix132_row_index("pinemhi:five")
+	if five_idx >= 0:
+		var five_spec: Dictionary = _room.pinemhi_board_spec_for(five_idx)
+		var frows: Array = five_spec.get("rows", []) as Array
+		_pinemhi2_expect(not frows.is_empty() and str((frows[frows.size() - 1] as Dictionary).get("text", "")) == "Your PINemHi best: 8.014.130",
+			"fix132: the Bad Cats board stands at the shelf's current best before the refresh (last row '%s')" % (str((frows[frows.size() - 1] as Dictionary).get("text", "")) if not frows.is_empty() else "<none>"))
 
 
 ## failstate variant (the tournament-full flag's diagnosis):
@@ -30156,6 +30506,92 @@ func _run_core_test() -> void:
 		"backfine: the Personal shelf loads its own file beside the Best shelf", failures)
 	_expect(int(((bf_pers_rec.get("rows", []) as Array)[0] as Dictionary).get("score", 0)) == 1638803870,
 		"backfine: the shelves never leak - the Personal read holds the Personal score, not the Best one", failures)
+
+	# FIX132: the bests resolution - by ROM where the app
+	# knows the ROM, title key as the stated fallback.
+	# The fixture is the field case itself: the player's
+	# REAL sorcr_l2.txt (verbatim, CRLF and all), a
+	# Batman-shaped bdk_294.txt (PINemHi's full title,
+	# his 52.656.630), and the collision file - the 1991
+	# game's file, titled "Batman", holding the
+	# 23.043.670 the field card wrongly showed. Under
+	# the resolver's NC (titlejoin) the Batman legs fail
+	# by name against that same wrong value.
+	var fx_root: String = "user://core_test_fix132"
+	var fx_shelf: String = fx_root + "/PINemHi LeaderBoard/TOP10_Personal"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(fx_shelf))
+	_expect(_write_text_file(fx_shelf + "/sorcr_l2.txt",
+		"PINEMHI ONLINE LEADERBOARD\r\n\r\n<<< Sorcerer >>>\r\n\r\n\r\nTOP 10 Personal Best Scores\r\n1   2.252.640      Kubrick  2026-11-17 13:40:44\r\n2     918.900      Kubrick  2026-04-07 20:17:32\r\n3     256.810      Kubrick  2026-11-17 13:23:02\r\n4     175.260      Kubrick  2026-11-17 14:21:53\r\n"),
+		"fix132: the real Sorcerer shelf fixture writes", failures)
+	_expect(_write_text_file(fx_shelf + "/bdk_294.txt",
+		"PINEMHI ONLINE LEADERBOARD\r\n\r\n<<< Batman: The Dark Knight >>>\r\n\r\n\r\nTOP 10 Personal Best Scores\r\n1   52.656.630      Kubrick  2026-11-17 16:08:05\r\n2   41.000.000      Kubrick  2026-09-01 10:00:00\r\n"),
+		"fix132: the Dark Knight shelf fixture writes", failures)
+	_expect(_write_text_file(fx_shelf + "/btmn_106.txt",
+		"PINEMHI ONLINE LEADERBOARD\r\n\r\n<<< Batman >>>\r\n\r\n\r\nTOP 10 Personal Best Scores\r\n1   23.043.670      Kubrick  2026-05-02 20:00:00\r\n"),
+		"fix132: the 1991 Batman collision fixture writes", failures)
+	var fx_folder: String = ProjectSettings.globalize_path(fx_root)
+	var fx_cfg: PvldsConfig = PvldsConfig.new()
+	fx_cfg.pinemhi_enabled = true
+	fx_cfg.pinemhi_folder = fx_folder
+	var fx_sorcerer: Dictionary = PinemhiScores.parse_file(fx_folder.path_join("PINemHi LeaderBoard").path_join("TOP10_Personal").path_join("sorcr_l2.txt"))
+	_expect(str(fx_sorcerer.get("stem", "")) == "sorcr_l2" and str(fx_sorcerer.get("score_text", "")) == "2.252.640",
+		"fix132: the real file parses with its stem and its dotted #1 (got stem '%s', score '%s')" % [str(fx_sorcerer.get("stem", "")), str(fx_sorcerer.get("score_text", ""))], failures)
+	var fx_by_stem: Dictionary = PinemhiScores.load_folder_by_stem(fx_folder)
+	_expect(fx_by_stem.size() == 3 and fx_by_stem.has("sorcr_l2") and fx_by_stem.has("bdk_294") and fx_by_stem.has("btmn_106"),
+		"fix132: the shelf indexes by stem - all three files, by their ROMs (got %s)" % str(fx_by_stem.keys()), failures)
+	_expect(str((PinemhiScores.best_for_stems(fx_by_stem, ["bdk_294", "bdk_113"]) as Dictionary).get("score_text", "")) == "52.656.630",
+		"fix132: the best over the Dark Knight ROMs is the Dark Knight's own 52.656.630", failures)
+	_expect(str((PinemhiScores.best_for_stems(fx_by_stem, ["btmn_106"]) as Dictionary).get("score_text", "")) == "23.043.670",
+		"fix132: the best over the 1991 ROM is that game's own 23.043.670 - the stems never cross games", failures)
+	_expect(PinemhiScores.best_for_stems(fx_by_stem, ["nope_99"]).is_empty(),
+		"fix132: an unknown stem set resolves to no best (the caller states the reason)", failures)
+	_expect(_write_text_file(fx_root + "/db.json",
+		"[{\"id\": \"fx-stern-batman\", \"name\": \"Batman\", \"manufacturer\": \"Stern\", \"year\": 2008, \"romFiles\": [{\"version\": \"bdk_294\"}, {\"version\": \"bdk_113\"}], \"tableFiles\": [], \"imgUrl\": \"\"}, {\"id\": \"fx-de-batman\", \"name\": \"Batman\", \"manufacturer\": \"Data East\", \"year\": 1991, \"romFiles\": [{\"version\": \"btmn_106\"}], \"tableFiles\": [], \"imgUrl\": \"\"}]"),
+		"fix132: the fixture db writes", failures)
+	var fx_db: VpsDatabase = VpsDatabase.new()
+	_expect(fx_db.load_db(ProjectSettings.globalize_path(fx_root + "/db.json")),
+		"fix132: the fixture db loads", failures)
+	var fx_ch: WovpChallenge = WovpChallenge.new()
+	fx_ch.challenge_id = "fx-batman"
+	fx_ch.name = "Batman (Stern 2008)"
+	fx_ch.table_name = "Batman"
+	fx_ch.table_external_id = "fx-stern-batman"
+	var fx_res: Dictionary = PinemhiScores.resolve_challenge_bests(fx_cfg, fx_db, [fx_ch])
+	var fx_batman: Dictionary = (fx_res.get("bests", {}) as Dictionary).get("batman", {}) as Dictionary
+	_expect(str(fx_batman.get("score_text", "")) == "52.656.630",
+		"fix132: the Stern Batman challenge serves the Dark Knight best, not the 1991 game's (got '%s')" % str(fx_batman.get("score_text", "")), failures)
+	_expect(str((fx_res.get("notes", {}) as Dictionary).get("fx-batman", "")).contains("via ROM bdk_294"),
+		"fix132: the resolution note names the ROM road (got '%s')" % str((fx_res.get("notes", {}) as Dictionary).get("fx-batman", "")), failures)
+	var fx_res_nodb: Dictionary = PinemhiScores.resolve_challenge_bests(fx_cfg, null, [fx_ch])
+	_expect(str(((fx_res_nodb.get("bests", {}) as Dictionary).get("batman", {}) as Dictionary).get("score_text", "")) == "23.043.670"
+		and str((fx_res_nodb.get("notes", {}) as Dictionary).get("fx-batman", "")).contains("no db identity"),
+		"fix132: with no db the title road serves - and the note says so in plain words", failures)
+	PinemhiScores.debug_nc = "titlejoin"
+	var fx_res_nc: Dictionary = PinemhiScores.resolve_challenge_bests(fx_cfg, fx_db, [fx_ch])
+	PinemhiScores.debug_nc = ""
+	_expect(str(((fx_res_nc.get("bests", {}) as Dictionary).get("batman", {}) as Dictionary).get("score_text", "")) == "23.043.670",
+		"fix132 NC: the titlejoin road reproduces the field fault's wrong value (the discriminator)", failures)
+	# The weekly road: the contest's own standings carry
+	# the ROM, and the weekly spec ends with the line.
+	var fx_contest: Dictionary = {"id": "main", "table": "Sorcerer", "window_start": "2026-11-15 22:00:04", "window_end": "2026-11-22 22:00:04", "pin": "",
+		"rows": [{"pos": 1, "name": "PESARO", "value": 1500410, "value_text": "1.500.410", "rom": "sorcr_l2", "date": "2026-11-16 10:00:00"}]}
+	var fx_wres: Dictionary = PinemhiScores.resolve_weekly_bests(fx_cfg, [fx_contest])
+	var fx_wbest: Dictionary = (fx_wres.get("bests", {}) as Dictionary).get("main", {}) as Dictionary
+	_expect(str(fx_wbest.get("score_text", "")) == "2.252.640",
+		"fix132: the Sorcerer weekly best resolves via the contest's own ROM (got '%s')" % str(fx_wbest.get("score_text", "")), failures)
+	var fx_wspec: Dictionary = RoomSpecs.pinemhi_weekly_board_spec(fx_contest, "Kubrick", 0, true, fx_wbest)
+	var fx_wrows: Array = fx_wspec.get("rows", []) as Array
+	_expect(not fx_wrows.is_empty() and str((fx_wrows[fx_wrows.size() - 1] as Dictionary).get("text", "")) == "Your PINemHi best: 2.252.640",
+		"fix132: the weekly board's last row is the best line, the file's own dotted rendering", failures)
+	var fx_wspec_none: Dictionary = RoomSpecs.pinemhi_weekly_board_spec(fx_contest, "Kubrick", 0, true)
+	var fx_has_line: bool = false
+	for fx_rv: Variant in (fx_wspec_none.get("rows", []) as Array):
+		if str((fx_rv as Dictionary).get("text", "")).begins_with("Your PINemHi best"):
+			fx_has_line = true
+	_expect(not fx_has_line, "fix132: no best handed in, no best line - the weekly board stays honest", failures)
+	var fx_sep: Dictionary = RoomSpecs.pinemhi_separator_spec()
+	_expect(str(fx_sep.get("kind", "")) == "board" and str(fx_sep.get("title", "")) == "PINemHi Weekly" and str(fx_sep.get("band_text", "")) == "PINEMHI",
+		"fix132: the separator spec stands in the family's dress (band, title)", failures)
 
 	# SCOREMARK: the front mark's semantics + spec shape.
 	# The mark keys on the player's OWN Personal rows
