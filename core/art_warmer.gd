@@ -20,6 +20,7 @@ extends RefCounted
 ## Set by the owner; fired (deferred to the main thread) when a pass
 ## empties its queue.
 var on_drained: Callable = Callable()
+var extra_keep_paths: Dictionary = {} ## FIX135: cache paths the prune must keep beyond the library's own (Main sets this to the standing weekly contests' shot paths - a contest shot belongs to no library game, and the prune would otherwise evict it at the next scan)
 
 var last_pass_msec: int = 0 ## wall duration of the last completed pass
 var last_pass_items: int = 0 ## extractions the last pass performed
@@ -66,6 +67,8 @@ func warm_library(games: Array[GameEntry]) -> void:
 				# it maps to this source's stamp, so it stands
 				# or falls with the face beside it.
 				keep[ArtProvider.pair_on_path_for(src)] = true
+	for p: String in extra_keep_paths:
+		keep[p] = true
 	ArtProvider.prune_cache(keep)
 	_mutex.lock()
 	_queue.clear()

@@ -3910,14 +3910,28 @@ func _tourn_challenge_count() -> int:
 ## run of their own on the middle band in the columns
 ## right after the WoVP pair block (after the lone state
 ## row's column when no challenges stand).
+## The weekly run's first column: the pair block's width
+## past TOURN_BLOCK_COL0. The separator stands here, at the
+## family's head (FIX135); the contest boards seat one
+## column further right (see _pinemhi_coord).
+func _pinemhi_run_start() -> int:
+	var groups: int = maxi(1, int(ceil(float(maxi(1, _tourn_challenge_count())) / 2.0)))
+	return TOURN_BLOCK_COL0 + 2 * groups
+
+
 func _pinemhi_coord(idx: int) -> Vector2i:
 	var ordinal: int = 0
-	for i: int in range(idx):
-		if i < _tournament_rows.size() and str((_tournament_rows[i] as Dictionary).get("kind", "")) == "pinemhi":
+	var sep_stands: bool = false
+	for i: int in range(_tournament_rows.size()):
+		var k: String = str((_tournament_rows[i] as Dictionary).get("kind", ""))
+		if k == "pinemhi_sep":
+			sep_stands = true
+		if i < idx and k == "pinemhi":
 			ordinal += 1
-	var groups: int = maxi(1, int(ceil(float(maxi(1, _tourn_challenge_count())) / 2.0)))
-	var start_col: int = TOURN_BLOCK_COL0 + 2 * groups
-	return Vector2i(start_col + ordinal, TOURN_BAND0)
+	# FIX135: the separator's own column stands between the
+	# pair block and the first contest board - the boards
+	# shift one column right to make room for it.
+	return Vector2i(_pinemhi_run_start() + (1 if sep_stands else 0) + ordinal, TOURN_BAND0)
 
 
 func _tourn_pair_coords(idx: int) -> Dictionary:
@@ -3951,9 +3965,22 @@ func _grid_coord(index: int) -> Vector2i:
 	if _tournament:
 		if _tourn_state_idx(index):
 			return Vector2i(TOURN_BLOCK_COL0, TOURN_BAND0)
-		if index >= 0 and index < _tournament_rows.size() \
-				and str((_tournament_rows[index] as Dictionary).get("kind", "")) == "pinemhi":
-			return _pinemhi_coord(index)
+		if index >= 0 and index < _tournament_rows.size():
+			var kind: String = str((_tournament_rows[index] as Dictionary).get("kind", ""))
+			# FIX135: the separator seats at the head of the
+			# weekly run, on its own column. Before this case
+			# existed it fell through to the pair layout below,
+			# which seated it on the first weekly board's own
+			# column - the two panels stood coplanar, the
+			# separator's ink composited across the board's
+			# standings, and every seat-keyed walk resolved
+			# the shared seat to the inert separator, so the
+			# first weekly card never took focus or launched
+			# (Chris's field report on 1.1.22).
+			if kind == "pinemhi_sep":
+				return Vector2i(_pinemhi_run_start(), TOURN_BAND0)
+			if kind == "pinemhi":
+				return _pinemhi_coord(index)
 		return (_tourn_pair_coords(index)["card"] as Vector2i)
 	return Vector2i(index / BAND_COUNT, index % BAND_COUNT)
 
@@ -4239,13 +4266,21 @@ func _plinth_nc() -> bool:
 ## are different panels for the same game_id across views -
 ## the mode tag keeps them honest; a mismatch is freed and
 ## re-minted at the right size).
-func _pool_card(game: GameEntry) -> Dictionary:
+func _pool_card(game: GameEntry, mode_override: String = "") -> Dictionary:
 	# Since the Tournament redesign, challenge panels are
 	# CARDS (the board stands beside the centred one as
 	# furniture); only the state row still wears a board face.
 	# PINEMHI2: the weekly rows wear board faces too - their
 	# panels ARE their boards (no card, no companion).
-	var mode: String = "board" if (_tournament and (game.game_id == "wovp:state" or game.game_id.begins_with("pinemhi:"))) else "card"
+	# FIX135: the seat loop passes the ROW's mode - a weekly
+	# board row is a board whatever game it seats. Keying the
+	# mode on the game id alone built an owned weekly row
+	# (seated on its library entry since FIX134) as a library
+	# CARD: nameplate and plate standing over the board's
+	# last rows, the full focus frame, the narrower size.
+	var mode: String = mode_override
+	if mode == "":
+		mode = "board" if (_tournament and (game.game_id == "wovp:state" or game.game_id.begins_with("pinemhi:"))) else "card"
 	var nodes: Dictionary = _panel_pool.get(game.game_id, {}) as Dictionary
 	if not nodes.is_empty() and str(nodes.get("mode", "")) != mode:
 		var old_root: ClickableQuad = nodes.get("root") as ClickableQuad
@@ -4813,7 +4848,9 @@ func _rebuild_wall() -> void:
 				pinemhi_n += 1
 		if pinemhi_n > 0:
 			var groups2: int = maxi(1, int(ceil(float(maxi(1, _tourn_challenge_count())) / 2.0)))
-			_columns = maxi(_columns, TOURN_BLOCK_COL0 + 2 * groups2 + pinemhi_n)
+			# FIX135: +1 - the separator's own column at the
+			# run's head (see _pinemhi_run_start).
+			_columns = maxi(_columns, TOURN_BLOCK_COL0 + 2 * groups2 + 1 + pinemhi_n)
 	else:
 		_columns = maxi(1, int(ceil(float(maxi(1, _visible_games.size())) / 3.0)))
 	if _status_label == null:
@@ -4821,7 +4858,7 @@ func _rebuild_wall() -> void:
 	# Panels for the whole standing view, seated on the drum.
 	for idx: int in range(_visible_games.size()):
 		var game: GameEntry = _visible_games[idx]
-		var nodes: Dictionary = _pool_card(game)
+		var nodes: Dictionary = _pool_card(game, "board" if (_tournament and _tourn_board_panel_idx(idx)) else "")
 		_panels.append(nodes["root"] as ClickableQuad)
 		_panel_launches.append(nodes["launch"] as ClickableQuad)
 		_panel_back_launches.append(nodes.get("back_launch") as ClickableQuad)
@@ -7391,6 +7428,17 @@ func refresh_shot_faces(game: GameEntry) -> void:
 		_fill_tournament_state_faces(_gen)
 		return
 	_fill_one_face(idx, _gen)
+
+
+## FIX135: a landed CONTEST shot re-fills the weekly board
+## faces on the standing wall. Main calls this when a shot
+## arrival's URL is one of the standing contests' own: the
+## arrival rides a fetch-only entry that stands in no view,
+## so refresh_shot_faces (keyed on the visible game) can
+## never find it - the board fill is the only door.
+func refresh_pinemhi_board_faces() -> void:
+	if _tournament:
+		_fill_tournament_state_faces(_gen)
 
 
 ## The panel-face heal (GRADFIX6 item 2 - the GRADFIX4

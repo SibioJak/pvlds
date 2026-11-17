@@ -215,6 +215,7 @@ var _pinemhi2_fetch_error: String = "" ## the last weekly fetch's failure in wor
 var _pinemhi2_player_name: String = "" ## his PINemHi name, derived at push time from his TOP10_Personal files (PinemhiScores.player_name_for_config)
 var _pinemhi_best_notes: Dictionary = {} ## FIX132: the bests resolvers' last-logged notes ({challenge/contest key: line}) - a note is printed when it changes, so every resolution (and every absence, with its reason) is on the record exactly once per change
 var _pinemhi_game_notes: Dictionary = {} ## FIX134: the weekly game resolver's last-logged notes, same discipline as _pinemhi_best_notes (its own map - the keys share the "weekly:" shape but the lines are a different family's verdicts)
+var _pinemhi2_shot_map: Dictionary = {} ## FIX135: the standing contests' own shot URLs ({contest id: url}), remembered from the last weekly push - a landed contest shot is recognised by its URL (see _on_shot_arrived), and the warmer's prune keeps these files (see _push_pinemhi2_data)
 var _pinemhi2_probe: bool = false ## --pvlds-pinemhi2-probe: the fetch gate - one real fetch through the app's HTTP path, the per-contest census printed, then quit
 var _smoke_pinemhi2: bool = false ## --pvlds-smoke-pinemhi2: drive the PINEMHI2 contract (env PVLDS_PINEMHI2_MODE: parse|stub|cache|room)
 var _smoke_starfield: bool = false ## --pvlds-smoke-starfield: drive the STARFIELD contract (env PVLDS_STARFIELD_MODE: field|gate)
@@ -246,6 +247,14 @@ var _fix134_reset_done: bool = false ## FIX134 stages: the clean no-weekly-data 
 var _fix134_killed: bool = false ## FIX134 launch stage: the spawned "table" process has been killed so Main's own settle can land
 var _fix134_probe_busy: bool = false ## FIX134 layout stage: a board_layout_probe run is in flight
 var _fix134_probe_results: Dictionary = {} ## FIX134 layout stage: contest id -> {rows, tex} from the probe run
+var _fix135_launches: Array = [] ## FIX135 stages: the game ids launch_requested carried, in order
+var _fix135_wait: int = 0 ## FIX135 stages: the standing poll budget, in frames
+var _fix135_reset_done: bool = false ## FIX135 stages: the clean no-weekly-data reset has been re-pushed after the boot fetch settled
+var _fix135_killed: bool = false ## FIX135 stages: the spawned "table" process has been killed so Main's own settle can land
+var _fix135_probe_busy: bool = false ## FIX135 stages: a board_layout_probe run is in flight
+var _fix135_probe_tex: Dictionary = {} ## FIX135 stages: row idx -> the probe's fresh render of that row's spec
+var _fix135_grab_name: String = "" ## FIX135 stages: a wall grab waiting for the drum to settle
+var _fix135_grab_settle: int = 0 ## FIX135 stages: consecutive settled frames toward the pending grab
 var _wovp_validating_for: String = "" ## who a running validation answers to: "fetch" | "room" | "desk"
 var _wovp_validating_key_hash: int = 0 ## the hash of the key a running validation is about (a desk test may name a key that is not the saved one)
 var _smoke_tournament: bool = false ## --pvlds-smoke-tournament: drive the Tournament Room contract once the room is up
@@ -1750,6 +1759,12 @@ func _shots_may_fetch() -> bool:
 func _on_shot_arrived(game: GameEntry) -> void:
 	if _room != null:
 		_room.refresh_shot_faces(game)
+		# FIX135: a landed CONTEST shot rides a fetch-only
+		# entry that stands in no view, so the refresh above
+		# cannot find it - recognised by its URL against the
+		# standing shot map, it re-fills the board faces.
+		if game != null and game.shot_url != "" and _pinemhi2_shot_map.values().has(game.shot_url):
+			_room.refresh_pinemhi_board_faces()
 
 
 func _scan_progress_text() -> String:
@@ -2389,6 +2404,20 @@ func _push_pinemhi2_data() -> void:
 		var cid: String = str(c.get("id", ""))
 		if cid != "":
 			shot_map[cid] = _db_shot_url_for_contest(str(c.get("table", "")))
+	# FIX135: remember the standing map (a landed contest
+	# shot is recognised by URL at arrival time), and put
+	# the contest shots under the art warmer's prune
+	# protection - they belong to no library game, so the
+	# library-only keep set would evict them at the next
+	# scan even after they land.
+	_pinemhi2_shot_map = shot_map
+	if _art_warmer != null:
+		var keep: Dictionary = {}
+		for cid2: String in shot_map:
+			var u: String = str(shot_map[cid2])
+			if u != "":
+				keep[ArtProvider.shot_cache_path_for(u)] = true
+		_art_warmer.extra_keep_paths = keep
 	# FIX134: each contest's own freshness rides the push
 	# as its "live" flag - a board's saved-standings note
 	# answers to ITS contest's freshness, not the family's
@@ -2424,6 +2453,16 @@ func _push_pinemhi2_data() -> void:
 	# hold yet, through the same fetcher the library and
 	# the unowned challenge cards use; an arrival heals
 	# the weekly face (RoomView.refresh_shot_faces).
+	# FIX135: the rows' games are no longer the whole
+	# story - since FIX134 an owned row seats its LIBRARY
+	# entry, whose shot_url is its own file's shot, while
+	# the board's art header reads the CONTEST's URL (the
+	# db game record's image, in shot_map). That URL was
+	# nobody's fetch job: the header never landed and no
+	# arrival could heal it. Each contest URL not already
+	# covered by a queued row game now queues on a
+	# fetch-only entry; its arrival re-fills the board
+	# faces (see _on_shot_arrived).
 	if _room != null and _shot_fetcher != null:
 		var want: Array[GameEntry] = []
 		for rv: Variant in _room.tournament_rows():
@@ -2436,6 +2475,21 @@ func _push_pinemhi2_data() -> void:
 			if not ArtProvider.shot_is_cached(game.shot_url) \
 					and not ArtProvider.is_negative_outcome(ArtProvider.shot_outcome(game.shot_url)):
 				want.append(game)
+		var covered: Dictionary = {}
+		for g2: GameEntry in want:
+			covered[g2.shot_url] = true
+		for cid3: String in shot_map:
+			var url3: String = str(shot_map[cid3])
+			if url3 == "" or covered.has(url3):
+				continue
+			if ArtProvider.shot_is_cached(url3) \
+					or ArtProvider.is_negative_outcome(ArtProvider.shot_outcome(url3)):
+				continue
+			var fe: GameEntry = GameEntry.new()
+			fe.game_id = "pinemhi:" + cid3
+			fe.shot_url = url3
+			want.append(fe)
+			covered[url3] = true
 		if not want.is_empty():
 			_shot_fetcher.fetch_library(want)
 
@@ -20700,6 +20754,8 @@ func _drive_pinemhi2_smoke() -> void:
 			_drive_pinemhi2_failstate()
 		"fix134":
 			_drive_pinemhi2_fix134()
+		"fix135":
+			_drive_pinemhi2_fix135()
 
 
 func _pinemhi2_expect(cond: bool, label: String) -> void:
@@ -21362,6 +21418,534 @@ func _fix134_layout_grab() -> void:
 	var vp: Image = get_viewport().get_texture().get_image()
 	if vp != null and not vp.is_empty():
 		vp.save_png(grab_dir.path_join("wall.png"))
+
+
+## FIX135 smoke (PVLDS_PINEMHI2_MODE=fix135; the stage rides
+## PVLDS_FIX135_STAGE): the field-failure round on 1.1.22 -
+## the first PINemHi weekly card dead in the wall and the
+## weekly faces garbled there, while FIX134's isolated face
+## renders stood clean. Every leg here runs on the WALL
+## assembly through the room's real doors (the pad's own
+## _move_focus walk, _a_press, _activate), on a field-shaped
+## wall: FOUR fabricated WoVP challenges (the count the
+## field wall carries - with three, the separator's seat
+## arithmetic never collides and the defect hides) and
+## three weekly contests (an 8-row Competition owned by
+## ROM, a 6-row 5-Minute owned by ROM, a Golf stand-in).
+##   wall    - seats, node modes, face identity, the pad
+##             walk onto the FIRST weekly panel, its launch
+##             (A-press and detail Play), the unowned
+##             panel's inertness, wall grabs.
+##   art     - shots live (PVLDS_SHOT_MODE=on, the fetcher
+##             re-rooted to the dossier stub): no contest
+##             shot is cached at push time; the contest
+##             URLs must be queued, land, and heal the
+##             faces on the standing wall; a warmer prune
+##             must not evict them.
+##   refresh - the full real road: the boot fetch lands the
+##             stub's v1 contests, the wall legs run, a real
+##             REFRESH press (the rail stop) pulls v2, and
+##             the wall legs run again on the rebuilt wall.
+func _drive_pinemhi2_fix135() -> void:
+	match OS.get_environment("PVLDS_FIX135_STAGE"):
+		"wall":
+			_fix135_wall()
+		"art":
+			_fix135_art()
+		"refresh":
+			_fix135_refresh()
+		_:
+			_pinemhi2_expect(false, "fix135: unknown stage '%s'" % OS.get_environment("PVLDS_FIX135_STAGE"))
+			_finish_pinemhi2_smoke()
+
+
+func _fix135_write_ctl(name: String, content: String) -> void:
+	_write_text_file(OS.get_environment("PVLDS_FIX135_DIR").path_join(name), content)
+
+
+func _fix135_enter_room() -> void:
+	_wovp_challenges = [
+		_pinemhi_fab_challenge("fix135-alpha", "Apollo 13"),
+		_pinemhi_fab_challenge("fix135-beta", "Medieval Madness"),
+		_pinemhi_fab_challenge("fix135-gamma", "Twilight Zone"),
+		_pinemhi_fab_challenge("fix135-delta", "Attack from Mars"),
+	]
+	_wovp_user_id = "smoke-user"
+	_wovp_boards_live = true
+	_wovp_fetched_at = int(Time.get_unix_time_from_system())
+	_push_wovp_data()
+	_room._handle_rail("tournament")
+
+
+## The field-shaped contests: Medieval Madness carries the
+## 8-row Competition (the field's Sorcerer shape) and Tales
+## of the Arabian Nights the 6-row 5-Minute (the field's
+## Elvis shape); both resolve to the letter library by ROM.
+## Sorcerer's Golf stands unowned - its ROM is not in the
+## letter library.
+func _fix135_contests(leader: String) -> Array:
+	var main_rows: Array = []
+	var names: Array = [leader, "Kubrick", "ZeWalrus", "DJTOYS", "PESARO", "MiaWallace", "VincentVega", "JulesW"]
+	for i: int in range(8):
+		main_rows.append({"pos": i + 1, "name": names[i], "value": 9000000 - i * 100000, "value_text": "%d.000" % (9000 - i * 100), "rom": "mm_109c", "date": "2026-11-16 10:00:00"})
+	var five_rows: Array = []
+	var fnames: Array = ["FiveLeader", "Kubrick", "Ana", "Bob", "Cid", "Dee"]
+	for i: int in range(6):
+		five_rows.append({"pos": i + 1, "name": fnames[i], "value": 6000000 - i * 100000, "value_text": "%d.000" % (6000 - i * 100), "rom": "totan_14", "date": "2026-11-16 11:00:00"})
+	var golf_rows: Array = []
+	var gnames: Array = ["GolfOne", "GolfTwo", "GolfThree", "GolfFour"]
+	for i: int in range(4):
+		golf_rows.append({"pos": i + 1, "name": gnames[i], "value": -100 * (i + 1), "value_text": "-%d" % (100 * (i + 1)), "rom": "sorcr_l2", "date": "2026-11-16 12:00:00"})
+	return [
+		{"id": "main", "label": "Weekly Competition", "table": "Medieval Madness",
+			"window_start": "2026-11-15 22:00:04", "window_end": "2026-11-22 22:00:04", "pin": "", "rows": main_rows},
+		{"id": "five", "label": "Weekly 5-Minute", "table": "Tales of the Arabian Nights",
+			"window_start": "2026-11-11 22:00:03", "window_end": "2026-11-18 22:00:03", "pin": "", "rows": five_rows},
+		{"id": "golf", "label": "Weekly Golf", "table": "Sorcerer",
+			"window_start": "2026-11-16 22:00:05", "window_end": "2026-11-23 22:00:05", "pin": "1596900", "rows": golf_rows},
+	]
+
+
+func _fix135_sep_idx() -> int:
+	if _room == null:
+		return -1
+	var rows: Array = _room.tournament_rows()
+	for i: int in range(rows.size()):
+		if str((rows[i] as Dictionary).get("kind", "")) == "pinemhi_sep":
+			return i
+	return -1
+
+
+func _fix135_nodes(idx: int) -> Dictionary:
+	if _room == null or idx < 0 or idx >= _room.tournament_rows().size():
+		return {}
+	var row: Dictionary = _room.tournament_rows()[idx] as Dictionary
+	var game: GameEntry = row.get("game", null) as GameEntry
+	if game == null:
+		return {}
+	return _room._panel_pool.get(game.game_id, {}) as Dictionary
+
+
+## The wall census, run identically on every standing wall
+## this round judges: seats are a bijection, the separator
+## heads the weekly run with the first weekly panel one
+## column to its right, and every weekly panel is built as
+## a board (no nameplate, no plate standing over its rows).
+func _fix135_wall_legs(tag: String) -> void:
+	var rows: Array = _room.tournament_rows()
+	var seen: Dictionary = {}
+	var dup: String = ""
+	for i: int in range(rows.size()):
+		var c: Vector2i = _room._grid_coord(i)
+		var key: String = "%d,%d" % [c.x, c.y]
+		if seen.has(key):
+			dup = "%s (rows %d and %d)" % [key, int(seen[key]), i]
+		seen[key] = i
+	_pinemhi2_expect(dup == "", "fix135 %s: every wall row owns its seat (duplicate seat %s)" % [tag, dup])
+	var sep_idx: int = _fix135_sep_idx()
+	var main_idx: int = _fix134_panel_idx("main")
+	_pinemhi2_expect(sep_idx >= 0 and main_idx >= 0, "fix135 %s: the separator and the first weekly panel stand (sep %d, main %d)" % [tag, sep_idx, main_idx])
+	if sep_idx >= 0 and main_idx >= 0:
+		var sc: Vector2i = _room._grid_coord(sep_idx)
+		var mc: Vector2i = _room._grid_coord(main_idx)
+		_pinemhi2_expect(mc.x == sc.x + 1 and mc.y == sc.y,
+			"fix135 %s: the first weekly panel stands one column right of the separator on its band (sep %s, main %s)" % [tag, str(sc), str(mc)])
+	for i: int in range(rows.size()):
+		var kind: String = str((rows[i] as Dictionary).get("kind", ""))
+		if kind != "pinemhi" and kind != "pinemhi_sep":
+			continue
+		var nodes: Dictionary = _fix135_nodes(i)
+		_pinemhi2_expect(str(nodes.get("mode", "")) == "board",
+			"fix135 %s: the %s panel (row %d) is built as a board (mode '%s')" % [tag, kind, i, str(nodes.get("mode", ""))])
+		_pinemhi2_expect(nodes.get("label", null) == null and nodes.get("plate", null) == null,
+			"fix135 %s: the %s panel (row %d) carries no nameplate or plate over its face" % [tag, kind, i])
+
+
+func _fix135_run_probes(idxs: Array) -> void:
+	_fix135_probe_busy = true
+	_fix135_probe_tex = {}
+	for iv: Variant in idxs:
+		var idx: int = int(iv)
+		var spec: Dictionary = _room.pinemhi_board_spec_for(idx)
+		var probe: Dictionary = await _room.board_layout_probe(spec)
+		var tex: Texture2D = probe.get("texture", null) as Texture2D
+		if tex != null:
+			_fix135_probe_tex[idx] = tex
+	_fix135_probe_busy = false
+
+
+## Face identity on the standing wall: each probed panel
+## wears a fresh render of its OWN spec, and no weekly face
+## is the separator's render.
+func _fix135_face_legs(tag: String) -> void:
+	for iv: Variant in _fix135_probe_tex:
+		var idx: int = int(iv)
+		var want: Texture2D = _fix135_probe_tex[idx] as Texture2D
+		var got: Texture2D = _room._panels[idx].current_texture()
+		_pinemhi2_expect(got != null and got.get_image().get_data() == want.get_image().get_data(),
+			"fix135 %s: panel %d wears its own face" % [tag, idx])
+	var sep_idx: int = _fix135_sep_idx()
+	if sep_idx >= 0 and _fix135_probe_tex.has(sep_idx):
+		var sep_data: PackedByteArray = (_fix135_probe_tex[sep_idx] as Texture2D).get_image().get_data()
+		for cid: String in ["main", "five", "golf"]:
+			var idx: int = _fix134_panel_idx(cid)
+			if idx >= 0 and idx < _room._panels.size():
+				var got: Texture2D = _room._panels[idx].current_texture()
+				_pinemhi2_expect(got != null and got.get_image().get_data() != sep_data,
+					"fix135 %s: the %s face is not the separator's face" % [tag, cid])
+
+
+## Drive the pad's own focus walk RIGHT from the first
+## panel until the target panel holds focus (or the steps
+## run out). Returns true when the target was reached.
+func _fix135_walk_to(idx: int) -> bool:
+	_room._set_centre(0, true)
+	_room._set_focused(_room._panels[0])
+	if _room._panels.find(_room._focused) == idx:
+		return true
+	for step: int in range(24):
+		_room._move_focus(Vector2.RIGHT)
+		if _room._panels.find(_room._focused) == idx:
+			return true
+	return false
+
+
+func _fix135_record_launch(game: GameEntry, _build: TableBuild) -> void:
+	_fix135_launches.append(game.game_id)
+
+
+## Centre the drum on a panel and save the wall grab once
+## the swing settles (or the budget runs out). Returns true
+## when the grab has been taken.
+func _fix135_grab_step(name: String, idx: int) -> bool:
+	if _fix135_grab_name == "":
+		_room._set_centre(idx, true)
+		_fix135_grab_name = name
+		_fix135_grab_settle = 0
+		_fix135_wait = 0
+		return false
+	_fix135_wait += 1
+	if absf(_room._drum_yaw - _room._swing_to) < 0.0008:
+		_fix135_grab_settle += 1
+	else:
+		_fix135_grab_settle = 0
+	if _fix135_grab_settle < 8 and _fix135_wait <= 900:
+		return false
+	var grab_dir: String = OS.get_environment("PVLDS_FIX135_GRAB")
+	if grab_dir != "":
+		DirAccess.make_dir_recursive_absolute(grab_dir)
+		var vp: Image = get_viewport().get_texture().get_image()
+		if vp != null and not vp.is_empty():
+			vp.save_png(grab_dir.path_join(_fix135_grab_name))
+	_fix135_grab_name = ""
+	return true
+
+
+func _fix135_wall() -> void:
+	match _pinemhi2_smoke_phase:
+		1:
+			if _room != null and _room.visible and _room.wall_ready:
+				_fix135_enter_room()
+				_pinemhi2_expect(_room.tournament_active(), "fix135 wall: the TOURNAMENT stop raises the Tournament Room")
+				_pinemhi2_smoke_phase = 2
+		2:
+			if _pinemhi_client != null and _pinemhi_client.is_busy():
+				return
+			if not _fix135_reset_done:
+				_pinemhi2_contests = []
+				_pinemhi2_fetched_at = 0
+				_pinemhi2_live = false
+				_pinemhi2_fetch_error = ""
+				_push_pinemhi2_data()
+				_fix135_reset_done = true
+				return
+			_pinemhi2_contests = _fix135_contests("AlphaOne")
+			_pinemhi2_fetched_at = int(Time.get_unix_time_from_system())
+			_pinemhi2_live = true
+			_pinemhi2_fetch_error = ""
+			_push_pinemhi2_data()
+			if not _room.launch_requested.is_connected(_fix135_record_launch):
+				_room.launch_requested.connect(_fix135_record_launch)
+			_pinemhi2_smoke_phase = 3
+		3:
+			if _fix134_panels_real():
+				var owners: Array[String] = _db.rom_owners("mm_109c")
+				_pinemhi2_expect(owners.size() == 1, "fix135 wall: the letter db resolves mm_109c to exactly one library game (got %d)" % owners.size())
+				_pinemhi2_expect(bool(_fix134_row_of("main").get("owned", false)), "fix135 wall: the Medieval Madness contest row stands owned (resolved by ROM)")
+				_pinemhi2_expect(bool(_fix134_row_of("five").get("owned", false)), "fix135 wall: the Tales of the Arabian Nights contest row stands owned (resolved by ROM)")
+				_pinemhi2_expect(not bool(_fix134_row_of("golf").get("owned", true)), "fix135 wall: the Sorcerer contest row stands unowned")
+				_fix135_wall_legs("wall")
+				var idxs: Array = []
+				var sep_idx: int = _fix135_sep_idx()
+				if sep_idx >= 0:
+					idxs.append(sep_idx)
+				for cid: String in ["main", "five", "golf"]:
+					var ci: int = _fix134_panel_idx(cid)
+					if ci >= 0:
+						idxs.append(ci)
+				_fix135_run_probes(idxs)
+				_pinemhi2_smoke_phase = 4
+		4:
+			if _fix135_probe_busy:
+				return
+			_fix135_face_legs("wall")
+			var main_idx: int = _fix134_panel_idx("main")
+			var walked: bool = _fix135_walk_to(main_idx)
+			_pinemhi2_expect(walked, "fix135 wall: the pad walk reaches the FIRST weekly panel")
+			_pinemhi2_expect(_room._focused == _room._panels[main_idx],
+				"fix135 wall: the first weekly panel holds the pad focus")
+			_fix135_wait = 0
+			_pinemhi2_smoke_phase = 5
+		5:
+			# The pop follows the CENTRE, and the centre
+			# follows focus on the room's own frame clock -
+			# give it its frames, then judge the standing pop.
+			_fix135_wait += 1
+			var main_idx: int = _fix134_panel_idx("main")
+			if _room.pop_target() == _room._panels[main_idx] or _fix135_wait > 600:
+				_pinemhi2_expect(_room.pop_target() == _room._panels[main_idx],
+					"fix135 wall: the first weekly panel stands centred and popped")
+				_room._a_press()
+				var owners: Array[String] = _db.rom_owners("mm_109c")
+				_pinemhi2_expect(_fix135_launches.size() == 1 and str(_fix135_launches[0]) == (owners[0] if owners.size() == 1 else "<none>"),
+					"fix135 wall: the A-press on the first weekly panel launches its library game (got %s)" % str(_fix135_launches))
+				_fix135_wait = 0
+				_fix135_killed = false
+				_pinemhi2_smoke_phase = 6
+		6:
+			if _launch_pid > 0 and not _fix135_killed:
+				OS.kill(_launch_pid)
+				_fix135_killed = true
+			_fix135_wait += 1
+			if not _launch_pending and _room != null and _room._mode == "wall":
+				var main_idx: int = _fix134_panel_idx("main")
+				_room._activate(_room._panels[main_idx])
+				_pinemhi2_expect(_room._mode == "detail", "fix135 wall: activating the first weekly panel opens its detail (mode '%s')" % _room._mode)
+				var play_quad: ClickableQuad = null
+				for q: ClickableQuad in _room._detail.get_clickables():
+					if q.action_id == "detail_play":
+						play_quad = q
+				_pinemhi2_expect(play_quad != null, "fix135 wall: the detail carries its Play quad")
+				if play_quad != null:
+					_room._activate(play_quad)
+					_pinemhi2_expect(_fix135_launches.size() == 2, "fix135 wall: the detail's Play launches the table (launches %s)" % str(_fix135_launches))
+				_fix135_killed = false
+				_fix135_wait = 0
+				_pinemhi2_smoke_phase = 7
+			elif _fix135_wait > 3600:
+				_pinemhi2_expect(false, "fix135 wall: the A-press launch never settled")
+				_finish_pinemhi2_smoke()
+		7:
+			if _launch_pid > 0 and not _fix135_killed:
+				OS.kill(_launch_pid)
+				_fix135_killed = true
+			_fix135_wait += 1
+			if not _launch_pending and _room != null:
+				if _room._mode == "detail":
+					var back_quad: ClickableQuad = null
+					for q: ClickableQuad in _room._detail.get_clickables():
+						if q.action_id == "detail_back":
+							back_quad = q
+					if back_quad != null:
+						_room._activate(back_quad)
+					_pinemhi2_expect(_room._mode == "wall", "fix135 wall: Back leaves the detail (mode '%s')" % _room._mode)
+				var golf_idx: int = _fix134_panel_idx("golf")
+				_pinemhi2_expect(golf_idx >= 0, "fix135 wall: the unowned weekly panel stands in the room")
+				if golf_idx >= 0:
+					_room._set_centre(golf_idx, true)
+					_room._set_focused(_room._panels[golf_idx])
+					_room._a_press()
+					_pinemhi2_expect(_fix135_launches.size() == 2, "fix135 wall: the A-press on the unowned weekly panel launches nothing (launches %s)" % str(_fix135_launches))
+					_room._activate(_room._panels[golf_idx])
+					_pinemhi2_expect(_room._mode == "wall", "fix135 wall: activating the unowned weekly panel opens no detail (mode '%s')" % _room._mode)
+				var golf_spec: Dictionary = _fix134_spec("golf")
+				var chip_texts: Array = []
+				for cv: Variant in (golf_spec.get("chips", []) as Array):
+					chip_texts.append(str((cv as Dictionary).get("text", "")))
+				_pinemhi2_expect(chip_texts.has("NOT IN YOUR LIBRARY"), "fix135 wall: the unowned weekly board says NOT IN YOUR LIBRARY (chips %s)" % str(chip_texts))
+				var main_spec: Dictionary = _fix134_spec("main")
+				var main_chips: Array = []
+				for cv2: Variant in (main_spec.get("chips", []) as Array):
+					main_chips.append(str((cv2 as Dictionary).get("text", "")))
+				_pinemhi2_expect(not main_chips.has("NOT IN YOUR LIBRARY"), "fix135 wall: the owned weekly board carries no NOT IN YOUR LIBRARY chip")
+				_pinemhi2_smoke_phase = 8
+			elif _fix135_wait > 3600:
+				_pinemhi2_expect(false, "fix135 wall: the detail Play launch never settled")
+				_finish_pinemhi2_smoke()
+		8:
+			if _fix135_grab_step("wall-main.png", _fix134_panel_idx("main")):
+				_pinemhi2_smoke_phase = 9
+		9:
+			if _fix135_grab_step("wall-sep.png", _fix135_sep_idx()):
+				_finish_pinemhi2_smoke()
+
+
+func _fix135_art() -> void:
+	match _pinemhi2_smoke_phase:
+		1:
+			if _room != null and _room.visible and _room.wall_ready:
+				_fix135_enter_room()
+				_pinemhi2_smoke_phase = 2
+		2:
+			if _pinemhi_client != null and _pinemhi_client.is_busy():
+				return
+			if not _fix135_reset_done:
+				_pinemhi2_contests = []
+				_pinemhi2_fetched_at = 0
+				_pinemhi2_live = false
+				_pinemhi2_fetch_error = ""
+				_push_pinemhi2_data()
+				_fix135_reset_done = true
+				return
+			var main_url: String = _db_shot_url_for_contest("Medieval Madness")
+			_pinemhi2_expect(main_url != "", "fix135 art: the db names a contest shot for Medieval Madness")
+			_pinemhi2_expect(not ArtProvider.shot_is_cached(main_url), "fix135 art: the contest shot is NOT cached when the contests are pushed")
+			_pinemhi2_contests = _fix135_contests("AlphaOne")
+			_pinemhi2_fetched_at = int(Time.get_unix_time_from_system())
+			_pinemhi2_live = true
+			_pinemhi2_fetch_error = ""
+			_push_pinemhi2_data()
+			_fix135_wait = 0
+			_pinemhi2_smoke_phase = 3
+		3:
+			_fix135_wait += 1
+			var main_idx: int = _fix134_panel_idx("main")
+			var five_idx: int = _fix134_panel_idx("five")
+			if main_idx >= 0 and five_idx >= 0:
+				var main_spec: Dictionary = _room.pinemhi_board_spec_for(main_idx)
+				var five_spec: Dictionary = _room.pinemhi_board_spec_for(five_idx)
+				if main_spec.get("art_texture", null) != null and five_spec.get("art_texture", null) != null:
+					_pinemhi2_expect(true, "fix135 art: the contest shots landed and the weekly specs wear their art")
+					_fix135_run_probes([main_idx])
+					_pinemhi2_smoke_phase = 4
+					return
+			if _fix135_wait > 12000:
+				_pinemhi2_expect(false, "fix135 art: the contest shots never landed on the weekly boards (waited %d frames)" % _fix135_wait)
+				_finish_pinemhi2_smoke()
+		4:
+			if _fix135_probe_busy:
+				return
+			_fix135_face_legs("art")
+			var main_url: String = _db_shot_url_for_contest("Medieval Madness")
+			var cpath: String = ArtProvider.shot_cache_path_for(main_url)
+			_pinemhi2_expect(FileAccess.file_exists(cpath), "fix135 art: the contest shot stands in the art cache")
+			if _art_warmer != null and _scanner != null:
+				_art_warmer.warm_library(_scanner.games)
+				_pinemhi2_expect(FileAccess.file_exists(cpath), "fix135 art: a warmer prune leaves the contest shot in the cache")
+			_pinemhi2_smoke_phase = 5
+		5:
+			if _fix135_grab_step("art-main.png", _fix134_panel_idx("main")):
+				_finish_pinemhi2_smoke()
+
+
+func _fix135_refresh() -> void:
+	match _pinemhi2_smoke_phase:
+		1:
+			if _room != null and _room.visible and _room.wall_ready:
+				_fix135_enter_room()
+				_pinemhi2_smoke_phase = 2
+		2:
+			# The boot fetch (the stub's v1 generation) must
+			# land the v1 contests before the wall is judged.
+			_fix135_wait += 1
+			var spec: Dictionary = _fix134_spec("main")
+			if not spec.is_empty():
+				var first: Dictionary = _fix134_first_score(spec)
+				if str(first.get("name", "")) == "AlphaOne":
+					_pinemhi2_expect(true, "fix135 refresh: the boot fetch stands the v1 standings on the wall")
+					_fix135_wait = 0
+					_pinemhi2_smoke_phase = 3
+					return
+			if _fix135_wait > 12000:
+				_pinemhi2_expect(false, "fix135 refresh: the boot fetch never stood the v1 standings")
+				_finish_pinemhi2_smoke()
+		3:
+			if _fix134_panels_real():
+				_fix135_wall_legs("refresh-v1")
+				var idxs: Array = []
+				var sep_idx: int = _fix135_sep_idx()
+				if sep_idx >= 0:
+					idxs.append(sep_idx)
+				for cid: String in ["main", "five", "golf"]:
+					var ci: int = _fix134_panel_idx(cid)
+					if ci >= 0:
+						idxs.append(ci)
+				_fix135_run_probes(idxs)
+				_pinemhi2_smoke_phase = 4
+		4:
+			if _fix135_probe_busy:
+				return
+			_fix135_face_legs("refresh-v1")
+			var main_idx: int = _fix134_panel_idx("main")
+			_pinemhi2_expect(_fix135_walk_to(main_idx), "fix135 refresh-v1: the pad walk reaches the FIRST weekly panel")
+			_fix135_write_ctl("gen.txt", "v2")
+			_room._handle_rail("wovp_refresh")
+			_fix135_wait = 0
+			_pinemhi2_smoke_phase = 5
+		5:
+			_fix135_wait += 1
+			var spec: Dictionary = _fix134_spec("main")
+			if not spec.is_empty():
+				var first: Dictionary = _fix134_first_score(spec)
+				if str(first.get("name", "")) == "BravoTwo":
+					_pinemhi2_expect(true, "fix135 refresh: a real REFRESH press moved the main board to the v2 standings")
+					_fix135_wait = 0
+					_pinemhi2_smoke_phase = 6
+					return
+			if _fix135_wait > 12000:
+				_pinemhi2_expect(false, "fix135 refresh: the REFRESH press never landed the v2 standings")
+				_finish_pinemhi2_smoke()
+		6:
+			if _fix134_panels_real():
+				_fix135_wall_legs("refresh-v2")
+				var idxs: Array = []
+				var sep_idx: int = _fix135_sep_idx()
+				if sep_idx >= 0:
+					idxs.append(sep_idx)
+				for cid: String in ["main", "five", "golf"]:
+					var ci: int = _fix134_panel_idx(cid)
+					if ci >= 0:
+						idxs.append(ci)
+				_fix135_run_probes(idxs)
+				if not _room.launch_requested.is_connected(_fix135_record_launch):
+					_room.launch_requested.connect(_fix135_record_launch)
+				_pinemhi2_smoke_phase = 7
+		7:
+			if _fix135_probe_busy:
+				return
+			_fix135_face_legs("refresh-v2")
+			var main_idx: int = _fix134_panel_idx("main")
+			_pinemhi2_expect(_fix135_walk_to(main_idx), "fix135 refresh-v2: the pad walk reaches the FIRST weekly panel")
+			_pinemhi2_expect(_room._focused == _room._panels[main_idx],
+				"fix135 refresh-v2: the first weekly panel holds the pad focus")
+			_fix135_wait = 0
+			_pinemhi2_smoke_phase = 8
+		8:
+			_fix135_wait += 1
+			var main_idx: int = _fix134_panel_idx("main")
+			if _room.pop_target() == _room._panels[main_idx] or _fix135_wait > 600:
+				_pinemhi2_expect(_room.pop_target() == _room._panels[main_idx],
+					"fix135 refresh-v2: the first weekly panel stands centred and popped")
+				_room._a_press()
+				var owners: Array[String] = _db.rom_owners("mm_109c")
+				_pinemhi2_expect(_fix135_launches.size() == 1 and str(_fix135_launches[0]) == (owners[0] if owners.size() == 1 else "<none>"),
+					"fix135 refresh-v2: the A-press on the first weekly panel launches its library game (got %s)" % str(_fix135_launches))
+				_fix135_wait = 0
+				_fix135_killed = false
+				_pinemhi2_smoke_phase = 9
+		9:
+			if _launch_pid > 0 and not _fix135_killed:
+				OS.kill(_launch_pid)
+				_fix135_killed = true
+			_fix135_wait += 1
+			if not _launch_pending and _room != null and _room._mode == "wall":
+				_pinemhi2_smoke_phase = 10
+			elif _fix135_wait > 3600:
+				_pinemhi2_expect(false, "fix135 refresh-v2: the A-press launch never settled")
+				_finish_pinemhi2_smoke()
+		10:
+			if _fix135_grab_step("refresh-main.png", _fix134_panel_idx("main")):
+				_finish_pinemhi2_smoke()
 
 
 ## STARFIELD smoke (--pvlds-smoke-starfield, harness env
