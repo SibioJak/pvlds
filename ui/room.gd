@@ -1173,6 +1173,7 @@ const BOARD_TEX_RETRY_MS: int = 600 ## the heal's minimum interval between re-re
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _launch_marker_surface: String = "wall" ## FIX139: which surface the standing wait launched from - "wall" (the launching panel's LOADING marker stands) or "detail" (the detail's Play quad carries the state instead)
 var _launch_panel_mode: String = "" ## FIX140: the mode of the panel the standing wall launch was pressed on ("board"/"card"), recorded at the press (see _launch_focused_card) - the marker writer keys on it, since one game can now hold a panel per mode; "" = no wall press recorded (the writer falls back to the card)
+var _launch_panel_seat: String = "" ## FIX141: the seat of the panel the standing wall launch was pressed on (see pool_seat_for_idx), recorded beside _launch_panel_mode - one game can now hold a panel per row, so the marker writer keys on the seat too
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
 var _db_warning_active: bool = false ## FIX114: the standing database warning's state (Main drives it from the last landed scan's database kind - see set_db_warning_active)
@@ -1428,9 +1429,9 @@ var _pop_awake: bool = true ## OPTIMIZE standing-cost cut: the pop spring loop r
 var _pop_last_target: ClickableQuad = null ## OPTIMIZE standing-cost cut: the pop target the sleeping loop last settled under
 
 var _drum_yaw: float = 0.0 ## the drum's current yaw, radians (== _swing_to at rest)
-var _panel_pool: Dictionary = {} ## (game_id, mode) -> {root, launch, frame, plate, label, mode, plate_done, game_id}: card nodes built once per library adoption and re-seated per view (a rebuild that freed and rebuilt 300+ cards would tax every letter pick - the pick-latency law). FIX140: the key carries the MODE (see _pool_key) - a game standing as both a weekly board and a challenge card holds one node set PER MODE; the pre-fix game_id-only key freed the first mode's root when the second seated.
+var _panel_pool: Dictionary = {} ## (game_id, mode, seat) -> {root, launch, frame, plate, label, mode, plate_done, game_id, face_key}: card nodes built once per library adoption and re-seated per view (a rebuild that freed and rebuilt 300+ cards would tax every letter pick - the pick-latency law). FIX140: the key carries the MODE (see _pool_key) - a game standing as both a weekly board and a challenge card holds one node set PER MODE; the pre-fix game_id-only key freed the first mode's root when the second seated. FIX141: the key carries the SEAT too - two rows of one game in one mode (two challenges, two weekly contests) hold one node set PER ROW.
 var _plates_pending: bool = false ## a rebuild stood new cards: their nameplates re-derive from the labels' live AABBs until every one settles (see _refresh_card_plate)
-var _panel_face_key: Dictionary = {} ## game_id -> the face key its standing texture was filled for ("" = never filled)
+var _panel_face_key: Dictionary = {} ## game_id -> the face key its standing texture was filled for ("" = never filled). FIX141: this stamps the game's face CONTENT; each pool entry's own "face_key" stamps that PANEL's wearing of it (see _panel_face_bound_key) - the standing tests require both.
 var _panel_window_lo: int = -1 ## the drawn window's first COLUMN (visibility + face fill range), -1 = none yet
 var _panel_window_hi: int = -1 ## the drawn window's last COLUMN
 var _power_subject_cache: Dictionary = {} ## game_id -> [backglass path, fav, Texture2D]: rendered power-on subjects (the backglass face, rendered once per game per library PER FAVOURITE STATE - GRADFIX12 item 2: the subject is a rendered face, so it carries the favourite badge its render was made under; a cache that ignored the flag served the pre-toggle subject over the new face and the star died under the settled overlay)
@@ -4129,6 +4130,13 @@ func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 	if mode == "card":
 		q.set_frame_size(CARD_FRAME_SIZE)
 	var nodes: Dictionary = {"root": q, "mode": mode, "game_id": game.game_id}
+	# FIX141: the face key THIS panel's quad was last bound
+	# under ("" = never). _panel_face_key stamps the game's
+	# face CONTENT; this stamps the PANEL's wearing of it -
+	# with a panel per row, the game stamp alone would judge
+	# a second panel standing while it wears the placeholder
+	# (see _face_is_standing).
+	nodes["face_key"] = ""
 	var pivot: Node3D = q.flip_pivot()
 	# FIX139: the LOADING marker - a dark plate + the one
 	# word, on the pivot at the surface's bottom band. Minted
@@ -4272,30 +4280,84 @@ func _plinth_nc() -> bool:
 ## (PVLDS_FIX140_NC=sharedroot) the key collapses to the bare
 ## game_id - the pre-fix shape - and _pool_card's mismatch
 ## free returns with it, so the fix140 legs fail by name.
-func _pool_key(game_id: String, mode: String) -> String:
+## FIX141: the key carries a third component, the SEAT - the
+## standing row's own identity (see pool_seat_for_idx). Two
+## rows of the SAME game in the SAME mode (two WoVP challenges
+## on one table; two weekly contests resolved to one table)
+## are different panels standing at different seats, so the
+## (game, mode) key alone collided exactly as the game-only
+## key had: the second seat stole the first row's panel.
+## Under the FIX141 NC seam (PVLDS_FIX141_NC=pergame) the key
+## drops the seat - the FIX140 shape - so the fix141 legs
+## fail by name while the fix140 legs still pass.
+func _pool_key(game_id: String, mode: String, seat: String = "") -> String:
 	if RoomSpecs.fix140_nc == "sharedroot":
 		return game_id
-	return game_id + "|" + mode
+	if RoomSpecs.fix141_nc == "pergame":
+		return game_id + "|" + mode
+	return game_id + "|" + mode + "|" + seat
 
 
-## One game's pooled nodes for one mode ({} when that mode
-## has none standing). The public face of the pool contract -
-## Main's censuses and smokes read through here too.
-func pool_nodes(game_id: String, mode: String) -> Dictionary:
-	return _panel_pool.get(_pool_key(game_id, mode), {}) as Dictionary
+## One game's pooled nodes for one mode at one seat ({} when
+## that seat has none standing). The public face of the pool
+## contract - Main's censuses and smokes read through here
+## too. The seat defaults to "" (the seatless rows: the
+## library's cards, the state rows, the separator).
+func pool_nodes(game_id: String, mode: String, seat: String = "") -> Dictionary:
+	return _panel_pool.get(_pool_key(game_id, mode, seat), {}) as Dictionary
+
+
+## FIX141: a standing row's seat - the identity its panel is
+## pooled under. Challenge rows seat by their challenge,
+## weekly rows by their contest; every other row (and the
+## library, which has no rows) is seatless. Derived in this
+## one place from the standing rows, so the seat loop, the
+## marker writer and every per-idx fetch name the same seat.
+## Rows are built 1:1 from the challenge/contest lists, whose
+## ids are unique; should two rows ever derive the same base
+## seat (the same challenge listed twice), an ordinal suffix
+## keeps them distinct - deterministically, since the rows
+## rebuild in the same order from the same pushes.
+func _row_seat_base(idx: int) -> String:
+	if not _tournament or idx < 0 or idx >= _tournament_rows.size():
+		return ""
+	var row: Dictionary = _tournament_rows[idx] as Dictionary
+	match str(row.get("kind", "")):
+		"challenge":
+			var ch: WovpChallenge = row.get("challenge") as WovpChallenge
+			return "ch:" + ch.challenge_id if ch != null else ""
+		"pinemhi":
+			var contest: Dictionary = row.get("contest", {}) as Dictionary
+			var cid: String = str(contest.get("id", ""))
+			return "wk:" + cid if cid != "" else ""
+	return ""
+
+
+func pool_seat_for_idx(idx: int) -> String:
+	var base: String = _row_seat_base(idx)
+	if base == "":
+		return ""
+	var dup: int = 0
+	for j: int in range(idx):
+		if _row_seat_base(j) == base:
+			dup += 1
+	return base if dup == 0 else base + "#" + str(dup + 1)
 
 
 ## Get a game's card nodes from the pool, minting them if this
 ## mode has none. FIX140: a mode mismatch is no longer a
 ## collision to resolve - the other mode's set is a different
 ## pool entry, standing at its own seat, and is never freed,
-## re-minted or borrowed here. (The pre-fix body keyed the
+## re-minted or borrowed here. FIX141: the seat (the caller's
+## row identity, pool_seat_for_idx) splits same-mode rows of
+## one game the same way - another row's set is a different
+## entry and is never borrowed here either. (The pre-fix body keyed the
 ## pool by game_id alone and freed the standing set on a
 ## mismatch: a game seated as a weekly board and then as a
 ## challenge card lost the board's root under its row -
 ## freed-quad errors and a segfault, convicted in FIX139's
 ## staging. The NC seam restores that body whole.)
-func _pool_card(game: GameEntry, mode_override: String = "") -> Dictionary:
+func _pool_card(game: GameEntry, mode_override: String = "", seat: String = "") -> Dictionary:
 	# Since the Tournament redesign, challenge panels are
 	# CARDS (the board stands beside the centred one as
 	# furniture); only the state row still wears a board face.
@@ -4327,10 +4389,10 @@ func _pool_card(game: GameEntry, mode_override: String = "") -> Dictionary:
 			old = _make_card_nodes(game, mode)
 			_panel_pool[game.game_id] = old
 		return old
-	var nodes: Dictionary = _panel_pool.get(_pool_key(game.game_id, mode), {}) as Dictionary
+	var nodes: Dictionary = _panel_pool.get(_pool_key(game.game_id, mode, seat), {}) as Dictionary
 	if nodes.is_empty():
 		nodes = _make_card_nodes(game, mode)
-		_panel_pool[_pool_key(game.game_id, mode)] = nodes
+		_panel_pool[_pool_key(game.game_id, mode, seat)] = nodes
 	return nodes
 
 
@@ -4400,8 +4462,12 @@ func _nodes_face_is_art(nodes: Dictionary) -> bool:
 	var parts: PackedStringArray = fkey.split("|")
 	if parts.size() <= 1 or parts[1] == "":
 		return false
-	for idx: int in range(_visible_games.size()):
-		if _visible_games[idx].game_id == gid:
+	# FIX141: the aspect is THIS panel's seat's - found by
+	# the root's identity, not by the first row naming the
+	# game (a second row of the game has its own aspect,
+	# still 0 until its own fill lands).
+	for idx: int in range(_panels.size()):
+		if _panels[idx] == root:
 			return idx < _panel_art_aspect.size() and _panel_art_aspect[idx] > 0.0
 	return false
 
@@ -4481,8 +4547,11 @@ func _refresh_all_card_plates() -> bool:
 		# FIX140: the seat's own mode - a weekly board seat
 		# reads its board entry (which has no plate to
 		# refresh), never the game's card entry.
+		# FIX141: and its own seat - a second row of the same
+		# game refreshes its own panel's plate, never the
+		# first row's.
 		var nodes: Dictionary = pool_nodes(_visible_games[idx].game_id,
-			"board" if _tourn_board_panel_idx(idx) else "card")
+			"board" if _tourn_board_panel_idx(idx) else "card", pool_seat_for_idx(idx))
 		if not nodes.is_empty() and not _refresh_card_plate(nodes):
 			settled = false
 	return settled
@@ -4900,7 +4969,7 @@ func _rebuild_wall() -> void:
 	# Panels for the whole standing view, seated on the drum.
 	for idx: int in range(_visible_games.size()):
 		var game: GameEntry = _visible_games[idx]
-		var nodes: Dictionary = _pool_card(game, "board" if (_tournament and _tourn_board_panel_idx(idx)) else "")
+		var nodes: Dictionary = _pool_card(game, "board" if (_tournament and _tourn_board_panel_idx(idx)) else "", pool_seat_for_idx(idx))
 		_panels.append(nodes["root"] as ClickableQuad)
 		_panel_launches.append(nodes["launch"] as ClickableQuad)
 		_panel_back_launches.append(nodes.get("back_launch") as ClickableQuad)
@@ -6081,12 +6150,22 @@ func _nb_sync_footer() -> void:
 func _nb_on_texture_assign(quad: ClickableQuad, old_tex: Texture2D, new_tex: Texture2D) -> void:
 	if quad == null or not _tex_is_real(old_tex) or _tex_is_real(new_tex):
 		return
-	var entry: Dictionary = pool_nodes(quad.payload, "card")
 	# FIX140: the conviction is about THIS quad - the game's
 	# card entry convicts only when the assigning quad is the
 	# card panel itself (a double-duty game's board quad
 	# shares the payload but is not the card).
-	if entry.is_empty() or entry.get("root") as ClickableQuad != quad:
+	# FIX141: the entry is found BY that identity - a game
+	# can hold a card entry per seat now, so no keyed fetch
+	# names the assigning quad's own entry; the scan over
+	# card entries for the one whose root IS this quad is
+	# the conviction's exact shape.
+	var entry: Dictionary = {}
+	for key: Variant in _panel_pool.keys():
+		var cand: Dictionary = _panel_pool[key] as Dictionary
+		if str(cand.get("mode", "")) == "card" and (cand.get("root") as ClickableQuad) == quad:
+			entry = cand
+			break
+	if entry.is_empty():
 		return
 	_nb_face_clear_count += 1
 	_nb_sync_footer()
@@ -6177,6 +6256,7 @@ func _nb_apply_swap(idx: int, fkey: String, hit: Array) -> void:
 	else:
 		_nb_bind_face(quad, tex, "swap")
 	_panel_face_key[game.game_id] = fkey
+	_stamp_face_bound(idx, fkey) ## FIX141: this panel wears it now
 	if idx < _panel_plates.size() and _panel_plates[idx] != null:
 		_panel_plates[idx].visible = from_art
 		_panel_labels[idx].visible = from_art
@@ -6556,14 +6636,46 @@ func _face_key_for(idx: int) -> String:
 	return game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "") + _pmh_segment(game)
 
 
+## FIX141: the face key the panel AT idx was last bound
+## under - its own pool entry's stamp, as opposed to
+## _panel_face_key's per-game content stamp. "" when the
+## panel has no entry or never wore a fill.
+func _panel_face_bound_key(idx: int) -> String:
+	if idx < 0 or idx >= _visible_games.size():
+		return ""
+	var nodes: Dictionary = pool_nodes(_visible_games[idx].game_id,
+		"board" if _tourn_board_panel_idx(idx) else "card", pool_seat_for_idx(idx))
+	if nodes.is_empty():
+		return ""
+	return str(nodes.get("face_key", ""))
+
+
+## FIX141: record that the panel AT idx now wears fkey -
+## the bound half of the standing test, written at the two
+## bind tails beside the _panel_face_key stamp (the full
+## fill and the enqueue swap).
+func _stamp_face_bound(idx: int, fkey: String) -> void:
+	if idx < 0 or idx >= _visible_games.size():
+		return
+	var nodes: Dictionary = pool_nodes(_visible_games[idx].game_id,
+		"board" if _tourn_board_panel_idx(idx) else "card", pool_seat_for_idx(idx))
+	if not nodes.is_empty():
+		nodes["face_key"] = fkey
+
+
 ## Whether a panel's standing face is honestly the face its
 ## key asks for (the fill's own already-wearing test, asked
-## without rendering anything).
+## without rendering anything). FIX141: the game's stamp
+## vouches for the CONTENT, the panel's bound key for the
+## PANEL - both must name the key, or a second panel of one
+## game (two challenge rows) reads standing off its twin's
+## fill while wearing the placeholder.
 func _face_is_standing(idx: int) -> bool:
 	if idx < 0 or idx >= _visible_games.size():
 		return true
 	var game: GameEntry = _visible_games[idx]
-	return str(_panel_face_key.get(game.game_id, "")) == _face_key_for(idx)
+	return str(_panel_face_key.get(game.game_id, "")) == _face_key_for(idx) \
+		and _panel_face_bound_key(idx) == _face_key_for(idx)
 
 
 ## The pipeline filter's key: _face_key_for with the art
@@ -6590,11 +6702,15 @@ func _face_path_memoized(game: GameEntry) -> String:
 
 ## The filter's standing test (memoized path): a face whose
 ## memo key matches its stamp needs no pipeline work.
+## FIX141: and whose PANEL bound that key (see
+## _face_is_standing) - the memo key is the same content
+## key, so the bound test compares against it unchanged.
 func _face_is_standing_memo(idx: int) -> bool:
 	if idx < 0 or idx >= _visible_games.size():
 		return true
 	var game: GameEntry = _visible_games[idx]
-	return str(_panel_face_key.get(game.game_id, "")) == _face_key_for_memo(idx)
+	return str(_panel_face_key.get(game.game_id, "")) == _face_key_for_memo(idx) \
+		and _panel_face_bound_key(idx) == _face_key_for_memo(idx)
 
 
 ## Enqueue the standing window's faces for the staged
@@ -7207,7 +7323,7 @@ func _blackface_nc(game: GameEntry) -> bool:
 func _rederive_card_plate(idx: int, game: GameEntry) -> void:
 	if idx < 0 or idx >= _panel_labels.size() or _panel_labels[idx] == null:
 		return
-	var fnodes: Dictionary = pool_nodes(game.game_id, "card")
+	var fnodes: Dictionary = pool_nodes(game.game_id, "card", pool_seat_for_idx(idx))
 	if fnodes.is_empty():
 		return
 	var fla: AABB = _panel_labels[idx].get_aabb()
@@ -7271,7 +7387,7 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 	var fav: bool = _store != null and _store.is_favorite(game.game_id)
 	var pup: bool = game.is_pup_tagged()
 	var fkey: String = game.game_id + "|" + art_file + "|" + ("fav" if fav else "") + "|" + ("pup" if pup else "") + _pmh_segment(game)
-	if str(_panel_face_key.get(game.game_id, "")) == fkey:
+	if str(_panel_face_key.get(game.game_id, "")) == fkey and _panel_face_bound_key(idx) == fkey:
 		# PHANTOMFIX Layer 1: the stamp alone no longer
 		# vouches for the face - a styled fallback cached
 		# under the art key stamps exactly this key. The
@@ -7281,6 +7397,12 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 		# or the entry's provenance is this key's art path.
 		# An entry that does not serve means the stamp is
 		# lying: fall through to a full fill.
+		# FIX141: the bound key rides the same gate - the
+		# stamp names the game's content, but a SECOND
+		# panel of the game (its other challenge row) has
+		# bound nothing yet: it falls through to the fill
+		# below, whose cache serve binds the standing
+		# texture onto THIS quad.
 		var standing_face: Array = _face_cache_get(fkey)
 		if standing_face.is_empty() or _face_cache_serves(standing_face, art_file):
 			_art_apply_branch = "standing" ## GRADFIX17 telemetry (read by the caller's apply wrap)
@@ -7397,6 +7519,7 @@ func _fill_one_face_sync(idx: int, gen: int) -> void:
 	else:
 		_nb_bind_face(quad, tex, "swap" if _art_apply_branch == "facecache" else "render") ## NEVERBLANK: the one bind door
 	_panel_face_key[game.game_id] = fkey
+	_stamp_face_bound(idx, fkey) ## FIX141: this panel wears it now (a no-op swap above still counts - the quad wears the texture)
 	# The nameplate shows only over an art face: a generated
 	# title card carries its own title, and a title under a
 	# title would double it.
@@ -9068,7 +9191,9 @@ func _flip_nodes(idx: int) -> Dictionary:
 	# FIX140: the flip belongs to the CARD panel - fetch its
 	# own entry (a board-mode entry for the same game is a
 	# different panel and has no back to turn).
-	var nodes: Dictionary = pool_nodes(game.game_id, "card")
+	# FIX141: at this seat - in the library the seat is ""
+	# and the one card per game is the only fetch there is.
+	var nodes: Dictionary = pool_nodes(game.game_id, "card", pool_seat_for_idx(idx))
 	if nodes.is_empty():
 		return {}
 	return nodes
@@ -9450,6 +9575,7 @@ func _activate(quad: ClickableQuad) -> void:
 						owner = owner.get_parent()
 					var oidx: int = _panels.find(owner as ClickableQuad) if owner != null else -1
 					_launch_panel_mode = "board" if (oidx >= 0 and _tourn_board_panel_idx(oidx)) else "card"
+					_launch_panel_seat = pool_seat_for_idx(oidx) ## FIX141: the pressed panel's seat, beside its mode
 					_selected_game_id = game2.game_id
 					_persist_view()
 					launch_requested.emit(game2, build)
@@ -9498,7 +9624,11 @@ func _launch_focused_card() -> void:
 	# signal fires - begin_launch's marker writer keys on
 	# it, and with a panel per mode the game alone no longer
 	# names the panel that was pressed.
+	# FIX141: the pressed seat's seat rides beside the mode -
+	# with a panel per row the mode alone no longer names it
+	# either.
 	_launch_panel_mode = "board" if _tourn_board_panel_idx(idx) else "card"
+	_launch_panel_seat = pool_seat_for_idx(idx)
 	_selected_game_id = game.game_id
 	_persist_view()
 	launch_requested.emit(game, build)
@@ -11914,9 +12044,12 @@ func _refresh_launch_marker() -> void:
 	# (game, mode) entry the press was recorded on - not on
 	# whichever entry the game happens to hold. A double-duty
 	# game's other panel keeps its marker down.
+	# FIX141: the entry is the (game, mode, SEAT) entry - a
+	# game standing at several rows holds a panel per row,
+	# and only the pressed row's panel carries the receipt.
 	var want_nodes: Dictionary = {}
 	if want != "":
-		want_nodes = pool_nodes(want, _launch_panel_mode if _launch_panel_mode != "" else "card")
+		want_nodes = pool_nodes(want, _launch_panel_mode if _launch_panel_mode != "" else "card", _launch_panel_seat)
 	var want_root: ClickableQuad = null
 	if not want_nodes.is_empty():
 		want_root = want_nodes.get("root") as ClickableQuad

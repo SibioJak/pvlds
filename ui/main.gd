@@ -269,6 +269,12 @@ var _fix140_card_root: ClickableQuad = null ## FIX140 smoke: the challenge card'
 var _fix140_probe_board_root: ClickableQuad = null ## FIX140 smoke: the pool probe's board-mode root (phase 1 mints both modes directly)
 var _fix140_probe_card_root: ClickableQuad = null ## FIX140 smoke: the pool probe's card-mode root
 var _fix140_probe_done: bool = false ## FIX140 smoke: the pool probe legs have run
+var _fix141_game_id: String = "" ## FIX141 smoke: the quadruple-duty game (mm_109c's owner) - two weekly boards AND two challenge cards in one wall
+var _fix141_tourney_reset: bool = false ## FIX141 smoke: the tournament baseline reset has been pushed
+var _fix141_wait_until: int = 0 ## FIX141 smoke: wall-clock hold target (the fix140 timer's own copy)
+var _fix141_phase_deadline: int = 0 ## FIX141 smoke: the settle deadline for the current phase
+var _fix141_probe_done: bool = false ## FIX141 smoke: the pool probe legs have run
+var _fix141_roots: Dictionary = {} ## FIX141 smoke: seat name -> the panel instance recorded at first standing (the cycle legs judge identity)
 var _fix135_probe_tex: Dictionary = {} ## FIX135 stages: row idx -> the probe's fresh render of that row's spec
 var _fix135_grab_name: String = "" ## FIX135 stages: a wall grab waiting for the drum to settle
 var _fix135_grab_settle: int = 0 ## FIX135 stages: consecutive settled frames toward the pending grab
@@ -1166,6 +1172,7 @@ func _ready() -> void:
 	RoomSpecs.pinemhi1_nc = OS.get_environment("PVLDS_PINEMHI1_NC")
 	RoomSpecs.fix139_nc = OS.get_environment("PVLDS_FIX139_NC")
 	RoomSpecs.fix140_nc = OS.get_environment("PVLDS_FIX140_NC")
+	RoomSpecs.fix141_nc = OS.get_environment("PVLDS_FIX141_NC")
 	# BACKFINE's negative-control seams (PVLDS_BACKFINE_NC=
 	# dateback / ghostbest): the date column returns to the
 	# back's personal rows / a Best section stands for a
@@ -20744,6 +20751,11 @@ func _drive_pinemhi2_smoke() -> void:
 			# Two launches with settles plus a rebuild
 			# cycle: the fix139 round's budget.
 			_pinemhi2_smoke_deadline_msec = Time.get_ticks_msec() + 600000
+		if mode == "fix141":
+			# Three launches with settles plus a rebuild
+			# cycle over a four-panel wall: the fix140
+			# budget, again.
+			_pinemhi2_smoke_deadline_msec = Time.get_ticks_msec() + 600000
 		_pinemhi2_smoke_phase = 1
 	_pinemhi2_smoke_wait += 1
 	if Time.get_ticks_msec() > _pinemhi2_smoke_deadline_msec:
@@ -20784,6 +20796,8 @@ func _drive_pinemhi2_smoke() -> void:
 			_drive_pinemhi2_fix139c()
 		"fix140":
 			_drive_pinemhi2_fix140()
+		"fix141":
+			_drive_pinemhi2_fix141()
 
 
 func _pinemhi2_expect(cond: bool, label: String) -> void:
@@ -21880,8 +21894,8 @@ func _drive_pinemhi2_fix140() -> void:
 			_pinemhi2_expect(is_instance_valid(_fix140_board_root) and _fix140_board_root.is_inside_tree()
 				and is_instance_valid(_fix140_card_root) and _fix140_card_root.is_inside_tree(),
 				"fix140: both panels stand - valid and in the tree after the seat")
-			var bnodes: Dictionary = _room.pool_nodes(_fix140_game_id, "board")
-			var cnodes: Dictionary = _room.pool_nodes(_fix140_game_id, "card")
+			var bnodes: Dictionary = _room.pool_nodes(_fix140_game_id, "board", _room.pool_seat_for_idx(widx))
+			var cnodes: Dictionary = _room.pool_nodes(_fix140_game_id, "card", _room.pool_seat_for_idx(cidx))
 			_pinemhi2_expect(not bnodes.is_empty() and not cnodes.is_empty()
 				and (bnodes.get("root") as ClickableQuad) == _fix140_board_root
 				and (cnodes.get("root") as ClickableQuad) == _fix140_card_root,
@@ -22017,6 +22031,423 @@ func _drive_pinemhi2_fix140() -> void:
 				"fix140 cycle: the weekly panel still renders its board after the cycle")
 			_room._set_centre(widx3, true)
 			_fix140_grab("after_cycle")
+			_finish_pinemhi2_smoke()
+
+
+func _fix141_hold(msec: int) -> void:
+	_fix141_wait_until = Time.get_ticks_msec() + msec
+
+
+func _fix141_held() -> bool:
+	return Time.get_ticks_msec() >= _fix141_wait_until
+
+
+func _fix141_grab(name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_FIX141_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	var path: String = dir.path_join(name + ".png")
+	var err: Error = img.save_png(path)
+	print("PVLDS FIX141 GRAB: ", path, " err=", err, " size=", img.get_size())
+
+
+## FIX141's weekly contests: Medieval Madness on mm_109c in
+## TWO contests at once (main + golf - the multi-weekly shape
+## the census convicted), Sorcerer absent in five.
+func _fix141_contests() -> Array:
+	return [
+		{
+			"id": "main", "label": "Weekly Competition", "table": "Medieval Madness",
+			"window_start": "2026-11-15 22:00:04", "window_end": "2026-11-22 22:00:04", "pin": "",
+			"rows": [
+				{"pos": 1, "name": "JB1980", "value": 50250000, "value_text": "50.250.000", "rom": "mm_109c", "date": "2026-11-16 10:00:00"},
+			],
+		},
+		{
+			"id": "five", "label": "Weekly 5-Minute", "table": "Sorcerer",
+			"window_start": "2026-11-11 22:00:03", "window_end": "2026-11-18 22:00:03", "pin": "",
+			"rows": [
+				{"pos": 1, "name": "DJTOYS", "value": 2526460, "value_text": "2.526.460", "rom": "sorcr_l2", "date": "2026-11-15 23:42:20"},
+			],
+		},
+		{
+			"id": "golf", "label": "Weekly Golf", "table": "Medieval Madness",
+			"window_start": "2026-11-16 22:00:05", "window_end": "2026-11-23 22:00:05", "pin": "1596900",
+			"rows": [
+				{"pos": 1, "name": "Kubrick", "value": 12345600, "value_text": "12.345.600", "rom": "mm_109c", "date": "2026-11-17 09:00:00"},
+			],
+		},
+	]
+
+
+## FIX141's room entry: fix134's staging plus a FOURTH
+## challenge - delta, a MONTHLY on Medieval Madness with its
+## own standings, so the same table holds a season card and a
+## monthly card at once (the two-challenges-one-table shape).
+func _fix141_enter_room() -> void:
+	var delta: WovpChallenge = _pinemhi_fab_challenge("pinemhi2-delta", "Medieval Madness")
+	delta.type_code = WovpChallenge.TYPE_MONTHLY
+	delta.name = "Medieval Madness - Monthly Contract"
+	var dr1: WovpScoreRow = WovpScoreRow.new()
+	dr1.position = 1
+	dr1.participant_name = "MonthlyAce"
+	dr1.score = 1500000000.0
+	var dr2: WovpScoreRow = WovpScoreRow.new()
+	dr2.position = 2
+	dr2.participant_name = "Smoke"
+	dr2.score = 900000000.0
+	dr2.user_id = "smoke-user"
+	delta.rows = [dr1, dr2]
+	_wovp_challenges = [
+		_pinemhi_fab_challenge("pinemhi2-alpha", "Apollo 13"),
+		_pinemhi_fab_challenge("pinemhi2-beta", "Medieval Madness"),
+		delta,
+		_pinemhi_fab_challenge("pinemhi2-gamma", "Twilight Zone"),
+	]
+	_wovp_user_id = "smoke-user"
+	_wovp_boards_live = true
+	_wovp_fetched_at = int(Time.get_unix_time_from_system())
+	_push_wovp_data()
+	_room._handle_rail("tournament")
+
+
+func _fix141_challenge_idx(cid: String) -> int:
+	if _room == null:
+		return -1
+	var rows: Array = _room.tournament_rows()
+	for i: int in range(rows.size()):
+		var row: Dictionary = rows[i] as Dictionary
+		if str(row.get("kind", "")) != "challenge":
+			continue
+		var ch: WovpChallenge = row.get("challenge") as WovpChallenge
+		if ch != null and ch.challenge_id == cid:
+			return i
+	return -1
+
+
+func _fix141_all_stand() -> bool:
+	for k: Variant in _fix141_roots.keys():
+		var r: ClickableQuad = _fix141_roots[k] as ClickableQuad
+		if r == null or not is_instance_valid(r) or not r.is_inside_tree():
+			return false
+	return _fix141_roots.size() == 4
+
+
+## FIX141 smoke (PVLDS_PINEMHI2_MODE=fix141): the quadruple-
+## duty fixture - Medieval Madness stands in ONE tournament
+## wall as TWO weekly boards (main + golf, both resolved to
+## it) AND TWO WoVP challenge cards (beta the season, delta
+## the monthly). The legs: the fixture is truly quadruple-
+## duty; the four panels are separate instances, each pooled
+## under its own seat, each at its own row; each renders its
+## own content (the two boards differ, the two companion
+## boards differ); a real A-press launches from the delta
+## card, the golf board and the beta card - the FIX139
+## LOADING marker stands on the exact panel pressed and the
+## other three survive every wait; a re-push + centre travel
+## cycle re-seats the SAME four instances. Under the NC
+## (PVLDS_FIX141_NC=pergame) the pool key drops the seat -
+## the FIX140 shape - and the standing legs fail by name.
+func _drive_pinemhi2_fix141() -> void:
+	match _pinemhi2_smoke_phase:
+		1:
+			if _room != null and _room.visible and _room.wall_ready:
+				var owners: Array[String] = _db.rom_owners("mm_109c")
+				_pinemhi2_expect(owners.size() == 1, "fix141: the letter db resolves mm_109c to exactly one library game (got %d)" % owners.size())
+				if owners.size() != 1:
+					_finish_pinemhi2_smoke()
+					return
+				_fix141_game_id = owners[0]
+				# The pool probe: mint the game's sets for
+				# the seatless card, two challenge seats and
+				# the board directly. Under the fix each seat
+				# keeps its own set; under the NC the card
+				# seats share one key, so the fetch-identity
+				# leg convicts in the mint's own tick.
+				var pidx: int = _fix139_panel_idx_of(_fix141_game_id)
+				_pinemhi2_expect(pidx >= 0, "fix141 pool: the Medieval Madness card stands in the library for the probe")
+				if pidx < 0:
+					_finish_pinemhi2_smoke()
+					return
+				var pgame: GameEntry = _room._visible_games[pidx] as GameEntry
+				var pcard: Dictionary = _room._pool_card(pgame, "card")
+				var pseat_a: Dictionary = _room._pool_card(pgame, "card", "ch:probe-a")
+				var pseat_b: Dictionary = _room._pool_card(pgame, "card", "ch:probe-b")
+				var pboard: Dictionary = _room._pool_card(pgame, "board", "wk:probe")
+				_pinemhi2_expect((_room.pool_nodes(_fix141_game_id, "card").get("root") as ClickableQuad) == (pcard.get("root") as ClickableQuad)
+					and (_room.pool_nodes(_fix141_game_id, "card", "ch:probe-a").get("root") as ClickableQuad) == (pseat_a.get("root") as ClickableQuad)
+					and (_room.pool_nodes(_fix141_game_id, "card", "ch:probe-b").get("root") as ClickableQuad) == (pseat_b.get("root") as ClickableQuad)
+					and (_room.pool_nodes(_fix141_game_id, "board", "wk:probe").get("root") as ClickableQuad) == (pboard.get("root") as ClickableQuad),
+					"fix141 pool: each seat's fetch returns its own set")
+				_pinemhi2_expect((pcard.get("root") as ClickableQuad) != (pseat_a.get("root") as ClickableQuad)
+					and (pseat_a.get("root") as ClickableQuad) != (pseat_b.get("root") as ClickableQuad)
+					and (pcard.get("root") as ClickableQuad) != (pboard.get("root") as ClickableQuad),
+					"fix141 pool: the seat mints are separate instances")
+				_fix141_hold(500)
+				_pinemhi2_smoke_phase = 2
+		2:
+			if not _fix141_probe_done:
+				if not _fix141_held():
+					return
+				_fix141_probe_done = true
+			if _pinemhi_client != null and _pinemhi_client.is_busy():
+				return
+			if _pinemhi2_fetched_at == 0 and _pinemhi2_fetch_error == "":
+				return
+			if not _fix141_tourney_reset:
+				_fix141_enter_room()
+				for ch: WovpChallenge in _wovp_challenges:
+					if ch.challenge_id == "pinemhi2-beta" or ch.challenge_id == "pinemhi2-delta":
+						ch.table_external_id = _fix141_game_id
+				_pinemhi2_expect(_room.tournament_active(), "fix141: the TOURNAMENT stop raises the Tournament Room")
+				_pinemhi2_contests = []
+				_pinemhi2_fetched_at = 0
+				_pinemhi2_live = false
+				_pinemhi2_fetch_error = ""
+				_push_pinemhi2_data()
+				_fix141_tourney_reset = true
+				return
+			_pinemhi2_contests = _fix141_contests()
+			_pinemhi2_fetched_at = int(Time.get_unix_time_from_system())
+			_pinemhi2_live = true
+			_pinemhi2_fetch_error = ""
+			_push_pinemhi2_data()
+			_fix141_phase_deadline = 0
+			_pinemhi2_smoke_phase = 3
+		3:
+			if _fix141_phase_deadline == 0:
+				_fix141_phase_deadline = Time.get_ticks_msec() + 12000
+			if Time.get_ticks_msec() < _fix141_phase_deadline:
+				return
+			if not _fix134_panels_real():
+				_fix141_phase_deadline = Time.get_ticks_msec() + 12000
+				return
+			var wmain: int = _fix134_panel_idx("main")
+			var wgolf: int = _fix134_panel_idx("golf")
+			var cbeta: int = _fix141_challenge_idx("pinemhi2-beta")
+			var cdelta: int = _fix141_challenge_idx("pinemhi2-delta")
+			_pinemhi2_expect(wmain >= 0 and wgolf >= 0, "fix141: both weekly boards stand in the room (main %d, golf %d)" % [wmain, wgolf])
+			_pinemhi2_expect(cbeta >= 0 and cdelta >= 0, "fix141: both challenge cards stand in the room (beta %d, delta %d)" % [cbeta, cdelta])
+			if wmain < 0 or wgolf < 0 or cbeta < 0 or cdelta < 0:
+				_finish_pinemhi2_smoke()
+				return
+			var rows: Array = _room.tournament_rows()
+			var quad_ok: bool = true
+			for i: int in [wmain, wgolf, cbeta, cdelta]:
+				var g: GameEntry = (rows[i] as Dictionary).get("game") as GameEntry
+				if g == null or g.game_id != _fix141_game_id:
+					quad_ok = false
+			_pinemhi2_expect(quad_ok, "fix141: the fixture is truly quadruple-duty - one game (%s) seats as two weekly boards and two challenge cards" % _fix141_game_id)
+			_fix141_roots = {
+				"wk:main": _room._panels[wmain], "wk:golf": _room._panels[wgolf],
+				"ch:beta": _room._panels[cbeta], "ch:delta": _room._panels[cdelta],
+			}
+			var distinct: bool = true
+			var keys: Array = _fix141_roots.keys()
+			for a: int in range(keys.size()):
+				for b: int in range(a + 1, keys.size()):
+					if _fix141_roots[keys[a]] == _fix141_roots[keys[b]]:
+						distinct = false
+			_pinemhi2_expect(distinct, "fix141: the four panels are separate instances - no row borrows another's panel")
+			_pinemhi2_expect(_fix141_all_stand(), "fix141: all four panels stand - valid and in the tree after the seat")
+			_pinemhi2_expect((_room.pool_nodes(_fix141_game_id, "board", _room.pool_seat_for_idx(wmain)).get("root") as ClickableQuad) == _fix141_roots["wk:main"]
+				and (_room.pool_nodes(_fix141_game_id, "board", _room.pool_seat_for_idx(wgolf)).get("root") as ClickableQuad) == _fix141_roots["wk:golf"]
+				and (_room.pool_nodes(_fix141_game_id, "card", _room.pool_seat_for_idx(cbeta)).get("root") as ClickableQuad) == _fix141_roots["ch:beta"]
+				and (_room.pool_nodes(_fix141_game_id, "card", _room.pool_seat_for_idx(cdelta)).get("root") as ClickableQuad) == _fix141_roots["ch:delta"],
+				"fix141: the pool holds one entry per seat, each at its own row")
+			var pos_seen: Array = []
+			var pos_distinct: bool = true
+			for k2: Variant in keys:
+				var p: Vector3 = (_fix141_roots[k2] as ClickableQuad).global_position
+				for pv: Variant in pos_seen:
+					if (pv as Vector3).distance_to(p) < 0.01:
+						pos_distinct = false
+				pos_seen.append(p)
+			_pinemhi2_expect(pos_distinct, "fix141: each panel stands at its own seat - four distinct positions on the wall")
+			var mbtex: Texture2D = (_fix141_roots["wk:main"] as ClickableQuad).current_texture()
+			var gbtex: Texture2D = (_fix141_roots["wk:golf"] as ClickableQuad).current_texture()
+			_pinemhi2_expect(mbtex != null and gbtex != null and mbtex.get_size() == Vector2(RoomSpecs.board_face_px())
+				and gbtex.get_size() == Vector2(RoomSpecs.board_face_px()) and mbtex != gbtex,
+				"fix141: each weekly panel renders its own contest's board - two boards, two contents")
+			var bctex: Texture2D = (_fix141_roots["ch:beta"] as ClickableQuad).current_texture()
+			var dctex: Texture2D = (_fix141_roots["ch:delta"] as ClickableQuad).current_texture()
+			_pinemhi2_expect(bctex != null and dctex != null and bctex.get_width() > 16 and dctex.get_width() > 16,
+				"fix141: each challenge panel renders its own real card face (neither stands on the placeholder)")
+			var bboard: MeshInstance3D = _room._board_nodes[cbeta] as MeshInstance3D
+			var dboard: MeshInstance3D = _room._board_nodes[cdelta] as MeshInstance3D
+			_pinemhi2_expect(bboard != null and dboard != null and bboard != dboard,
+				"fix141: the two challenges hold separate companion board instances")
+			var bbtex: Texture2D = null
+			var dbtex: Texture2D = null
+			if bboard != null and bboard.material_override != null:
+				bbtex = (bboard.material_override as StandardMaterial3D).albedo_texture
+			if dboard != null and dboard.material_override != null:
+				dbtex = (dboard.material_override as StandardMaterial3D).albedo_texture
+			_pinemhi2_expect(bbtex != null and dbtex != null and bbtex.get_width() > 16 and dbtex.get_width() > 16 and bbtex != dbtex,
+				"fix141: each challenge card's own board stands beside it - the season board and the monthly board differ")
+			_room._set_centre(wmain, true)
+			_fix141_hold(900)
+			_pinemhi2_smoke_phase = 4
+		4:
+			if not _fix141_held():
+				return
+			_fix141_grab("weekly_main")
+			var cb4: int = _fix141_challenge_idx("pinemhi2-beta")
+			if cb4 >= 0:
+				_room._set_centre(cb4, true)
+			_fix141_hold(900)
+			_pinemhi2_smoke_phase = 5
+		5:
+			if not _fix141_held():
+				return
+			_fix141_grab("challenge_beta")
+			var cd5: int = _fix141_challenge_idx("pinemhi2-delta")
+			if cd5 >= 0:
+				_room._set_centre(cd5, true)
+			_fix141_hold(900)
+			_pinemhi2_smoke_phase = 6
+		6:
+			if not _fix141_held():
+				return
+			_fix141_grab("challenge_delta")
+			var wg6: int = _fix134_panel_idx("golf")
+			if wg6 >= 0:
+				_room._set_centre(wg6, true)
+			_fix141_hold(900)
+			_pinemhi2_smoke_phase = 7
+		7:
+			if not _fix141_held():
+				return
+			_fix141_grab("weekly_golf")
+			_pinemhi2_smoke_phase = 8
+		8:
+			var cd8: int = _fix141_challenge_idx("pinemhi2-delta")
+			if cd8 < 0:
+				_pinemhi2_expect(false, "fix141 delta: the monthly card left the wall")
+				_finish_pinemhi2_smoke()
+				return
+			_room._set_centre(cd8, true)
+			_room._set_focused(_room._panels[cd8])
+			_room._a_press()
+			_pinemhi2_expect(_room.is_launch_in_wait(), "fix141 delta: the A-press opens the load wait")
+			_pinemhi2_expect(_launch_game != null and _launch_game.game_id == _fix141_game_id,
+				"fix141 delta: the launch carries the quadruple-duty game")
+			_pinemhi2_expect(_room.launch_marker_panel(_fix141_game_id) == _fix141_roots["ch:delta"],
+				"fix141 delta: the LOADING marker stands on the monthly card itself - not its season twin")
+			_pinemhi2_expect(_fix141_all_stand(), "fix141 delta: the other three panels survive the wait")
+			_fix141_hold(1500)
+			_pinemhi2_smoke_phase = 9
+		9:
+			if not _fix141_held():
+				return
+			_fix141_grab("delta_wait")
+			_fix139_kill()
+			_fix141_phase_deadline = Time.get_ticks_msec() + 120000
+			_pinemhi2_smoke_phase = 10
+		10:
+			if not _launch_pending and _room != null and _room._mode == "wall":
+				_pinemhi2_expect(_room.launch_marker_panel(_fix141_game_id) == null,
+					"fix141 delta: the marker clears when the failed load settles")
+				_pinemhi2_expect(_fix141_all_stand(), "fix141 delta: all four panels still stand after the settle")
+				_pinemhi2_smoke_phase = 11
+			elif Time.get_ticks_msec() > _fix141_phase_deadline:
+				_pinemhi2_expect(false, "fix141 delta: the killed launch never settled")
+				_finish_pinemhi2_smoke()
+		11:
+			var wg11: int = _fix134_panel_idx("golf")
+			if wg11 < 0:
+				_pinemhi2_expect(false, "fix141 golf: the golf board left the wall")
+				_finish_pinemhi2_smoke()
+				return
+			_room._set_centre(wg11, true)
+			_room._set_focused(_room._panels[wg11])
+			_room._a_press()
+			_pinemhi2_expect(_room.is_launch_in_wait(), "fix141 golf: the A-press opens the load wait")
+			_pinemhi2_expect(_room.launch_marker_panel(_fix141_game_id) == _fix141_roots["wk:golf"],
+				"fix141 golf: the LOADING marker stands on the golf board itself - not the main board")
+			_pinemhi2_expect(_fix141_all_stand(), "fix141 golf: the other three panels survive the wait")
+			_fix141_hold(1500)
+			_pinemhi2_smoke_phase = 12
+		12:
+			if not _fix141_held():
+				return
+			_fix141_grab("golf_wait")
+			_fix139_kill()
+			_fix141_phase_deadline = Time.get_ticks_msec() + 120000
+			_pinemhi2_smoke_phase = 13
+		13:
+			if not _launch_pending and _room != null and _room._mode == "wall":
+				_pinemhi2_expect(_room.launch_marker_panel(_fix141_game_id) == null,
+					"fix141 golf: the marker clears when the failed load settles")
+				_pinemhi2_expect(_fix141_all_stand(), "fix141 golf: all four panels still stand after the settle")
+				_pinemhi2_smoke_phase = 14
+			elif Time.get_ticks_msec() > _fix141_phase_deadline:
+				_pinemhi2_expect(false, "fix141 golf: the killed launch never settled")
+				_finish_pinemhi2_smoke()
+		14:
+			var cb14: int = _fix141_challenge_idx("pinemhi2-beta")
+			if cb14 < 0:
+				_pinemhi2_expect(false, "fix141 beta: the season card left the wall")
+				_finish_pinemhi2_smoke()
+				return
+			_room._set_centre(cb14, true)
+			_room._set_focused(_room._panels[cb14])
+			_room._a_press()
+			_pinemhi2_expect(_room.is_launch_in_wait(), "fix141 beta: the A-press opens the load wait")
+			_pinemhi2_expect(_room.launch_marker_panel(_fix141_game_id) == _fix141_roots["ch:beta"],
+				"fix141 beta: the LOADING marker stands on the season card itself - not its monthly twin")
+			_pinemhi2_expect(_fix141_all_stand(), "fix141 beta: the other three panels survive the wait")
+			_fix141_hold(1500)
+			_pinemhi2_smoke_phase = 15
+		15:
+			if not _fix141_held():
+				return
+			_fix141_grab("beta_wait")
+			_fix139_kill()
+			_fix141_phase_deadline = Time.get_ticks_msec() + 120000
+			_pinemhi2_smoke_phase = 16
+		16:
+			if not _launch_pending and _room != null and _room._mode == "wall":
+				_pinemhi2_expect(_room.launch_marker_panel(_fix141_game_id) == null,
+					"fix141 beta: the marker clears when the failed load settles")
+				_push_pinemhi2_data()
+				_push_wovp_data()
+				var last: int = _room._visible_games.size() - 1
+				if last > 0:
+					_room._set_centre(last, true)
+				_room._set_centre(0, true)
+				_fix141_phase_deadline = 0
+				_pinemhi2_smoke_phase = 17
+			elif Time.get_ticks_msec() > _fix141_phase_deadline:
+				_pinemhi2_expect(false, "fix141 beta: the killed launch never settled")
+				_finish_pinemhi2_smoke()
+		17:
+			if _fix141_phase_deadline == 0:
+				_fix141_phase_deadline = Time.get_ticks_msec() + 12000
+			if Time.get_ticks_msec() < _fix141_phase_deadline:
+				return
+			if not _fix134_panels_real():
+				_fix141_phase_deadline = Time.get_ticks_msec() + 12000
+				return
+			var wmain2: int = _fix134_panel_idx("main")
+			var wgolf2: int = _fix134_panel_idx("golf")
+			var cbeta2: int = _fix141_challenge_idx("pinemhi2-beta")
+			var cdelta2: int = _fix141_challenge_idx("pinemhi2-delta")
+			_pinemhi2_expect(wmain2 >= 0 and wgolf2 >= 0 and cbeta2 >= 0 and cdelta2 >= 0,
+				"fix141 cycle: all four seats stand again after the re-push and travel")
+			if wmain2 < 0 or wgolf2 < 0 or cbeta2 < 0 or cdelta2 < 0:
+				_finish_pinemhi2_smoke()
+				return
+			_pinemhi2_expect(_room._panels[wmain2] == _fix141_roots["wk:main"] and _room._panels[wgolf2] == _fix141_roots["wk:golf"]
+				and _room._panels[cbeta2] == _fix141_roots["ch:beta"] and _room._panels[cdelta2] == _fix141_roots["ch:delta"],
+				"fix141 cycle: the SAME four instances re-seat across the rebuild - the per-seat pool contract holds")
+			_pinemhi2_expect(_fix141_all_stand(), "fix141 cycle: all four panels stand - valid and in the tree after the cycle")
+			var mbtex2: Texture2D = (_fix141_roots["wk:main"] as ClickableQuad).current_texture()
+			_pinemhi2_expect(mbtex2 != null and mbtex2.get_size() == Vector2(RoomSpecs.board_face_px()),
+				"fix141 cycle: the main board still renders its board after the cycle")
+			_room._set_centre(cdelta2, true)
+			_fix141_grab("after_cycle")
 			_finish_pinemhi2_smoke()
 
 
@@ -22409,8 +22840,10 @@ func _fix135_nodes(idx: int) -> Dictionary:
 		return {}
 	# FIX140: the row's own mode - a weekly row's panel is the
 	# game's board entry, a challenge row's is its card entry.
+	# FIX141: and the row's own seat - a second row of the same
+	# game reads its own panel, never the first row's.
 	var mode: String = "board" if str(row.get("kind", "")) in ["state", "pinemhi", "pinemhi_sep"] else "card"
-	return _room.pool_nodes(game.game_id, mode)
+	return _room.pool_nodes(game.game_id, mode, _room.pool_seat_for_idx(idx))
 
 
 ## The wall census, run identically on every standing wall
