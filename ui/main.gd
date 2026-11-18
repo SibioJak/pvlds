@@ -453,6 +453,22 @@ var _sm_failures: int = 0
 var _sm_done: bool = false
 var _sm_judged: bool = false ## a judge coroutine is in flight (its legs land in _sm_failures when it sets this back)
 var _pm1_samples: Array = []
+var _smoke_fix133: bool = false ## --pvlds-smoke-fix133: FIX133 round - the warp's two field fixes, judged in staged boots by PVLDS_FIX133_MODE. "hold": herding ON, the real watchdog, a stub VPX with a delayed runtime - the warp must stand full before the runtime stamp, hold CONSTANT at full on every frame between the runtime stamp and the focus-lock stamp, and ease only after the lock. "fail": the stub dies mid-load - the failure path eases the warp home as it always has. "capture": the near volume's census + head-clearance legs and the rest / full-warp grabs (forward, and turned 180 degrees) into PVLDS_FIX133_GRAB_DIR, each warp grab paired with a near-hidden twin for the runner's pixel diffs
+var _f133_mode: String = "hold"
+var _f133_phase: int = 0
+var _f133_sub: int = 0
+var _f133_settle: int = 0
+var _f133_wait: int = 0
+var _f133_failures: int = 0
+var _f133_done: bool = false
+var _f133_phase0_at: int = -1 ## msec the driver first ticked (the room-wait budget is wall-clock: frame counts lie under headless and loaded-box frame rates)
+var _f133_wait_at: int = -1 ## msec the current wait began (launch / settle waits are wall-clock for the same reason)
+var _f133_full_at: int = -1 ## msec the warp first stood full
+var _f133_runtime_at: int = -1 ## msec the runtime stamp was first observed in the contract
+var _f133_lock_at: int = -1 ## msec the focus-lock stamp was first observed in the contract
+var _f133_hold_samples: int = 0 ## frames sampled between the runtime stamp and the lock stamp
+var _f133_hold_min: float = 1.0 ## the lowest warp amount across that window
+var _f133_target_slipped: bool = false ## the warp's target dropped inside that window (an ease-out began early)
 var _smoke_loading: bool = false ## --pvlds-smoke-loading: LOADING round - one boot judges all three items. (3) The tournie boards' deadline line: RoomSpecs' two board specs carry sub_size 30 + sub_bold (LOADING stood them at 28; ENDGAME Part D raised them). (2) The rail's working set: the library strip stands whole (11 sections), the Tournament Room's strip stands at exactly TOURNAMENT / REFRESH / SETUP / EXIT with the focus walk across the four (drawn focus == real focus at every step), and the B-door round trip restores the library strip. (1) The env-named target (PVLDS_LOADING_TARGET) launches through the real launch door and the SETTLED marquee is judged geometrically off the labels' rendered AABBs: contents exact, every label one line tall, consecutive labels' spans disjoint with clearance, no line wider than the marquee's 2.30 m cap. Grabs land in PVLDS_LOADING_GRAB_DIR
 var _ld_phase: int = 0
 var _ld_roll_first: float = -1.0 ## FIX131: the loading smoke's first roll sample at full warp (phase 4 -> 5 accrual window)
@@ -965,6 +981,11 @@ func _ready() -> void:
 		_smoke_backtrim = true
 	if user_args.has("--pvlds-smoke-pinemhi1"):
 		_smoke_pinemhi1 = true
+	if user_args.has("--pvlds-smoke-fix133"):
+		_smoke_fix133 = true
+		_f133_mode = OS.get_environment("PVLDS_FIX133_MODE")
+		if _f133_mode == "":
+			_f133_mode = "hold"
 	if user_args.has("--pvlds-smoke-loading"):
 		_smoke_loading = true
 	if user_args.has("--pvlds-smoke-pinemhi2"):
@@ -1660,6 +1681,8 @@ func _process(_delta: float) -> void:
 		_drive_backtrim_smoke()
 	if _smoke_pinemhi1:
 		_drive_pinemhi1_smoke()
+	if _smoke_fix133:
+		_drive_fix133_smoke()
 	if _smoke_loading:
 		_drive_loading_smoke()
 	if _smoke_pinemhi2:
@@ -17564,6 +17587,301 @@ func _finish_pinemhi1_smoke() -> void:
 		get_tree().quit(0)
 	else:
 		printerr("PVLDS PINEMHI1 SMOKE: FAIL (%d)" % _pm1_failures)
+		get_tree().quit(1)
+
+
+## FIX133 smoke (--pvlds-smoke-fix133): the warp round's two
+## items judged through the real launch door against the
+## harness stub VPX, with the real watchdog on duty. HOLD is
+## the Item A proof: the contract's stamps are read back from
+## disk every frame beside the room's warp state, so the legs
+## judge the actual cue discipline - full before the runtime,
+## constant at full until the lock, easing only after it.
+## FAIL is the unchanged failure path. CAPTURE is Item B's
+## rendered evidence (see the var block for the modes).
+func _drive_fix133_smoke() -> void:
+	if _f133_done:
+		return
+	var target: String = OS.get_environment("PVLDS_FIX133_TARGET")
+	if target == "":
+		target = "dg-galaxy-corsair"
+	if _f133_phase == 0:
+		if _f133_phase0_at < 0:
+			_f133_phase0_at = Time.get_ticks_msec()
+		# The gate is the room standing and the scanner holding
+		# the target - NOT wall_ready: the launch door, the warp
+		# and the contract do not read the wall's textures, and
+		# the fill queue's drain waits on art fetches that a
+		# blackholed network can hold open for many minutes
+		# (convicted in this staging, 2026-11-18: wall_ready
+		# false for 10+ minutes with the room up and all 10
+		# games held). CAPTURE additionally waits 20 s of wall
+		# time so the faces can dress as far as they will.
+		if _room != null and _room.visible and _scanner != null and _scanner.game_by_id(target) != null:
+			if _f133_mode == "capture":
+				if Time.get_ticks_msec() - _f133_phase0_at > 20000:
+					_f133_capture_rest(target)
+			else:
+				_f133_begin_launch(target)
+		elif Time.get_ticks_msec() - _f133_phase0_at > 600000:
+			_f133_fail("the room/scanner never stood up on the real boot path")
+			_finish_fix133_smoke()
+		return
+	match _f133_mode:
+		"hold":
+			if _f133_phase == 1:
+				_f133_hold_tick()
+			elif _f133_phase == 2:
+				_f133_hold_ease_tick()
+		"fail":
+			if _f133_phase == 1:
+				_f133_fail_tick()
+			elif _f133_phase == 2:
+				_f133_fail_ease_tick()
+		"capture":
+			if _f133_phase == 1:
+				_f133_capture_warp_tick()
+			elif _f133_phase == 2:
+				_f133_capture_back_tick()
+
+
+func _f133_begin_launch(target: String) -> void:
+	var game: GameEntry = _scanner.game_by_id(target) if _scanner != null else null
+	if game == null:
+		_f133_fail("the scanner holds no game %s" % target)
+		_finish_fix133_smoke()
+		return
+	_on_launch_requested(game, game.resolve_default_build(_state))
+	_f133_phase = 1
+	_f133_sub = 0
+	_f133_settle = 0
+	_f133_wait = 0
+	_f133_wait_at = Time.get_ticks_msec()
+
+
+func _f133_hold_tick() -> void:
+	_f133_wait += 1
+	var now: int = Time.get_ticks_msec()
+	var hs: Dictionary = _room.hyper_state()
+	var amount: float = float(hs["amount"])
+	var c: WatchdogContract = WatchdogContract.load_from_disk()
+	var mine: bool = c != null and c.session_id == _launch_session_id
+	if _f133_full_at < 0 and amount >= 0.999:
+		_f133_full_at = now
+	if mine and c.runtime_seen_unix > 0 and _f133_runtime_at < 0:
+		_f133_runtime_at = now
+		_f133_expect(_f133_full_at >= 0,
+			"FIX133 hold: the warp stood full before the runtime stamp landed - the load's early seconds are all warp")
+	if _f133_runtime_at >= 0 and _f133_lock_at < 0:
+		_f133_hold_samples += 1
+		_f133_hold_min = minf(_f133_hold_min, amount)
+		# The slip check judges only frames where the lock is
+		# NOT yet in hand: on the lock's own frame the target
+		# has already - correctly - dropped in answer to it
+		# (the poll runs before this driver in the frame).
+		if not (mine and c.focus_locked_unix > 0) and float(hs["target"]) < 0.999:
+			_f133_target_slipped = true
+		if mine and c.focus_locked_unix > 0:
+			_f133_lock_at = now
+			_f133_expect(not _f133_target_slipped,
+				"FIX133 hold: the warp's target never dropped between the runtime stamp and the lock - no ease-out on the runtime cue")
+			_f133_expect(now - _f133_runtime_at >= 4000,
+				"FIX133 hold: the lock landed well after the runtime (window %d ms - the focus sequence's own floor is 8 s)" % (now - _f133_runtime_at))
+			_f133_expect(_f133_hold_samples >= 8,
+				"FIX133 hold: the runtime-to-lock window was sampled standing (%d frames)" % _f133_hold_samples)
+			_f133_expect(_f133_hold_min >= 0.999,
+				"FIX133 hold: the warp held CONSTANT at full across the whole runtime-to-lock window (min %.4f over %d frames)" % [_f133_hold_min, _f133_hold_samples])
+			_f133_phase = 2
+			_f133_wait = 0
+		elif now - _f133_runtime_at > 20000:
+			_f133_fail("FIX133 hold: the focus lock never landed within 20 s of the runtime stamp")
+			_finish_fix133_smoke()
+	elif _f133_runtime_at < 0 and Time.get_ticks_msec() - _f133_wait_at > 60000:
+		_f133_fail("FIX133 hold: the runtime stamp never landed")
+		_finish_fix133_smoke()
+
+
+func _f133_hold_ease_tick() -> void:
+	_f133_wait += 1
+	var amount: float = float(_room.hyper_state()["amount"])
+	if amount < 0.99:
+		_f133_expect(_launch_up_seen_msec >= 0 and _launch_up_reason.begins_with("the table is up"),
+			"FIX133 hold: the ease-out rode the focus-lock cue (reason: %s)" % _launch_up_reason)
+		_f133_expect(Time.get_ticks_msec() - _f133_lock_at <= 2000,
+			"FIX133 hold: the ease-out began within 2 s of the lock stamp")
+		_finish_fix133_smoke()
+	elif Time.get_ticks_msec() - _f133_lock_at > 10000:
+		_f133_fail("FIX133 hold: the warp never began easing after the lock")
+		_finish_fix133_smoke()
+
+
+func _f133_fail_tick() -> void:
+	_f133_wait += 1
+	var amount: float = float(_room.hyper_state()["amount"])
+	if _f133_full_at < 0 and amount >= 0.999:
+		_f133_full_at = Time.get_ticks_msec()
+	if not _launch_pending:
+		_f133_expect(_f133_full_at >= 0,
+			"FIX133 fail: the warp stood full during the load before the stub died")
+		_f133_expect(not _room.is_launch_in_wait(),
+			"FIX133 fail: the room left the load wait when the stub died mid-load")
+		_f133_phase = 2
+		_f133_wait = 0
+		_f133_wait_at = Time.get_ticks_msec()
+	elif Time.get_ticks_msec() - _f133_wait_at > 60000:
+		_f133_fail("FIX133 fail: the dead stub never settled the launch as failed")
+		_finish_fix133_smoke()
+
+
+func _f133_fail_ease_tick() -> void:
+	_f133_wait += 1
+	var amount: float = float(_room.hyper_state()["amount"])
+	if amount <= 0.001:
+		_f133_ok("FIX133 fail: the warp eased all the way home on the failure path, as it always has")
+		_finish_fix133_smoke()
+	elif Time.get_ticks_msec() - _f133_wait_at > 10000:
+		_f133_fail("FIX133 fail: the warp never eased home after the failure (amount %.4f)" % amount)
+		_finish_fix133_smoke()
+
+
+func _f133_capture_rest(target: String) -> void:
+	var count: int = _room.starfield_near_count()
+	_f133_expect(count > 0,
+		"FIX133 near: the near volume stands (%d stars inside the wall)" % count)
+	var min_len: float = -1.0
+	for b: int in range(_room._bg_near_bands.size()):
+		var i: int = 0
+		while i < 8192:
+			var p: Vector3 = _room.starfield_near_star(b, i)
+			if p == Vector3.ZERO:
+				break
+			if min_len < 0.0 or p.length() < min_len:
+				min_len = p.length()
+			i += 1
+	if min_len < 0.0:
+		min_len = 0.0
+	_f133_expect(min_len >= 1.049,
+		"FIX133 near: no star spawns inside the head-clearance radius (nearest stands at %.3f m)" % min_len)
+	if _room._bg_near_mat != null:
+		_f133_expect(float(_room._bg_near_mat.get_shader_parameter("hyper_fade")) == 0.0,
+			"FIX133 near: the near fade is 0 at rest - the resting room draws none of it")
+	_f133_grab("rest_near.png")
+	_f133_set_near_visible(false)
+	_f133_phase = 1
+	_f133_sub = 0
+	_f133_settle = 0
+	# The launch begins from CAPTURE's own second phase; the
+	# rest pair's second grab lands first (sub 0 below), then
+	# the launch fires (sub 1).
+
+
+func _f133_capture_warp_tick() -> void:
+	if _f133_sub == 0:
+		# The rest pair's twin: near hidden, same resting room.
+		_f133_settle += 1
+		if _f133_settle >= 3:
+			_f133_grab("rest_skyonly.png")
+			_f133_set_near_visible(true)
+			_f133_sub = 1
+			_f133_settle = 0
+		return
+	if _f133_sub == 1:
+		var target: String = OS.get_environment("PVLDS_FIX133_TARGET")
+		if target == "":
+			target = "dg-galaxy-corsair"
+		if _scanner == null or _scanner.game_by_id(target) == null:
+			if _f133_wait_at < 0:
+				_f133_wait_at = Time.get_ticks_msec()
+			if Time.get_ticks_msec() - _f133_wait_at > 600000:
+				_f133_fail("FIX133 capture: the scanner never held the target")
+				_finish_fix133_smoke()
+			return
+		_f133_begin_launch(target)
+		# _f133_begin_launch set phase 1; CAPTURE continues in
+		# its own phase 1 with sub 2 (the warp watch).
+		_f133_phase = 1
+		_f133_sub = 2
+		return
+	# sub 2: the warp watch.
+	_f133_wait += 1
+	var amount: float = float(_room.hyper_state()["amount"])
+	if _f133_sub == 2:
+		if amount >= 0.999:
+			if _room._bg_near_mat != null:
+				_f133_expect(absf(float(_room._bg_near_mat.get_shader_parameter("hyper_fade")) - 1.0) < 0.01,
+					"FIX133 near: at full warp the near fade stands at 1 - the volume is fully in")
+			_f133_grab("warp_fwd_near.png")
+			_f133_set_near_visible(false)
+			_f133_sub = 3
+			_f133_settle = 0
+		elif Time.get_ticks_msec() - _f133_wait_at > 60000:
+			_f133_fail("FIX133 capture: the warp never reached full")
+			_finish_fix133_smoke()
+	elif _f133_sub == 3:
+		_f133_settle += 1
+		if _f133_settle >= 3:
+			_f133_grab("warp_fwd_skyonly.png")
+			_f133_set_near_visible(true)
+			_room._desk_rig.rotation.y = PI
+			_f133_phase = 2
+			_f133_settle = 0
+
+
+func _f133_capture_back_tick() -> void:
+	_f133_settle += 1
+	if _f133_sub == 3:
+		if _f133_settle >= 6:
+			_f133_grab("warp_back_near.png")
+			_f133_set_near_visible(false)
+			_f133_sub = 4
+			_f133_settle = 0
+	elif _f133_sub == 4:
+		if _f133_settle >= 3:
+			_f133_grab("warp_back_skyonly.png")
+			_f133_set_near_visible(true)
+			_room._desk_rig.rotation.y = 0.0
+			_finish_fix133_smoke()
+
+
+func _f133_set_near_visible(v: bool) -> void:
+	for band: MultiMeshInstance3D in _room._bg_near_bands:
+		band.visible = v
+
+
+func _f133_grab(name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_FIX133_GRAB_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	img.save_png(dir.path_join(name))
+	print("  ok - fix133 smoke: grab saved ", name)
+
+
+func _f133_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - fix133 smoke: ", label)
+	else:
+		_f133_fail(label)
+
+
+func _f133_ok(label: String) -> void:
+	print("  ok - fix133 smoke: ", label)
+
+
+func _f133_fail(label: String) -> void:
+	_f133_failures += 1
+	printerr("  FAIL - fix133 smoke: ", label)
+
+
+func _finish_fix133_smoke() -> void:
+	_f133_done = true
+	if _launch_service != null:
+		_launch_service.disarm("fix133 smoke")
+	if _f133_failures == 0:
+		print("PVLDS FIX133 SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS FIX133 SMOKE: FAIL (%d)" % _f133_failures)
 		get_tree().quit(1)
 
 
