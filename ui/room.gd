@@ -319,6 +319,8 @@ const LABEL_STRIP_Y: float = -0.30 ## the nameplate strip's centre, card-local m
 const LABEL_STRIP_SIZE: Vector2 = Vector2(0.62, 0.135) ## the nameplate's dark plate behind the title
 const LABEL_PIXEL_SIZE: float = 0.0024 ## the title Label3D's world scale (the prototype's)
 const LABEL_FONT_SIZE: int = 30
+const LOADING_STRIP_H: float = 0.105 ## FIX139: the LOADING marker's plate height, metres - a little sign at the launching surface's bottom
+const LOADING_FONT_SIZE: int = 34 ## FIX139: the marker's type size - the nameplate's conventions, a step larger for a one-word read
 const LABEL_WIDTH_PX: float = 246.0 ## wrapped-title width: a long name takes up to four lines inside the plate's column (246px = 0.590 m of ink on the 0.62 m card - the block stands inside its own card with margin; was 255 = 0.612 m, its right edge flush with the silhouette - GRADFIX2 item 1)
 ## The swing: the drum eases to the focused column on a cubic
 ## ease-out; the duration grows with the travel (a letter
@@ -712,6 +714,7 @@ var _panel_labels: Array[Label3D] = [] ## per panel: the title label on its name
 var _mat_frame_dark: StandardMaterial3D = null ## the cards' shared dark frame material
 var _mat_frame_amber: StandardMaterial3D = null ## the centred card's amber frame material
 var _mat_plate: StandardMaterial3D = null ## the shared nameplate/status plate material (the marquee fade drives its alpha)
+var _mat_loading_plate: StandardMaterial3D = null ## FIX139: the LOADING marker plates' shared material (darker and a higher rung than the nameplate's - the marker covers what it stands on)
 var _window_fill_busy: bool = false ## a window face-fill pass is running (centre changes coalesce through _window_fill_dirty)
 var _window_fill_dirty: bool = false
 ## GRADFIX16 (item 2) art pipeline state: the staged face
@@ -1168,6 +1171,7 @@ var _state_fill_dirty: bool = false
 const BOARD_TEX_MAX_RETRIES: int = 5 ## the blank-face heal's bound per standing key
 const BOARD_TEX_RETRY_MS: int = 600 ## the heal's minimum interval between re-renders
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
+var _launch_marker_surface: String = "wall" ## FIX139: which surface the standing wait launched from - "wall" (the launching panel's LOADING marker stands) or "detail" (the detail's Play quad carries the state instead)
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
 var _db_warning_active: bool = false ## FIX114: the standing database warning's state (Main drives it from the last landed scan's database kind - see set_db_warning_active)
@@ -4008,6 +4012,39 @@ func _unshaded_mat(color: Color, alpha: float) -> StandardMaterial3D:
 	return m
 
 
+## FIX139: the LOADING marker plates' material - the
+## nameplate plate's dark, a touch more opaque, on a higher
+## rung than the nameplate stack: the marker stands IN FRONT
+## of the face and of the nameplate, should a grown plate
+## reach down into its band (during the wait the bottom of
+## the surface says LOADING, full stop).
+func _loading_plate_mat() -> StandardMaterial3D:
+	if _mat_loading_plate == null:
+		_mat_loading_plate = _unshaded_mat(Color(0.0, 0.0, 0.0), 0.85)
+		_mat_loading_plate.render_priority = 6
+	return _mat_loading_plate
+
+
+## FIX139: the LOADING marker's word - the nameplate label's
+## conventions (white, dark outline, centred) at a one-word
+## size, seated in the marker plate's band.
+func _make_loading_label(parent: Node, strip_y: float) -> Label3D:
+	var l: Label3D = Label3D.new()
+	l.text = "LOADING"
+	l.position = Vector3(0.0, strip_y, 0.024)
+	l.pixel_size = LABEL_PIXEL_SIZE
+	l.font_size = LOADING_FONT_SIZE
+	l.width = 258.0
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.outline_size = 7
+	l.outline_modulate = Color(0.0, 0.0, 0.0, 0.9)
+	l.modulate = Color(0.96, 0.97, 1.0)
+	l.render_priority = 8
+	parent.add_child(l)
+	return l
+
+
 func _make_card_quad(parent: Node, size: Vector2, pos: Vector3, mat: Material) -> MeshInstance3D:
 	var mi: MeshInstance3D = MeshInstance3D.new()
 	var qm: QuadMesh = QuadMesh.new()
@@ -4086,6 +4123,21 @@ func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 		q.set_frame_size(CARD_FRAME_SIZE)
 	var nodes: Dictionary = {"root": q, "mode": mode}
 	var pivot: Node3D = q.flip_pivot()
+	# FIX139: the LOADING marker - a dark plate + the one
+	# word, on the pivot at the surface's bottom band. Minted
+	# hidden on EVERY panel, card and board alike (a weekly
+	# board is its own surface; a challenge card is a card);
+	# _refresh_launch_marker is the only writer of its
+	# visibility, keyed to the launch state.
+	var loading_y: float = -size.y * 0.5 + LOADING_STRIP_H * 0.5 + 0.004
+	var lm_plate: MeshInstance3D = _make_card_quad(pivot,
+		Vector2(size.x, LOADING_STRIP_H), Vector3(0.0, loading_y, 0.016),
+		_loading_plate_mat())
+	lm_plate.visible = false
+	nodes["loading_plate"] = lm_plate
+	var lm_label: Label3D = _make_loading_label(pivot, loading_y)
+	lm_label.visible = false
+	nodes["loading_label"] = lm_label
 	if mode == "card":
 		nodes["frame"] = _make_card_quad(pivot, CARD_FRAME_SIZE, Vector3(0.0, 0.0, -0.007), _frame_mat(false))
 		# The tournie border (GRADFIX8 item 4): a ring quad
@@ -11712,6 +11764,13 @@ func begin_launch(game: GameEntry) -> void:
 	var detail_open: bool = _detail != null and _detail.is_open()
 	if detail_open:
 		_detail.set_launching(true)
+	# FIX139: the press's receipt - the LOADING marker stands
+	# on the surface the launch came from, this same frame.
+	# From the wall, that is the launching panel itself; from
+	# the detail, the detail's Play quad carries the state
+	# (set_launching, just above) and no wall marker stands.
+	_launch_marker_surface = "detail" if detail_open else "wall"
+	_refresh_launch_marker()
 	_set_focused(null)
 	_refresh_focusables()
 	# GRADFIX13 (item 2): the wait's LOADING state used to
@@ -11726,9 +11785,11 @@ func begin_launch(game: GameEntry) -> void:
 	# FIX138: the wait's face is the room itself, at rest -
 	# no marquee (abolished FIX131), no warp (abolished here).
 	# The room simply sits: wall standing, starfield drifting
-	# at its standing rate, the banner's note above the only
-	# words. Detail launches wait the same way - the detail
-	# panel stands in front of the resting room.
+	# at its standing rate, the banner's note above - and
+	# (FIX139) the launching surface's own LOADING strip at
+	# its bottom, the press's receipt. Detail launches wait
+	# the same way - the detail panel stands in front of the
+	# resting room, its Play quad carrying the word.
 
 
 ## VPX died during the load, with the launcher still resident to
@@ -11746,6 +11807,7 @@ func begin_launch(game: GameEntry) -> void:
 ## from, no longer as a texture key.
 func end_launch_failed(game: GameEntry, reason: String) -> void:
 	_launching_game_id = ""
+	_refresh_launch_marker() ## FIX139: the wait is over - the marker clears with it; the banner's failure note takes it from here
 	_failed_game_id = game.game_id
 	_status_note = "Launch failed: %s - %s" % [game.title, reason]
 	if _detail != null and _detail.is_open():
@@ -11760,6 +11822,54 @@ func end_launch_failed(game: GameEntry, reason: String) -> void:
 	if _mode == "detail":
 		return
 	_rebuild_wall()
+
+
+## FIX139: the LOADING marker's one writer. The marker stands
+## on exactly the pooled panel whose game the wait is loading,
+## and only when the launch's surface is the wall (a detail
+## launch's surface is the detail, whose Play quad carries the
+## state instead - see begin_launch). begin_launch and
+## end_launch_failed are the only call sites - the two places
+## the wait's state changes; a successful hand-off exits the
+## process, so no clear is owed there, and a return boot mints
+## every marker hidden. Under the NC seam
+## (PVLDS_FIX139_NC=nomarker) the marker never stands, so the
+## fix139 legs fail by name.
+func _refresh_launch_marker() -> void:
+	var want: String = _launching_game_id if _launch_marker_surface == "wall" else ""
+	if RoomSpecs.fix139_nc == "nomarker":
+		want = ""
+	for gid: Variant in _panel_pool.keys():
+		var nodes: Dictionary = _panel_pool[gid] as Dictionary
+		var plate: MeshInstance3D = nodes.get("loading_plate") as MeshInstance3D
+		var label: Label3D = nodes.get("loading_label") as Label3D
+		if plate == null or label == null:
+			continue
+		var on: bool = want != "" and str(gid) == want
+		plate.visible = on
+		label.visible = on
+
+
+## FIX139 queries (the fix139 smoke reads the marker the way
+## the lockout smoke reads the wait): whose marker stands -
+## a game_id, "" when none - and one game's marker label, for
+## the seat and text legs.
+func launch_marker_game_id() -> String:
+	for gid: Variant in _panel_pool.keys():
+		var nodes: Dictionary = _panel_pool[gid] as Dictionary
+		var label: Label3D = nodes.get("loading_label") as Label3D
+		if label != null and label.visible:
+			return str(gid)
+	return ""
+
+
+func launch_marker_visible_for(game_id: String) -> bool:
+	return game_id != "" and launch_marker_game_id() == game_id
+
+
+func launch_marker_label(game_id: String) -> Label3D:
+	var nodes: Dictionary = _panel_pool.get(game_id, {}) as Dictionary
+	return nodes.get("loading_label") as Label3D
 
 
 ## The wall fade itself: panels, their Launch buttons, the rail,

@@ -31,6 +31,7 @@ var _big_quad: ClickableQuad
 var _info_quad: ClickableQuad
 var _fav_quad: ClickableQuad
 var _play_quad: ClickableQuad
+var _launching: bool = false ## FIX139: this view's Play quad is in its LOADING state (set_launching's record - the fix139 smoke reads it through is_launching)
 var _back_quad: ClickableQuad
 var _once_quad: ClickableQuad
 var _mkdef_quad: ClickableQuad
@@ -131,7 +132,13 @@ func handle(quad: ClickableQuad) -> void:
 ## Launch-in-progress surface for this view's Play quad (Main owns
 ## the wait): while the table loads the button goes dead and says
 ## so; restoring re-renders the real play target.
+## FIX139: whether the Play quad stands in its LOADING state.
+func is_launching() -> bool:
+	return _launching
+
+
 func set_launching(loading: bool) -> void:
+	_launching = loading
 	if _play_quad == null:
 		return
 	if loading:

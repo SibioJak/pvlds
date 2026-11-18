@@ -246,6 +246,13 @@ var _fix134_launches: Array = [] ## FIX134 launch stage: the game ids launch_req
 var _fix134_wait: int = 0 ## FIX134 stages: the standing poll budget, in frames
 var _fix134_reset_done: bool = false ## FIX134 stages: the clean no-weekly-data reset has been re-pushed after the boot fetch settled
 var _fix134_killed: bool = false ## FIX134 launch stage: the spawned "table" process has been killed so Main's own settle can land
+var _fix139_game_id: String = "" ## FIX139 smoke: the letter library's Medieval Madness game id (mm_109c's owner) - the one game every surface leg launches
+var _fix139_challenge_game_id: String = "" ## FIX139 smoke: the challenge card's game id, read at its A-press
+var _fix139_alt_game_id: String = "" ## FIX139 smoke: the OTHER library game's id - the challenge is armed with it (see phase 12)
+var _fix139_wait_until: int = 0 ## FIX139 smoke: wall-clock hold target - the grabs wait for rendered frames to stand, not frame counts
+var _fix139_phase_deadline: int = 0 ## FIX139 smoke: the settle deadline for the current phase
+var _fix139_tourney_reset: bool = false ## FIX139 smoke: the tournament baseline reset has been pushed
+var _fix139_challenge_armed: bool = false ## FIX139 smoke: the beta challenge has been given its id join and re-pushed
 var _fix134_probe_busy: bool = false ## FIX134 layout stage: a board_layout_probe run is in flight
 var _fix134_probe_results: Dictionary = {} ## FIX134 layout stage: contest id -> {rows, tex} from the probe run
 var _fix135_launches: Array = [] ## FIX135 stages: the game ids launch_requested carried, in order
@@ -442,7 +449,7 @@ var _cb_judged: bool = false
 var _cb_grabbed: bool = false ## PINEMHI1: the rendered grab for the current cardback target already saved
 var _cb_seat_tries: int = 0 ## focus seats attempted for the standing target (a target that never centres fails instead of looping)
 var _smoke_backtrim: bool = false ## --pvlds-smoke-backtrim: BACKTRIM round - stages the IPDBFIX field bug end to end: the room is reset to its virgin pre-push state (no facts, stamp 0), Indy is flipped (an empty-facts back renders under the ipdb0 key), then the NORMAL push sequence runs and Indy is flipped again - the healed back must stand with its IPDB rows because the stamp bumped on the changed facts, and repeat pushes must not churn it
-var _smoke_pinemhi1: bool = false ## --pvlds-smoke-pinemhi1: PINEMHI1 round, FIX138's permanent home - launches the env-named target (PVLDS_PINEMHI1_TARGET) through the real launch door against the stub VPX and judges the load wait's law: no marquee, no warp (no warp state, no warp uniforms in the sky shader, no near volume), the wall at full alpha across the wait
+var _smoke_pinemhi1: bool = false ## --pvlds-smoke-pinemhi1: PINEMHI1 round, FIX138's permanent home - launches the env-named target (PVLDS_PINEMHI1_TARGET) through the real launch door against the stub VPX and judges the load wait's law: no marquee, no warp (no warp state, no warp uniforms in the sky shader, no near volume), the wall at full alpha across the wait, and the launched card's own LOADING marker standing for it (FIX139 - the surface's receipt, not the marquee)
 var _pm1_phase: int = 0
 var _pm1_wait: int = 0
 var _pm1_failures: int = 0
@@ -1148,6 +1155,7 @@ func _ready() -> void:
 	# the trim legs fail by name. Same seam shape.
 	RoomSpecs.backtrim_nc = OS.get_environment("PVLDS_BACKTRIM_NC")
 	RoomSpecs.pinemhi1_nc = OS.get_environment("PVLDS_PINEMHI1_NC")
+	RoomSpecs.fix139_nc = OS.get_environment("PVLDS_FIX139_NC")
 	# BACKFINE's negative-control seams (PVLDS_BACKFINE_NC=
 	# dateback / ghostbest): the date column returns to the
 	# back's personal rows / a Best section stands for a
@@ -17418,8 +17426,11 @@ func _cb_expect(cond: bool, label: String) -> void:
 ## carries no warp uniforms, no near volume stands), the
 ## wall stands at FULL alpha across 45 sampled frames of
 ## the wait (no dim), and the wait itself stands open the
-## whole window. A grab lands at PVLDS_PINEMHI1_GRAB when
-## set.
+## whole window. FIX139 adds one leg of distinction: the
+## launched card's own LOADING marker DOES stand for the
+## wait - it is the surface's receipt, not the room's
+## marquee, and the marquee legs above are unchanged.
+## A grab lands at PVLDS_PINEMHI1_GRAB when set.
 func _drive_pinemhi1_smoke() -> void:
 	if _pm1_done:
 		return
@@ -17457,6 +17468,8 @@ func _drive_pinemhi1_smoke() -> void:
 func _pm1_judge(target: String) -> void:
 	_pm1_expect(_room.get_node_or_null("LoadingMarquee") == null,
 		"PINEMHI1 wait: no marquee node stands in the room during %s's load wait - the text is abolished" % target)
+	_pm1_expect(_room.launch_marker_visible_for(target),
+		"PINEMHI1 wait: FIX139's per-surface LOADING marker stands on %s's own card for the wait - the marquee stays abolished; the marker is the launched card's receipt, not the room's text" % target)
 	_pm1_expect(not _room.has_method("marquee_text") and not _room.has_method("marquee_fact_text"),
 		"PINEMHI1 wait: the room offers no marquee text surface - no headline, no fact lines, nothing to read")
 	_pm1_expect(not _room.has_method("hyper_state") and not _room.has_method("set_hyper_spin"),
@@ -20709,6 +20722,14 @@ func _drive_pinemhi2_smoke() -> void:
 			_pinemhi2_run_fix137_legs()
 			_finish_pinemhi2_smoke()
 			return
+		if mode == "fix139":
+			# Four launches with rendered grabs: the round
+			# gets the longer deadline.
+			_pinemhi2_smoke_deadline_msec = Time.get_ticks_msec() + 600000
+		if mode == "fix139c":
+			# The challenge door alone, in its own short
+			# boot (see _drive_pinemhi2_fix139c).
+			_pinemhi2_smoke_deadline_msec = Time.get_ticks_msec() + 300000
 		_pinemhi2_smoke_phase = 1
 	_pinemhi2_smoke_wait += 1
 	if Time.get_ticks_msec() > _pinemhi2_smoke_deadline_msec:
@@ -20743,6 +20764,10 @@ func _drive_pinemhi2_smoke() -> void:
 			_drive_pinemhi2_fix134()
 		"fix135":
 			_drive_pinemhi2_fix135()
+		"fix139":
+			_drive_pinemhi2_fix139()
+		"fix139c":
+			_drive_pinemhi2_fix139c()
 
 
 func _pinemhi2_expect(cond: bool, label: String) -> void:
@@ -21330,6 +21355,449 @@ func _fix134_launch() -> void:
 
 func _fix134_record_launch(game: GameEntry, _build: TableBuild) -> void:
 	_fix134_launches.append(game.game_id)
+
+
+## FIX139 smoke (PVLDS_PINEMHI2_MODE=fix139): the LOADING
+## marker on every launch surface, driven through the real
+## input path on the fix134 staging (letter library; the
+## spawned "table" is the harness binary itself, which never
+## stamps a runtime, so each wait stands until the driver
+## kills the pid into Main's own failure settle). The legs:
+## the library card's A-press (the marker up in the press's
+## own tick, on that card only, its word and its bottom
+## seat; grabs before/during), the failure settle (marker
+## gone), the detail's Play (the detail carries the state,
+## no wall marker), the weekly board's A-press (marker on
+## the board-mode panel), the challenge card's A-press
+## (marker on the card). Under the NC
+## (PVLDS_FIX139_NC=nomarker) the marker legs fail by name.
+func _drive_pinemhi2_fix139() -> void:
+	match _pinemhi2_smoke_phase:
+		1:
+			if _room != null and _room.visible and _room.wall_ready:
+				var owners: Array[String] = _db.rom_owners("mm_109c")
+				_pinemhi2_expect(owners.size() == 1, "fix139: the letter db resolves mm_109c to exactly one library game (got %d)" % owners.size())
+				if owners.size() != 1:
+					_finish_pinemhi2_smoke()
+					return
+				_fix139_game_id = owners[0]
+				for g: Variant in _room._visible_games:
+					var ge: GameEntry = g as GameEntry
+					if ge != null and ge.game_id != _fix139_game_id:
+						_fix139_alt_game_id = ge.game_id
+				var idx: int = _fix139_panel_idx_of(_fix139_game_id)
+				_pinemhi2_expect(idx >= 0, "fix139 library: the Medieval Madness card stands in the library")
+				if idx < 0:
+					_finish_pinemhi2_smoke()
+					return
+				_room._set_centre(idx, true)
+				_room._set_focused(_room._panels[idx])
+				_fix139_hold(900)
+				_pinemhi2_smoke_phase = 2
+		2:
+			if not _fix139_held():
+				return
+			_fix139_grab("lib_before")
+			var idx2: int = _fix139_panel_idx_of(_fix139_game_id)
+			_room._set_focused(_room._panels[idx2])
+			_room._a_press()
+			# The receipt is the press's own frame: the wait
+			# stands and the marker is already up, on this
+			# card only.
+			_pinemhi2_expect(_room.is_launch_in_wait(), "fix139 library: the A-press opens the load wait")
+			_pinemhi2_expect(_room.launch_marker_visible_for(_fix139_game_id),
+				"fix139 library: the LOADING marker stands on the launched card in the press's own tick")
+			_pinemhi2_expect(_room.launch_marker_game_id() == _fix139_game_id,
+				"fix139 library: exactly one marker stands - the launched card's (got '%s')" % _room.launch_marker_game_id())
+			var label: Label3D = _room.launch_marker_label(_fix139_game_id)
+			_pinemhi2_expect(label != null and label.text == "LOADING",
+				"fix139 library: the marker's word is LOADING")
+			_pinemhi2_expect(label != null and label.position.y < -0.40 and label.position.y > -0.54,
+				"fix139 library: the marker sits at the card's bottom (y %.3f)" % (label.position.y if label != null else 0.0))
+			_fix139_hold(1500)
+			_pinemhi2_smoke_phase = 3
+		3:
+			if not _fix139_held():
+				return
+			_fix139_grab("lib_wait")
+			_fix139_kill()
+			_fix139_phase_deadline = Time.get_ticks_msec() + 120000
+			_pinemhi2_smoke_phase = 4
+		4:
+			if not _launch_pending and _room != null and _room._mode == "wall":
+				_pinemhi2_expect(_room.launch_marker_game_id() == "",
+					"fix139 library: the marker clears when the failed load settles")
+				_fix139_grab("lib_failed")
+				_pinemhi2_smoke_phase = 5
+			elif Time.get_ticks_msec() > _fix139_phase_deadline:
+				_pinemhi2_expect(false, "fix139 library: the killed launch never settled")
+				_finish_pinemhi2_smoke()
+		5:
+			# The detail door: activate the card, press Play.
+			var idx5: int = _fix139_panel_idx_of(_fix139_game_id)
+			if idx5 < 0:
+				_pinemhi2_expect(false, "fix139 detail: the card left the wall")
+				_finish_pinemhi2_smoke()
+				return
+			_room._activate(_room._panels[idx5])
+			_pinemhi2_expect(_room._mode == "detail",
+				"fix139 detail: activating the card opens its detail (mode '%s')" % _room._mode)
+			var play_quad: ClickableQuad = null
+			for q: ClickableQuad in _room._detail.get_clickables():
+				if q.action_id == "detail_play":
+					play_quad = q
+			_pinemhi2_expect(play_quad != null, "fix139 detail: the detail carries its Play quad")
+			if play_quad == null:
+				_finish_pinemhi2_smoke()
+				return
+			_room._activate(play_quad)
+			_pinemhi2_expect(_room._detail.is_launching(),
+				"fix139 detail: the Play quad takes its LOADING state in the press's own tick")
+			_pinemhi2_expect(_room.launch_marker_game_id() == "",
+				"fix139 detail: no wall marker stands - the detail is the launch's surface")
+			_fix139_hold(1500)
+			_pinemhi2_smoke_phase = 6
+		6:
+			if not _fix139_held():
+				return
+			_fix139_grab("detail_wait")
+			_fix139_kill()
+			_fix139_phase_deadline = Time.get_ticks_msec() + 120000
+			_pinemhi2_smoke_phase = 7
+		7:
+			if not _launch_pending and _room != null:
+				_pinemhi2_expect(not _room._detail.is_launching(),
+					"fix139 detail: the Play quad restores when the failed load settles")
+				if _room._mode == "detail":
+					var back_quad: ClickableQuad = null
+					for q: ClickableQuad in _room._detail.get_clickables():
+						if q.action_id == "detail_back":
+							back_quad = q
+					if back_quad != null:
+						_room._activate(back_quad)
+				_pinemhi2_expect(_room._mode == "wall",
+					"fix139 detail: Back leaves the detail (mode '%s')" % _room._mode)
+				_pinemhi2_smoke_phase = 8
+			elif Time.get_ticks_msec() > _fix139_phase_deadline:
+				_pinemhi2_expect(false, "fix139 detail: the killed launch never settled")
+				_finish_pinemhi2_smoke()
+		8:
+			# Into the Tournament Room on the fix134 staging:
+			# fabricated WoVP challenges, a baseline reset,
+			# then the synthetic weekly contests through
+			# Main's own push.
+			if _pinemhi_client != null and _pinemhi_client.is_busy():
+				return
+			if not _fix139_tourney_reset:
+				_fix134_enter_room()
+				_pinemhi2_expect(_room.tournament_active(), "fix139 weekly: the TOURNAMENT stop raises the Tournament Room")
+				_pinemhi2_contests = []
+				_pinemhi2_fetched_at = 0
+				_pinemhi2_live = false
+				_pinemhi2_fetch_error = ""
+				_push_pinemhi2_data()
+				_fix139_tourney_reset = true
+				return
+			_pinemhi2_contests = _fix139_contests()
+			_pinemhi2_fetched_at = int(Time.get_unix_time_from_system())
+			_pinemhi2_live = true
+			_pinemhi2_fetch_error = ""
+			_push_pinemhi2_data()
+			_pinemhi2_smoke_phase = 9
+		9:
+			if _fix134_panels_real():
+				var widx: int = _fix134_panel_idx("main")
+				_pinemhi2_expect(widx >= 0, "fix139 weekly: the owned weekly panel stands in the room")
+				if widx < 0:
+					_finish_pinemhi2_smoke()
+					return
+				_room._set_centre(widx, true)
+				_room._set_focused(_room._panels[widx])
+				_room._a_press()
+				_pinemhi2_expect(_room.is_launch_in_wait(), "fix139 weekly: the A-press opens the load wait")
+				_pinemhi2_expect(_room.launch_marker_visible_for(_fix139_game_id),
+					"fix139 weekly: the LOADING marker stands on the weekly board in the press's own tick")
+				_pinemhi2_expect(_room.launch_marker_game_id() == _fix139_game_id,
+					"fix139 weekly: exactly one marker stands - the weekly board's")
+				_fix139_hold(1500)
+				_pinemhi2_smoke_phase = 10
+		10:
+			if not _fix139_held():
+				return
+			_fix139_grab("weekly_wait")
+			_fix139_kill()
+			_fix139_phase_deadline = Time.get_ticks_msec() + 120000
+			_pinemhi2_smoke_phase = 11
+		11:
+			if not _launch_pending and _room != null and _room._mode == "wall":
+				_pinemhi2_expect(_room.launch_marker_game_id() == "",
+					"fix139 weekly: the marker clears when the failed load settles")
+				_pinemhi2_smoke_phase = 12
+			elif Time.get_ticks_msec() > _fix139_phase_deadline:
+				_pinemhi2_expect(false, "fix139 weekly: the killed launch never settled")
+				_finish_pinemhi2_smoke()
+		12:
+			# The challenge card (the fix139c split-boot
+			# attempt kept dying to the staging crash family;
+			# the door is proven here, in the warm room). Arm:
+			# beta was entered unarmed (the fix134 shape), so
+			# set its id join now and rebuild via a contests
+			# push - the wovp push's shot-URL map was already
+			# computed without it, so no db shot is fetched.
+			if not _fix139_challenge_armed:
+				# Arm beta with the OTHER library game, not
+				# Medieval Madness: MM already stands in this
+				# wall as the weekly board (board mode), and
+				# the panel pool holds ONE node set per game -
+				# seating MM again as a card frees the board's
+				# root under it (the seat then crashes on the
+				# freed quad). A same-game weekly+challenge
+				# pair is a real field shape; the hazard is
+				# the room's, recorded in the round's report.
+				for ch: WovpChallenge in _wovp_challenges:
+					if ch.challenge_id == "pinemhi2-beta":
+						ch.table_external_id = _fix139_alt_game_id
+				_push_pinemhi2_data()
+				_fix139_challenge_armed = true
+				_fix139_phase_deadline = Time.get_ticks_msec() + 30000
+				return
+			var cidx: int = _fix139_challenge_idx()
+			if cidx < 0 and Time.get_ticks_msec() < _fix139_phase_deadline:
+				return # the rebuild's rows are still settling
+			_pinemhi2_expect(cidx >= 0, "fix139 challenge: a launchable challenge card stands in the room")
+			if cidx < 0:
+				_finish_pinemhi2_smoke()
+				return
+			var crow: Dictionary = _room.tournament_rows()[cidx] as Dictionary
+			var cgame: GameEntry = crow.get("game") as GameEntry
+			_fix139_challenge_game_id = cgame.game_id if cgame != null else ""
+			_room._set_centre(cidx, true)
+			_room._set_focused(_room._panels[cidx])
+			_fix139_hold(900)
+			_pinemhi2_smoke_phase = 13
+		13:
+			if not _fix139_held():
+				return
+			var cidx2: int = _fix139_challenge_idx()
+			if cidx2 >= 0:
+				_room._set_focused(_room._panels[cidx2])
+			_room._a_press()
+			_pinemhi2_expect(_room.is_launch_in_wait(), "fix139 challenge: the A-press opens the load wait")
+			_pinemhi2_expect(_room.launch_marker_visible_for(_fix139_challenge_game_id),
+				"fix139 challenge: the LOADING marker stands on the challenge card in the press's own tick")
+			_pinemhi2_expect(_room.launch_marker_game_id() == _fix139_challenge_game_id,
+				"fix139 challenge: exactly one marker stands - the challenge card's")
+			_fix139_hold(1500)
+			_pinemhi2_smoke_phase = 14
+		14:
+			if not _fix139_held():
+				return
+			_fix139_grab("challenge_wait")
+			_fix139_kill()
+			_fix139_phase_deadline = Time.get_ticks_msec() + 120000
+			_pinemhi2_smoke_phase = 15
+		15:
+			if not _launch_pending and _room != null and _room._mode == "wall":
+				_pinemhi2_expect(_room.launch_marker_game_id() == "",
+					"fix139 challenge: the marker clears when the failed load settles")
+				_finish_pinemhi2_smoke()
+			elif Time.get_ticks_msec() > _fix139_phase_deadline:
+				_pinemhi2_expect(false, "fix139 challenge: the killed launch never settled")
+				_finish_pinemhi2_smoke()
+
+
+
+## FIX139 challenge door (PVLDS_PINEMHI2_MODE=fix139c): the
+## tournament challenge card's A-press, in its own short boot.
+## The main fix139 boot's long room session kept dying to the
+## staging crash family before it reached this door; a short
+## boot gives the leg its own exposure. The challenge is armed
+## BEFORE the wall's first build (the fab fixtures carry no
+## maker/year for the identity join, so beta gets the direct
+## id join up front - the field's own shape: a real fetch arms
+## challenges before the room is entered).
+func _drive_pinemhi2_fix139c() -> void:
+	match _pinemhi2_smoke_phase:
+		1:
+			if _room != null and _room.visible and _room.wall_ready:
+				var owners: Array[String] = _db.rom_owners("mm_109c")
+				_pinemhi2_expect(owners.size() == 1, "fix139c: the letter db resolves mm_109c to exactly one library game (got %d)" % owners.size())
+				if owners.size() != 1:
+					_finish_pinemhi2_smoke()
+					return
+				_fix139_game_id = owners[0]
+				_pinemhi2_smoke_phase = 2
+		2:
+			if _pinemhi_client != null and _pinemhi_client.is_busy():
+				return
+			# Wait for the boot's own weekly fetch to land
+			# before pushing anything: its failure landing
+			# pushes too, and in this young boot that push
+			# otherwise lands inside the entry pushes (the
+			# main boot's fetch settled during its library
+			# phases, long before its tournament entry).
+			if _pinemhi2_fetched_at == 0 and _pinemhi2_fetch_error == "":
+				return
+			if not _fix139_tourney_reset:
+				# Enter unarmed (the fix134 shape), THEN arm beta.
+				# The wovp push above computed its shot-URL map
+				# while beta still carried no id, so no db shot is
+				# ever resolved for it: an owned challenge's face
+				# is its own local art. (Arming before the push
+				# made the room fetch the db shot over HTTPS, and
+				# this staging's dead network kills the process
+				# on that fetch's TLS failure path.) The contests
+				# pushes below rebuild the rows with beta owned.
+				_fix134_enter_room()
+				for ch: WovpChallenge in _wovp_challenges:
+					if ch.challenge_id == "pinemhi2-beta":
+						ch.table_external_id = _fix139_game_id
+				_pinemhi2_expect(_room.tournament_active(), "fix139c challenge: the TOURNAMENT stop raises the Tournament Room")
+				_pinemhi2_contests = []
+				_pinemhi2_fetched_at = 0
+				_pinemhi2_live = false
+				_pinemhi2_fetch_error = ""
+				_push_pinemhi2_data()
+				_fix139_tourney_reset = true
+				return
+			_pinemhi2_contests = _fix139_contests()
+			_pinemhi2_fetched_at = int(Time.get_unix_time_from_system())
+			_pinemhi2_live = true
+			_pinemhi2_fetch_error = ""
+			_push_pinemhi2_data()
+			_pinemhi2_smoke_phase = 3
+		3:
+			# Let the room go fully quiet first (fills,
+			# warmer, fetcher drained) - the main boot
+			# reaches this room ~45 s in; this boot is
+			# there in ~5 s and the fill machinery is
+			# still hot.
+			if _fix139_phase_deadline == 0:
+				_fix139_phase_deadline = Time.get_ticks_msec() + 20000
+			if Time.get_ticks_msec() < _fix139_phase_deadline:
+				return
+			if _fix134_panels_real():
+				var cidx: int = _fix139_challenge_idx()
+				_pinemhi2_expect(cidx >= 0, "fix139c challenge: a launchable challenge card stands in the room")
+				if cidx < 0:
+					_finish_pinemhi2_smoke()
+					return
+				var crow: Dictionary = _room.tournament_rows()[cidx] as Dictionary
+				var cgame: GameEntry = crow.get("game") as GameEntry
+				_fix139_challenge_game_id = cgame.game_id if cgame != null else ""
+				_room._set_centre(cidx, true)
+				_room._set_focused(_room._panels[cidx])
+				_fix139_hold(900)
+				_pinemhi2_smoke_phase = 4
+		4:
+			if not _fix139_held():
+				return
+			var cidx2: int = _fix139_challenge_idx()
+			if cidx2 >= 0:
+				_room._set_focused(_room._panels[cidx2])
+			_room._a_press()
+			_pinemhi2_expect(_room.is_launch_in_wait(), "fix139c challenge: the A-press opens the load wait")
+			_pinemhi2_expect(_room.launch_marker_visible_for(_fix139_challenge_game_id),
+				"fix139c challenge: the LOADING marker stands on the challenge card in the press's own tick")
+			_pinemhi2_expect(_room.launch_marker_game_id() == _fix139_challenge_game_id,
+				"fix139c challenge: exactly one marker stands - the challenge card's")
+			_fix139_hold(1500)
+			_pinemhi2_smoke_phase = 5
+		5:
+			if not _fix139_held():
+				return
+			_fix139_grab("challenge_wait")
+			_fix139_kill()
+			_fix139_phase_deadline = Time.get_ticks_msec() + 120000
+			_pinemhi2_smoke_phase = 6
+		6:
+			if not _launch_pending and _room != null and _room._mode == "wall":
+				_pinemhi2_expect(_room.launch_marker_game_id() == "",
+					"fix139c challenge: the marker clears when the failed load settles")
+				_finish_pinemhi2_smoke()
+			elif Time.get_ticks_msec() > _fix139_phase_deadline:
+				_pinemhi2_expect(false, "fix139c challenge: the killed launch never settled")
+				_finish_pinemhi2_smoke()
+
+
+func _fix139_panel_idx_of(game_id: String) -> int:
+	if _room == null:
+		return -1
+	for i: int in range(_room._visible_games.size()):
+		if (_room._visible_games[i] as GameEntry).game_id == game_id:
+			return i
+	return -1
+
+
+func _fix139_challenge_idx() -> int:
+	if _room == null:
+		return -1
+	var fallback: int = -1
+	var rows: Array = _room.tournament_rows()
+	for i: int in range(rows.size()):
+		var row: Dictionary = rows[i] as Dictionary
+		if str(row.get("kind", "")) != "challenge":
+			continue
+		if not _room._tournament_launchable(i):
+			continue
+		if fallback < 0:
+			fallback = i
+		var ch: WovpChallenge = row.get("challenge") as WovpChallenge
+		if ch != null and ch.challenge_id == "pinemhi2-beta":
+			return i
+	return fallback
+
+
+func _fix139_hold(msec: int) -> void:
+	_fix139_wait_until = Time.get_ticks_msec() + msec
+
+
+func _fix139_held() -> bool:
+	return Time.get_ticks_msec() >= _fix139_wait_until
+
+
+func _fix139_kill() -> void:
+	if _launch_pid > 0:
+		OS.kill(_launch_pid)
+
+
+func _fix139_grab(name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_FIX139_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	var path: String = dir.path_join(name + ".png")
+	var err: Error = img.save_png(path)
+	print("PVLDS FIX139 GRAB: ", path, " err=", err, " size=", img.get_size())
+
+
+## The fix134 launch stage's synthetic contests, verbatim:
+## Medieval Madness played on mm_109c (in the letter library
+## by ROM), Sorcerer on sorcr_l2 (absent), Ripleys with no
+## rows yet (absent).
+func _fix139_contests() -> Array:
+	return [
+		{
+			"id": "main", "label": "Weekly Competition", "table": "Medieval Madness",
+			"window_start": "2026-11-15 22:00:04", "window_end": "2026-11-22 22:00:04", "pin": "",
+			"rows": [
+				{"pos": 1, "name": "JB1980", "value": 50250000, "value_text": "50.250.000", "rom": "mm_109c", "date": "2026-11-16 10:00:00"},
+			],
+		},
+		{
+			"id": "five", "label": "Weekly 5-Minute", "table": "Sorcerer",
+			"window_start": "2026-11-11 22:00:03", "window_end": "2026-11-18 22:00:03", "pin": "",
+			"rows": [
+				{"pos": 1, "name": "DJTOYS", "value": 2526460, "value_text": "2.526.460", "rom": "sorcr_l2", "date": "2026-11-15 23:42:20"},
+				{"pos": 2, "name": "JB1980", "value": 2252640, "value_text": "2.252.640", "rom": "sorcr_l2", "date": "2026-11-17 13:40:44"},
+			],
+		},
+		{
+			"id": "golf", "label": "Weekly Golf", "table": "Ripleys Believe It or Not!",
+			"window_start": "2026-11-16 22:00:05", "window_end": "2026-11-23 22:00:05", "pin": "1596900",
+			"rows": [],
+		},
+	]
 
 
 func _fix134_layout() -> void:
@@ -31725,6 +32193,7 @@ func _run_core_test() -> void:
 	RoomSpecs.cardback_nc = OS.get_environment("PVLDS_CARDBACK_NC")
 	RoomSpecs.backtrim_nc = OS.get_environment("PVLDS_BACKTRIM_NC")
 	RoomSpecs.pinemhi1_nc = OS.get_environment("PVLDS_PINEMHI1_NC")
+	RoomSpecs.fix139_nc = OS.get_environment("PVLDS_FIX139_NC")
 	RoomSpecs.backfine_nc = OS.get_environment("PVLDS_BACKFINE_NC")
 	RoomSpecs.oneten_nc = OS.get_environment("PVLDS_ONETEN_NC")
 	RoomSpecs.scoremark_nc = OS.get_environment("PVLDS_SCOREMARK_NC")
