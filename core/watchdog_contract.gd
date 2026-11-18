@@ -102,6 +102,22 @@ extends RefCounted
 ##                    an unsettled foreground, so the cue moved to
 ##                    the runtime. Absent in contracts written
 ##                    before the field existed; loads default 0.
+##   focus_locked_unix  FIX133: WATCHDOG-owned: stamped once per
+##                    session when the launch focus sequence
+##                    declares FocusLocked - the player window
+##                    itself holding the foreground, verified by
+##                    read-back over the dwell. From 1.1.25 this
+##                    is the resident launcher's hand-off cue
+##                    (with focus herding on): the runtime above
+##                    exists seconds before the table is really
+##                    up, and settling on it left dead air in the
+##                    headset. The launcher never writes it,
+##                    except to CLEAR it when a fresh session is
+##                    armed (checkin / perform_launch), and
+##                    carries it verbatim through its own saves.
+##                    Absent in contracts written before the
+##                    field existed; loads default 0. Schema
+##                    stays v2.
 ##   launcher_path    what the watchdog relaunches
 ##   launcher_args    ...with these arguments
 ##   launcher_pid     pid of the launcher that last checked in
@@ -136,6 +152,7 @@ var game_pid: int = 0
 var game_started_unix: int = 0
 var game_window_seen_unix: int = 0
 var runtime_seen_unix: int = 0
+var focus_locked_unix: int = 0
 var launcher_path: String = ""
 var launcher_args: Array[String] = []
 var launcher_pid: int = 0
@@ -195,6 +212,7 @@ static func load_from_disk() -> WatchdogContract:
 	c.game_started_unix = int(d.get("game_started_unix", 0))
 	c.game_window_seen_unix = int(d.get("game_window_seen_unix", 0))
 	c.runtime_seen_unix = int(d.get("runtime_seen_unix", 0))
+	c.focus_locked_unix = int(d.get("focus_locked_unix", 0))
 	c.launcher_path = str(d.get("launcher_path", ""))
 	c.launcher_pid = int(d.get("launcher_pid", 0))
 	c.last_checkin_unix = int(d.get("last_checkin_unix", 0))
@@ -231,6 +249,7 @@ func to_dictionary() -> Dictionary:
 	d["game_started_unix"] = game_started_unix
 	d["game_window_seen_unix"] = game_window_seen_unix
 	d["runtime_seen_unix"] = runtime_seen_unix
+	d["focus_locked_unix"] = focus_locked_unix
 	d["launcher_path"] = launcher_path
 	var la: Array = []
 	for a: String in launcher_args:

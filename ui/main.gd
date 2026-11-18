@@ -722,15 +722,18 @@ var _lockout_setup_fired: bool = false
 
 # The launch load wait. While _launch_pending, _process polls for
 # the hand-off point and for VPX dying mid-load.
-const LAUNCH_SETTLE_MSEC: int = 1500 ## table runtime up + this long = hand off
+const LAUNCH_SETTLE_MSEC: int = 1500 ## the up-cue + this long = hand off
 const LAUNCH_CAP_MSEC: int = 45000 ## never hold the room hostage to a stuck load
 const LAUNCH_DEAD_GRACE_MSEC: int = 1500 ## a dead spawn pid gets this long for the watchdog's by-path window report before the launch is called failed
+const LAUNCH_FOCUS_GRACE_MSEC: int = 24000 ## FIX133: with focus herding on, the up-cue is the watchdog's focus-lock stamp; if the runtime has been up this long with no lock, the wait hands off on the runtime instead. The bound covers the focus sequence's whole launch window (its resolution floor is runtime + 8 s, its hard deadline runtime + 20 s, its dwell 2 s) with slack for the contract's ticks and writes.
 var _launch_pending: bool = false
 var _launch_game: GameEntry = null
 var _launch_pid: int = 0
 var _launch_session_id: int = 0
 var _launch_started_msec: int = 0
 var _launch_runtime_seen_msec: int = -1
+var _launch_up_seen_msec: int = -1 ## FIX133: when the up-cue landed (the focus lock, or the runtime under the herding-off and grace paths); the settle counts from here
+var _launch_up_reason: String = "" ## FIX133: the hand-off's reason, named when the up-cue lands
 var _launch_pid_dead_msec: int = -1
 var _xr_session_ending: bool = false ## latched by the OpenXR session_ending signal when present
 
@@ -1062,6 +1065,11 @@ func _ready() -> void:
 	# panels' filled focus frame - each so the matching
 	# smoke legs fail against it by name.
 	RoomView.debug_fieldpass_nc = OS.get_environment("PVLDS_FIELDPASS_NC")
+	# The FIX133 negative-control seam (PVLDS_FIX133_NC=
+	# nonear): no near warp volume is built, restoring the
+	# sky-only warp so the fix133 smoke's capture legs fail
+	# against it by name.
+	RoomView.debug_fix133_nc = OS.get_environment("PVLDS_FIX133_NC")
 	# The boot seating guard's negative-control seam
 	# (PVLDS_BOOT_NC=oldbind): the guard never arms, so the
 	# resting pointer owns the boot centre again and the
@@ -3219,6 +3227,8 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 		_launch_session_id = int(result.get("session_id", 0))
 		_launch_started_msec = Time.get_ticks_msec()
 		_launch_runtime_seen_msec = -1
+		_launch_up_seen_msec = -1
+		_launch_up_reason = ""
 		_launch_pid_dead_msec = -1
 		# RETURN: record where this launch came from, on disk
 		# NOW - the load wait can exit this process at
@@ -3252,13 +3262,24 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 ## judged: VPX dying mid-load (failure - unless the watchdog has
 ## already reported the game's window by exe path, in which case the
 ## spawn pid simply was not the whole story), the XR session
-## changing hands, the watchdog's runtime report + settle, the cap.
-## The settle cue is the RUNTIME stamp, not the window sighting:
-## the sighting stamps off the editor's own canvas about a second
-## after spawn, while a real table load takes several seconds
-## more - handing off on it left a desktop gap in the headset
-## between the room leaving and the table arriving. The sighting
-## keeps its other jobs (the dead-pid grace above, the watchdog's
+## changing hands, the watchdog's up-cue + settle, the cap.
+## The up-cue's history is a ladder of evidence, each rung moved
+## because the one below fired while the table was still loading:
+## the window sighting stamps off the editor's own canvas about a
+## second after spawn; the RUNTIME stamp says the table's runtime
+## exists, seconds before the table is really up - settling on it
+## eased the warp out into dead air (the resting room, then black,
+## then the table). FIX133: with focus herding on, the cue is the
+## watchdog's FOCUS-LOCK stamp - the player window itself holding
+## the foreground, verified by the focus sequence's read-back
+## dwell; the same window-present + foreground facts the return
+## path's exit detector trusts. The warp holds at full until the
+## cue lands, then eases across the settle. Two bounded misses:
+## herding off (the focus family is off by the player's own
+## switch) restores the runtime cue exactly; and a runtime older
+## than LAUNCH_FOCUS_GRACE_MSEC with no lock hands off on the
+## runtime rather than hold the room hostage. The sighting keeps
+## its other jobs (the dead-pid grace above, the watchdog's
 ## exit-detector arming). Every backstop is unchanged: a table
 ## whose runtime never shows still rides the cap, the XR cue, or
 ## the failure path exactly as before.
@@ -3298,14 +3319,28 @@ func _poll_launch() -> void:
 	if contract.session_id == _launch_session_id and contract.runtime_seen_unix > 0:
 		if _launch_runtime_seen_msec < 0:
 			_launch_runtime_seen_msec = now
-			# FIX131: the table is coming up - the warp eases
-			# out across the settle beat, so the hand-off is
-			# met from a near-resting field.
-			if _room != null:
-				_room.begin_launch_settle()
-		elif now - _launch_runtime_seen_msec >= LAUNCH_SETTLE_MSEC:
-			_settle_launch(true, "VPX's runtime is up")
-			return
+	if _launch_runtime_seen_msec >= 0 and _launch_up_seen_msec < 0:
+		# FIX133: the up-cue (see the poll's header for the
+		# ladder). The runtime stamp alone no longer settles
+		# anything while the focus family is on duty: the
+		# warp holds at full until the table is genuinely up.
+		if _config != null and not _config.focus_herding:
+			_launch_up_seen_msec = now
+			_launch_up_reason = "VPX's runtime is up"
+		elif contract.session_id == _launch_session_id and contract.focus_locked_unix > 0:
+			_launch_up_seen_msec = now
+			_launch_up_reason = "the table is up - the player window holds the focus"
+		elif now - _launch_runtime_seen_msec >= LAUNCH_FOCUS_GRACE_MSEC:
+			_launch_up_seen_msec = now
+			_launch_up_reason = "VPX's runtime is up (the focus lock never landed)"
+		if _launch_up_seen_msec >= 0 and _room != null:
+			# The table is genuinely up - the warp eases out
+			# across the settle beat, so the hand-off is met
+			# from a near-resting field.
+			_room.begin_launch_settle()
+	if _launch_up_seen_msec >= 0 and now - _launch_up_seen_msec >= LAUNCH_SETTLE_MSEC:
+		_settle_launch(true, _launch_up_reason)
+		return
 	if now - _launch_started_msec >= LAUNCH_CAP_MSEC:
 		_settle_launch(true, "the load cap was reached")
 
@@ -29141,6 +29176,7 @@ func _run_core_test() -> void:
 	contract.game_pid = 4242
 	contract.game_window_seen_unix = 1234567
 	contract.runtime_seen_unix = 2345678
+	contract.focus_locked_unix = 4567890
 	contract.launcher_path = "C:/PVLDS/PVLDS.exe"
 	contract.focus_herding = false
 	contract.hold_exit_enabled = false
@@ -29151,6 +29187,7 @@ func _run_core_test() -> void:
 	_expect(contract2.armed and contract2.session_id == 7 and contract2.game_pid == 4242
 		and contract2.session_state == "live" and contract2.game_window_seen_unix == 1234567
 		and contract2.runtime_seen_unix == 2345678
+		and contract2.focus_locked_unix == 4567890
 		and not contract2.focus_herding
 		and not contract2.hold_exit_enabled and contract2.hold_exit_fired_unix == 3456789
 		and contract2.launcher_path == "C:/PVLDS/PVLDS.exe",

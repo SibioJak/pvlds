@@ -597,6 +597,25 @@ const BG_VOLUME_POINT_SPREAD: float = 1.45 ## the star quad's size factor under 
 const BG_VOLUME_TINT_NEUTRAL: Color = Color(1.0, 1.0, 1.0) ## most stars: neutral white (exactly neutral - the tint census classifies by channel difference)
 const BG_VOLUME_TINT_WARM: Color = Color(1.0, 0.87, 0.72) ## a faint warm minority
 const BG_VOLUME_TINT_BLUE: Color = Color(0.80, 0.88, 1.0) ## a faint blue minority
+## FIX133: the NEAR warp volume. The sky's bands all stand
+## OUTSIDE the wall (3.60 m), and the cards depth-occlude
+## them, so the shipped warp read as a backdrop behind the
+## wall. These three shells wrap the player INSIDE the wall -
+## in front of the cards, at the sides, and behind the
+## camera - so at warp the streaks cross the whole room
+## volume and pass the player's own position: a volume he
+## sits inside, not a backdrop. Same shader, same three warp
+## uniforms driven from the same _update_hyperspace, on their
+## OWN material whose fade uniform (hyper_fade) rides the
+## warp amount: at rest the fade is 0 and the near field is
+## not drawn at all, so the resting room is unchanged. The
+## innermost shell IS the head-clearance law: no near star
+## spawns inside 1.05 m of the eye, so streaks pass around
+## the player, never through his face. The shells drift by
+## the volume's own depth law (their radii read as the near
+## endpoint - the fastest rate, as the closest layer should).
+const HYPER_NEAR_RADII: Array[float] = [1.05, 1.65, 2.55] ## the near volume's shell radii in metres, eye-centred; [0] is the head-clearance floor
+const HYPER_NEAR_COUNT_BASE: float = 300.0 ## stars on the innermost near shell; a shell's count grows as radius^BG_VOLUME_COUNT_GROWTH, the sky's law
 const BG_BACKDROP_RADIUS: float = 500.0 ## the starless backdrop's distance - beyond the far band, inside the cameras' far plane
 ## The backdrop's shader: the far shell's sky WITHOUT its
 ## stars - the same deep colour, the same milky band
@@ -634,6 +653,11 @@ render_mode unshaded, cull_disabled, blend_mix, depth_draw_never;
 uniform float hyper_amount = 0.0;
 uniform float hyper_roll = 0.0;
 uniform float hyper_streak = 0.0;
+// FIX133: the near warp volume's fade - its material rides
+// this on the warp amount, so the near field exists only
+// while the warp engages. The sky's material never sets it:
+// the default keeps the sky exactly as it has always been.
+uniform float hyper_fade = 1.0;
 void vertex() {
 	// FIX131 HYPERSPACE: at rest (amount 0, roll 0) this pass
 	// is the identity and the field stands exactly as built.
@@ -673,7 +697,7 @@ void fragment() {
 	float core = 1.0 - smoothstep(0.0, 0.38, d);
 	a = clamp(a + core * 0.35, 0.0, 1.0);
 	ALBEDO = COLOR.rgb;
-	ALPHA = a;
+	ALPHA = a * hyper_fade;
 }
 """
 ## The pre-FIELDPASS star shader, kept only behind the
@@ -929,6 +953,12 @@ static var debug_bg_nc: String = ""
 ## cyan slab through a frameless board face) - each so the
 ## matching smoke legs fail by name. Empty in every real run.
 static var debug_fieldpass_nc: String = ""
+## Negative-control seam for FIX133 (the harness env
+## PVLDS_FIX133_NC, set by Main before any room exists):
+## "nonear" builds no near warp volume, restoring the
+## pre-FIX133 sky-only warp so the fix133 smoke's capture
+## legs fail against it by name. Empty in every real run.
+static var debug_fix133_nc: String = ""
 ## Negative-control seam for the boot seating guard (the
 ## harness env PVLDS_BOOT_NC, set by Main before any room
 ## exists): "oldbind" never arms the guard, restoring the
@@ -1161,6 +1191,7 @@ var _bg_starfield: MeshInstance3D = null
 var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD FIX round's depth layer)
 var _bg_backdrop: MeshInstance3D = null ## STARFIELD: the starless deep-colour backdrop behind the volume (LAYERED only)
 var _bg_volume_bands: Array[MultiMeshInstance3D] = [] ## STARFIELD: the volume's band nodes, near to far, each centred on EYE and drifting at its own depth-scaled rate
+var _bg_near_bands: Array[MultiMeshInstance3D] = [] ## FIX133: the near warp volume's shells, innermost first, each centred on EYE; drawn only while the warp engages (their material's fade rides the amount)
 var _starfield_mode: String = "layered" ## the SETUP dial: "layered" | "flat" | "off" (see set_starfield_mode)
 var _wall_motion_mode: String = "stepped" ## OPTIMIZE: STEPPED is the only gait - set_wall_motion_mode coerces every value to "stepped" (PANELFIT removed the panel button that wore it as a label)
 var _bg_ring: MeshInstance3D = null ## always null since GRADFIX4 removed the orbit ring (item 5e); background_layers() skips it
@@ -1244,6 +1275,7 @@ var _hyper_amount: float = 0.0 ## the warp's eased engagement, 0 at rest -> 1 at
 var _hyper_target: float = 0.0 ## where the amount is headed: 1 while a load wait stands, 0 as it settles
 var _hyper_roll_rad: float = 0.0 ## the field's accumulated roll around the view axis, radians; accrues only while the warp is engaged, freezes where it stops, wraps at rest
 var _bg_volume_mat: ShaderMaterial = null ## the volume's ONE shared star material (built in _build_star_volume); the warp's uniforms ride it
+var _bg_near_mat: ShaderMaterial = null ## FIX133: the near warp volume's own star material - the same shader; its hyper_fade uniform is what _update_hyperspace drives with the warp amount
 var _wall_alpha_applied: float = 1.0 ## the wall fade's last applied alpha (change guard)
 ## GRADFIX17 (item 2): the wall-alpha pass's write-on-change
 ## bookkeeping. The pass used to rewrite every panel's,
@@ -2187,6 +2219,8 @@ func _apply_starfield_mode() -> void:
 		_bg_backdrop.visible = not legacy and _starfield_mode == "layered"
 	for band: MultiMeshInstance3D in _bg_volume_bands:
 		band.visible = not legacy and _starfield_mode == "layered"
+	for band: MultiMeshInstance3D in _bg_near_bands:
+		band.visible = not legacy and _starfield_mode == "layered"
 
 
 ## The drift, one frame's worth (GRADFIX4 item 5d): in
@@ -2219,6 +2253,12 @@ func _update_background(delta: float) -> void:
 	for i: int in range(_bg_volume_bands.size()):
 		var band: MultiMeshInstance3D = _bg_volume_bands[i]
 		band.rotation.y += deg_to_rad(_volume_rate(BG_VOLUME_RADII[i])) * drift_mult * delta
+	# FIX133: the near shells turn with the same depth law
+	# (their radii read as the near endpoint - the closest
+	# layer turns fastest, as the sky's own near band does).
+	for i: int in range(_bg_near_bands.size()):
+		var nband: MultiMeshInstance3D = _bg_near_bands[i]
+		nband.rotation.y += deg_to_rad(_volume_rate(HYPER_NEAR_RADII[i])) * drift_mult * delta
 
 
 ## The standing sky's measurable pair, far first: the two
@@ -2263,6 +2303,28 @@ func starfield_volume_star(band_idx: int, star_idx: int) -> Vector3:
 	if mm == null or star_idx < 0 or star_idx >= mm.instance_count:
 		return Vector3.ZERO
 	return mm.get_instance_transform(star_idx).origin
+
+
+## FIX133: one near star's standing local position (band 0
+## = innermost shell) - the fix133 smoke judges the
+## head-clearance law off these (every length >= the
+## innermost shell's radius).
+func starfield_near_star(band_idx: int, star_idx: int) -> Vector3:
+	if band_idx < 0 or band_idx >= _bg_near_bands.size():
+		return Vector3.ZERO
+	var mm: MultiMesh = _bg_near_bands[band_idx].multimesh
+	if mm == null or star_idx < 0 or star_idx >= mm.instance_count:
+		return Vector3.ZERO
+	return mm.get_instance_transform(star_idx).origin
+
+
+## FIX133: the near volume's standing star census.
+func starfield_near_count() -> int:
+	var total: int = 0
+	for band: MultiMeshInstance3D in _bg_near_bands:
+		if band.multimesh != null:
+			total += band.multimesh.instance_count
+	return total
 
 
 ## FIELDPASS: one star's standing instance colour in a
@@ -2468,6 +2530,61 @@ func _build_star_volume() -> void:
 		node.position = EYE
 		_bg_root.add_child(node)
 		_bg_volume_bands.append(node)
+	# FIX133: the near warp volume (HYPER_NEAR_RADII) - the
+	# same field wrapped around the player inside the wall.
+	# Its own material instance of the same shader (never the
+	# flat NC variant: the fade law is the near field's whole
+	# existence), its fade starting at 0 so nothing of it
+	# stands at rest. The per-star build mirrors the sky's:
+	# same angular size law (the near radii read log_t 0 - no
+	# shrink, no dim), same tint mix, its own fixed seeds.
+	if debug_fix133_nc != "nonear":
+		var nsm: ShaderMaterial = ShaderMaterial.new()
+		var nsh: Shader = Shader.new()
+		nsh.code = BG_VOLUME_STAR_SHADER
+		nsm.shader = nsh
+		nsm.set_shader_parameter("hyper_fade", 0.0)
+		_bg_near_mat = nsm
+		var nquad: QuadMesh = QuadMesh.new()
+		nquad.size = Vector2.ONE
+		nquad.material = nsm
+		var nr_min: float = HYPER_NEAR_RADII[0]
+		for band_idx: int in range(HYPER_NEAR_RADII.size()):
+			var radius: float = HYPER_NEAR_RADII[band_idx]
+			var count: int = int(round(HYPER_NEAR_COUNT_BASE * pow(radius / nr_min, BG_VOLUME_COUNT_GROWTH)))
+			var nmm: MultiMesh = MultiMesh.new()
+			nmm.transform_format = MultiMesh.TRANSFORM_3D
+			nmm.use_colors = true
+			nmm.mesh = nquad
+			nmm.instance_count = count
+			var nrng: RandomNumberGenerator = RandomNumberGenerator.new()
+			nrng.seed = 31337 + band_idx * 104729
+			var angular: float = BG_VOLUME_STAR_DEG
+			var base_size: float = radius * tan(deg_to_rad(angular))
+			for s: int in range(count):
+				var z: float = nrng.randf_range(-1.0, 1.0)
+				var theta: float = nrng.randf() * TAU
+				var ring_r: float = sqrt(maxf(0.0, 1.0 - z * z))
+				var dir: Vector3 = Vector3(ring_r * cos(theta), z, ring_r * sin(theta))
+				var pos: Vector3 = dir * radius
+				var up: Vector3 = Vector3.UP if absf(dir.y) < 0.99 else Vector3.RIGHT
+				var basis: Basis = Basis.looking_at(dir, up).scaled(Vector3.ONE * base_size * BG_VOLUME_POINT_SPREAD * nrng.randf_range(0.75, 1.25))
+				nmm.set_instance_transform(s, Transform3D(basis, pos))
+				var shade: float = nrng.randf_range(0.55, 1.0)
+				var tint_roll: float = nrng.randf()
+				var tint: Color = BG_VOLUME_TINT_NEUTRAL
+				if tint_roll > 0.92:
+					tint = BG_VOLUME_TINT_WARM
+				elif tint_roll > 0.84:
+					tint = BG_VOLUME_TINT_BLUE
+				nmm.set_instance_color(s, Color(tint.r * shade, tint.g * shade, tint.b * shade))
+			var nnode: MultiMeshInstance3D = MultiMeshInstance3D.new()
+			nnode.name = "StarfieldNearBand%d" % band_idx
+			nnode.multimesh = nmm
+			nnode.custom_aabb = AABB(Vector3.ONE * -(radius + 2.0), Vector3.ONE * (radius + 2.0) * 2.0)
+			nnode.position = EYE
+			_bg_root.add_child(nnode)
+			_bg_near_bands.append(nnode)
 
 
 ## The haze a card wears by its column's distance from the
@@ -11865,19 +11982,24 @@ func _engage_hyperspace() -> void:
 
 
 ## FIX131: release the warp - the wait settled without a
-## hand-off (end_launch_failed), or Main's runtime-up cue
-## says the table is coming up and the hand-off is a settle
-## away (begin_launch_settle). The amount eases home and the
-## wall undims on the same curve; browsing resumes onto a
-## resting field.
+## hand-off (end_launch_failed), or Main's up-cue says the
+## table is genuinely up and the hand-off is a settle away
+## (begin_launch_settle; FIX133 moved that cue to the
+## watchdog's focus-lock stamp). The amount eases home and
+## the wall undims on the same curve; browsing resumes onto
+## a resting field.
 func _release_hyperspace() -> void:
 	_hyper_target = 0.0
 
 
-## FIX131: Main's settle cue - VPX's runtime is up and the
-## hand-off follows after the settle beat, so the warp eases
-## out NOW and the player meets the table from a near-resting
-## field instead of mid-jump.
+## Main's settle cue - the table is genuinely up (FIX133:
+## the watchdog's focus-lock stamp, or the runtime under the
+## herding-off / grace paths) and the hand-off follows after
+## the settle beat, so the warp eases out NOW and the player
+## meets the table from a near-resting field instead of
+## mid-jump. Until this lands the warp holds at full - the
+## FIX131 shape eased out on the runtime stamp, seconds
+## before the table stood, and the wait ended in dead air.
 func begin_launch_settle() -> void:
 	_release_hyperspace()
 
@@ -11926,6 +12048,7 @@ func hyper_state() -> Dictionary:
 		"streak_growth": float(params[0]),
 		"roll_rate_deg_s": float(params[1]),
 		"volume_standing": starfield_volume_standing(),
+		"near_standing": not _bg_near_bands.is_empty(),
 	}
 
 
@@ -11952,6 +12075,14 @@ func _update_hyperspace(delta: float) -> void:
 		_bg_volume_mat.set_shader_parameter("hyper_amount", _hyper_amount)
 		_bg_volume_mat.set_shader_parameter("hyper_roll", _hyper_roll_rad)
 		_bg_volume_mat.set_shader_parameter("hyper_streak", float(params[0]))
+	# FIX133: the near volume rides the same three uniforms
+	# in sync with the sky, plus its fade on the amount - it
+	# fades in with the warp and is gone again at rest.
+	if _bg_near_mat != null:
+		_bg_near_mat.set_shader_parameter("hyper_amount", _hyper_amount)
+		_bg_near_mat.set_shader_parameter("hyper_roll", _hyper_roll_rad)
+		_bg_near_mat.set_shader_parameter("hyper_streak", float(params[0]))
+		_bg_near_mat.set_shader_parameter("hyper_fade", _hyper_amount)
 	var fade_e: float = _hyper_amount * _hyper_amount * (3.0 - 2.0 * _hyper_amount)
 	_apply_wall_alpha(lerpf(1.0, HYPER_LOAD_WALL_ALPHA, fade_e))
 
