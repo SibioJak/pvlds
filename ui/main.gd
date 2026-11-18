@@ -442,7 +442,7 @@ var _cb_judged: bool = false
 var _cb_grabbed: bool = false ## PINEMHI1: the rendered grab for the current cardback target already saved
 var _cb_seat_tries: int = 0 ## focus seats attempted for the standing target (a target that never centres fails instead of looping)
 var _smoke_backtrim: bool = false ## --pvlds-smoke-backtrim: BACKTRIM round - stages the IPDBFIX field bug end to end: the room is reset to its virgin pre-push state (no facts, stamp 0), Indy is flipped (an empty-facts back renders under the ipdb0 key), then the NORMAL push sequence runs and Indy is flipped again - the healed back must stand with its IPDB rows because the stamp bumped on the changed facts, and repeat pushes must not churn it
-var _smoke_pinemhi1: bool = false ## --pvlds-smoke-pinemhi1: PINEMHI1 round - launches the env-named target (PVLDS_PINEMHI1_TARGET) through the real launch door against the stub VPX and judges the standing marquee: headline, the fact lines, and the settled scale holding CONSTANT (the pulse is gone); under PVLDS_PINEMHI1_NC=pulse the scale breathes and the pulse leg fails by name
+var _smoke_pinemhi1: bool = false ## --pvlds-smoke-pinemhi1: PINEMHI1 round, FIX138's permanent home - launches the env-named target (PVLDS_PINEMHI1_TARGET) through the real launch door against the stub VPX and judges the load wait's law: no marquee, no warp (no warp state, no warp uniforms in the sky shader, no near volume), the wall at full alpha across the wait
 var _pm1_phase: int = 0
 var _pm1_wait: int = 0
 var _pm1_failures: int = 0
@@ -454,25 +454,8 @@ var _sm_failures: int = 0
 var _sm_done: bool = false
 var _sm_judged: bool = false ## a judge coroutine is in flight (its legs land in _sm_failures when it sets this back)
 var _pm1_samples: Array = []
-var _smoke_fix133: bool = false ## --pvlds-smoke-fix133: FIX133 round - the warp's two field fixes, judged in staged boots by PVLDS_FIX133_MODE. "hold": herding ON, the real watchdog, a stub VPX with a delayed runtime - the warp must stand full before the runtime stamp, hold CONSTANT at full on every frame between the runtime stamp and the focus-lock stamp, and ease only after the lock. "fail": the stub dies mid-load - the failure path eases the warp home as it always has. "capture": the near volume's census + head-clearance legs and the rest / full-warp grabs (forward, and turned 180 degrees) into PVLDS_FIX133_GRAB_DIR, each warp grab paired with a near-hidden twin for the runner's pixel diffs
-var _f133_mode: String = "hold"
-var _f133_phase: int = 0
-var _f133_sub: int = 0
-var _f133_settle: int = 0
-var _f133_wait: int = 0
-var _f133_failures: int = 0
-var _f133_done: bool = false
-var _f133_phase0_at: int = -1 ## msec the driver first ticked (the room-wait budget is wall-clock: frame counts lie under headless and loaded-box frame rates)
-var _f133_wait_at: int = -1 ## msec the current wait began (launch / settle waits are wall-clock for the same reason)
-var _f133_full_at: int = -1 ## msec the warp first stood full
-var _f133_runtime_at: int = -1 ## msec the runtime stamp was first observed in the contract
-var _f133_lock_at: int = -1 ## msec the focus-lock stamp was first observed in the contract
-var _f133_hold_samples: int = 0 ## frames sampled between the runtime stamp and the lock stamp
-var _f133_hold_min: float = 1.0 ## the lowest warp amount across that window
-var _f133_target_slipped: bool = false ## the warp's target dropped inside that window (an ease-out began early)
-var _smoke_loading: bool = false ## --pvlds-smoke-loading: LOADING round - one boot judges all three items. (3) The tournie boards' deadline line: RoomSpecs' two board specs carry sub_size 30 + sub_bold (LOADING stood them at 28; ENDGAME Part D raised them). (2) The rail's working set: the library strip stands whole (11 sections), the Tournament Room's strip stands at exactly TOURNAMENT / REFRESH / SETUP / EXIT with the focus walk across the four (drawn focus == real focus at every step), and the B-door round trip restores the library strip. (1) The env-named target (PVLDS_LOADING_TARGET) launches through the real launch door and the SETTLED marquee is judged geometrically off the labels' rendered AABBs: contents exact, every label one line tall, consecutive labels' spans disjoint with clearance, no line wider than the marquee's 2.30 m cap. Grabs land in PVLDS_LOADING_GRAB_DIR
+var _smoke_loading: bool = false ## --pvlds-smoke-loading: LOADING round - one boot judges all three items. (3) The tournie boards' deadline line: RoomSpecs' two board specs carry sub_size 30 + sub_bold (LOADING stood them at 28; ENDGAME Part D raised them). (2) The rail's working set: the library strip stands whole (11 sections), the Tournament Room's strip stands at exactly TOURNAMENT / REFRESH / SETUP / EXIT with the focus walk across the four (drawn focus == real focus at every step), and the B-door round trip restores the library strip. (1) The env-named target (PVLDS_LOADING_TARGET) launches through the real launch door and the standing wait is judged at rest (FIX138's law: no marquee, no warp, wall at full alpha). Grabs land in PVLDS_LOADING_GRAB_DIR
 var _ld_phase: int = 0
-var _ld_roll_first: float = -1.0 ## FIX131: the loading smoke's first roll sample at full warp (phase 4 -> 5 accrual window)
 var _ld_wait: int = 0
 var _ld_failures: int = 0
 var _ld_done: bool = false
@@ -739,18 +722,15 @@ var _lockout_setup_fired: bool = false
 
 # The launch load wait. While _launch_pending, _process polls for
 # the hand-off point and for VPX dying mid-load.
-const LAUNCH_SETTLE_MSEC: int = 1500 ## the up-cue + this long = hand off
+const LAUNCH_SETTLE_MSEC: int = 1500 ## table runtime up + this long = hand off
 const LAUNCH_CAP_MSEC: int = 45000 ## never hold the room hostage to a stuck load
 const LAUNCH_DEAD_GRACE_MSEC: int = 1500 ## a dead spawn pid gets this long for the watchdog's by-path window report before the launch is called failed
-const LAUNCH_FOCUS_GRACE_MSEC: int = 24000 ## FIX133: with focus herding on, the up-cue is the watchdog's focus-lock stamp; if the runtime has been up this long with no lock, the wait hands off on the runtime instead. The bound covers the focus sequence's whole launch window (its resolution floor is runtime + 8 s, its hard deadline runtime + 20 s, its dwell 2 s) with slack for the contract's ticks and writes.
 var _launch_pending: bool = false
 var _launch_game: GameEntry = null
 var _launch_pid: int = 0
 var _launch_session_id: int = 0
 var _launch_started_msec: int = 0
 var _launch_runtime_seen_msec: int = -1
-var _launch_up_seen_msec: int = -1 ## FIX133: when the up-cue landed (the focus lock, or the runtime under the herding-off and grace paths); the settle counts from here
-var _launch_up_reason: String = "" ## FIX133: the hand-off's reason, named when the up-cue lands
 var _launch_pid_dead_msec: int = -1
 var _xr_session_ending: bool = false ## latched by the OpenXR session_ending signal when present
 
@@ -982,11 +962,6 @@ func _ready() -> void:
 		_smoke_backtrim = true
 	if user_args.has("--pvlds-smoke-pinemhi1"):
 		_smoke_pinemhi1 = true
-	if user_args.has("--pvlds-smoke-fix133"):
-		_smoke_fix133 = true
-		_f133_mode = OS.get_environment("PVLDS_FIX133_MODE")
-		if _f133_mode == "":
-			_f133_mode = "hold"
 	if user_args.has("--pvlds-smoke-loading"):
 		_smoke_loading = true
 	if user_args.has("--pvlds-smoke-pinemhi2"):
@@ -1087,11 +1062,6 @@ func _ready() -> void:
 	# panels' filled focus frame - each so the matching
 	# smoke legs fail against it by name.
 	RoomView.debug_fieldpass_nc = OS.get_environment("PVLDS_FIELDPASS_NC")
-	# The FIX133 negative-control seam (PVLDS_FIX133_NC=
-	# nonear): no near warp volume is built, restoring the
-	# sky-only warp so the fix133 smoke's capture legs fail
-	# against it by name.
-	RoomView.debug_fix133_nc = OS.get_environment("PVLDS_FIX133_NC")
 	# The boot seating guard's negative-control seam
 	# (PVLDS_BOOT_NC=oldbind): the guard never arms, so the
 	# resting pointer owns the boot centre again and the
@@ -1688,8 +1658,6 @@ func _process(_delta: float) -> void:
 		_drive_backtrim_smoke()
 	if _smoke_pinemhi1:
 		_drive_pinemhi1_smoke()
-	if _smoke_fix133:
-		_drive_fix133_smoke()
 	if _smoke_loading:
 		_drive_loading_smoke()
 	if _smoke_pinemhi2:
@@ -2777,27 +2745,6 @@ func _on_room_edge_arrows_toggled(on: bool) -> void:
 		_room.set_setup_panel_message("That arrows setting could NOT be saved - the config file is not writable, so the switch has been put back as it was.")
 
 
-## FIX131: the room SETUP panel's HYPERSPACE dial - the
-## edge-arrows terms exactly (save, and a failed save
-## restores the config AND the dial, and says so on the
-## panel: a dial that did not save must not look - or act -
-## turned).
-func _on_room_hyper_spin_changed(mode: String) -> void:
-	if _config == null:
-		return
-	var before: String = _config.hyper_spin
-	_config.hyper_spin = mode
-	if _config.save_to_disk():
-		if _room != null:
-			_room.set_setup_panel_message("Hyperspace: %s while a table loads." % RoomView.HYPER_SPIN_LABELS[mode])
-		_refresh_setup_panel_health()
-		return
-	_config.hyper_spin = before
-	if _room != null:
-		_room.set_hyper_spin(before)
-		_room.set_setup_panel_message("That hyperspace setting could NOT be saved - the config file is not writable, so the dial has been put back as it was.")
-
-
 func _on_room_wovp_key_pasted(api_key: String) -> void:
 	if _config == null:
 		return
@@ -3165,14 +3112,12 @@ func _enter_room() -> void:
 		_room.wovp_key_pasted.connect(_on_room_wovp_key_pasted)
 		_room.pinemhi_watcher_toggled.connect(_on_room_pinemhi_watcher_toggled)
 		_room.edge_arrows_toggled.connect(_on_room_edge_arrows_toggled)
-		_room.hyper_spin_changed.connect(_on_room_hyper_spin_changed)
 		_room.wovp_submit_requested.connect(_on_room_wovp_submit_requested)
 		_room.wovp_key_test_requested.connect(_on_room_wovp_key_test)
 		_room.display_settings_changed.connect(_on_display_settings_changed)
 		_room.set_starfield_mode(_config.starfield_mode)
 		_room.set_pinemhi_manage_watcher(_config.pinemhi_manage_watcher) ## PINEMHI2 (Part B): the SETUP dial's standing value
 		_room.set_edge_arrows(_config.edge_arrows) ## FIX122: the SETUP dial's standing value (OFF by default)
-		_room.set_hyper_spin(_config.hyper_spin) ## FIX131: the HYPERSPACE dial's standing value (GENTLE SPIN by default)
 		_room.set_wall_motion_mode(_config.wall_motion_mode)
 		_room.launch_requested.connect(_on_launch_requested)
 		_room.exit_requested.connect(_on_exit_requested)
@@ -3276,8 +3221,6 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 		_launch_session_id = int(result.get("session_id", 0))
 		_launch_started_msec = Time.get_ticks_msec()
 		_launch_runtime_seen_msec = -1
-		_launch_up_seen_msec = -1
-		_launch_up_reason = ""
 		_launch_pid_dead_msec = -1
 		# RETURN: record where this launch came from, on disk
 		# NOW - the load wait can exit this process at
@@ -3311,27 +3254,20 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 ## judged: VPX dying mid-load (failure - unless the watchdog has
 ## already reported the game's window by exe path, in which case the
 ## spawn pid simply was not the whole story), the XR session
-## changing hands, the watchdog's up-cue + settle, the cap.
-## The up-cue's history is a ladder of evidence, each rung moved
-## because the one below fired while the table was still loading:
-## the window sighting stamps off the editor's own canvas about a
-## second after spawn; the RUNTIME stamp says the table's runtime
-## exists, seconds before the table is really up - settling on it
-## eased the warp out into dead air (the resting room, then black,
-## then the table). FIX133: with focus herding on, the cue is the
-## watchdog's FOCUS-LOCK stamp - the player window itself holding
-## the foreground, verified by the focus sequence's read-back
-## dwell; the same window-present + foreground facts the return
-## path's exit detector trusts. The warp holds at full until the
-## cue lands, then eases across the settle. Two bounded misses:
-## herding off (the focus family is off by the player's own
-## switch) restores the runtime cue exactly; and a runtime older
-## than LAUNCH_FOCUS_GRACE_MSEC with no lock hands off on the
-## runtime rather than hold the room hostage. The sighting keeps
-## its other jobs (the dead-pid grace above, the watchdog's
+## changing hands, the watchdog's runtime report + settle, the cap.
+## The settle cue is the RUNTIME stamp, not the window sighting:
+## the sighting stamps off the editor's own canvas about a second
+## after spawn, while a real table load takes several seconds
+## more - handing off on it left a desktop gap in the headset
+## between the room leaving and the table arriving. The sighting
+## keeps its other jobs (the dead-pid grace above, the watchdog's
 ## exit-detector arming). Every backstop is unchanged: a table
 ## whose runtime never shows still rides the cap, the XR cue, or
 ## the failure path exactly as before.
+## (FIX133 moved this cue to the watchdog's focus-lock stamp so
+## the hyperspace warp could hold until the table was genuinely
+## up; FIX138 deleted the warp and restored this form - the
+## lock stamp went with it.)
 func _poll_launch() -> void:
 	if _shot_launch_path != "":
 		_poll_shot_launch()
@@ -3368,28 +3304,9 @@ func _poll_launch() -> void:
 	if contract.session_id == _launch_session_id and contract.runtime_seen_unix > 0:
 		if _launch_runtime_seen_msec < 0:
 			_launch_runtime_seen_msec = now
-	if _launch_runtime_seen_msec >= 0 and _launch_up_seen_msec < 0:
-		# FIX133: the up-cue (see the poll's header for the
-		# ladder). The runtime stamp alone no longer settles
-		# anything while the focus family is on duty: the
-		# warp holds at full until the table is genuinely up.
-		if _config != null and not _config.focus_herding:
-			_launch_up_seen_msec = now
-			_launch_up_reason = "VPX's runtime is up"
-		elif contract.session_id == _launch_session_id and contract.focus_locked_unix > 0:
-			_launch_up_seen_msec = now
-			_launch_up_reason = "the table is up - the player window holds the focus"
-		elif now - _launch_runtime_seen_msec >= LAUNCH_FOCUS_GRACE_MSEC:
-			_launch_up_seen_msec = now
-			_launch_up_reason = "VPX's runtime is up (the focus lock never landed)"
-		if _launch_up_seen_msec >= 0 and _room != null:
-			# The table is genuinely up - the warp eases out
-			# across the settle beat, so the hand-off is met
-			# from a near-resting field.
-			_room.begin_launch_settle()
-	if _launch_up_seen_msec >= 0 and now - _launch_up_seen_msec >= LAUNCH_SETTLE_MSEC:
-		_settle_launch(true, _launch_up_reason)
-		return
+		elif now - _launch_runtime_seen_msec >= LAUNCH_SETTLE_MSEC:
+			_settle_launch(true, "VPX's runtime is up")
+			return
 	if now - _launch_started_msec >= LAUNCH_CAP_MSEC:
 		_settle_launch(true, "the load cap was reached")
 
@@ -3440,8 +3357,7 @@ func _settle_launch(ok: bool, reason: String) -> void:
 
 ## --pvlds-shot-launch: fire a real launch once the wall is ready,
 ## then capture the LOADING room ~1s into the wait and leave. The
-## capture delay is retunable via PVLDS_SHOT_LAUNCH_DELAY_MS (the
-## hyperspace QA loop shoots mid-ramp and full-warp frames).
+## capture delay is retunable via PVLDS_SHOT_LAUNCH_DELAY_MS.
 func _poll_shot_launch() -> void:
 	if not _shot_launch_fired:
 		if _room != null and _room.visible and _room.wall_ready:
@@ -3454,11 +3370,6 @@ func _poll_shot_launch() -> void:
 	if _launch_pending and Time.get_ticks_msec() - _shot_launch_at_msec >= delay_ms:
 		var path: String = _shot_launch_path
 		_shot_launch_path = ""
-		if _room != null:
-			var hs: Dictionary = _room.hyper_state()
-			print("PVLDS SHOT LAUNCH HYPER mode=%s amount=%.3f roll_deg=%.2f streak=%.1f roll_rate=%.1f" % [
-				str(hs["mode"]), float(hs["amount"]), float(hs["roll_deg"]),
-				float(hs["streak_growth"]), float(hs["roll_rate_deg_s"])])
 		var img: Image = get_viewport().get_texture().get_image()
 		var err: Error = img.save_png(path)
 		print("PVLDS SHOT LAUNCH: ", path, " err=", err, " size=", img.get_size())
@@ -5454,24 +5365,10 @@ func _setup_panel_surface_assertions() -> void:
 	_room._activate(_room.setup_panel_arrows_quad())
 	_setup_panel_expect(_config != null and not _config.edge_arrows and not _room.edge_arrows(),
 		"edge arrows: a second press turns the dial (and the config) back OFF")
-	# FIX131: the HYPERSPACE dial cycles the loading-warp
-	# attempts and the config follows the room - pressed
-	# through the full cycle, so the panel is left as it
-	# was found.
-	var hyper_start: String = _room.hyper_spin()
-	var hyper_idx: int = PvldsConfig.HYPER_SPIN_MODES.find(hyper_start)
-	_room._activate(_room.setup_panel_hyper_quad())
-	var hyper_next: String = PvldsConfig.HYPER_SPIN_MODES[(hyper_idx + 1) % PvldsConfig.HYPER_SPIN_MODES.size()]
-	_setup_panel_expect(_room.hyper_spin() == hyper_next and _config != null and _config.hyper_spin == hyper_next,
-		"hyperspace: one press cycles the dial (and the config) %s -> %s" % [hyper_start, hyper_next])
-	for i: int in range(3):
-		_room._activate(_room.setup_panel_hyper_quad())
-	_setup_panel_expect(_room.hyper_spin() == hyper_start and _config != null and _config.hyper_spin == hyper_start,
-		"hyperspace: the full cycle returns the dial (and the config) to %s" % hyper_start)
 	_setup_panel_expect(_room.setup_panel_ipdb_quad() != null, "XR setup: the panel has RE-APPLY IPDB DATA")
 	_setup_panel_expect(_room.setup_panel_watcher_quad() != null, "XR setup: the panel has PINEMHI WATCHER (the watcher dial row)")
 	_setup_panel_expect(_room.setup_panel_arrows_quad() != null, "XR setup: the panel has EDGE ARROWS (the chevron dial row, FIX122)")
-	_setup_panel_expect(_room.setup_panel_hyper_quad() != null, "XR setup: the panel has HYPERSPACE (the loading-warp dial row, FIX131)")
+	_setup_panel_expect(not _room.has_method("setup_panel_hyper_quad"), "XR setup: the panel has NO HYPERSPACE row (FIX138: the dial is deleted with the warp)")
 	_setup_panel_expect(_room.setup_panel_back_quad() != null, "XR setup: the panel has BACK")
 	# PANELFIT (item 1): the reseated panel's bottom clears
 	# the numbers line - the lowest panel quad's downward
@@ -5534,7 +5431,6 @@ func _setup_panel_surface_assertions() -> void:
 		and _room.setup_panel_ipdb_quad().pick_enabled
 		and _room.setup_panel_watcher_quad().pick_enabled
 		and _room.setup_panel_arrows_quad().pick_enabled
-		and _room.setup_panel_hyper_quad().pick_enabled
 		and _room.setup_panel_back_quad().pick_enabled,
 		"XR setup: the panel's own buttons are live")
 	# PANELFIT restatement: this leg was written when the
@@ -5545,8 +5441,8 @@ func _setup_panel_surface_assertions() -> void:
 	# same intent (focus is confined to the panel's own
 	# buttons), true census.
 	# FIX122: the EDGE ARROWS dial makes it NINE.
-	# FIX131: the HYPERSPACE dial makes it TEN.
-	_setup_panel_expect(_room._focusables.size() == 10
+	# FIX138: the HYPERSPACE dial's deletion returns it to NINE.
+	_setup_panel_expect(_room._focusables.size() == 9
 		and _room._focusables.has(_room.setup_panel_scan_quad())
 		and _room._focusables.has(_room.setup_panel_download_quad())
 		and _room._focusables.has(_room.setup_panel_wovp_paste_quad())
@@ -5555,9 +5451,8 @@ func _setup_panel_surface_assertions() -> void:
 		and _room._focusables.has(_room.setup_panel_ipdb_quad())
 		and _room._focusables.has(_room.setup_panel_watcher_quad())
 		and _room._focusables.has(_room.setup_panel_arrows_quad())
-		and _room._focusables.has(_room.setup_panel_hyper_quad())
 		and _room._focusables.has(_room.setup_panel_back_quad()),
-		"XR setup: focus navigation is confined to the panel's ten buttons")
+		"XR setup: focus navigation is confined to the panel's nine buttons")
 	_setup_panel_expect(_room._focused == _room.setup_panel_scan_quad(),
 		"XR setup: focus opens on SCAN LIBRARY")
 	# Confinement under travel: TAB around the stops and
@@ -12307,28 +12202,24 @@ func _nav_leg_ay_swap_async() -> void:
 	# (the card click) - where build picking lives now.
 	_room._on_select(_room._panels[2])
 	_nav_expect(_room._mode == "detail", "A/Y: a card click opens the detail view")
-	_nav_expect(float(_room.hyper_state()["target"]) == 0.0 and float(_room.hyper_state()["amount"]) == 0.0,
-		"hyperspace: no warp stands while the detail view is open")
 	# Y in the detail view is inert.
 	await _nav_feed_button(JOY_BUTTON_Y)
 	_nav_expect(not _launch_pending and _room._mode == "detail",
 		"A/Y: a detail-view Y press does nothing")
 	# A launch begun from the detail view, through the
-	# detail's own Play path: the room enters the wait, the
-	# detail carries its launching state, and the warp
-	# engages behind the info card (FIX131: the sky occludes
-	# nothing - the marquee's old exclusion died with it).
+	# detail's own Play path: the room enters the wait and
+	# the detail carries its launching state (FIX138: the
+	# wait's face is the resting room - no warp engages
+	# behind the info card, and none ever did need to).
 	var build: TableBuild = game.resolve_default_build(_state)
-	_nav_expect(build != null, "hyperspace: the detail-leg game resolves a default build")
+	_nav_expect(build != null, "launch: the detail-leg game resolves a default build")
 	_room._on_detail_play(game, build)
 	var guard: int = 0
 	while not _launch_pending and guard < 600:
 		await get_tree().process_frame
 		guard += 1
-	_nav_expect(_launch_pending, "hyperspace: a detail-view Play starts a launch")
-	_nav_expect(_room.is_launch_in_wait(), "hyperspace: the room is in the load wait")
-	_nav_expect(float(_room.hyper_state()["target"]) == 1.0,
-		"hyperspace: a detail-initiated launch engages the warp")
+	_nav_expect(_launch_pending, "launch: a detail-view Play starts a launch")
+	_nav_expect(_room.is_launch_in_wait(), "launch: the room is in the load wait")
 	# The dead stub settles it as a failure; the room hands
 	# the wait back to the detail view, which then closes
 	# to the wall as usual.
@@ -12336,11 +12227,9 @@ func _nav_leg_ay_swap_async() -> void:
 	while _launch_pending and guard < 3600:
 		await get_tree().process_frame
 		guard += 1
-	_nav_expect(not _launch_pending, "hyperspace: the detail-initiated launch settles")
+	_nav_expect(not _launch_pending, "launch: the detail-initiated launch settles")
 	_nav_expect(_room._mode == "detail",
-		"hyperspace: the failed settle lands back on the detail view")
-	_nav_expect(float(_room.hyper_state()["target"]) == 0.0,
-		"hyperspace: the failed settle releases the warp")
+		"launch: the failed settle lands back on the detail view")
 	# Close the way production does (the detail's own
 	# escape: hide + the closed signal), not by calling the
 	# room's handler directly - the handler alone leaves
@@ -12348,8 +12237,7 @@ func _nav_leg_ay_swap_async() -> void:
 	# path reads that flag.
 	_room._detail.handle_escape()
 	_nav_expect(_room._mode == "wall", "A/Y: the detail view closes back to the wall")
-	# A on a focused card fires its default build - and a
-	# wall-initiated launch engages the warp as always.
+	# A on a focused card fires its default build.
 	_room._set_focused(_room._panels[2])
 	await _nav_feed_button(JOY_BUTTON_A)
 	guard = 0
@@ -12361,8 +12249,6 @@ func _nav_leg_ay_swap_async() -> void:
 		"A/Y: the launch is the focused card's game")
 	_nav_expect(_room.is_launch_in_wait(), "A/Y: the room is in the load wait")
 	_nav_expect(_room.focusable_count() == 0, "A/Y: the wait's focusable set is empty")
-	_nav_expect(float(_room.hyper_state()["target"]) == 1.0,
-		"hyperspace: a wall-initiated launch engages the warp again")
 	# A second A inside the wait fires nothing.
 	var session: int = _launch_session_id
 	await _nav_feed_button(JOY_BUTTON_A)
@@ -17523,17 +17409,17 @@ func _cb_expect(cond: bool, label: String) -> void:
 ## wait, judged standing. The env-named target
 ## (PVLDS_PINEMHI1_TARGET, default Indy) launches through
 ## the real launch door against the harness stub VPX.
-## FIX131 rework: this smoke judged the loading marquee
-## (headline, fact lines, the pulse's absence); the
-## marquee is abolished and the hyperspace warp carries
-## the wait now, so the legs judge the abolition and the
-## warp: NO marquee node stands and the room offers no
-## marquee text surface at all, the warp's amount rises
-## to full and holds CONSTANT there across 45 frames
-## (the pulse leg's successor - the settled warp does not
-## breathe either), and in a spin mode the roll has
-## accrued while it held. A grab lands at
-## PVLDS_PINEMHI1_GRAB when set.
+## FIX138: this smoke is the permanent home of the load-
+## wait law. It judged the marquee once (abolished FIX131),
+## then the hyperspace warp (abolished here); the legs now
+## judge what the wait IS: no marquee node stands and the
+## room offers no marquee text surface at all, the warp is
+## GONE (the room offers no warp state, the sky's shader
+## carries no warp uniforms, no near volume stands), the
+## wall stands at FULL alpha across 45 sampled frames of
+## the wait (no dim), and the wait itself stands open the
+## whole window. A grab lands at PVLDS_PINEMHI1_GRAB when
+## set.
 func _drive_pinemhi1_smoke() -> void:
 	if _pm1_done:
 		return
@@ -17558,38 +17444,45 @@ func _drive_pinemhi1_smoke() -> void:
 					_finish_pinemhi1_smoke()
 		1:
 			_pm1_wait += 1
-			if _room != null and float(_room.hyper_state()["amount"]) >= 0.999:
-				_pm1_samples.append(float(_room.hyper_state()["amount"]))
+			if _room != null and _launch_pending and _room.is_launch_in_wait():
+				_pm1_samples.append(float(_room._wall_alpha_applied))
 				if _pm1_samples.size() >= 45:
 					_pm1_judge(target)
 					_finish_pinemhi1_smoke()
 			elif _pm1_wait > 1800:
-				_pm1_fail("the warp for %s never reached full (amount=%s)" % [target, str(_room.hyper_state()["amount"]) if _room != null else "<no room>"])
+				_pm1_fail("the load wait for %s never stood open across the sampling window" % target)
 				_finish_pinemhi1_smoke()
 
 
 func _pm1_judge(target: String) -> void:
 	_pm1_expect(_room.get_node_or_null("LoadingMarquee") == null,
-		"PINEMHI1 hyperspace: no marquee node stands in the room during %s's load wait - the text is abolished" % target)
+		"PINEMHI1 wait: no marquee node stands in the room during %s's load wait - the text is abolished" % target)
 	_pm1_expect(not _room.has_method("marquee_text") and not _room.has_method("marquee_fact_text"),
-		"PINEMHI1 hyperspace: the room offers no marquee text surface - no headline, no fact lines, nothing to read")
+		"PINEMHI1 wait: the room offers no marquee text surface - no headline, no fact lines, nothing to read")
+	_pm1_expect(not _room.has_method("hyper_state") and not _room.has_method("set_hyper_spin"),
+		"PINEMHI1 wait: the room offers no warp state at all - the hyperspace machinery is deleted, not parked")
+	var sky_code: String = ""
+	if _room._bg_volume_mat != null and _room._bg_volume_mat.shader != null:
+		sky_code = _room._bg_volume_mat.shader.code
+	_pm1_expect(sky_code != "" and not sky_code.contains("hyper_"),
+		"PINEMHI1 wait: the sky's star shader carries no warp uniforms - the field cannot streak or roll")
+	_pm1_expect(_room.find_children("StarfieldNearBand*", "", true, false).is_empty(),
+		"PINEMHI1 wait: no near warp volume stands around the player - the sky's bands are the whole field")
 	var lo: float = 1e9
 	var hi: float = -1e9
 	for sv: Variant in _pm1_samples:
-		var s: float = float(sv)
-		lo = minf(lo, s)
-		hi = maxf(hi, s)
-	_pm1_expect(hi - lo < 0.0001 and absf(hi - 1.0) < 0.0001,
-		"PINEMHI1 hyperspace: the engaged warp holds CONSTANT at full amount across %d frames - nothing breathes (min %.4f, max %.4f)" % [_pm1_samples.size(), lo, hi])
-	var hs: Dictionary = _room.hyper_state()
-	if float(hs["roll_rate_deg_s"]) > 0.0:
-		_pm1_expect(float(hs["roll_deg"]) > 1.0,
-			"PINEMHI1 hyperspace: in %s mode the field's roll accrued while the warp held (%.2f deg)" % [str(hs["mode"]), float(hs["roll_deg"])])
+		var s2: float = float(sv)
+		lo = minf(lo, s2)
+		hi = maxf(hi, s2)
+	_pm1_expect(absf(hi - 1.0) < 0.0001 and absf(lo - 1.0) < 0.0001,
+		"PINEMHI1 wait: the wall stands at FULL alpha across %d frames of %s's wait - no warp dim (min %.4f, max %.4f)" % [_pm1_samples.size(), target, lo, hi])
+	_pm1_expect(_launch_pending and _room.is_launch_in_wait(),
+		"PINEMHI1 wait: the wait stood open across the whole sampling window (the hand-off is the poll's, after it)")
 	var grab: String = OS.get_environment("PVLDS_PINEMHI1_GRAB")
 	if grab != "":
 		var img: Image = get_viewport().get_texture().get_image()
 		img.save_png(grab)
-		print("  ok - pinemhi1 smoke: hyperspace grab saved to ", grab)
+		print("  ok - pinemhi1 smoke: resting-wait grab saved to ", grab)
 
 
 func _pm1_expect(cond: bool, label: String) -> void:
@@ -17616,310 +17509,15 @@ func _finish_pinemhi1_smoke() -> void:
 		get_tree().quit(1)
 
 
-## FIX133 smoke (--pvlds-smoke-fix133): the warp round's two
-## items judged through the real launch door against the
-## harness stub VPX, with the real watchdog on duty. HOLD is
-## the Item A proof: the contract's stamps are read back from
-## disk every frame beside the room's warp state, so the legs
-## judge the actual cue discipline - full before the runtime,
-## constant at full until the lock, easing only after it.
-## FAIL is the unchanged failure path. CAPTURE is Item B's
-## rendered evidence (see the var block for the modes).
-func _drive_fix133_smoke() -> void:
-	if _f133_done:
-		return
-	var target: String = OS.get_environment("PVLDS_FIX133_TARGET")
-	if target == "":
-		target = "dg-galaxy-corsair"
-	if _f133_phase == 0:
-		if _f133_phase0_at < 0:
-			_f133_phase0_at = Time.get_ticks_msec()
-		# The gate is the room standing and the scanner holding
-		# the target - NOT wall_ready: the launch door, the warp
-		# and the contract do not read the wall's textures, and
-		# the fill queue's drain waits on art fetches that a
-		# blackholed network can hold open for many minutes
-		# (convicted in this staging, 2026-11-18: wall_ready
-		# false for 10+ minutes with the room up and all 10
-		# games held). CAPTURE additionally waits 20 s of wall
-		# time so the faces can dress as far as they will.
-		if _room != null and _room.visible and _scanner != null and _scanner.game_by_id(target) != null:
-			if _f133_mode == "capture":
-				if Time.get_ticks_msec() - _f133_phase0_at > 20000:
-					_f133_capture_rest(target)
-			else:
-				_f133_begin_launch(target)
-		elif Time.get_ticks_msec() - _f133_phase0_at > 600000:
-			_f133_fail("the room/scanner never stood up on the real boot path")
-			_finish_fix133_smoke()
-		return
-	match _f133_mode:
-		"hold":
-			if _f133_phase == 1:
-				_f133_hold_tick()
-			elif _f133_phase == 2:
-				_f133_hold_ease_tick()
-		"fail":
-			if _f133_phase == 1:
-				_f133_fail_tick()
-			elif _f133_phase == 2:
-				_f133_fail_ease_tick()
-		"capture":
-			if _f133_phase == 1:
-				_f133_capture_warp_tick()
-			elif _f133_phase == 2:
-				_f133_capture_back_tick()
-
-
-func _f133_begin_launch(target: String) -> void:
-	var game: GameEntry = _scanner.game_by_id(target) if _scanner != null else null
-	if game == null:
-		_f133_fail("the scanner holds no game %s" % target)
-		_finish_fix133_smoke()
-		return
-	_on_launch_requested(game, game.resolve_default_build(_state))
-	_f133_phase = 1
-	_f133_sub = 0
-	_f133_settle = 0
-	_f133_wait = 0
-	_f133_wait_at = Time.get_ticks_msec()
-
-
-func _f133_hold_tick() -> void:
-	_f133_wait += 1
-	var now: int = Time.get_ticks_msec()
-	var hs: Dictionary = _room.hyper_state()
-	var amount: float = float(hs["amount"])
-	var c: WatchdogContract = WatchdogContract.load_from_disk()
-	var mine: bool = c != null and c.session_id == _launch_session_id
-	if _f133_full_at < 0 and amount >= 0.999:
-		_f133_full_at = now
-	if mine and c.runtime_seen_unix > 0 and _f133_runtime_at < 0:
-		_f133_runtime_at = now
-		_f133_expect(_f133_full_at >= 0,
-			"FIX133 hold: the warp stood full before the runtime stamp landed - the load's early seconds are all warp")
-	if _f133_runtime_at >= 0 and _f133_lock_at < 0:
-		_f133_hold_samples += 1
-		_f133_hold_min = minf(_f133_hold_min, amount)
-		# The slip check judges only frames where the lock is
-		# NOT yet in hand: on the lock's own frame the target
-		# has already - correctly - dropped in answer to it
-		# (the poll runs before this driver in the frame).
-		if not (mine and c.focus_locked_unix > 0) and float(hs["target"]) < 0.999:
-			_f133_target_slipped = true
-		if mine and c.focus_locked_unix > 0:
-			_f133_lock_at = now
-			_f133_expect(not _f133_target_slipped,
-				"FIX133 hold: the warp's target never dropped between the runtime stamp and the lock - no ease-out on the runtime cue")
-			_f133_expect(now - _f133_runtime_at >= 4000,
-				"FIX133 hold: the lock landed well after the runtime (window %d ms - the focus sequence's own floor is 8 s)" % (now - _f133_runtime_at))
-			_f133_expect(_f133_hold_samples >= 8,
-				"FIX133 hold: the runtime-to-lock window was sampled standing (%d frames)" % _f133_hold_samples)
-			_f133_expect(_f133_hold_min >= 0.999,
-				"FIX133 hold: the warp held CONSTANT at full across the whole runtime-to-lock window (min %.4f over %d frames)" % [_f133_hold_min, _f133_hold_samples])
-			_f133_phase = 2
-			_f133_wait = 0
-		elif now - _f133_runtime_at > 20000:
-			_f133_fail("FIX133 hold: the focus lock never landed within 20 s of the runtime stamp")
-			_finish_fix133_smoke()
-	elif _f133_runtime_at < 0 and Time.get_ticks_msec() - _f133_wait_at > 60000:
-		_f133_fail("FIX133 hold: the runtime stamp never landed")
-		_finish_fix133_smoke()
-
-
-func _f133_hold_ease_tick() -> void:
-	_f133_wait += 1
-	var amount: float = float(_room.hyper_state()["amount"])
-	if amount < 0.99:
-		_f133_expect(_launch_up_seen_msec >= 0 and _launch_up_reason.begins_with("the table is up"),
-			"FIX133 hold: the ease-out rode the focus-lock cue (reason: %s)" % _launch_up_reason)
-		_f133_expect(Time.get_ticks_msec() - _f133_lock_at <= 2000,
-			"FIX133 hold: the ease-out began within 2 s of the lock stamp")
-		_finish_fix133_smoke()
-	elif Time.get_ticks_msec() - _f133_lock_at > 10000:
-		_f133_fail("FIX133 hold: the warp never began easing after the lock")
-		_finish_fix133_smoke()
-
-
-func _f133_fail_tick() -> void:
-	_f133_wait += 1
-	var amount: float = float(_room.hyper_state()["amount"])
-	if _f133_full_at < 0 and amount >= 0.999:
-		_f133_full_at = Time.get_ticks_msec()
-	if not _launch_pending:
-		_f133_expect(_f133_full_at >= 0,
-			"FIX133 fail: the warp stood full during the load before the stub died")
-		_f133_expect(not _room.is_launch_in_wait(),
-			"FIX133 fail: the room left the load wait when the stub died mid-load")
-		_f133_phase = 2
-		_f133_wait = 0
-		_f133_wait_at = Time.get_ticks_msec()
-	elif Time.get_ticks_msec() - _f133_wait_at > 60000:
-		_f133_fail("FIX133 fail: the dead stub never settled the launch as failed")
-		_finish_fix133_smoke()
-
-
-func _f133_fail_ease_tick() -> void:
-	_f133_wait += 1
-	var amount: float = float(_room.hyper_state()["amount"])
-	if amount <= 0.001:
-		_f133_ok("FIX133 fail: the warp eased all the way home on the failure path, as it always has")
-		_finish_fix133_smoke()
-	elif Time.get_ticks_msec() - _f133_wait_at > 10000:
-		_f133_fail("FIX133 fail: the warp never eased home after the failure (amount %.4f)" % amount)
-		_finish_fix133_smoke()
-
-
-func _f133_capture_rest(target: String) -> void:
-	var count: int = _room.starfield_near_count()
-	_f133_expect(count > 0,
-		"FIX133 near: the near volume stands (%d stars inside the wall)" % count)
-	var min_len: float = -1.0
-	for b: int in range(_room._bg_near_bands.size()):
-		var i: int = 0
-		while i < 8192:
-			var p: Vector3 = _room.starfield_near_star(b, i)
-			if p == Vector3.ZERO:
-				break
-			if min_len < 0.0 or p.length() < min_len:
-				min_len = p.length()
-			i += 1
-	if min_len < 0.0:
-		min_len = 0.0
-	_f133_expect(min_len >= 1.049,
-		"FIX133 near: no star spawns inside the head-clearance radius (nearest stands at %.3f m)" % min_len)
-	if _room._bg_near_mat != null:
-		_f133_expect(float(_room._bg_near_mat.get_shader_parameter("hyper_fade")) == 0.0,
-			"FIX133 near: the near fade is 0 at rest - the resting room draws none of it")
-	_f133_grab("rest_near.png")
-	_f133_set_near_visible(false)
-	_f133_phase = 1
-	_f133_sub = 0
-	_f133_settle = 0
-	# The launch begins from CAPTURE's own second phase; the
-	# rest pair's second grab lands first (sub 0 below), then
-	# the launch fires (sub 1).
-
-
-func _f133_capture_warp_tick() -> void:
-	if _f133_sub == 0:
-		# The rest pair's twin: near hidden, same resting room.
-		_f133_settle += 1
-		if _f133_settle >= 3:
-			_f133_grab("rest_skyonly.png")
-			_f133_set_near_visible(true)
-			_f133_sub = 1
-			_f133_settle = 0
-		return
-	if _f133_sub == 1:
-		var target: String = OS.get_environment("PVLDS_FIX133_TARGET")
-		if target == "":
-			target = "dg-galaxy-corsair"
-		if _scanner == null or _scanner.game_by_id(target) == null:
-			if _f133_wait_at < 0:
-				_f133_wait_at = Time.get_ticks_msec()
-			if Time.get_ticks_msec() - _f133_wait_at > 600000:
-				_f133_fail("FIX133 capture: the scanner never held the target")
-				_finish_fix133_smoke()
-			return
-		_f133_begin_launch(target)
-		# _f133_begin_launch set phase 1; CAPTURE continues in
-		# its own phase 1 with sub 2 (the warp watch).
-		_f133_phase = 1
-		_f133_sub = 2
-		return
-	# sub 2: the warp watch.
-	_f133_wait += 1
-	var amount: float = float(_room.hyper_state()["amount"])
-	if _f133_sub == 2:
-		if amount >= 0.999:
-			if _room._bg_near_mat != null:
-				_f133_expect(absf(float(_room._bg_near_mat.get_shader_parameter("hyper_fade")) - 1.0) < 0.01,
-					"FIX133 near: at full warp the near fade stands at 1 - the volume is fully in")
-			_f133_grab("warp_fwd_near.png")
-			_f133_set_near_visible(false)
-			_f133_sub = 3
-			_f133_settle = 0
-		elif Time.get_ticks_msec() - _f133_wait_at > 60000:
-			_f133_fail("FIX133 capture: the warp never reached full")
-			_finish_fix133_smoke()
-	elif _f133_sub == 3:
-		_f133_settle += 1
-		if _f133_settle >= 3:
-			_f133_grab("warp_fwd_skyonly.png")
-			_f133_set_near_visible(true)
-			_room._desk_rig.rotation.y = PI
-			_f133_phase = 2
-			_f133_settle = 0
-
-
-func _f133_capture_back_tick() -> void:
-	_f133_settle += 1
-	if _f133_sub == 3:
-		if _f133_settle >= 6:
-			_f133_grab("warp_back_near.png")
-			_f133_set_near_visible(false)
-			_f133_sub = 4
-			_f133_settle = 0
-	elif _f133_sub == 4:
-		if _f133_settle >= 3:
-			_f133_grab("warp_back_skyonly.png")
-			_f133_set_near_visible(true)
-			_room._desk_rig.rotation.y = 0.0
-			_finish_fix133_smoke()
-
-
-func _f133_set_near_visible(v: bool) -> void:
-	for band: MultiMeshInstance3D in _room._bg_near_bands:
-		band.visible = v
-
-
-func _f133_grab(name: String) -> void:
-	var dir: String = OS.get_environment("PVLDS_FIX133_GRAB_DIR")
-	if dir == "":
-		return
-	var img: Image = get_viewport().get_texture().get_image()
-	img.save_png(dir.path_join(name))
-	print("  ok - fix133 smoke: grab saved ", name)
-
-
-func _f133_expect(cond: bool, label: String) -> void:
-	if cond:
-		print("  ok - fix133 smoke: ", label)
-	else:
-		_f133_fail(label)
-
-
-func _f133_ok(label: String) -> void:
-	print("  ok - fix133 smoke: ", label)
-
-
-func _f133_fail(label: String) -> void:
-	_f133_failures += 1
-	printerr("  FAIL - fix133 smoke: ", label)
-
-
-func _finish_fix133_smoke() -> void:
-	_f133_done = true
-	if _launch_service != null:
-		_launch_service.disarm("fix133 smoke")
-	if _f133_failures == 0:
-		print("PVLDS FIX133 SMOKE: PASS")
-		get_tree().quit(0)
-	else:
-		printerr("PVLDS FIX133 SMOKE: FAIL (%d)" % _f133_failures)
-		get_tree().quit(1)
-
-
 ## LOADING smoke (--pvlds-smoke-loading): the round's three
 ## items judged in one boot on the real boot path (see
 ## _smoke_loading's declaration for the contract). The rail
 ## legs read the room's standing quads - visible set in seat
 ## order, pick state, the bar's span - and walk focus with
-## the room's own step door; the marquee legs launch the
-## env-named target through the real launch door and measure
-## the settled labels' rendered AABBs in the holder's space
-## (the holder's settled scale is 1.0 - the PINEMHI1 law).
+## the room's own step door; the wait legs launch the
+## env-named target through the real launch door and judge
+## the standing wait at rest (FIX138's law, whose full form
+## the pinemhi1 smoke carries).
 func _ld_expect(cond: bool, label: String) -> void:
 	if cond:
 		print("  ok - loading smoke: ", label)
@@ -18051,26 +17649,29 @@ func _ld_judge_tournie_strip() -> void:
 	_ld_grab("tournie_strip.png")
 
 
-func _ld_judge_hyperspace(target: String) -> void:
-	# FIX131: this judge measured the marquee's labels (one
-	# line tall, clear of each other, inside the width cap)
-	# off their rendered AABBs. The text it measured is
-	# abolished; the legs below judge what stands instead -
-	# the warp, off the room's own state read.
+func _ld_judge_rest(target: String) -> void:
+	# FIX131: this judge measured the marquee's labels off
+	# their rendered AABBs; FIX133's form judged the warp
+	# that replaced them. FIX138: both are abolished - the
+	# legs judge the resting wait that stands instead, off
+	# the room's own reads (the pinemhi1 smoke carries the
+	# same law's full form).
 	_ld_expect(_room.get_node_or_null("LoadingMarquee") == null,
-		"LOADING hyperspace: no marquee node stands during %s's load wait - the loading text is gone" % target)
-	var hs: Dictionary = _room.hyper_state()
-	_ld_expect(float(hs["target"]) == 1.0 and float(hs["amount"]) >= 0.999,
-		"LOADING hyperspace: the warp stands fully engaged for %s's wait (amount %.3f)" % [target, float(hs["amount"])])
-	_ld_expect(PvldsConfig.HYPER_SPIN_MODES.has(str(hs["mode"])),
-		"LOADING hyperspace: the dial's mode reads back a real attempt ('%s')" % str(hs["mode"]))
-	if str(hs["mode"]) != "classic":
-		_ld_expect(float(hs["streak_growth"]) > 0.0,
-			"LOADING hyperspace: %s mode carries a streak (growth %.1f)" % [str(hs["mode"]), float(hs["streak_growth"])])
-	if float(hs["roll_rate_deg_s"]) > 0.0:
-		_ld_expect(float(hs["roll_deg"]) > _ld_roll_first + 0.5,
-			"LOADING hyperspace: the field rolled while the warp held (%.2f -> %.2f deg at %.1f deg/s)" % [_ld_roll_first, float(hs["roll_deg"]), float(hs["roll_rate_deg_s"])])
-	_ld_grab("hyper_warp.png")
+		"LOADING rest: no marquee node stands during %s's load wait - the loading text is gone" % target)
+	_ld_expect(not _room.has_method("hyper_state"),
+		"LOADING rest: the room offers no warp state - the hyperspace machinery is deleted")
+	var sky_code: String = ""
+	if _room._bg_volume_mat != null and _room._bg_volume_mat.shader != null:
+		sky_code = _room._bg_volume_mat.shader.code
+	_ld_expect(sky_code != "" and not sky_code.contains("hyper_"),
+		"LOADING rest: the sky's star shader carries no warp uniforms")
+	_ld_expect(_room.find_children("StarfieldNearBand*", "", true, false).is_empty(),
+		"LOADING rest: no near warp volume stands around the player")
+	_ld_expect(absf(float(_room._wall_alpha_applied) - 1.0) < 0.0001,
+		"LOADING rest: the wall stands at full alpha in %s's wait (alpha %.4f) - no warp dim" % [target, float(_room._wall_alpha_applied)])
+	_ld_expect(_launch_pending and _room.is_launch_in_wait(),
+		"LOADING rest: the wait stands open while the room rests")
+	_ld_grab("rest_wait.png")
 
 
 func _drive_loading_smoke() -> void:
@@ -18124,17 +17725,16 @@ func _drive_loading_smoke() -> void:
 					_finish_loading_smoke()
 		4:
 			_ld_wait += 1
-			if _room != null and float(_room.hyper_state()["amount"]) >= 0.999:
-				_ld_roll_first = float(_room.hyper_state()["roll_deg"])
+			if _room != null and _launch_pending and _room.is_launch_in_wait():
 				_ld_phase = 5
 				_ld_wait = 0
 			elif _ld_wait > 1800:
-				_ld_fail("the warp for %s never reached full (amount=%s)" % [target, str(_room.hyper_state()["amount"]) if _room != null else "<no room>"])
+				_ld_fail("the load wait for %s never stood" % target)
 				_finish_loading_smoke()
 		5:
 			_ld_wait += 1
 			if _ld_wait >= 45:
-				_ld_judge_hyperspace(target)
+				_ld_judge_rest(target)
 				_finish_loading_smoke()
 
 
@@ -29657,7 +29257,6 @@ func _run_core_test() -> void:
 	contract.game_pid = 4242
 	contract.game_window_seen_unix = 1234567
 	contract.runtime_seen_unix = 2345678
-	contract.focus_locked_unix = 4567890
 	contract.launcher_path = "C:/PVLDS/PVLDS.exe"
 	contract.focus_herding = false
 	contract.hold_exit_enabled = false
@@ -29668,7 +29267,6 @@ func _run_core_test() -> void:
 	_expect(contract2.armed and contract2.session_id == 7 and contract2.game_pid == 4242
 		and contract2.session_state == "live" and contract2.game_window_seen_unix == 1234567
 		and contract2.runtime_seen_unix == 2345678
-		and contract2.focus_locked_unix == 4567890
 		and not contract2.focus_herding
 		and not contract2.hold_exit_enabled and contract2.hold_exit_fired_unix == 3456789
 		and contract2.launcher_path == "C:/PVLDS/PVLDS.exe",

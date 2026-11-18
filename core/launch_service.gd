@@ -159,7 +159,6 @@ func checkin(config: PvldsConfig) -> WatchdogContract:
 	c.game_pid = 0
 	c.game_window_seen_unix = 0
 	c.runtime_seen_unix = 0
-	c.focus_locked_unix = 0
 	c.save_to_disk()
 	ensure_watchdog()
 	return c
@@ -202,7 +201,6 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	c.game_pid = 0
 	c.game_window_seen_unix = 0
 	c.runtime_seen_unix = 0
-	c.focus_locked_unix = 0
 	c.game_started_unix = int(Time.get_unix_time_from_system())
 	c.launcher_path = LaunchService.launcher_path()
 	c.launcher_args = LaunchService.launcher_args()

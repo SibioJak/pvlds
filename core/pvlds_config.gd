@@ -117,17 +117,10 @@ const WALL_MOTION_MODES: Array[String] = ["stepped"]
 ## chevrons do.
 var edge_arrows: bool = false
 ## FIX131: the loading hyperspace dial. While a table loads,
-## the starfield goes hyperspace (the loading marquee is
-## abolished - the stars carry the wait); this key picks the
-## attempt the player judges in the headset: "classic" (the
-## resting field, no streaks), "streaks" (radial streaks, no
-## roll), "gentle" (streaks + a slow roll), "full" (streaks +
-## the full Lucas roll). The dial lives on the in-room SETUP
-## panel only (HYPERSPACE row), over this one key. A config
-## without the key loads the judging default "gentle"; an
-## unrecognised value coerces to it too.
-var hyper_spin: String = "gentle"
-const HYPER_SPIN_MODES: Array[String] = ["classic", "streaks", "gentle", "full"]
+## FIX138: the hyper_spin key (the deleted hyperspace dial's
+## setting) is no longer read or written. A config written
+## while the dial lived still loads cleanly - the key is
+## simply never consulted, and saves never write it back.
 ## HOLD-EXIT: the hold-to-exit toggle. Holding D-pad right for
 ## 1.5 s during a table session shuts the whole works down
 ## (the watchdog reads the pad and fires; see watchdog/
@@ -246,9 +239,6 @@ func load_from_disk() -> bool:
 	hold_exit_enabled = bool(d.get("hold_exit_enabled", true))
 	pinemhi_manage_watcher = bool(d.get("pinemhi_manage_watcher", false))
 	edge_arrows = bool(d.get("edge_arrows", false))
-	hyper_spin = str(d.get("hyper_spin", "gentle"))
-	if not HYPER_SPIN_MODES.has(hyper_spin):
-		hyper_spin = "gentle"
 	screenshots_folder = str(d.get("screenshots_folder", ""))
 	update_feed_url = str(d.get("update_feed_url", ""))
 	# OPTIMIZE: any stored gait coerces to the one gait -
@@ -281,7 +271,6 @@ func save_to_disk() -> bool:
 	d["hold_exit_enabled"] = hold_exit_enabled
 	d["pinemhi_manage_watcher"] = pinemhi_manage_watcher
 	d["edge_arrows"] = edge_arrows
-	d["hyper_spin"] = hyper_spin
 	d["screenshots_folder"] = screenshots_folder
 	d["update_feed_url"] = update_feed_url
 	wall_motion_mode = "stepped" ## OPTIMIZE: saves write the one gait, whatever a caller left standing in the var

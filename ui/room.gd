@@ -30,7 +30,6 @@ signal wovp_submit_requested(challenge_id: String, photo_path: String) ## ROOMSU
 signal display_settings_changed ## a SETUP display dial turned (the starfield): Main persists the room's standing values to the config
 signal pinemhi_watcher_toggled(on: bool) ## PINEMHI2 (Part B): the SETUP panel's PINEMHI WATCHER dial flipped: Main flips + saves the config's watcher-management toggle (the room never holds config)
 signal edge_arrows_toggled(on: bool) ## FIX122: the SETUP panel's EDGE ARROWS dial flipped: Main flips + saves the config's edge-arrows toggle (the room never holds config)
-signal hyper_spin_changed(mode: String) ## FIX131: the SETUP panel's HYPERSPACE dial turned: Main saves the config's hyper_spin mode (the room never holds config)
 
 const PAGE_COLS: int = 4
 const PAGE_ROWS: int = 3
@@ -43,33 +42,20 @@ const FILTER_LABELS: Dictionary = {"all": "ALL", "vr": "VR", "favorites": "FAVOR
 const SORTS: Array[String] = ["name", "year", "manufacturer", "designer"]
 const SORT_LABELS: Dictionary = {"name": "NAME", "year": "YEAR", "manufacturer": "MAKER", "designer": "DESIGNER"}
 
-# ------------------------------------------------------- hyperspace (FIX131)
-## The load wait's face. The fact-sheet marquee that stood
-## here (year, designer, IPDB fact lines in flying letters)
-## is ABOLISHED by Chris's ruling, 2026-11-17: the text had
-## no honest utility left once the starfield became the
-## loading indicator - its rotation already said "alive and
-## working". What stands in its place is the starfield
-## itself, turned up: while a table loads, the volume's
-## stars stretch into radial streaks and the field rolls
-## around the view axis - the Lucas jump, spin included
-## (Chris: what made the effect effective was not just the
-## streak but the spin). In VR the roll could be wonderful
-## or nauseating, so the attempts are a SETUP dial
-## (HYPERSPACE: CLASSIC / STREAKS / GENTLE SPIN / FULL SPIN,
-## config key hyper_spin, judging default GENTLE SPIN) and
-## every feel number is a constant here, in one place, for
-## one-line retunes after his headset verdict. The wait's
-## wall dim survives the marquee: it is the warp's dim now,
-## driven by the engagement both ways - no snap back.
-const HYPER_RAMP_IN_SEC: float = 1.1 ## the warp's ease-in: amount 0 -> 1 after a launch begins
-const HYPER_RAMP_OUT_SEC: float = 0.9 ## the warp's ease-out: amount -> 0 as the wait settles (failure, or Main's runtime-up cue ahead of the hand-off)
-const HYPER_LOAD_WALL_ALPHA: float = 0.16 ## the wall's alpha at full warp (the marquee fade's standing value, re-homed)
-const HYPER_STREAK_GROWTH: float = 26.0 ## a star's radial growth at 45 degrees off the view axis, at full amount (centre stars stay points - the films' own law); the shader clamps the angle term at 1.5
-const HYPER_ROLL_GENTLE_DEG_S: float = 6.0 ## GENTLE SPIN: the field's roll rate around the view axis at full amount
-const HYPER_ROLL_FULL_DEG_S: float = 20.0 ## FULL SPIN: the full Lucas roll rate at full amount
-const HYPER_DRIFT_MULT: float = 2.0 ## the bands' standing yaw drift multiplier at full amount - the field's motion ramps with the warp
-const HYPER_SPIN_LABELS: Dictionary = {"classic": "CLASSIC", "streaks": "STREAKS", "gentle": "GENTLE SPIN", "full": "FULL SPIN"} ## the dial's display names by mode
+# ------------------------------------------------------- the load wait (FIX138)
+## The load wait's face is the room itself, at rest. Two
+## abolitions stand here, both Chris's rulings: the fact-
+## sheet marquee (year, designer, IPDB fact lines in flying
+## letters) was abolished 2026-11-17 - the text had no honest
+## utility left - and the hyperspace warp that replaced it
+## (FIX131's streaks and spin, FIX133's near volume and its
+## hold-until-focus-lock) was abolished 2026-11-18 after its
+## field trial: the disconcerting won. What remains is what
+## stood before both: the player sits in the room, controls
+## locked, the wall at full presence, the plain starfield
+## drifting at its standing rate, until the table comes up.
+## No loading text returns with the warp's removal - the
+## wait's only words are the banner's standing note.
 
 ## Card pop-out (Chris, 2026-10-22): the card under the pointer -
 ## or holding gamepad/keyboard focus - lifts off the wall toward
@@ -597,25 +583,6 @@ const BG_VOLUME_POINT_SPREAD: float = 1.45 ## the star quad's size factor under 
 const BG_VOLUME_TINT_NEUTRAL: Color = Color(1.0, 1.0, 1.0) ## most stars: neutral white (exactly neutral - the tint census classifies by channel difference)
 const BG_VOLUME_TINT_WARM: Color = Color(1.0, 0.87, 0.72) ## a faint warm minority
 const BG_VOLUME_TINT_BLUE: Color = Color(0.80, 0.88, 1.0) ## a faint blue minority
-## FIX133: the NEAR warp volume. The sky's bands all stand
-## OUTSIDE the wall (3.60 m), and the cards depth-occlude
-## them, so the shipped warp read as a backdrop behind the
-## wall. These three shells wrap the player INSIDE the wall -
-## in front of the cards, at the sides, and behind the
-## camera - so at warp the streaks cross the whole room
-## volume and pass the player's own position: a volume he
-## sits inside, not a backdrop. Same shader, same three warp
-## uniforms driven from the same _update_hyperspace, on their
-## OWN material whose fade uniform (hyper_fade) rides the
-## warp amount: at rest the fade is 0 and the near field is
-## not drawn at all, so the resting room is unchanged. The
-## innermost shell IS the head-clearance law: no near star
-## spawns inside 1.05 m of the eye, so streaks pass around
-## the player, never through his face. The shells drift by
-## the volume's own depth law (their radii read as the near
-## endpoint - the fastest rate, as the closest layer should).
-const HYPER_NEAR_RADII: Array[float] = [1.05, 1.65, 2.55] ## the near volume's shell radii in metres, eye-centred; [0] is the head-clearance floor
-const HYPER_NEAR_COUNT_BASE: float = 300.0 ## stars on the innermost near shell; a shell's count grows as radius^BG_VOLUME_COUNT_GROWTH, the sky's law
 const BG_BACKDROP_RADIUS: float = 500.0 ## the starless backdrop's distance - beyond the far band, inside the cameras' far plane
 ## The backdrop's shader: the far shell's sky WITHOUT its
 ## stars - the same deep colour, the same milky band
@@ -650,45 +617,6 @@ void fragment() {
 const BG_VOLUME_STAR_SHADER: String = """
 shader_type spatial;
 render_mode unshaded, cull_disabled, blend_mix, depth_draw_never;
-uniform float hyper_amount = 0.0;
-uniform float hyper_roll = 0.0;
-uniform float hyper_streak = 0.0;
-// FIX133: the near warp volume's fade - its material rides
-// this on the warp amount, so the near field exists only
-// while the warp engages. The sky's material never sets it:
-// the default keeps the sky exactly as it has always been.
-uniform float hyper_fade = 1.0;
-void vertex() {
-	// FIX131 HYPERSPACE: at rest (amount 0, roll 0) this pass
-	// is the identity and the field stands exactly as built.
-	// Engaged, it works in view space, where the Lucas look
-	// lives: the roll rotates every star around the view axis
-	// (the z axis here, through the camera), and the streak
-	// stretches each vertex's offset from its star's centre
-	// along the screen-radial direction, growing with the
-	// star's angle off that axis - centre stars stay points,
-	// edge stars smear. POSITION is written directly (clip
-	// space) so no matrix inverse is needed; UV and COLOR
-	// pass through untouched, so the fragment's round falloff
-	// simply stretches with the quad.
-	vec4 v_vert = MODELVIEW_MATRIX * vec4(VERTEX, 1.0);
-	vec4 v_cent = MODELVIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0);
-	float ca = cos(hyper_roll);
-	float sa = sin(hyper_roll);
-	mat2 rot = mat2(vec2(ca, sa), vec2(-sa, ca));
-	v_vert.xy = rot * v_vert.xy;
-	v_cent.xy = rot * v_cent.xy;
-	vec2 radial = v_cent.xy;
-	float rlen = length(radial);
-	vec2 rdir = rlen > 0.00001 ? radial / rlen : vec2(0.0, 1.0);
-	vec2 off = v_vert.xy - v_cent.xy;
-	float along = dot(off, rdir);
-	vec2 tang = off - rdir * along;
-	float tanang = rlen / max(0.05, -v_cent.z);
-	float grow = 1.0 + hyper_amount * hyper_streak * clamp(tanang, 0.0, 1.5);
-	v_vert.xy = v_cent.xy + rdir * (along * grow) + tang;
-	POSITION = PROJECTION_MATRIX * v_vert;
-}
 void fragment() {
 	vec2 centred = (UV - vec2(0.5)) * 2.0;
 	float d = length(centred);
@@ -697,7 +625,7 @@ void fragment() {
 	float core = 1.0 - smoothstep(0.0, 0.38, d);
 	a = clamp(a + core * 0.35, 0.0, 1.0);
 	ALBEDO = COLOR.rgb;
-	ALPHA = a * hyper_fade;
+	ALPHA = a;
 }
 """
 ## The pre-FIELDPASS star shader, kept only behind the
@@ -953,12 +881,6 @@ static var debug_bg_nc: String = ""
 ## cyan slab through a frameless board face) - each so the
 ## matching smoke legs fail by name. Empty in every real run.
 static var debug_fieldpass_nc: String = ""
-## Negative-control seam for FIX133 (the harness env
-## PVLDS_FIX133_NC, set by Main before any room exists):
-## "nonear" builds no near warp volume, restoring the
-## pre-FIX133 sky-only warp so the fix133 smoke's capture
-## legs fail against it by name. Empty in every real run.
-static var debug_fix133_nc: String = ""
 ## Negative-control seam for the boot seating guard (the
 ## harness env PVLDS_BOOT_NC, set by Main before any room
 ## exists): "oldbind" never arms the guard, restoring the
@@ -1191,7 +1113,6 @@ var _bg_starfield: MeshInstance3D = null
 var _bg_starfield_near: MeshInstance3D = null ## the near star shell (the GRAD FIX round's depth layer)
 var _bg_backdrop: MeshInstance3D = null ## STARFIELD: the starless deep-colour backdrop behind the volume (LAYERED only)
 var _bg_volume_bands: Array[MultiMeshInstance3D] = [] ## STARFIELD: the volume's band nodes, near to far, each centred on EYE and drifting at its own depth-scaled rate
-var _bg_near_bands: Array[MultiMeshInstance3D] = [] ## FIX133: the near warp volume's shells, innermost first, each centred on EYE; drawn only while the warp engages (their material's fade rides the amount)
 var _starfield_mode: String = "layered" ## the SETUP dial: "layered" | "flat" | "off" (see set_starfield_mode)
 var _wall_motion_mode: String = "stepped" ## OPTIMIZE: STEPPED is the only gait - set_wall_motion_mode coerces every value to "stepped" (PANELFIT removed the panel button that wore it as a label)
 var _bg_ring: MeshInstance3D = null ## always null since GRADFIX4 removed the orbit ring (item 5e); background_layers() skips it
@@ -1270,12 +1191,7 @@ func set_db_warning_active(active: bool) -> void:
 	_db_warning_active = active
 	_refresh_banner()
 var _selected_game_id: String = "" ## last game opened/launched; restored + persisted as view state
-var _hyper_mode: String = "gentle" ## FIX131: the HYPERSPACE dial's standing value, pushed by Main from the config (set_hyper_spin); a press cycles it here and reports via hyper_spin_changed - Main owns the save
-var _hyper_amount: float = 0.0 ## the warp's eased engagement, 0 at rest -> 1 at full warp; driven by _update_hyperspace toward _hyper_target
-var _hyper_target: float = 0.0 ## where the amount is headed: 1 while a load wait stands, 0 as it settles
-var _hyper_roll_rad: float = 0.0 ## the field's accumulated roll around the view axis, radians; accrues only while the warp is engaged, freezes where it stops, wraps at rest
-var _bg_volume_mat: ShaderMaterial = null ## the volume's ONE shared star material (built in _build_star_volume); the warp's uniforms ride it
-var _bg_near_mat: ShaderMaterial = null ## FIX133: the near warp volume's own star material - the same shader; its hyper_fade uniform is what _update_hyperspace drives with the warp amount
+var _bg_volume_mat: ShaderMaterial = null ## the volume's ONE shared star material (built in _build_star_volume)
 var _wall_alpha_applied: float = 1.0 ## the wall fade's last applied alpha (change guard)
 ## GRADFIX17 (item 2): the wall-alpha pass's write-on-change
 ## bookkeeping. The pass used to rewrite every panel's,
@@ -1334,7 +1250,6 @@ var _setup_panel_back_btn: ClickableQuad = null
 var _setup_panel_ipdb_btn: ClickableQuad = null ## CARDBACK/IPDBFIX: RE-APPLY IPDB DATA - Main re-applies the bundled snapshot, the panel's mirror of the desk's button
 var _setup_panel_watcher_btn: ClickableQuad = null ## PINEMHI2 (Part B): PINEMHI WATCHER: ON/OFF - the watcher-management dial, a full-width row under BACK's row (the panel's PINemHi presence is its face line; the dial stands beside it in the button stack)
 var _setup_panel_arrows_btn: ClickableQuad = null ## FIX122: EDGE ARROWS: ON/OFF - the edge-scroll chevron dial, a full-width row under the watcher row (OFF by default - the player hates the chevrons)
-var _setup_panel_hyper_btn: ClickableQuad = null ## FIX131: HYPERSPACE: CLASSIC/STREAKS/GENTLE SPIN/FULL SPIN - the loading warp dial, a full-width row under the arrows row (judging default GENTLE SPIN)
 var _edge_arrows: bool = false ## FIX122: the dial's standing value, pushed by Main from the config (set_edge_arrows); a press flips it here and reports via edge_arrows_toggled - Main owns the save
 var _setup_btn_tex: Dictionary = {} ## ENDGAME (Part B): panel button quad -> [rest_tex, lifted_tex] - both dresses rendered at fill time, swapped on focus (the strip's discipline: the material change must never wait on a render)
 var _setup_btn_home: Dictionary = {} ## ENDGAME (Part B): panel button quad -> its built position; the focused button lifts toward the eye off this home
@@ -2220,8 +2135,6 @@ func _apply_starfield_mode() -> void:
 		_bg_backdrop.visible = not legacy and _starfield_mode == "layered"
 	for band: MultiMeshInstance3D in _bg_volume_bands:
 		band.visible = not legacy and _starfield_mode == "layered"
-	for band: MultiMeshInstance3D in _bg_near_bands:
-		band.visible = not legacy and _starfield_mode == "layered"
 
 
 ## The drift, one frame's worth (GRADFIX4 item 5d): in
@@ -2247,19 +2160,9 @@ func _update_background(delta: float) -> void:
 	# STARFIELD: each volume band turns at its own
 	# depth-scaled rate - one rotation increment per band,
 	# nothing allocated, nothing else touched.
-	# FIX131: at warp the drift ramps with the engagement
-	# (HYPER_DRIFT_MULT at full amount) - the field's motion
-	# rises with the streaks and the roll.
-	var drift_mult: float = 1.0 + (HYPER_DRIFT_MULT - 1.0) * _hyper_amount
 	for i: int in range(_bg_volume_bands.size()):
 		var band: MultiMeshInstance3D = _bg_volume_bands[i]
-		band.rotation.y += deg_to_rad(_volume_rate(BG_VOLUME_RADII[i])) * drift_mult * delta
-	# FIX133: the near shells turn with the same depth law
-	# (their radii read as the near endpoint - the closest
-	# layer turns fastest, as the sky's own near band does).
-	for i: int in range(_bg_near_bands.size()):
-		var nband: MultiMeshInstance3D = _bg_near_bands[i]
-		nband.rotation.y += deg_to_rad(_volume_rate(HYPER_NEAR_RADII[i])) * drift_mult * delta
+		band.rotation.y += deg_to_rad(_volume_rate(BG_VOLUME_RADII[i])) * delta
 
 
 ## The standing sky's measurable pair, far first: the two
@@ -2306,26 +2209,6 @@ func starfield_volume_star(band_idx: int, star_idx: int) -> Vector3:
 	return mm.get_instance_transform(star_idx).origin
 
 
-## FIX133: one near star's standing local position (band 0
-## = innermost shell) - the fix133 smoke judges the
-## head-clearance law off these (every length >= the
-## innermost shell's radius).
-func starfield_near_star(band_idx: int, star_idx: int) -> Vector3:
-	if band_idx < 0 or band_idx >= _bg_near_bands.size():
-		return Vector3.ZERO
-	var mm: MultiMesh = _bg_near_bands[band_idx].multimesh
-	if mm == null or star_idx < 0 or star_idx >= mm.instance_count:
-		return Vector3.ZERO
-	return mm.get_instance_transform(star_idx).origin
-
-
-## FIX133: the near volume's standing star census.
-func starfield_near_count() -> int:
-	var total: int = 0
-	for band: MultiMeshInstance3D in _bg_near_bands:
-		if band.multimesh != null:
-			total += band.multimesh.instance_count
-	return total
 
 
 ## FIELDPASS: one star's standing instance colour in a
@@ -2485,7 +2368,7 @@ func _build_star_volume() -> void:
 	qsh.code = BG_VOLUME_STAR_SHADER_FLAT if debug_fieldpass_nc == "squares" else BG_VOLUME_STAR_SHADER
 	qsm.shader = qsh
 	quad.material = qsm
-	_bg_volume_mat = qsm ## FIX131: the warp drives its uniforms on this one shared material
+	_bg_volume_mat = qsm ## the volume's one shared star material
 	var r_min: float = BG_VOLUME_RADII[0]
 	for band_idx: int in range(BG_VOLUME_RADII.size()):
 		var radius: float = BG_VOLUME_RADII[band_idx]
@@ -2531,61 +2414,6 @@ func _build_star_volume() -> void:
 		node.position = EYE
 		_bg_root.add_child(node)
 		_bg_volume_bands.append(node)
-	# FIX133: the near warp volume (HYPER_NEAR_RADII) - the
-	# same field wrapped around the player inside the wall.
-	# Its own material instance of the same shader (never the
-	# flat NC variant: the fade law is the near field's whole
-	# existence), its fade starting at 0 so nothing of it
-	# stands at rest. The per-star build mirrors the sky's:
-	# same angular size law (the near radii read log_t 0 - no
-	# shrink, no dim), same tint mix, its own fixed seeds.
-	if debug_fix133_nc != "nonear":
-		var nsm: ShaderMaterial = ShaderMaterial.new()
-		var nsh: Shader = Shader.new()
-		nsh.code = BG_VOLUME_STAR_SHADER
-		nsm.shader = nsh
-		nsm.set_shader_parameter("hyper_fade", 0.0)
-		_bg_near_mat = nsm
-		var nquad: QuadMesh = QuadMesh.new()
-		nquad.size = Vector2.ONE
-		nquad.material = nsm
-		var nr_min: float = HYPER_NEAR_RADII[0]
-		for band_idx: int in range(HYPER_NEAR_RADII.size()):
-			var radius: float = HYPER_NEAR_RADII[band_idx]
-			var count: int = int(round(HYPER_NEAR_COUNT_BASE * pow(radius / nr_min, BG_VOLUME_COUNT_GROWTH)))
-			var nmm: MultiMesh = MultiMesh.new()
-			nmm.transform_format = MultiMesh.TRANSFORM_3D
-			nmm.use_colors = true
-			nmm.mesh = nquad
-			nmm.instance_count = count
-			var nrng: RandomNumberGenerator = RandomNumberGenerator.new()
-			nrng.seed = 31337 + band_idx * 104729
-			var angular: float = BG_VOLUME_STAR_DEG
-			var base_size: float = radius * tan(deg_to_rad(angular))
-			for s: int in range(count):
-				var z: float = nrng.randf_range(-1.0, 1.0)
-				var theta: float = nrng.randf() * TAU
-				var ring_r: float = sqrt(maxf(0.0, 1.0 - z * z))
-				var dir: Vector3 = Vector3(ring_r * cos(theta), z, ring_r * sin(theta))
-				var pos: Vector3 = dir * radius
-				var up: Vector3 = Vector3.UP if absf(dir.y) < 0.99 else Vector3.RIGHT
-				var basis: Basis = Basis.looking_at(dir, up).scaled(Vector3.ONE * base_size * BG_VOLUME_POINT_SPREAD * nrng.randf_range(0.75, 1.25))
-				nmm.set_instance_transform(s, Transform3D(basis, pos))
-				var shade: float = nrng.randf_range(0.55, 1.0)
-				var tint_roll: float = nrng.randf()
-				var tint: Color = BG_VOLUME_TINT_NEUTRAL
-				if tint_roll > 0.92:
-					tint = BG_VOLUME_TINT_WARM
-				elif tint_roll > 0.84:
-					tint = BG_VOLUME_TINT_BLUE
-				nmm.set_instance_color(s, Color(tint.r * shade, tint.g * shade, tint.b * shade))
-			var nnode: MultiMeshInstance3D = MultiMeshInstance3D.new()
-			nnode.name = "StarfieldNearBand%d" % band_idx
-			nnode.multimesh = nmm
-			nnode.custom_aabb = AABB(Vector3.ONE * -(radius + 2.0), Vector3.ONE * (radius + 2.0) * 2.0)
-			nnode.position = EYE
-			_bg_root.add_child(nnode)
-			_bg_near_bands.append(nnode)
 
 
 ## The haze a card wears by its column's distance from the
@@ -8422,8 +8250,6 @@ func _refresh_focusables() -> void:
 			_focusables.append(_setup_panel_watcher_btn)
 		if _setup_panel_arrows_btn != null:
 			_focusables.append(_setup_panel_arrows_btn)
-		if _setup_panel_hyper_btn != null:
-			_focusables.append(_setup_panel_hyper_btn)
 		if _setup_panel_back_btn != null:
 			_focusables.append(_setup_panel_back_btn)
 	elif _submit_panel_up:
@@ -8513,7 +8339,7 @@ func _apply_setup_panel_button_dress() -> void:
 			_setup_panel_wovp_paste_btn, _setup_panel_wovp_test_btn,
 			_setup_panel_stars_btn,
 			_setup_panel_ipdb_btn, _setup_panel_back_btn, _setup_panel_watcher_btn,
-			_setup_panel_arrows_btn, _setup_panel_hyper_btn]:
+			_setup_panel_arrows_btn]:
 		if bq == null:
 			continue
 		var lifted: bool = bq == _focused
@@ -8581,8 +8407,6 @@ func _refresh_quad_states() -> void:
 		all.append(_setup_panel_watcher_btn)
 	if _setup_panel_arrows_btn != null:
 		all.append(_setup_panel_arrows_btn)
-	if _setup_panel_hyper_btn != null:
-		all.append(_setup_panel_hyper_btn)
 	if _setup_panel_back_btn != null:
 		all.append(_setup_panel_back_btn)
 	# ROOMSUBMIT: the submit panel's stops take visual
@@ -9450,13 +9274,6 @@ func _activate(quad: ClickableQuad) -> void:
 				set_setup_panel_message("Edge arrows: the wall's edge chevrons will show when a scroll is available - saving..." if _edge_arrows else "Edge arrows: the wall's edge chevrons will stay hidden - saving...")
 				edge_arrows_toggled.emit(_edge_arrows)
 				_update_scroll_arrows()
-				_request_setup_panel_render(true)
-			"setup_setting_hyper_spin":
-				quad.pulse()
-				var modes: Array[String] = PvldsConfig.HYPER_SPIN_MODES
-				_hyper_mode = modes[(modes.find(_hyper_mode) + 1) % modes.size()]
-				set_setup_panel_message("Hyperspace: %s while a table loads - saving..." % HYPER_SPIN_LABELS[_hyper_mode])
-				hyper_spin_changed.emit(_hyper_mode)
 				_request_setup_panel_render(true)
 		return
 	if _submit_panel_up:
@@ -10668,7 +10485,6 @@ func clear_setup_panel() -> void:
 		_setup_panel_ipdb_btn = null
 		_setup_panel_watcher_btn = null
 		_setup_panel_arrows_btn = null
-		_setup_panel_hyper_btn = null
 		_setup_panel_back_btn = null
 		_setup_btn_tex.clear()
 		_setup_btn_home.clear()
@@ -10734,9 +10550,6 @@ func setup_panel_watcher_quad() -> ClickableQuad:
 func setup_panel_arrows_quad() -> ClickableQuad:
 	return _setup_panel_arrows_btn
 
-
-func setup_panel_hyper_quad() -> ClickableQuad:
-	return _setup_panel_hyper_btn
 
 
 ## PINEMHI2 (Part B): the watcher dial's standing value -
@@ -10970,18 +10783,6 @@ func _build_setup_panel() -> void:
 	_setup_panel_arrows_btn.setup("setup_setting_edge_arrows", "", placeholder, Vector2(2.01, 0.17))
 	_setup_panel_arrows_btn.position = Vector3(0.0, -1.05, 0.0)
 	_setup_panel.add_child(_setup_panel_arrows_btn)
-	# The hyperspace row (FIX131): one full-width dial under
-	# the arrows row - HYPERSPACE: CLASSIC/STREAKS/GENTLE
-	# SPIN/FULL SPIN, the STARS dial's terms (the label states
-	# the standing value; a press cycles it in the room at
-	# once and Main persists it via hyper_spin_changed). The
-	# loading warp it tunes replaced the marquee outright -
-	# this dial is where Chris walks the spin attempts from
-	# inside the headset.
-	_setup_panel_hyper_btn = ClickableQuad.new()
-	_setup_panel_hyper_btn.setup("setup_setting_hyper_spin", "", placeholder, Vector2(2.01, 0.17))
-	_setup_panel_hyper_btn.position = Vector3(0.0, -1.26, 0.0)
-	_setup_panel.add_child(_setup_panel_hyper_btn)
 	# ENDGAME (Part B): the panel's buttons wear the machined
 	# dress - their focus read is the bevel-lift (lifted
 	# gradient + a step toward the eye), not the frame, so
@@ -10992,7 +10793,7 @@ func _build_setup_panel() -> void:
 			_setup_panel_wovp_paste_btn, _setup_panel_wovp_test_btn,
 			_setup_panel_stars_btn,
 			_setup_panel_ipdb_btn, _setup_panel_back_btn, _setup_panel_watcher_btn,
-			_setup_panel_arrows_btn, _setup_panel_hyper_btn]:
+			_setup_panel_arrows_btn]:
 		bq.suppress_frame = true
 		_setup_btn_home[bq] = bq.position
 	if _setup_downloader == null:
@@ -11061,7 +10862,6 @@ func _fill_setup_panel_textures(gen: int) -> void:
 		[_setup_panel_back_btn, "BACK", true, Vector2i(672, 116)],
 		[_setup_panel_watcher_btn, "PINEMHI WATCHER: " + ("ON" if _pinemhi_manage_watcher else "OFF"), false, Vector2i(1372, 116)],
 		[_setup_panel_arrows_btn, "EDGE ARROWS: " + ("ON" if _edge_arrows else "OFF"), false, Vector2i(1372, 116)],
-		[_setup_panel_hyper_btn, "HYPERSPACE: " + str(HYPER_SPIN_LABELS[_hyper_mode]), false, Vector2i(1372, 116)],
 	]
 	for lifted_pass: bool in [false, true]:
 		for b: Array in btns:
@@ -11900,7 +11700,7 @@ func _fill_submit_panel_textures(gen: int) -> void:
 func begin_launch(game: GameEntry) -> void:
 	_launching_game_id = game.game_id
 	_failed_game_id = ""
-	_snap_flip_shut() ## the wall freezes for the wait: no card stands turned while the warp engages
+	_snap_flip_shut() ## the wall freezes for the wait: no card stands turned while the table loads
 	_status_note = "Launching %s... controls are locked while the table loads" % game.title
 	for q: ClickableQuad in _panels:
 		q.pick_enabled = false
@@ -11923,15 +11723,12 @@ func begin_launch(game: GameEntry) -> void:
 	# launches, via set_launching just above) - the strip
 	# drops no state.
 	_refresh_banner()
-	# FIX131: the wait's face is the hyperspace warp, and it
-	# engages on EVERY launch, wall or detail. The marquee
-	# it replaces had to skip detail launches - its letters
-	# stood at the wall's settle depth, straight into the
-	# detail panel's shadow (field report, 2026-10-26). The
-	# warp is the sky itself: it occludes nothing, hides
-	# behind nothing, and the detail panel stands in front
-	# of a jumping sky exactly as it should.
-	_engage_hyperspace()
+	# FIX138: the wait's face is the room itself, at rest -
+	# no marquee (abolished FIX131), no warp (abolished here).
+	# The room simply sits: wall standing, starfield drifting
+	# at its standing rate, the banner's note above the only
+	# words. Detail launches wait the same way - the detail
+	# panel stands in front of the resting room.
 
 
 ## VPX died during the load, with the launcher still resident to
@@ -11948,7 +11745,6 @@ func begin_launch(game: GameEntry) -> void:
 ## _failed_game_id is kept as the record the note derives
 ## from, no longer as a texture key.
 func end_launch_failed(game: GameEntry, reason: String) -> void:
-	_release_hyperspace()
 	_launching_game_id = ""
 	_failed_game_id = game.game_id
 	_status_note = "Launch failed: %s - %s" % [game.title, reason]
@@ -11966,125 +11762,9 @@ func end_launch_failed(game: GameEntry, reason: String) -> void:
 	_rebuild_wall()
 
 
-## FIX131: engage the hyperspace warp - begin_launch's call.
-## The amount eases up in _update_hyperspace; the roll starts
-## accruing with it. Nothing is built or torn down: the warp
-## is uniforms on the standing starfield, so engaging is a
-## target flip and the view is never broken.
-func _engage_hyperspace() -> void:
-	_hyper_target = 1.0
-
-
-## FIX131: release the warp - the wait settled without a
-## hand-off (end_launch_failed), or Main's up-cue says the
-## table is genuinely up and the hand-off is a settle away
-## (begin_launch_settle; FIX133 moved that cue to the
-## watchdog's focus-lock stamp). The amount eases home and
-## the wall undims on the same curve; browsing resumes onto
-## a resting field.
-func _release_hyperspace() -> void:
-	_hyper_target = 0.0
-
-
-## Main's settle cue - the table is genuinely up (FIX133:
-## the watchdog's focus-lock stamp, or the runtime under the
-## herding-off / grace paths) and the hand-off follows after
-## the settle beat, so the warp eases out NOW and the player
-## meets the table from a near-resting field instead of
-## mid-jump. Until this lands the warp holds at full - the
-## FIX131 shape eased out on the runtime stamp, seconds
-## before the table stood, and the wait ended in dead air.
-func begin_launch_settle() -> void:
-	_release_hyperspace()
-
-
-## FIX131: the dial's two per-mode numbers, from the one
-## constants block: [streak growth, roll rate in deg/s].
-## CLASSIC is the resting field - both zero, the warp never
-## engages visually even while a wait stands.
-func _hyper_variant_params(mode: String) -> Array:
-	match mode:
-		"streaks":
-			return [HYPER_STREAK_GROWTH, 0.0]
-		"gentle":
-			return [HYPER_STREAK_GROWTH, HYPER_ROLL_GENTLE_DEG_S]
-		"full":
-			return [HYPER_STREAK_GROWTH, HYPER_ROLL_FULL_DEG_S]
-	return [0.0, 0.0]
-
-
-## FIX131: the HYPERSPACE dial's standing value - Main pushes
-## the config's mode in at room entry (the room never holds
-## config), a press on the dial cycles it here and reports
-## (hyper_spin_changed), and Main calls back here if its save
-## failed, so the dial never shows a state the config does
-## not hold. Turning it mid-wait retunes the standing warp at
-## once (the params are read every frame).
-func set_hyper_spin(mode: String) -> void:
-	_hyper_mode = mode if PvldsConfig.HYPER_SPIN_MODES.has(mode) else "gentle"
-	if _setup_panel_up:
-		_request_setup_panel_render(true)
-
-
-func hyper_spin() -> String:
-	return _hyper_mode
-
-
-## FIX131: the warp's standing state - the proofs' read (the
-## shot hook prints it, the smokes judge by it).
-func hyper_state() -> Dictionary:
-	var params: Array = _hyper_variant_params(_hyper_mode)
-	return {
-		"mode": _hyper_mode,
-		"amount": _hyper_amount,
-		"target": _hyper_target,
-		"roll_deg": rad_to_deg(_hyper_roll_rad),
-		"streak_growth": float(params[0]),
-		"roll_rate_deg_s": float(params[1]),
-		"volume_standing": starfield_volume_standing(),
-		"near_standing": not _bg_near_bands.is_empty(),
-	}
-
-
-## Per-frame hyperspace, driven from _process: the amount
-## eases toward its target (in on the launch, out on the
-## settle), the roll accrues at the dial's rate scaled by the
-## amount (so it spins up and down with the warp, never
-## snaps), the wall rides the same eased curve down to
-## HYPER_LOAD_WALL_ALPHA and back, and the three uniforms
-## land on the volume's shared material. At rest the roll
-## wraps to its own equivalent angle - cos/sin never see a
-## stale large value, and the frozen field does not move.
-func _update_hyperspace(delta: float) -> void:
-	if _hyper_target > _hyper_amount:
-		_hyper_amount = minf(_hyper_target, _hyper_amount + delta / HYPER_RAMP_IN_SEC)
-	elif _hyper_target < _hyper_amount:
-		_hyper_amount = maxf(_hyper_target, _hyper_amount - delta / HYPER_RAMP_OUT_SEC)
-	var params: Array = _hyper_variant_params(_hyper_mode)
-	if _hyper_amount > 0.0:
-		_hyper_roll_rad += deg_to_rad(float(params[1])) * _hyper_amount * delta
-	elif _hyper_roll_rad != 0.0:
-		_hyper_roll_rad = fmod(_hyper_roll_rad, TAU)
-	if _bg_volume_mat != null:
-		_bg_volume_mat.set_shader_parameter("hyper_amount", _hyper_amount)
-		_bg_volume_mat.set_shader_parameter("hyper_roll", _hyper_roll_rad)
-		_bg_volume_mat.set_shader_parameter("hyper_streak", float(params[0]))
-	# FIX133: the near volume rides the same three uniforms
-	# in sync with the sky, plus its fade on the amount - it
-	# fades in with the warp and is gone again at rest.
-	if _bg_near_mat != null:
-		_bg_near_mat.set_shader_parameter("hyper_amount", _hyper_amount)
-		_bg_near_mat.set_shader_parameter("hyper_roll", _hyper_roll_rad)
-		_bg_near_mat.set_shader_parameter("hyper_streak", float(params[0]))
-		_bg_near_mat.set_shader_parameter("hyper_fade", _hyper_amount)
-	var fade_e: float = _hyper_amount * _hyper_amount * (3.0 - 2.0 * _hyper_amount)
-	_apply_wall_alpha(lerpf(1.0, HYPER_LOAD_WALL_ALPHA, fade_e))
-
-
-
 ## The wall fade itself: panels, their Launch buttons, the rail,
-## and the banner. Change-guarded - _update_hyperspace calls
-## this every frame of the wait. Each card's fade is multiplied by
+## and the banner. Change-guarded - the haze pass calls this
+## as the centre moves. Each card's fade is multiplied by
 ## its haze (the background stack's fourth layer): the marquee
 ## dims the whole wall, the haze dims the far columns further.
 ## The wall-alpha write counter (the hitchhunt smoke reads
@@ -13101,7 +12781,6 @@ func _process(delta: float) -> void:
 	# moves no focus, activates nothing, and escapes nothing. On
 	# the SETUP placard the press also does nothing: BACK is the
 	# only way off the placard.
-	# The hyperspace warp animates on this same per-frame beat.
 	# Scroll telemetry (observation only): start the witness
 	# on the room's first visible frame, and snapshot the
 	# drum's motion state BEFORE this frame's swing update -
@@ -13109,8 +12788,6 @@ func _process(delta: float) -> void:
 	_telemetry_start_if_needed()
 	var telemetry_motion_was_active: bool = _swing_active or _nc_roll_dir != 0 or absf(_swing_vel) > 0.0001
 	var telemetry_applied_yaw_before: float = _wall.rotation.y if _wall != null else _drum_yaw
-	if _hyper_amount > 0.0 or _hyper_target > 0.0:
-		_update_hyperspace(delta)
 	_update_background(delta) ## the starfield drift (GRADFIX4 item 5d) - its own beat, ungated
 	_rb_update() ## SUBMITPANEL: the submit read-back's poll clock - asks Main for the next board fetch when one falls due
 	if _plates_pending:

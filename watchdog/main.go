@@ -121,7 +121,7 @@ import (
 // session header line alongside the launcher version the
 // contract carries, so a field log names both halves of the
 // pair that produced it.
-const WatchdogVersion = "1.1.26"
+const WatchdogVersion = "1.1.27"
 
 type Contract struct {
 	Version int  `json:"version"`
@@ -201,22 +201,10 @@ type Contract struct {
 	// written before the field existed; the launcher treats 0
 	// as "not yet" and its load cap still bounds the wait.
 	RuntimeSeenUnix int64    `json:"runtime_seen_unix"`
-	// FocusLockedUnix is owned by THIS process (FIX133):
-	// stamped once per session when the launch focus sequence
-	// (focus.go) declares FocusLocked — the player window
-	// itself holding the foreground, verified by read-back
-	// over the dwell. It is the resident launcher's hand-off
-	// cue from 1.1.25 on: the runtime stamp above says the
-	// table's runtime exists, but the load runs seconds past
-	// it, and easing the room's warp out on the runtime left
-	// dead air before the table appeared. The lock is the
-	// strongest "the table is genuinely up" evidence the
-	// path has — the same window-present + foreground facts
-	// the exit detector trusts on the return trip. Absent/0
-	// in contracts written before the field existed; the
-	// launcher treats 0 as "not yet" and its grace and load
-	// cap still bound the wait. Schema stays v2.
-	FocusLockedUnix int64    `json:"focus_locked_unix"`
+	// (focus_locked_unix stood here in 1.1.25–1.1.26: the
+	// focus sequence's lock stamp, written for the launcher's
+	// warp hold. FIX138 removed the field with the warp; the
+	// focus sequence itself is unchanged. Schema stays v2.)
 	LauncherPath    string   `json:"launcher_path"`
 	LauncherArgs    []string `json:"launcher_args"`
 	LauncherPID     int      `json:"launcher_pid"`
@@ -840,17 +828,6 @@ func main() {
 						logf("watchdog: session %d: focus not delivered - the player window holds the foreground, but its thread focus stayed on %s after %d %s", c.SessionID, playerFocusDesc(ws), focusMaxAttempts, attemptsWord)
 					case seqLogLocked:
 						logf("watchdog: session %d: focus locked - the player window (%q) holds the foreground", c.SessionID, sessionFocus.playerClass())
-						// FIX133: the lock is the resident
-						// launcher's hand-off cue — stamp it
-						// into the contract, once per session
-						// (a re-lock after a reopen does not
-						// move the first stamp: the cue fired
-						// when the table first stood up).
-						writeContractMerged(func(mc *Contract) {
-							if mc.FocusLockedUnix == 0 && (mc.SessionState == "loading" || mc.SessionState == "live") {
-								mc.FocusLockedUnix = time.Now().Unix()
-							}
-						})
 					case seqLogUnresolved:
 						logf("watchdog: session %d: focus unresolved - %s", c.SessionID, sessionFocus.reason())
 					case seqLogReopen:
