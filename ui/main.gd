@@ -260,6 +260,15 @@ var _fix135_wait: int = 0 ## FIX135 stages: the standing poll budget, in frames
 var _fix135_reset_done: bool = false ## FIX135 stages: the clean no-weekly-data reset has been re-pushed after the boot fetch settled
 var _fix135_killed: bool = false ## FIX135 stages: the spawned "table" process has been killed so Main's own settle can land
 var _fix135_probe_busy: bool = false ## FIX135 stages: a board_layout_probe run is in flight
+var _fix140_game_id: String = "" ## FIX140 smoke: the double-duty game (mm_109c's owner) - weekly board AND challenge card in one wall
+var _fix140_tourney_reset: bool = false ## FIX140 smoke: the tournament baseline reset has been pushed
+var _fix140_wait_until: int = 0 ## FIX140 smoke: wall-clock hold target (the fix139 timer's own copy)
+var _fix140_phase_deadline: int = 0 ## FIX140 smoke: the settle deadline for the current phase
+var _fix140_board_root: ClickableQuad = null ## FIX140 smoke: the weekly board's panel instance, recorded at first standing (the cycle legs judge identity)
+var _fix140_card_root: ClickableQuad = null ## FIX140 smoke: the challenge card's panel instance, recorded at first standing
+var _fix140_probe_board_root: ClickableQuad = null ## FIX140 smoke: the pool probe's board-mode root (phase 1 mints both modes directly)
+var _fix140_probe_card_root: ClickableQuad = null ## FIX140 smoke: the pool probe's card-mode root
+var _fix140_probe_done: bool = false ## FIX140 smoke: the pool probe legs have run
 var _fix135_probe_tex: Dictionary = {} ## FIX135 stages: row idx -> the probe's fresh render of that row's spec
 var _fix135_grab_name: String = "" ## FIX135 stages: a wall grab waiting for the drum to settle
 var _fix135_grab_settle: int = 0 ## FIX135 stages: consecutive settled frames toward the pending grab
@@ -1156,6 +1165,7 @@ func _ready() -> void:
 	RoomSpecs.backtrim_nc = OS.get_environment("PVLDS_BACKTRIM_NC")
 	RoomSpecs.pinemhi1_nc = OS.get_environment("PVLDS_PINEMHI1_NC")
 	RoomSpecs.fix139_nc = OS.get_environment("PVLDS_FIX139_NC")
+	RoomSpecs.fix140_nc = OS.get_environment("PVLDS_FIX140_NC")
 	# BACKFINE's negative-control seams (PVLDS_BACKFINE_NC=
 	# dateback / ghostbest): the date column returns to the
 	# back's personal rows / a Best section stands for a
@@ -6819,7 +6829,7 @@ func _grad_gf7_census_centre(c: int) -> void:
 		# buttons are minted again and every centre counts
 		# violations here; the verdict leg below is named
 		# "no launch:" so the harness NC fails by name.
-		var nodes7: Dictionary = _room._panel_pool.get(g.game_id, {}) as Dictionary
+		var nodes7: Dictionary = _room.pool_nodes(g.game_id, "card")
 		var back_holder: Node3D = nodes7.get("back") as Node3D if not nodes7.is_empty() else null
 		var vis_count: int = (1 if front != null and front.visible else 0) + (1 if back != null and back_holder != null and back_holder.visible else 0)
 		if front != null or back != null or vis_count != 0:
@@ -20730,6 +20740,10 @@ func _drive_pinemhi2_smoke() -> void:
 			# The challenge door alone, in its own short
 			# boot (see _drive_pinemhi2_fix139c).
 			_pinemhi2_smoke_deadline_msec = Time.get_ticks_msec() + 300000
+		if mode == "fix140":
+			# Two launches with settles plus a rebuild
+			# cycle: the fix139 round's budget.
+			_pinemhi2_smoke_deadline_msec = Time.get_ticks_msec() + 600000
 		_pinemhi2_smoke_phase = 1
 	_pinemhi2_smoke_wait += 1
 	if Time.get_ticks_msec() > _pinemhi2_smoke_deadline_msec:
@@ -20768,6 +20782,8 @@ func _drive_pinemhi2_smoke() -> void:
 			_drive_pinemhi2_fix139()
 		"fix139c":
 			_drive_pinemhi2_fix139c()
+		"fix140":
+			_drive_pinemhi2_fix140()
 
 
 func _pinemhi2_expect(cond: bool, label: String) -> void:
@@ -21720,6 +21736,290 @@ func _drive_pinemhi2_fix139c() -> void:
 				_finish_pinemhi2_smoke()
 
 
+func _fix140_hold(msec: int) -> void:
+	_fix140_wait_until = Time.get_ticks_msec() + msec
+
+
+func _fix140_held() -> bool:
+	return Time.get_ticks_msec() >= _fix140_wait_until
+
+
+func _fix140_grab(name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_FIX140_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	var path: String = dir.path_join(name + ".png")
+	var err: Error = img.save_png(path)
+	print("PVLDS FIX140 GRAB: ", path, " err=", err, " size=", img.get_size())
+
+
+## FIX140 smoke (PVLDS_PINEMHI2_MODE=fix140): the double-duty
+## fixture - Medieval Madness stands in ONE tournament wall as
+## BOTH the "main" weekly board (board mode, seated on its
+## library entry since FIX134) AND the beta WoVP challenge
+## card (card mode, armed with MM's own game id - the exact
+## shape FIX139's phase 12 dodged by arming beta with the
+## other library game). The legs: the fixture is truly
+## double-duty; the two panels are separate instances, both
+## standing; the pool holds one entry per mode, each at its
+## own seat; each renders its own content; a real A-press
+## launches from EACH panel, the FIX139 LOADING marker stands
+## on the pressed panel itself, and the other panel survives
+## the wait; a contests re-push + centre travel cycle
+## re-seats the SAME two instances. Under the NC
+## (PVLDS_FIX140_NC=sharedroot) the pool is one set per game
+## again and the standing legs fail by name.
+func _drive_pinemhi2_fix140() -> void:
+	match _pinemhi2_smoke_phase:
+		1:
+			if _room != null and _room.visible and _room.wall_ready:
+				var owners: Array[String] = _db.rom_owners("mm_109c")
+				_pinemhi2_expect(owners.size() == 1, "fix140: the letter db resolves mm_109c to exactly one library game (got %d)" % owners.size())
+				if owners.size() != 1:
+					_finish_pinemhi2_smoke()
+					return
+				_fix140_game_id = owners[0]
+				# The pool probe: mint BOTH modes for the
+				# game directly, before any wall seats
+				# them. Under the fix each mode keeps its
+				# own set; under the NC the card mint frees
+				# the board set (queue_free - the validity
+				# legs run after the flush, in phase 2).
+				var pidx: int = _fix139_panel_idx_of(_fix140_game_id)
+				_pinemhi2_expect(pidx >= 0, "fix140 pool: the Medieval Madness card stands in the library for the probe")
+				if pidx < 0:
+					_finish_pinemhi2_smoke()
+					return
+				var pgame: GameEntry = _room._visible_games[pidx] as GameEntry
+				var pboard: Dictionary = _room._pool_card(pgame, "board")
+				var pcard: Dictionary = _room._pool_card(pgame, "card")
+				_fix140_probe_board_root = pboard.get("root") as ClickableQuad
+				_fix140_probe_card_root = pcard.get("root") as ClickableQuad
+				# The fetch-identity leg judges NOW, in the
+				# mint's own tick: under the NC the shared
+				# key already serves the card set for the
+				# board fetch, so the conviction is on the
+				# record before the freed root can take
+				# the process down (the NC frees the
+				# standing library card - the room's frame
+				# machinery may kill the boot during the
+				# hold below; the name lands first).
+				_pinemhi2_expect((_room.pool_nodes(_fix140_game_id, "board").get("root") as ClickableQuad) == _fix140_probe_board_root
+					and (_room.pool_nodes(_fix140_game_id, "card").get("root") as ClickableQuad) == _fix140_probe_card_root,
+					"fix140 pool: each mode's fetch returns its own set")
+				_fix140_hold(500)
+				_pinemhi2_smoke_phase = 2
+		2:
+			if not _fix140_probe_done:
+				if not _fix140_held():
+					return
+				_pinemhi2_expect(_fix140_probe_board_root != _fix140_probe_card_root,
+					"fix140 pool: the board and card mints are separate instances")
+				_pinemhi2_expect(is_instance_valid(_fix140_probe_board_root) and is_instance_valid(_fix140_probe_card_root),
+					"fix140 pool: seating the card leaves the board's panel alive - one set per mode")
+				_fix140_probe_done = true
+			if _pinemhi_client != null and _pinemhi_client.is_busy():
+				return
+			# As fix139c: wait for the boot's own weekly
+			# fetch to land before pushing anything.
+			if _pinemhi2_fetched_at == 0 and _pinemhi2_fetch_error == "":
+				return
+			if not _fix140_tourney_reset:
+				# Enter unarmed, THEN arm beta with MM
+				# itself (see fix139c's note on the shot
+				# map: arming after the wovp push keeps the
+				# owned card on its local art).
+				_fix134_enter_room()
+				for ch: WovpChallenge in _wovp_challenges:
+					if ch.challenge_id == "pinemhi2-beta":
+						ch.table_external_id = _fix140_game_id
+				_pinemhi2_expect(_room.tournament_active(), "fix140: the TOURNAMENT stop raises the Tournament Room")
+				_pinemhi2_contests = []
+				_pinemhi2_fetched_at = 0
+				_pinemhi2_live = false
+				_pinemhi2_fetch_error = ""
+				_push_pinemhi2_data()
+				_fix140_tourney_reset = true
+				return
+			_pinemhi2_contests = _fix139_contests()
+			_pinemhi2_fetched_at = int(Time.get_unix_time_from_system())
+			_pinemhi2_live = true
+			_pinemhi2_fetch_error = ""
+			_push_pinemhi2_data()
+			_fix140_phase_deadline = 0
+			_pinemhi2_smoke_phase = 3
+		3:
+			# Let the room go fully quiet first (fills,
+			# warmer, fetcher drained) - a deferred free
+			# from a bad seat lands within a frame or two;
+			# the standing legs judge the settled wall.
+			if _fix140_phase_deadline == 0:
+				_fix140_phase_deadline = Time.get_ticks_msec() + 12000
+			if Time.get_ticks_msec() < _fix140_phase_deadline:
+				return
+			if not _fix134_panels_real():
+				_fix140_phase_deadline = Time.get_ticks_msec() + 12000
+				return
+			var widx: int = _fix134_panel_idx("main")
+			var cidx: int = _fix139_challenge_idx()
+			_pinemhi2_expect(widx >= 0, "fix140: the owned weekly board stands in the room")
+			_pinemhi2_expect(cidx >= 0, "fix140: a launchable challenge card stands in the room")
+			if widx < 0 or cidx < 0:
+				_finish_pinemhi2_smoke()
+				return
+			var rows: Array = _room.tournament_rows()
+			var wgame: GameEntry = (rows[widx] as Dictionary).get("game") as GameEntry
+			var cgame: GameEntry = (rows[cidx] as Dictionary).get("game") as GameEntry
+			_pinemhi2_expect(wgame != null and cgame != null and wgame.game_id == _fix140_game_id and cgame.game_id == _fix140_game_id,
+				"fix140: the fixture is truly double-duty - one game (%s) seats as both the weekly board and the challenge card" % _fix140_game_id)
+			_fix140_board_root = _room._panels[widx]
+			_fix140_card_root = _room._panels[cidx]
+			_pinemhi2_expect(_fix140_board_root != _fix140_card_root,
+				"fix140: the weekly board and the challenge card are separate panel instances")
+			_pinemhi2_expect(is_instance_valid(_fix140_board_root) and _fix140_board_root.is_inside_tree()
+				and is_instance_valid(_fix140_card_root) and _fix140_card_root.is_inside_tree(),
+				"fix140: both panels stand - valid and in the tree after the seat")
+			var bnodes: Dictionary = _room.pool_nodes(_fix140_game_id, "board")
+			var cnodes: Dictionary = _room.pool_nodes(_fix140_game_id, "card")
+			_pinemhi2_expect(not bnodes.is_empty() and not cnodes.is_empty()
+				and (bnodes.get("root") as ClickableQuad) == _fix140_board_root
+				and (cnodes.get("root") as ClickableQuad) == _fix140_card_root,
+				"fix140: the pool holds one entry per mode, each at its own seat")
+			var btex: Texture2D = _fix140_board_root.current_texture()
+			var ctex: Texture2D = _fix140_card_root.current_texture()
+			_pinemhi2_expect(btex != null and btex.get_size() == Vector2(RoomSpecs.board_face_px()),
+				"fix140: the weekly panel renders its own content - the contest board at board size")
+			_pinemhi2_expect(ctex != null and ctex.get_width() > 16 and ctex != btex,
+				"fix140: the challenge panel renders its own content - a real card face, not the board's")
+			_pinemhi2_expect(_fix140_board_root.quad_size() == RoomSpecs.board_panel_size()
+				and _fix140_card_root.quad_size() != RoomSpecs.board_panel_size(),
+				"fix140: each panel wears its own mode's size (board %.2fx%.2f, card %.2fx%.2f)" % [
+					_fix140_board_root.quad_size().x, _fix140_board_root.quad_size().y,
+					_fix140_card_root.quad_size().x, _fix140_card_root.quad_size().y])
+			_pinemhi2_expect(cnodes.get("label") != null and bnodes.get("label") == null,
+				"fix140: the card entry carries its nameplate label; the board entry carries none")
+			_room._set_centre(widx, true)
+			_fix140_hold(900)
+			_pinemhi2_smoke_phase = 4
+		4:
+			if not _fix140_held():
+				return
+			_fix140_grab("weekly_board")
+			var cidx4: int = _fix139_challenge_idx()
+			if cidx4 >= 0:
+				_room._set_centre(cidx4, true)
+			_fix140_hold(900)
+			_pinemhi2_smoke_phase = 5
+		5:
+			if not _fix140_held():
+				return
+			_fix140_grab("challenge_card")
+			_pinemhi2_smoke_phase = 6
+		6:
+			var widx2: int = _fix134_panel_idx("main")
+			if widx2 < 0:
+				_pinemhi2_expect(false, "fix140 weekly: the weekly board left the wall")
+				_finish_pinemhi2_smoke()
+				return
+			_room._set_centre(widx2, true)
+			_room._set_focused(_room._panels[widx2])
+			_room._a_press()
+			_pinemhi2_expect(_room.is_launch_in_wait(), "fix140 weekly: the A-press opens the load wait")
+			_pinemhi2_expect(_launch_game != null and _launch_game.game_id == _fix140_game_id,
+				"fix140 weekly: the launch carries the double-duty game")
+			_pinemhi2_expect(_room.launch_marker_panel(_fix140_game_id) == _fix140_board_root,
+				"fix140 weekly: the LOADING marker stands on the weekly board panel itself")
+			_pinemhi2_expect(is_instance_valid(_fix140_card_root) and _fix140_card_root.is_inside_tree(),
+				"fix140 weekly: the challenge card survives the board's launch wait")
+			_fix140_hold(1500)
+			_pinemhi2_smoke_phase = 7
+		7:
+			if not _fix140_held():
+				return
+			_fix140_grab("weekly_wait")
+			_fix139_kill()
+			_fix140_phase_deadline = Time.get_ticks_msec() + 120000
+			_pinemhi2_smoke_phase = 8
+		8:
+			if not _launch_pending and _room != null and _room._mode == "wall":
+				_pinemhi2_expect(_room.launch_marker_panel(_fix140_game_id) == null,
+					"fix140 weekly: the marker clears when the failed load settles")
+				_pinemhi2_expect(is_instance_valid(_fix140_board_root) and _fix140_board_root.is_inside_tree()
+					and is_instance_valid(_fix140_card_root) and _fix140_card_root.is_inside_tree(),
+					"fix140 weekly: both panels still stand after the settle")
+				_pinemhi2_smoke_phase = 9
+			elif Time.get_ticks_msec() > _fix140_phase_deadline:
+				_pinemhi2_expect(false, "fix140 weekly: the killed launch never settled")
+				_finish_pinemhi2_smoke()
+		9:
+			var cidx2: int = _fix139_challenge_idx()
+			if cidx2 < 0:
+				_pinemhi2_expect(false, "fix140 challenge: the challenge card left the wall")
+				_finish_pinemhi2_smoke()
+				return
+			_room._set_centre(cidx2, true)
+			_room._set_focused(_room._panels[cidx2])
+			_room._a_press()
+			_pinemhi2_expect(_room.is_launch_in_wait(), "fix140 challenge: the A-press opens the load wait")
+			_pinemhi2_expect(_launch_game != null and _launch_game.game_id == _fix140_game_id,
+				"fix140 challenge: the launch carries the double-duty game")
+			_pinemhi2_expect(_room.launch_marker_panel(_fix140_game_id) == _fix140_card_root,
+				"fix140 challenge: the LOADING marker stands on the challenge card itself")
+			_pinemhi2_expect(is_instance_valid(_fix140_board_root) and _fix140_board_root.is_inside_tree(),
+				"fix140 challenge: the weekly board survives the card's launch wait")
+			_fix140_hold(1500)
+			_pinemhi2_smoke_phase = 10
+		10:
+			if not _fix140_held():
+				return
+			_fix140_grab("challenge_wait")
+			_fix139_kill()
+			_fix140_phase_deadline = Time.get_ticks_msec() + 120000
+			_pinemhi2_smoke_phase = 11
+		11:
+			if not _launch_pending and _room != null and _room._mode == "wall":
+				_pinemhi2_expect(_room.launch_marker_panel(_fix140_game_id) == null,
+					"fix140 challenge: the marker clears when the failed load settles")
+				# The cycle: a contests re-push (the wall
+				# rebuilds) plus centre travel end to end.
+				_push_pinemhi2_data()
+				var last: int = _room._visible_games.size() - 1
+				if last > 0:
+					_room._set_centre(last, true)
+					_room._set_centre(0, true)
+				_fix140_phase_deadline = 0
+				_pinemhi2_smoke_phase = 12
+			elif Time.get_ticks_msec() > _fix140_phase_deadline:
+				_pinemhi2_expect(false, "fix140 challenge: the killed launch never settled")
+				_finish_pinemhi2_smoke()
+		12:
+			if _fix140_phase_deadline == 0:
+				_fix140_phase_deadline = Time.get_ticks_msec() + 12000
+			if Time.get_ticks_msec() < _fix140_phase_deadline:
+				return
+			if not _fix134_panels_real():
+				_fix140_phase_deadline = Time.get_ticks_msec() + 12000
+				return
+			var widx3: int = _fix134_panel_idx("main")
+			var cidx3: int = _fix139_challenge_idx()
+			_pinemhi2_expect(widx3 >= 0 and cidx3 >= 0, "fix140 cycle: both seats stand again after the re-push and travel")
+			if widx3 < 0 or cidx3 < 0:
+				_finish_pinemhi2_smoke()
+				return
+			_pinemhi2_expect(_room._panels[widx3] == _fix140_board_root and _room._panels[cidx3] == _fix140_card_root,
+				"fix140 cycle: the SAME two instances re-seat across the rebuild - the pool contract holds")
+			_pinemhi2_expect(is_instance_valid(_fix140_board_root) and _fix140_board_root.is_inside_tree()
+				and is_instance_valid(_fix140_card_root) and _fix140_card_root.is_inside_tree(),
+				"fix140 cycle: both panels stand - valid and in the tree after the cycle")
+			var btex2: Texture2D = _fix140_board_root.current_texture()
+			_pinemhi2_expect(btex2 != null and btex2.get_size() == Vector2(RoomSpecs.board_face_px()),
+				"fix140 cycle: the weekly panel still renders its board after the cycle")
+			_room._set_centre(widx3, true)
+			_fix140_grab("after_cycle")
+			_finish_pinemhi2_smoke()
+
+
 func _fix139_panel_idx_of(game_id: String) -> int:
 	if _room == null:
 		return -1
@@ -22107,7 +22407,10 @@ func _fix135_nodes(idx: int) -> Dictionary:
 	var game: GameEntry = row.get("game", null) as GameEntry
 	if game == null:
 		return {}
-	return _room._panel_pool.get(game.game_id, {}) as Dictionary
+	# FIX140: the row's own mode - a weekly row's panel is the
+	# game's board entry, a challenge row's is its card entry.
+	var mode: String = "board" if str(row.get("kind", "")) in ["state", "pinemhi", "pinemhi_sep"] else "card"
+	return _room.pool_nodes(game.game_id, mode)
 
 
 ## The wall census, run identically on every standing wall

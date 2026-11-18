@@ -1172,6 +1172,7 @@ const BOARD_TEX_MAX_RETRIES: int = 5 ## the blank-face heal's bound per standing
 const BOARD_TEX_RETRY_MS: int = 600 ## the heal's minimum interval between re-renders
 var _launching_game_id: String = "" ## a launch is in its load wait (Main owns it); the wall is frozen meanwhile
 var _launch_marker_surface: String = "wall" ## FIX139: which surface the standing wait launched from - "wall" (the launching panel's LOADING marker stands) or "detail" (the detail's Play quad carries the state instead)
+var _launch_panel_mode: String = "" ## FIX140: the mode of the panel the standing wall launch was pressed on ("board"/"card"), recorded at the press (see _launch_focused_card) - the marker writer keys on it, since one game can now hold a panel per mode; "" = no wall press recorded (the writer falls back to the card)
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
 var _db_warning_active: bool = false ## FIX114: the standing database warning's state (Main drives it from the last landed scan's database kind - see set_db_warning_active)
@@ -1427,7 +1428,7 @@ var _pop_awake: bool = true ## OPTIMIZE standing-cost cut: the pop spring loop r
 var _pop_last_target: ClickableQuad = null ## OPTIMIZE standing-cost cut: the pop target the sleeping loop last settled under
 
 var _drum_yaw: float = 0.0 ## the drum's current yaw, radians (== _swing_to at rest)
-var _panel_pool: Dictionary = {} ## game_id -> {root, launch, frame, plate, label, mode, plate_done}: card nodes built once per library adoption and re-seated per view (a rebuild that freed and rebuilt 300+ cards would tax every letter pick - the pick-latency law)
+var _panel_pool: Dictionary = {} ## (game_id, mode) -> {root, launch, frame, plate, label, mode, plate_done, game_id}: card nodes built once per library adoption and re-seated per view (a rebuild that freed and rebuilt 300+ cards would tax every letter pick - the pick-latency law). FIX140: the key carries the MODE (see _pool_key) - a game standing as both a weekly board and a challenge card holds one node set PER MODE; the pre-fix game_id-only key freed the first mode's root when the second seated.
 var _plates_pending: bool = false ## a rebuild stood new cards: their nameplates re-derive from the labels' live AABBs until every one settles (see _refresh_card_plate)
 var _panel_face_key: Dictionary = {} ## game_id -> the face key its standing texture was filled for ("" = never filled)
 var _panel_window_lo: int = -1 ## the drawn window's first COLUMN (visibility + face fill range), -1 = none yet
@@ -1614,7 +1615,10 @@ func refresh_library() -> void:
 ## The card pool dies with its library: every pooled card node
 ## is freed (they are out of the tree or drum children - either
 ## way queue_free takes them), and the next rebuild mints fresh
-## cards from the new scan's truth.
+## cards from the new scan's truth. FIX140: the sweep walks the
+## pool by entry, so every mode's set for a game is freed
+## exactly once under the (game, mode) keying, as it was under
+## the old game-only keying.
 func _free_panel_pool() -> void:
 	for gid: Variant in _panel_pool.keys():
 		var nodes: Dictionary = _panel_pool[gid] as Dictionary
@@ -3444,14 +3448,17 @@ func _tourney_border_mat(type_code: String, color: Color) -> ShaderMaterial:
 func _apply_tourney_borders() -> void:
 	var map: Dictionary = tourney_border_map()
 	var in_library: bool = not _tournament
-	for gid: Variant in _panel_pool.keys():
-		var nodes: Dictionary = _panel_pool[gid] as Dictionary
+	for key: Variant in _panel_pool.keys():
+		var nodes: Dictionary = _panel_pool[key] as Dictionary
 		if str(nodes.get("mode", "")) != "card":
 			continue
 		var border: MeshInstance3D = nodes.get("border") as MeshInstance3D
 		if border == null:
 			continue
-		var info: Dictionary = map.get(str(gid), {}) as Dictionary
+		# FIX140: the game id rides the entry itself - the
+		# pool key carries the mode now, so the key alone no
+		# longer names the game.
+		var info: Dictionary = map.get(str(nodes.get("game_id", "")), {}) as Dictionary
 		var on: bool = in_library and not info.is_empty()
 		border.visible = on
 		nodes["border_on"] = on
@@ -3470,7 +3477,7 @@ func _apply_tourney_borders() -> void:
 ## read): whether its ring stands, and the colour/type
 ## it was applied with.
 func tourney_border_state(game_id: String) -> Dictionary:
-	var nodes: Dictionary = _panel_pool.get(game_id, {}) as Dictionary
+	var nodes: Dictionary = pool_nodes(game_id, "card")
 	if nodes.is_empty():
 		return {"on": false, "type_code": "", "color": Color(0.0, 0.0, 0.0, 0.0), "has_node": false}
 	var border: MeshInstance3D = nodes.get("border") as MeshInstance3D
@@ -4121,7 +4128,7 @@ func _make_card_nodes(game: GameEntry, mode: String) -> Dictionary:
 	# frame quad (a hair larger, behind) covers its edge.
 	if mode == "card":
 		q.set_frame_size(CARD_FRAME_SIZE)
-	var nodes: Dictionary = {"root": q, "mode": mode}
+	var nodes: Dictionary = {"root": q, "mode": mode, "game_id": game.game_id}
 	var pivot: Node3D = q.flip_pivot()
 	# FIX139: the LOADING marker - a dark plate + the one
 	# word, on the pivot at the surface's bottom band. Minted
@@ -4254,11 +4261,40 @@ func _plinth_nc() -> bool:
 	return OS.get_environment("PVLDS_GF13_NC") == "plinth"
 
 
+## FIX140: the panel pool's one contract. The pool holds one
+## node set per (game, MODE) - a library card and a Tournament
+## board are different panels for the same game_id, and in the
+## Tournament Room they stand SIMULTANEOUSLY (an owned weekly
+## board seats on its library entry - the very game a WoVP
+## challenge card may also seat). Every fetch and mint walks
+## through _pool_key / pool_nodes; no consumer keys the pool
+## by game_id alone. Under the NC seam
+## (PVLDS_FIX140_NC=sharedroot) the key collapses to the bare
+## game_id - the pre-fix shape - and _pool_card's mismatch
+## free returns with it, so the fix140 legs fail by name.
+func _pool_key(game_id: String, mode: String) -> String:
+	if RoomSpecs.fix140_nc == "sharedroot":
+		return game_id
+	return game_id + "|" + mode
+
+
+## One game's pooled nodes for one mode ({} when that mode
+## has none standing). The public face of the pool contract -
+## Main's censuses and smokes read through here too.
+func pool_nodes(game_id: String, mode: String) -> Dictionary:
+	return _panel_pool.get(_pool_key(game_id, mode), {}) as Dictionary
+
+
 ## Get a game's card nodes from the pool, minting them if this
-## view's mode has none (a library card and a Tournament board
-## are different panels for the same game_id across views -
-## the mode tag keeps them honest; a mismatch is freed and
-## re-minted at the right size).
+## mode has none. FIX140: a mode mismatch is no longer a
+## collision to resolve - the other mode's set is a different
+## pool entry, standing at its own seat, and is never freed,
+## re-minted or borrowed here. (The pre-fix body keyed the
+## pool by game_id alone and freed the standing set on a
+## mismatch: a game seated as a weekly board and then as a
+## challenge card lost the board's root under its row -
+## freed-quad errors and a segfault, convicted in FIX139's
+## staging. The NC seam restores that body whole.)
 func _pool_card(game: GameEntry, mode_override: String = "") -> Dictionary:
 	# Since the Tournament redesign, challenge panels are
 	# CARDS (the board stands beside the centred one as
@@ -4274,18 +4310,27 @@ func _pool_card(game: GameEntry, mode_override: String = "") -> Dictionary:
 	var mode: String = mode_override
 	if mode == "":
 		mode = "board" if (_tournament and (game.game_id == "wovp:state" or game.game_id.begins_with("pinemhi:"))) else "card"
-	var nodes: Dictionary = _panel_pool.get(game.game_id, {}) as Dictionary
-	if not nodes.is_empty() and str(nodes.get("mode", "")) != mode:
-		var old_root: ClickableQuad = nodes.get("root") as ClickableQuad
-		if old_root != null and is_instance_valid(old_root):
-			if old_root.get_parent() != null:
-				old_root.get_parent().remove_child(old_root)
-			old_root.queue_free()
-		nodes = {}
-		_panel_face_key.erase(game.game_id)
+	if RoomSpecs.fix140_nc == "sharedroot":
+		# NC (PVLDS_FIX140_NC=sharedroot): the pre-FIX140
+		# pool, verbatim - one set per game_id, a mismatch
+		# freed and re-minted at the new mode's size.
+		var old: Dictionary = _panel_pool.get(game.game_id, {}) as Dictionary
+		if not old.is_empty() and str(old.get("mode", "")) != mode:
+			var old_root: ClickableQuad = old.get("root") as ClickableQuad
+			if old_root != null and is_instance_valid(old_root):
+				if old_root.get_parent() != null:
+					old_root.get_parent().remove_child(old_root)
+				old_root.queue_free()
+			old = {}
+			_panel_face_key.erase(game.game_id)
+		if old.is_empty():
+			old = _make_card_nodes(game, mode)
+			_panel_pool[game.game_id] = old
+		return old
+	var nodes: Dictionary = _panel_pool.get(_pool_key(game.game_id, mode), {}) as Dictionary
 	if nodes.is_empty():
 		nodes = _make_card_nodes(game, mode)
-		_panel_pool[game.game_id] = nodes
+		_panel_pool[_pool_key(game.game_id, mode)] = nodes
 	return nodes
 
 
@@ -4433,7 +4478,11 @@ func _refresh_all_card_plates() -> bool:
 	for idx: int in range(_panels.size()):
 		if idx >= _visible_games.size():
 			break
-		var nodes: Dictionary = _panel_pool.get(_visible_games[idx].game_id, {}) as Dictionary
+		# FIX140: the seat's own mode - a weekly board seat
+		# reads its board entry (which has no plate to
+		# refresh), never the game's card entry.
+		var nodes: Dictionary = pool_nodes(_visible_games[idx].game_id,
+			"board" if _tourn_board_panel_idx(idx) else "card")
 		if not nodes.is_empty() and not _refresh_card_plate(nodes):
 			settled = false
 	return settled
@@ -6032,8 +6081,12 @@ func _nb_sync_footer() -> void:
 func _nb_on_texture_assign(quad: ClickableQuad, old_tex: Texture2D, new_tex: Texture2D) -> void:
 	if quad == null or not _tex_is_real(old_tex) or _tex_is_real(new_tex):
 		return
-	var entry: Dictionary = _panel_pool.get(quad.payload, {}) as Dictionary
-	if entry.is_empty() or str(entry.get("mode", "")) != "card":
+	var entry: Dictionary = pool_nodes(quad.payload, "card")
+	# FIX140: the conviction is about THIS quad - the game's
+	# card entry convicts only when the assigning quad is the
+	# card panel itself (a double-duty game's board quad
+	# shares the payload but is not the card).
+	if entry.is_empty() or entry.get("root") as ClickableQuad != quad:
 		return
 	_nb_face_clear_count += 1
 	_nb_sync_footer()
@@ -7154,8 +7207,8 @@ func _blackface_nc(game: GameEntry) -> bool:
 func _rederive_card_plate(idx: int, game: GameEntry) -> void:
 	if idx < 0 or idx >= _panel_labels.size() or _panel_labels[idx] == null:
 		return
-	var fnodes: Dictionary = _panel_pool.get(game.game_id, {}) as Dictionary
-	if fnodes.is_empty() or str(fnodes.get("mode", "")) != "card":
+	var fnodes: Dictionary = pool_nodes(game.game_id, "card")
+	if fnodes.is_empty():
 		return
 	var fla: AABB = _panel_labels[idx].get_aabb()
 	if fla.size.y <= 0.0:
@@ -9012,8 +9065,11 @@ func _flip_nodes(idx: int) -> Dictionary:
 	if idx < 0 or idx >= _panels.size():
 		return {}
 	var game: GameEntry = _visible_games[idx]
-	var nodes: Dictionary = _panel_pool.get(game.game_id, {}) as Dictionary
-	if nodes.is_empty() or str(nodes.get("mode", "")) != "card":
+	# FIX140: the flip belongs to the CARD panel - fetch its
+	# own entry (a board-mode entry for the same game is a
+	# different panel and has no back to turn).
+	var nodes: Dictionary = pool_nodes(game.game_id, "card")
+	if nodes.is_empty():
 		return {}
 	return nodes
 
@@ -9384,6 +9440,16 @@ func _activate(quad: ClickableQuad) -> void:
 				var build: TableBuild = game2.resolve_default_build(_store)
 				if build != null:
 					quad.pulse()
+					# FIX140: the plinth rides a panel -
+					# record that panel's seat mode for the
+					# marker writer, as _launch_focused_card
+					# does for the A-press. The plinth's root
+					# is the panel quad up its parent chain.
+					var owner: Node = quad
+					while owner != null and not _panels.has(owner as ClickableQuad):
+						owner = owner.get_parent()
+					var oidx: int = _panels.find(owner as ClickableQuad) if owner != null else -1
+					_launch_panel_mode = "board" if (oidx >= 0 and _tourn_board_panel_idx(oidx)) else "card"
 					_selected_game_id = game2.game_id
 					_persist_view()
 					launch_requested.emit(game2, build)
@@ -9428,6 +9494,11 @@ func _launch_focused_card() -> void:
 	var build: TableBuild = game.resolve_default_build(_store)
 	if build == null:
 		return
+	# FIX140: record the pressed seat's mode before the
+	# signal fires - begin_launch's marker writer keys on
+	# it, and with a panel per mode the game alone no longer
+	# names the panel that was pressed.
+	_launch_panel_mode = "board" if _tourn_board_panel_idx(idx) else "card"
 	_selected_game_id = game.game_id
 	_persist_view()
 	launch_requested.emit(game, build)
@@ -11839,13 +11910,23 @@ func _refresh_launch_marker() -> void:
 	var want: String = _launching_game_id if _launch_marker_surface == "wall" else ""
 	if RoomSpecs.fix139_nc == "nomarker":
 		want = ""
-	for gid: Variant in _panel_pool.keys():
-		var nodes: Dictionary = _panel_pool[gid] as Dictionary
+	# FIX140: the marker stands on the LAUNCHED PANEL - the
+	# (game, mode) entry the press was recorded on - not on
+	# whichever entry the game happens to hold. A double-duty
+	# game's other panel keeps its marker down.
+	var want_nodes: Dictionary = {}
+	if want != "":
+		want_nodes = pool_nodes(want, _launch_panel_mode if _launch_panel_mode != "" else "card")
+	var want_root: ClickableQuad = null
+	if not want_nodes.is_empty():
+		want_root = want_nodes.get("root") as ClickableQuad
+	for key: Variant in _panel_pool.keys():
+		var nodes: Dictionary = _panel_pool[key] as Dictionary
 		var plate: MeshInstance3D = nodes.get("loading_plate") as MeshInstance3D
 		var label: Label3D = nodes.get("loading_label") as Label3D
 		if plate == null or label == null:
 			continue
-		var on: bool = want != "" and str(gid) == want
+		var on: bool = want_root != null and (nodes.get("root") as ClickableQuad) == want_root
 		plate.visible = on
 		label.visible = on
 
@@ -11855,11 +11936,11 @@ func _refresh_launch_marker() -> void:
 ## a game_id, "" when none - and one game's marker label, for
 ## the seat and text legs.
 func launch_marker_game_id() -> String:
-	for gid: Variant in _panel_pool.keys():
-		var nodes: Dictionary = _panel_pool[gid] as Dictionary
+	for key: Variant in _panel_pool.keys():
+		var nodes: Dictionary = _panel_pool[key] as Dictionary
 		var label: Label3D = nodes.get("loading_label") as Label3D
 		if label != null and label.visible:
-			return str(gid)
+			return str(nodes.get("game_id", ""))
 	return ""
 
 
@@ -11867,9 +11948,41 @@ func launch_marker_visible_for(game_id: String) -> bool:
 	return game_id != "" and launch_marker_game_id() == game_id
 
 
+## FIX140 query: the panel whose LOADING marker stands for
+## this game (null when none) - the fix140 legs judge WHICH
+## of a double-duty game's two panels carries the receipt.
+func launch_marker_panel(game_id: String) -> ClickableQuad:
+	if game_id == "":
+		return null
+	for key: Variant in _panel_pool.keys():
+		var nodes: Dictionary = _panel_pool[key] as Dictionary
+		if str(nodes.get("game_id", "")) != game_id:
+			continue
+		var label: Label3D = nodes.get("loading_label") as Label3D
+		if label != null and label.visible:
+			return nodes.get("root") as ClickableQuad
+	return null
+
+
 func launch_marker_label(game_id: String) -> Label3D:
-	var nodes: Dictionary = _panel_pool.get(game_id, {}) as Dictionary
-	return nodes.get("loading_label") as Label3D
+	# The standing marker's label first (a double-duty game
+	# holds one per mode; the visible one is the receipt the
+	# legs judge); then the launch mode's entry, then any.
+	var fallback: Label3D = null
+	for key: Variant in _panel_pool.keys():
+		var nodes: Dictionary = _panel_pool[key] as Dictionary
+		if str(nodes.get("game_id", "")) != game_id:
+			continue
+		var label: Label3D = nodes.get("loading_label") as Label3D
+		if label == null:
+			continue
+		if label.visible:
+			return label
+		if str(nodes.get("mode", "")) == (_launch_panel_mode if _launch_panel_mode != "" else "card"):
+			fallback = label
+		elif fallback == null:
+			fallback = label
+	return fallback
 
 
 ## The wall fade itself: panels, their Launch buttons, the rail,
