@@ -761,8 +761,11 @@ static func pinemhi_struck_color(band: Color) -> Color:
 
 ## SCOREMARK: the front mark's one truth - the game holds
 ## at least one of the PLAYER'S OWN PINemHi Personal rows
-## (the same records map the card back reads, joined by the
-## same challenge_key). This bool is the SOLID state of the
+## (the same records map the card back reads). FIX137: the
+## maps are the resolver's views, keyed by the game's own
+## id - the join is the game's identity, never its title
+## shape, so a same-titled sibling's rows can no longer
+## mark this game. This bool is the SOLID state of the
 ## three-state corner (pinemhi_mark_state, below): an
 ## ONLINE Best file alone earns no SOLID mark - it earns
 ## the HOLLOW one, "supported, go set one". The records'
@@ -772,7 +775,7 @@ static func pinemhi_marked(game: GameEntry, personal: Dictionary, best: Dictiona
 	if scoremark_nc == "ghostmark":
 		return true
 	var map: Dictionary = best if scoremark_nc == "bestkey" else personal
-	var rec: Dictionary = map.get(PinemhiScores.challenge_key(game.title), {}) as Dictionary
+	var rec: Dictionary = map.get(game.game_id, {}) as Dictionary
 	return not (rec.get("rows", []) as Array).is_empty()
 
 
@@ -791,10 +794,10 @@ static func pinemhi_marked(game: GameEntry, personal: Dictionary, best: Dictiona
 ##   beats a NOT SUPPORTED marker for the same game - the
 ##   positive proof outranks the marker's word.
 ## - STRUCK needs CERTAINTY of non-support, and STRUCKLIGHT
-##   wires the real source: the unsupported key set Main
-##   pushes (PinemhiScores.load_unsupported_keys_for_config)
-##   - the monitor's own NOT SUPPORTED marker files, joined
-##   stem -> title through the install's romfind name index.
+##   wires the real source: the unsupported set Main pushes
+##   (the struck view of the FIX137 resolved boards) - the
+##   monitor's own NOT SUPPORTED marker files, resolved per
+##   game by ROM stem, the romfind title join as fallback.
 ##   Absence alone never strikes: no marker, no join, or no
 ##   romfind leaves the game UNMARKED, and romfind itself
 ##   (the vpinmame name-conversion table, every rom listed,
@@ -809,11 +812,10 @@ static func pinemhi_mark_state(game: GameEntry, personal: Dictionary, best: Dict
 		return PINEMHI_MARK_SOLID if pinemhi_marked(game, personal, best) else PINEMHI_MARK_NONE
 	if pinemhi_marked(game, personal, best):
 		return PINEMHI_MARK_SOLID
-	var key: String = PinemhiScores.challenge_key(game.title)
-	var best_rec: Dictionary = best.get(key, {}) as Dictionary
+	var best_rec: Dictionary = best.get(game.game_id, {}) as Dictionary
 	if not (best_rec.get("rows", []) as Array).is_empty():
 		return PINEMHI_MARK_HOLLOW
-	if unsupported.has(key):
+	if unsupported.has(game.game_id):
 		return PINEMHI_MARK_STRUCK
 	return PINEMHI_MARK_NONE
 

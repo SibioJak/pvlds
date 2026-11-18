@@ -215,6 +215,7 @@ var _pinemhi2_fetch_error: String = "" ## the last weekly fetch's failure in wor
 var _pinemhi2_player_name: String = "" ## his PINemHi name, derived at push time from his TOP10_Personal files (PinemhiScores.player_name_for_config)
 var _pinemhi_best_notes: Dictionary = {} ## FIX132: the bests resolvers' last-logged notes ({challenge/contest key: line}) - a note is printed when it changes, so every resolution (and every absence, with its reason) is on the record exactly once per change
 var _pinemhi_game_notes: Dictionary = {} ## FIX134: the weekly game resolver's last-logged notes, same discipline as _pinemhi_best_notes (its own map - the keys share the "weekly:" shape but the lines are a different family's verdicts)
+var _pinemhi_library_notes: Dictionary = {} ## FIX137: the library-boards resolver's last-logged notes ({game_id: line}), same discipline - every game PINemHi has evidence on states its road exactly once per change
 var _pinemhi2_shot_map: Dictionary = {} ## FIX135: the standing contests' own shot URLs ({contest id: url}), remembered from the last weekly push - a landed contest shot is recognised by its URL (see _on_shot_arrived), and the warmer's prune keeps these files (see _push_pinemhi2_data)
 var _pinemhi2_probe: bool = false ## --pvlds-pinemhi2-probe: the fetch gate - one real fetch through the app's HTTP path, the per-contest census printed, then quit
 var _smoke_pinemhi2: bool = false ## --pvlds-smoke-pinemhi2: drive the PINEMHI2 contract (env PVLDS_PINEMHI2_MODE: parse|stub|cache|room)
@@ -1152,6 +1153,12 @@ func _ready() -> void:
 	# pre-FIX132 title-key road, so the fix132 legs fail
 	# by name against the field fault's own values.
 	PinemhiScores.debug_nc = OS.get_environment("PVLDS_FIX132_NC")
+	# The FIX137 negative-control seam (PVLDS_FIX137_NC):
+	# "titlejoin" - the library-boards resolver restores
+	# the pre-FIX137 title-key road, so the fix137 legs
+	# fail by name against the field fault's own values.
+	if OS.get_environment("PVLDS_FIX137_NC") != "":
+		PinemhiScores.debug_nc = OS.get_environment("PVLDS_FIX137_NC")
 	# The PINEMHI2 negative-control seam (PVLDS_PINEMHI2_NC):
 	# "golfscore" - the weekly parser reads golf distances
 	# as scores; "stale" - Main's weekly push claims a
@@ -2232,21 +2239,23 @@ func _push_wovp_data() -> void:
 	var bests_res: Dictionary = PinemhiScores.resolve_challenge_bests(_config, _db, _wovp_challenges)
 	_room.set_pinemhi_bests(bests_res.get("bests", {}) as Dictionary)
 	_log_pinemhi_best_notes(bests_res.get("notes", {}) as Dictionary)
-	# PINEMHI1: the full Personal row lists ride the same
-	# push (the card back's read), re-read from the same
-	# install read - fresh files land on the backs, and a
-	# standing back heals under the rows' new stamp.
-	_room.set_pinemhi_rows(PinemhiScores.load_rows_for_config(_config))
-	# BACKFINE: the TOP10_Best row lists ride the same push
-	# (the card back's online-best section), re-read from
-	# the same install read.
-	_room.set_pinemhi_best_rows(PinemhiScores.load_best_rows_for_config(_config))
-	# STRUCKLIGHT: the unsupported title-key set rides the
-	# same push, after the rows/best maps it judges against
-	# (the monitor's NOT SUPPORTED markers, joined through
-	# romfind) - a marker written by a first play of an
-	# unsupported table lands on the next push, no restart.
-	_room.set_pinemhi_unsupported(PinemhiScores.load_unsupported_keys_for_config(_config))
+	# FIX137: the library boards ride the same push through
+	# the ONE door - every library game's personal + online
+	# rows resolved by its db ROMs (PinemhiScores.
+	# resolve_library_boards), the title key as the stated
+	# fallback, the struck evidence resolved with them.
+	# This replaces the three title-keyed pushes (Personal
+	# rows, Best rows, the unsupported set) whose title join
+	# dressed the Dark Knight's card back in the 1991
+	# game's board. Fresh files land on the backs, a
+	# standing back heals under the rows' new stamp, and a
+	# marker written by a first play of an unsupported
+	# table lands on the next push, no restart. Every
+	# resolution is noted; a changed note is logged.
+	var lib_res: Dictionary = PinemhiScores.resolve_library_boards(
+		_config, _db, _scanner.games if _scanner != null else [])
+	_room.set_pinemhi_library_boards(lib_res.get("boards", {}) as Dictionary)
+	_log_pinemhi_library_notes(lib_res.get("notes", {}) as Dictionary)
 	# CARDBACK + BACKTRIM: the IPDB facts ride the same
 	# push, through the one door that carries the stamp
 	# law - a repeat ride of unchanged facts never bumps,
@@ -2396,6 +2405,23 @@ func _log_pinemhi_game_notes(notes: Dictionary) -> void:
 	for k2: Variant in _pinemhi_game_notes.keys():
 		if not notes.has(k2):
 			_pinemhi_game_notes.erase(k2)
+
+
+## FIX137: the library-boards resolver's notes, printed
+## on change like the bests notes - every library game's
+## resolution (the road it took and the value it serves,
+## or the plain absence) is on the record exactly once
+## per change. The resolver only notes games PINemHi has
+## evidence on, so the silent games stay silent.
+func _log_pinemhi_library_notes(notes: Dictionary) -> void:
+	for k: Variant in notes.keys():
+		var line: String = str(notes[k])
+		if str(_pinemhi_library_notes.get(k, "")) != line:
+			_pinemhi_library_notes[k] = line
+			print("PVLDS PINEMHI LIBRARY: ", line)
+	for k2: Variant in _pinemhi_library_notes.keys():
+		if not notes.has(k2):
+			_pinemhi_library_notes.erase(k2)
 
 
 ## FIX132: the db's author-shot URL for one weekly
@@ -20152,7 +20178,7 @@ func _drive_backtrim_smoke() -> void:
 					_bt_fail("the room never came up on the real boot path")
 					_finish_backtrim_smoke()
 		1:
-			_room.set_pinemhi_rows({})
+			_room.set_pinemhi_library_boards({})
 			get_viewport().warp_mouse(Vector2(8.0, 592.0))
 			_bt_phase = 2
 			_bt_wait = 0
@@ -20181,7 +20207,7 @@ func _drive_backtrim_smoke() -> void:
 			_bt_expect((_room._ipdb_facts as Dictionary).has("lkSumsrF"),
 				"the normal push landed: the room still holds the seeded IPDB facts (the facts plumbing stands intact for the marquee)")
 			_bt_stamp = _room._pinemhi_stamp
-			_room.set_pinemhi_rows(_bt_fixture_rows())
+			_room.set_pinemhi_library_boards(_bt_fixture_boards())
 			_bt_phase = 5
 			_bt_wait = 0
 		5:
@@ -20201,8 +20227,8 @@ func _drive_backtrim_smoke() -> void:
 				_finish_backtrim_smoke()
 		6:
 			var key6: String = _room._flip_tex_key
-			_room.set_pinemhi_rows(_bt_fixture_rows())
-			_room.set_pinemhi_rows(_bt_fixture_rows())
+			_room.set_pinemhi_library_boards(_bt_fixture_boards())
+			_room.set_pinemhi_library_boards(_bt_fixture_boards())
 			_bt_expect(_room._pinemhi_stamp == 1 and _room._flip_tex_key == key6,
 				"no churn: repeat pushes of the unchanged rows move neither the stamp (%d) nor the standing back" % _room._pinemhi_stamp)
 			_finish_backtrim_smoke()
@@ -20245,13 +20271,15 @@ func _bt_seat_or_flip(game_id: String) -> bool:
 	return true
 
 
-## The fabricated Beetlejuice row list the heal legs push
-## through the room's own door (the parsed-file shape
-## PinemhiScores.parse_file_rows produces).
-func _bt_fixture_rows() -> Dictionary:
-	return {"beetlejuice": {"title": "Beetlejuice", "rows": [
+## The fabricated Beetlejuice board the heal legs push
+## through the room's own door (FIX137: the resolved-
+## boards shape PinemhiScores.resolve_library_boards
+## produces, keyed by the game's own id - Beetlejuice
+## stands on the fixture wall as 1vJ_ZQYe).
+func _bt_fixture_boards() -> Dictionary:
+	return {"1vJ_ZQYe": {"personal": {"title": "Beetlejuice", "rows": [
 		{"rank": 1, "score_text": "42.424.240", "score": 42424240, "player": "Kubrick", "when": "2026-09-01 20:00:00"},
-	]}}
+	]}, "best": {}, "struck": false}}
 
 
 ## The rows the room's back spec draws for idx - judged
@@ -20660,11 +20688,12 @@ func _drive_scoremark_smoke() -> void:
 			if _sm_judged:
 				# The heal, first push: Indy's first score.
 				var indy: GameEntry = _sm_game("lkSumsrF")
-				var ikey: String = PinemhiScores.challenge_key(indy.title)
-				var pushed: Dictionary = _room._pinemhi_rows.duplicate()
-				pushed[ikey] = {"title": indy.title, "key": ikey, "rows": [
+				var pushed: Dictionary = _room._pinemhi_boards.duplicate()
+				var indy_entry: Dictionary = (pushed.get(indy.game_id, {}) as Dictionary).duplicate()
+				indy_entry["personal"] = {"title": indy.title, "rows": [
 					{"rank": 1, "score": 424242, "score_text": "424,242", "player": "Kubrick", "when": "2026-11-07 10:00:00"}]}
-				_room.set_pinemhi_rows(pushed)
+				pushed[indy.game_id] = indy_entry
+				_room.set_pinemhi_library_boards(pushed)
 				_sm_phase = 4
 				_sm_wait = 0
 			elif _sm_wait > 3600:
@@ -20678,10 +20707,11 @@ func _drive_scoremark_smoke() -> void:
 				_sm_expect(true, "heal: a rows push adding Indiana Jones's first score raised its standing mark to SOLID without a rescan")
 				# The second push: Apollo's rows leave.
 				var apollo: GameEntry = _sm_game("dhgyex0l")
-				var akey: String = PinemhiScores.challenge_key(apollo.title)
-				var pushed2: Dictionary = _room._pinemhi_rows.duplicate()
-				pushed2.erase(akey)
-				_room.set_pinemhi_rows(pushed2)
+				var pushed2: Dictionary = _room._pinemhi_boards.duplicate()
+				var apollo_entry: Dictionary = (pushed2.get(apollo.game_id, {}) as Dictionary).duplicate()
+				apollo_entry["personal"] = {}
+				pushed2[apollo.game_id] = apollo_entry
+				_room.set_pinemhi_library_boards(pushed2)
 				_sm_phase = 5
 				_sm_wait = 0
 			elif _sm_wait > 1800:
@@ -21075,6 +21105,10 @@ func _drive_pinemhi2_smoke() -> void:
 			_pinemhi2_run_parse_legs()
 			_finish_pinemhi2_smoke()
 			return
+		if mode == "fix137":
+			_pinemhi2_run_fix137_legs()
+			_finish_pinemhi2_smoke()
+			return
 		_pinemhi2_smoke_phase = 1
 	_pinemhi2_smoke_wait += 1
 	if Time.get_ticks_msec() > _pinemhi2_smoke_deadline_msec:
@@ -21122,6 +21156,135 @@ func _pinemhi2_expect(cond: bool, label: String) -> void:
 func _finish_pinemhi2_smoke() -> void:
 	print("PVLDS PINEMHI2 SMOKE RESULT: ", "PASS" if _pinemhi2_smoke_failures == 0 else "FAIL (%d)" % _pinemhi2_smoke_failures)
 	get_tree().quit(0 if _pinemhi2_smoke_failures == 0 else 1)
+
+
+## FIX137 invariant legs (PVLDS_PINEMHI2_MODE=fix137):
+## the same-title law, judged on the field case itself.
+## The fixture is the FIX132 two-Batman install extended:
+## two db games BOTH named "Batman" (Stern 2008, romFiles
+## bdk_294/bdk_113; Data East 1991, romFiles btmn_106), a
+## third same-title game whose ROMs hold no shelf files,
+## Personal + Best shelves for both real ROMs, and the
+## Sorcerer control. For each game, EVERY surface that
+## prints its personal best must print the value from
+## THAT game's ROM shelf file - the library back (the
+## fix137 resolver + pinemhi_back_spec, the room's own
+## spec), the tournament board's best line (the FIX132
+## challenge road) and the weekly board's best line (the
+## FIX132 weekly road) - and the two Batmans' backs must
+## differ wherever their shelves differ. Under
+## PVLDS_FIX137_NC=titlejoin the resolver restores the
+## pre-FIX137 title join and the Dark Knight legs fail by
+## name against the 1991 game's 23.043.670 - the field
+## fault's own value.
+func _pinemhi2_run_fix137_legs() -> void:
+	var root: String = "user://pinemhi2_fix137"
+	var shelf_p: String = root + "/PINemHi LeaderBoard/TOP10_Personal"
+	var shelf_b: String = root + "/PINemHi LeaderBoard/TOP10_Best"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(shelf_p))
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(shelf_b))
+	_pinemhi2_expect(_write_text_file(shelf_p + "/bdk_294.txt",
+		"PINEMHI ONLINE LEADERBOARD\r\n\r\n<<< Batman: The Dark Knight >>>\r\n\r\n\r\nTOP 10 Personal Best Scores\r\n1   52.656.630      Kubrick  2026-11-17 16:08:05\r\n2   41.000.000      Kubrick  2026-09-01 10:00:00\r\n"),
+		"fix137: the Dark Knight Personal fixture writes")
+	_pinemhi2_expect(_write_text_file(shelf_p + "/btmn_106.txt",
+		"PINEMHI ONLINE LEADERBOARD\r\n\r\n<<< Batman >>>\r\n\r\n\r\nTOP 10 Personal Best Scores\r\n1   23.043.670      Kubrick  2026-05-02 20:00:00\r\n"),
+		"fix137: the 1991 Batman Personal fixture writes")
+	_pinemhi2_expect(_write_text_file(shelf_b + "/bdk_294.txt",
+		"PINEMHI ONLINE LEADERBOARD\r\n\r\n<<< Batman: The Dark Knight >>>\r\n\r\n\r\nTOP 10 Best Scores\r\n1   230.627.510      MAB (VPA Team)  2026-10-01 10:00:00\r\n2   123.776.150      Fer 40 (VPA Team)  2026-10-02 10:00:00\r\n"),
+		"fix137: the Dark Knight Best fixture writes")
+	_pinemhi2_expect(_write_text_file(shelf_b + "/btmn_106.txt",
+		"PINEMHI ONLINE LEADERBOARD\r\n\r\n<<< Batman >>>\r\n\r\n\r\nTOP 10 Best Scores\r\n1   99.999.990      Someone Else  2026-08-01 10:00:00\r\n"),
+		"fix137: the 1991 Batman Best fixture writes")
+	_pinemhi2_expect(_write_text_file(root + "/db.json",
+		"[{\"id\": \"fx-stern-batman\", \"name\": \"Batman\", \"manufacturer\": \"Stern\", \"year\": 2008, \"romFiles\": [{\"version\": \"bdk_294\"}, {\"version\": \"bdk_113\"}], \"tableFiles\": [], \"imgUrl\": \"\"}, {\"id\": \"fx-de-batman\", \"name\": \"Batman\", \"manufacturer\": \"Data East\", \"year\": 1991, \"romFiles\": [{\"version\": \"btmn_106\"}], \"tableFiles\": [], \"imgUrl\": \"\"}, {\"id\": \"fx-phantom-batman\", \"name\": \"Batman\", \"manufacturer\": \"Sega\", \"year\": 1995, \"romFiles\": [{\"version\": \"bret_100\"}], \"tableFiles\": [], \"imgUrl\": \"\"}]"),
+		"fix137: the three-Batman fixture db writes")
+	var folder: String = ProjectSettings.globalize_path(root)
+	var cfg: PvldsConfig = PvldsConfig.new()
+	cfg.pinemhi_enabled = true
+	cfg.pinemhi_folder = folder
+	var db: VpsDatabase = VpsDatabase.new()
+	_pinemhi2_expect(db.load_db(folder.path_join("db.json")), "fix137: the fixture db loads")
+	var mk_game := func(id: String, maker: String, yr: int) -> GameEntry:
+		var g: GameEntry = GameEntry.new()
+		g.game_id = id
+		g.title = "Batman"
+		g.manufacturer = maker
+		g.year = yr
+		return g
+	var stern: GameEntry = mk_game.call("fx-stern-batman", "Stern", 2008)
+	var de: GameEntry = mk_game.call("fx-de-batman", "Data East", 1991)
+	var phantom: GameEntry = mk_game.call("fx-phantom-batman", "Sega", 1995)
+	var res: Dictionary = PinemhiScores.resolve_library_boards(cfg, db, [stern, de, phantom])
+	var boards: Dictionary = res.get("boards", {}) as Dictionary
+	var notes: Dictionary = res.get("notes", {}) as Dictionary
+	_pinemhi2_expect(boards.has("fx-stern-batman") and boards.has("fx-de-batman") and boards.has("fx-phantom-batman"),
+		"fix137: the resolver boards every library game by its own id")
+	_pinemhi2_expect(str(notes.get("fx-stern-batman", "")).contains("via ROM bdk_294"),
+		"fix137: the Dark Knight's resolution note names the ROM road (got '%s')" % str(notes.get("fx-stern-batman", "")))
+	var back_scores := func(g: GameEntry) -> Array:
+		var entry: Dictionary = boards.get(g.game_id, {}) as Dictionary
+		var spec: Dictionary = RoomSpecs.pinemhi_back_spec(g,
+			entry.get("personal", {}) as Dictionary, entry.get("best", {}) as Dictionary)
+		var ss: Array = []
+		for rv: Variant in (spec.get("rows", []) as Array):
+			var rd: Dictionary = rv as Dictionary
+			if str(rd.get("kind", "")) == "score":
+				ss.append(str(rd.get("score_text", "")))
+		return ss
+	var stern_scores: Array = back_scores.call(stern)
+	var de_scores: Array = back_scores.call(de)
+	_pinemhi2_expect(not stern_scores.is_empty() and str(stern_scores[0]) == "52,656,630",
+		"fix137: the Dark Knight's back serves its own ROM shelf's #1 (got %s)" % str(stern_scores))
+	_pinemhi2_expect(not de_scores.is_empty() and str(de_scores[0]) == "23,043,670",
+		"fix137: the 1991 Batman's back serves its own ROM shelf's #1 (got %s)" % str(de_scores))
+	_pinemhi2_expect(stern_scores != de_scores,
+		"fix137: the two Batmans' backs differ wherever their shelves differ")
+	_pinemhi2_expect(stern_scores.has("230,627,510") and not stern_scores.has("99,999,990"),
+		"fix137: the Dark Knight's online section is the Dark Knight ROM's Best shelf, no cross-dressing (got %s)" % str(stern_scores))
+	_pinemhi2_expect(de_scores.has("99,999,990") and not de_scores.has("230,627,510"),
+		"fix137: the 1991 Batman's online section is its own ROM's Best shelf, no cross-dressing (got %s)" % str(de_scores))
+	# The phantom: no shelf files behind its ROMs - the
+	# honest empty state, no mark, and no borrowed board
+	# from its same-titled siblings.
+	var phantom_entry: Dictionary = boards.get("fx-phantom-batman", {}) as Dictionary
+	var phantom_spec: Dictionary = RoomSpecs.pinemhi_back_spec(phantom,
+		phantom_entry.get("personal", {}) as Dictionary, phantom_entry.get("best", {}) as Dictionary)
+	var phantom_scores: Array = back_scores.call(phantom)
+	_pinemhi2_expect(phantom_scores.is_empty() and (phantom_spec.get("rows", []) as Array).size() == 1
+		and str(((phantom_spec.get("rows", []) as Array)[0] as Dictionary).get("text", "")).contains("No PINemHi scores"),
+		"fix137: the shelf-less Batman stands the honest empty state - it borrows no sibling's board")
+	# The marks read the same resolved views the backs do.
+	var pers_view: Dictionary = {}
+	var best_view: Dictionary = {}
+	for gid: Variant in boards.keys():
+		var be: Dictionary = boards[gid] as Dictionary
+		if not (be.get("personal", {}) as Dictionary).is_empty():
+			pers_view[gid] = be.get("personal", {})
+		if not (be.get("best", {}) as Dictionary).is_empty():
+			best_view[gid] = be.get("best", {})
+	_pinemhi2_expect(RoomSpecs.pinemhi_marked(stern, pers_view, best_view) and RoomSpecs.pinemhi_marked(de, pers_view, best_view),
+		"fix137: both Batmans are marked off their own shelves")
+	_pinemhi2_expect(not RoomSpecs.pinemhi_marked(phantom, pers_view, best_view),
+		"fix137: the shelf-less Batman is unmarked - a sibling's rows do not mark it")
+	# Cross-surface agreement: the tournament board's best
+	# line and the weekly board's best line serve the same
+	# Dark Knight value the library back serves - the
+	# agreement the player checked by eye in the field.
+	var ch: WovpChallenge = WovpChallenge.new()
+	ch.challenge_id = "fx137-batman"
+	ch.name = "Batman (Stern 2008)"
+	ch.table_name = "Batman"
+	ch.table_external_id = "fx-stern-batman"
+	var ch_res: Dictionary = PinemhiScores.resolve_challenge_bests(cfg, db, [ch])
+	var ch_best: Dictionary = (ch_res.get("bests", {}) as Dictionary).get("batman", {}) as Dictionary
+	_pinemhi2_expect(int(ch_best.get("score", 0)) == 52656630 and not stern_scores.is_empty() and str(stern_scores[0]) == "52,656,630",
+		"fix137: the tournament road and the library back agree on the Dark Knight (board %s, back %s)" % [str(ch_best.get("score_text", "")), str(stern_scores[0]) if not stern_scores.is_empty() else "<none>"])
+	var contest: Dictionary = {"id": "main", "table": "Batman", "window_start": "2026-11-15 22:00:04", "window_end": "2026-11-22 22:00:04", "pin": "",
+		"rows": [{"pos": 1, "name": "PESARO", "value": 1500410, "value_text": "1.500.410", "rom": "bdk_294", "date": "2026-11-16 10:00:00"}]}
+	var wk_res: Dictionary = PinemhiScores.resolve_weekly_bests(cfg, [contest])
+	var wk_best: Dictionary = (wk_res.get("bests", {}) as Dictionary).get("main", {}) as Dictionary
+	_pinemhi2_expect(str(wk_best.get("score_text", "")) == "52.656.630",
+		"fix137: the weekly road serves the same Dark Knight value (got %s)" % str(wk_best.get("score_text", "")))
 
 
 ## FIX134 smoke (PVLDS_PINEMHI2_MODE=fix134; the stage rides
@@ -32318,8 +32481,9 @@ func _run_core_test() -> void:
 	# rows key it instead and the semantic leg fails by
 	# name; under =ghostmark every game is marked and the
 	# scoreless legs fail by name). The maps key by
-	# challenge_key(title), the backs' own join.
-	var sm_key: String = PinemhiScores.challenge_key(bf_game.title)
+	# game_id (FIX137: the resolver's own keying - the
+	# join is the game's identity, never its title shape).
+	var sm_key: String = bf_game.game_id
 	var sm_pers: Dictionary = {sm_key: bf_rec.call(2, "Kubrick", 1638803870)}
 	var sm_best: Dictionary = {sm_key: bf_rec.call(10, "Online", 2000000000)}
 	_expect(RoomSpecs.pinemhi_marked(bf_game, sm_pers, {}),

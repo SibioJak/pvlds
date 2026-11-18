@@ -460,6 +460,168 @@ static func resolve_weekly_games(db: VpsDatabase, contests: Array) -> Dictionary
 	return {"games": out, "notes": notes}
 
 
+## FIX137: every Personal file's FULL row list under a
+## PINemHi folder, keyed by ROM stem (stem_key of the
+## file's basename): {stem_key: {title, rows, stem}}.
+## The card back's by-ROM read - the shelf files are
+## named by the ROM they score, so this map is the
+## install's own identity index for full row lists,
+## the twin of load_folder_by_stem for best records.
+static func load_folder_rows_by_stem(folder: String) -> Dictionary:
+	return _load_folder_rows_by_stem_from(folder, PERSONAL_DIR)
+
+
+## FIX137: every TOP10_Best file's FULL row list, keyed
+## by ROM stem - the card back's online section read
+## by the same identity.
+static func load_folder_best_rows_by_stem(folder: String) -> Dictionary:
+	return _load_folder_rows_by_stem_from(folder, BEST_DIR)
+
+
+static func _load_folder_rows_by_stem_from(folder: String, shelf: String) -> Dictionary:
+	var out: Dictionary = {}
+	if folder == "":
+		return out
+	var dir_path: String = folder.path_join(LEADERBOARD_DIR).path_join(shelf)
+	var da: DirAccess = DirAccess.open(dir_path)
+	if da == null:
+		return out
+	for file_name: String in da.get_files():
+		if not file_name.to_lower().ends_with(".txt"):
+			continue
+		var rec: Dictionary = parse_file_rows(dir_path.path_join(file_name))
+		if rec.is_empty():
+			continue
+		var key: String = stem_key(str(rec.get("stem", "")))
+		if key != "" and not out.has(key):
+			out[key] = {"title": str(rec.get("title", "")), "rows": rec.get("rows", []),
+				"stem": str(rec.get("stem", ""))}
+	return out
+
+
+## FIX137: the winning full-row record over a set of ROM
+## stems - the stem whose file's #1 row is the highest
+## (a tie goes to the latest #1 date, then to the first
+## stem named): best_for_stems' ordering over row lists,
+## so the back's #1 line and the boards' best line are
+## the same value by construction. {} when no stem has
+## a shelf file - the caller states that reason.
+static func rows_for_stems(stem_rows_map: Dictionary, stems: Array) -> Dictionary:
+	var best: Dictionary = {}
+	for sv: Variant in stems:
+		var rec: Dictionary = stem_rows_map.get(stem_key(str(sv)), {}) as Dictionary
+		var rows: Array = rec.get("rows", []) as Array
+		if rec.is_empty() or rows.is_empty():
+			continue
+		if best.is_empty():
+			best = rec
+			continue
+		var top: Dictionary = rows[0] as Dictionary
+		var btop: Dictionary = (best.get("rows", []) as Array)[0] as Dictionary
+		if int(top.get("score", 0)) > int(btop.get("score", 0)) \
+				or (int(top.get("score", 0)) == int(btop.get("score", 0)) \
+					and str(top.get("when", "")) > str(btop.get("when", ""))):
+			best = rec
+	return best
+
+
+## FIX137: the library boards, resolved - the ONE door
+## every library PINemHi surface reads through (the card
+## backs' personal + online sections, the front corner
+## marks, the detail view's mark). Before this round the
+## backs joined the title-keyed row maps by the game's
+## title shape, so two games sharing a title (the Stern
+## and Data East Batmans) wore ONE board between them -
+## the 1991 game's 23.043.670 stood on the Dark Knight's
+## back while its season card read its own 250.432.010.
+## The resolution is FIX132's, per library game: the db
+## record's own ROM list read from the shelves BY STEM
+## (personal and Best independently), the title key as
+## the stated fallback per shelf, and the struck
+## evidence read from the monitor's marker stems (the
+## romfind title join as its fallback). Returns
+## {boards, notes}: boards maps EVERY game's id to
+## {personal, best, struck} (empty records where PINemHi
+## holds nothing - the honest empty state); a note
+## stands for every game PINemHi has any evidence on,
+## stating the roads taken and the values served, or
+## the plain absence - Main logs the changed ones, so
+## no verdict on this path is ever silent. Under the
+## debug_nc "titlejoin" seam the ROM road is skipped
+## wholesale: the pre-FIX137 title join, so the fix137
+## legs fail by name against the field fault's values.
+static func resolve_library_boards(cfg: PvldsConfig, db: VpsDatabase, games: Array) -> Dictionary:
+	var out: Dictionary = {}
+	var notes: Dictionary = {}
+	var folder: String = resolve_folder(cfg)
+	if folder == "" or games.is_empty():
+		return {"boards": out, "notes": notes}
+	var title_road_only: bool = debug_nc == "titlejoin"
+	var pers_by_stem: Dictionary = load_folder_rows_by_stem(folder)
+	var best_by_stem: Dictionary = load_folder_best_rows_by_stem(folder)
+	var pers_by_title: Dictionary = load_folder_rows(folder)
+	var best_by_title: Dictionary = load_folder_best_rows(folder)
+	var marker_keys: Dictionary = {}
+	for mk: Variant in load_folder_marker_stems(folder).keys():
+		marker_keys[stem_key(str(mk))] = true
+	var unsupported_keys: Dictionary = load_folder_unsupported_keys(folder)
+	for gv: Variant in games:
+		var g: GameEntry = gv as GameEntry
+		if g == null or g.game_id == "":
+			continue
+		var stems: Array = []
+		if db != null and not title_road_only:
+			stems = db.rom_keys_of(g.game_id)
+		var tkey: String = challenge_key(g.title)
+		var personal: Dictionary = {}
+		var personal_road: String = ""
+		var best: Dictionary = {}
+		var best_road: String = ""
+		if not stems.is_empty():
+			personal = rows_for_stems(pers_by_stem, stems)
+			if not personal.is_empty():
+				personal_road = "ROM " + str(personal.get("stem", ""))
+			best = rows_for_stems(best_by_stem, stems)
+			if not best.is_empty():
+				best_road = "ROM " + str(best.get("stem", ""))
+		if personal.is_empty():
+			personal = pers_by_title.get(tkey, {}) as Dictionary
+			if not personal.is_empty():
+				personal_road = "title"
+		if best.is_empty():
+			best = best_by_title.get(tkey, {}) as Dictionary
+			if not best.is_empty():
+				best_road = "title"
+		var struck: bool = false
+		var struck_road: String = ""
+		if not title_road_only:
+			for sv2: Variant in stems:
+				if marker_keys.has(stem_key(str(sv2))):
+					struck = true
+					struck_road = "ROM " + str(sv2)
+					break
+		if not struck and unsupported_keys.has(tkey):
+			struck = true
+			struck_road = "title"
+		out[g.game_id] = {"personal": personal, "best": best, "struck": struck}
+		if personal.is_empty() and best.is_empty() and not struck:
+			continue
+		var why: String = "no db identity" if stems.is_empty() and not title_road_only \
+			else "db ROMs [%s] have no shelf files" % ", ".join(PackedStringArray(stems)) \
+			if not stems.is_empty() else "the titlejoin NC road"
+		var ptxt: String = "no personal rows (%s)" % why if personal.is_empty() else \
+			"personal %s via %s" % [str((personal.get("rows", []) as Array)[0].get("score_text", "")),
+				personal_road if personal_road != "title" else "title key '%s' (%s)" % [tkey, why]]
+		var btxt: String = "no online rows (%s)" % why if best.is_empty() else \
+			"online %s via %s" % [str((best.get("rows", []) as Array)[0].get("score_text", "")),
+				best_road if best_road != "title" else "title key '%s' (%s)" % [tkey, why]]
+		var line: String = "%s (library): %s; %s" % [g.title, ptxt, btxt]
+		if struck:
+			line += "; PINemHi does not support it (marker via %s)" % struck_road
+		notes[g.game_id] = line
+	return {"boards": out, "notes": notes}
+
+
 ## PINEMHI2: the player's own PINemHi name, derived from
 ## his TOP10_Personal files: each file's #1 row is a best
 ## row (load_folder's records ARE the files' best rows),
@@ -537,14 +699,12 @@ static func _load_folder_rows_from(folder: String, shelf: String) -> Dictionary:
 	return out
 
 
-## The config-driven full-row read Main pushes to the room.
-static func load_rows_for_config(cfg: PvldsConfig) -> Dictionary:
-	return load_folder_rows(resolve_folder(cfg))
-
-
-## The config-driven Best read Main pushes to the room.
-static func load_best_rows_for_config(cfg: PvldsConfig) -> Dictionary:
-	return load_folder_best_rows(resolve_folder(cfg))
+## (FIX137: the config-driven full-row reads Main used to
+## push straight to the room - load_rows_for_config /
+## load_best_rows_for_config - are deleted. The room's
+## one door is resolve_library_boards above; these folder
+## loaders survive only as its shelf readers and the
+## title fallback's read.)
 
 
 ## STRUCKLIGHT: the ROM stems PINemHi's monitor has marked
@@ -653,9 +813,10 @@ static func load_folder_unsupported_keys(folder: String) -> Dictionary:
 	return out
 
 
-## The config-driven unsupported read Main pushes to the room.
-static func load_unsupported_keys_for_config(cfg: PvldsConfig) -> Dictionary:
-	return load_folder_unsupported_keys(resolve_folder(cfg))
+## (FIX137: the config-driven unsupported read Main used
+## to push straight to the room is deleted with the other
+## title-keyed pushes - the struck evidence reaches the
+## room resolved per game, inside resolve_library_boards.)
 
 
 ## The SETUP surfaces' standing line, in plain words.

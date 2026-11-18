@@ -1470,10 +1470,11 @@ var _wovp_challenges: Array = [] ## the last-good boards (Array of WovpChallenge
 var _pinemhi_bests: Dictionary = {} ## NEXTROUND (item 4): PINemHi personal bests by PinemhiScores title key, pushed by Main (set_pinemhi_bests); a challenge whose title keys into this map gets the subordinate best line on its standing board
 var _ipdb_facts: Dictionary = {} ## CARDBACK: the IPDB cache's facts by game id, pushed by Main (set_ipdb_facts); PINEMHI1: the loading marquee reads ONLY this map - the flip path never fetches
 var _ipdb_stamp: int = 0 ## CARDBACK: Main's cache stamp (the facts' name; the marquee reads live at raise, so no render key rides it since PINEMHI1)
-var _pinemhi_rows: Dictionary = {} ## PINEMHI1: PINemHi Personal full row lists by PinemhiScores title key, pushed by Main (set_pinemhi_rows); the card back renders these
-var _pinemhi_best_rows: Dictionary = {} ## BACKFINE: PINemHi TOP10_Best full row lists by the same title key, pushed by Main (set_pinemhi_best_rows); the card back's online-best section renders these
-var _pinemhi_unsupported: Dictionary = {} ## STRUCKLIGHT: the unsupported title-key set (PINemHi's own NOT SUPPORTED markers, joined through romfind), pushed by Main (set_pinemhi_unsupported); the front corner's STRUCK state reads it
-var _pinemhi_stamp: int = 0 ## PINEMHI1: the rows' name - bumped by set_pinemhi_rows when the pushed rows differ; it rides _card_back_key so a standing back heals under its new key
+var _pinemhi_boards: Dictionary = {} ## FIX137: the resolved library boards Main pushes through the ONE door (set_pinemhi_library_boards): {game_id: {personal, best, struck}} - PinemhiScores.resolve_library_boards read each game's shelves by its db ROMs, title key as the stated fallback
+var _pinemhi_rows: Dictionary = {} ## PINEMHI1: PINemHi Personal full row lists by game_id (the personal view of _pinemhi_boards, split out by the setter); the card back renders these
+var _pinemhi_best_rows: Dictionary = {} ## BACKFINE: PINemHi TOP10_Best full row lists by game_id (the online view of _pinemhi_boards); the card back's online-best section renders these
+var _pinemhi_unsupported: Dictionary = {} ## STRUCKLIGHT: the unsupported game_id set (the struck view of _pinemhi_boards - PINemHi's own NOT SUPPORTED markers, resolved per game by ROM stem, romfind title join as fallback); the front corner's STRUCK state reads it
+var _pinemhi_stamp: int = 0 ## PINEMHI1: the rows' name - bumped by set_pinemhi_library_boards when the pushed boards' rows differ; it rides _card_back_key so a standing back heals under its new key
 var _wovp_shots_folder: String = "" ## ROOMSUBMIT: the config's screenshots folder, pushed by Main with the boards - the submit panel reads its photos from there
 var _wovp_shot_urls: Dictionary = {} ## FIX124: challenge_id -> the db shot URL Main resolved for that challenge, pushed with the boards - a synthetic unowned entry is BORN wearing its shot URL, so no tournament rebuild (the PINemHi weekly push included) can strip it back to the bare title face
 var _wovp_fetched_at: int = 0 ## unix time the standing boards landed (0 = never)
@@ -2739,13 +2740,14 @@ func _has_pinemhi_score(game: GameEntry) -> bool:
 ## PINEMHI MARKS + STRUCKLIGHT: the corner's three-state
 ## value for one game (RoomSpecs.pinemhi_mark_state carries
 ## the semantics + the honesty rule + the precedence).
-## HOLLOW rides the Best rows Main already pushes for the
-## card backs; STRUCK rides the unsupported key set Main
-## pushes beside them (the monitor's own NOT SUPPORTED
-## markers through the romfind name index). Every front
-## consumer reads this: the specs, the detail hand-off,
-## and the face keys (via _pmh_segment), so a push re-names
-## and re-renders exactly the fronts whose state moved.
+## HOLLOW rides the Best rows Main pushes for the card
+## backs; STRUCK rides the unsupported set from the same
+## resolved push (the monitor's own NOT SUPPORTED markers,
+## resolved per game by ROM stem, romfind join as
+## fallback). Every front consumer reads this: the specs,
+## the detail hand-off, and the face keys (via
+## _pmh_segment), so a push re-names and re-renders
+## exactly the fronts whose state moved.
 func _pinemhi_mark(game: GameEntry) -> int:
 	return RoomSpecs.pinemhi_mark_state(game, _pinemhi_rows, _pinemhi_best_rows, _pinemhi_unsupported)
 
@@ -2771,69 +2773,61 @@ func set_pinemhi_bests(bests: Dictionary) -> void:
 			_render_tournament_board(idx)
 
 
-## PINEMHI1: Main's push of the PINemHi Personal full row
-## lists (the card back's read, sibling to the bests push
-## above). The rows' stamp is their name: when a push
-## carries different rows, the stamp bumps and a back
-## standing open re-renders under its new key - the heal
-## the facts push used to perform for the old tenant,
-## kept for the data the back actually renders. A repeat
-## push of the same rows touches nothing: no churn.
-## Under PVLDS_BACKTRIM_NC=nostamp the stamp never bumps
-## and the heal never runs, so the backtrim legs fail by
-## name against the stale back.
-func set_pinemhi_rows(rows_map: Dictionary) -> void:
-	if rows_map == _pinemhi_rows:
+## FIX137: Main's ONE push of the library PINemHi boards
+## (PinemhiScores.resolve_library_boards - every game's
+## personal + online rows resolved by its db ROMs, the
+## title key as the stated fallback, the struck evidence
+## resolved with them). This setter is the only door the
+## data enters by: it splits the resolved boards into the
+## three standing views (Personal rows, Best rows, the
+## unsupported set - all keyed by game_id now, never by
+## title shape, so two same-titled games can no longer
+## wear one board between them) and applies the standing
+## disciplines the three retired pushes carried:
+## - the rows' stamp is their name: when a push carries
+##   different rows (either shelf), the stamp bumps and a
+##   back standing open re-renders under its new key -
+##   the heal. A repeat push of the same boards touches
+##   nothing: no churn. Under PVLDS_BACKTRIM_NC=nostamp
+##   the stamp never bumps and the heal never runs, so
+##   the backtrim legs fail by name against the stale back.
+## - the same push moves the FRONT marks (a game that
+##   gained its first Personal row, lost its last, gained
+##   a Best record, or gained a NOT SUPPORTED marker
+##   re-names its front through the key's pmh segment),
+##   so any changed view re-asks the standing faces; the
+##   fill's own key check leaves unchanged faces
+##   unrendered, and its state-row guard keeps tournie
+##   boards out of it.
+func set_pinemhi_library_boards(boards: Dictionary) -> void:
+	var rows_map: Dictionary = {}
+	var best_map: Dictionary = {}
+	var unsup_map: Dictionary = {}
+	for gid: Variant in boards.keys():
+		var entry: Dictionary = boards[gid] as Dictionary
+		var personal: Dictionary = entry.get("personal", {}) as Dictionary
+		if not personal.is_empty():
+			rows_map[gid] = personal
+		var best: Dictionary = entry.get("best", {}) as Dictionary
+		if not best.is_empty():
+			best_map[gid] = best
+		if bool(entry.get("struck", false)):
+			unsup_map[gid] = true
+	var rows_changed: bool = rows_map != _pinemhi_rows
+	var best_changed: bool = best_map != _pinemhi_best_rows
+	var unsup_changed: bool = unsup_map != _pinemhi_unsupported
+	if not rows_changed and not best_changed and not unsup_changed:
+		_pinemhi_boards = boards
 		return
+	_pinemhi_boards = boards
 	_pinemhi_rows = rows_map
-	if RoomSpecs.backtrim_nc == "nostamp":
-		return
-	_pinemhi_stamp += 1
-	if _flip_idx >= 0:
-		_flip_key = _card_back_key(_flip_idx)
-		_refresh_card_back()
-	# SCOREMARK: the same push moves the FRONT marks - a
-	# game that gained its first Personal row (or lost its
-	# last) re-names its front through the key's pmh
-	# segment, so re-ask the standing faces; the fill's own
-	# key check leaves unchanged faces unrendered, exactly
-	# the backs' no-churn discipline, and its state-row
-	# guard keeps tournie boards out of it.
-	for idx: int in range(_panels.size()):
-		_fill_one_face(idx, _gen)
-
-
-## BACKFINE: Main's push of the PINemHi TOP10_Best full row
-## lists (the card back's online-best section, sibling to
-## the Personal rows push above). The two maps share the
-## one stamp: the back renders both, so either map changing
-## re-names the back and a standing back heals the same way.
-func set_pinemhi_best_rows(rows_map: Dictionary) -> void:
-	if rows_map == _pinemhi_best_rows:
-		return
-	_pinemhi_best_rows = rows_map
-	if RoomSpecs.backtrim_nc == "nostamp":
-		return
-	_pinemhi_stamp += 1
-	if _flip_idx >= 0:
-		_flip_key = _card_back_key(_flip_idx)
-		_refresh_card_back()
-
-
-## STRUCKLIGHT: Main's push of the unsupported title-key
-## set (the monitor's NOT SUPPORTED markers, joined to
-## titles through the install's romfind name index - the
-## read itself is PinemhiScores'). The set moves FRONT
-## marks only: a game that gains a marker (a first play of
-## an unsupported table wrote one) flips its corner to
-## STRUCK through the key's pmh segment, so - like the
-## rows push - a changed set re-asks the standing faces
-## and the fill's own key check leaves unchanged faces
-## unrendered. A repeat push of the same set is no churn.
-func set_pinemhi_unsupported(keys_map: Dictionary) -> void:
-	if keys_map == _pinemhi_unsupported:
-		return
-	_pinemhi_unsupported = keys_map
+	_pinemhi_best_rows = best_map
+	_pinemhi_unsupported = unsup_map
+	if (rows_changed or best_changed) and RoomSpecs.backtrim_nc != "nostamp":
+		_pinemhi_stamp += 1
+		if _flip_idx >= 0:
+			_flip_key = _card_back_key(_flip_idx)
+			_refresh_card_back()
 	for idx: int in range(_panels.size()):
 		_fill_one_face(idx, _gen)
 
@@ -9110,18 +9104,18 @@ func _card_back_spec(idx: int) -> Dictionary:
 			ch2 = cand
 			break
 	# PINEMHI1: the back's tenant is the game's PINemHi
-	# record (title-joined like the boards' best line,
-	# through challenge_key's normalization). The retired
-	# Spec Sheet wing stands only under the oldgrid NC.
+	# record. FIX137: the maps are keyed by the game's own
+	# id and Main resolved them by the game's ROMs (the
+	# title join that dressed the Dark Knight in the 1991
+	# game's board is gone). The retired Spec Sheet wing
+	# stands only under the oldgrid NC.
 	var spec: Dictionary
 	if RoomSpecs.pinemhi1_nc == "oldgrid":
 		spec = RoomSpecs.wing_spec(game, ch2, _wovp_user_id, now_unix,
 			_ipdb_facts.get(game.game_id, {}) as Dictionary)
 	else:
-		var record: Dictionary = _pinemhi_rows.get(
-			PinemhiScores.challenge_key(game.title), {}) as Dictionary
-		var best_record: Dictionary = _pinemhi_best_rows.get(
-			PinemhiScores.challenge_key(game.title), {}) as Dictionary
+		var record: Dictionary = _pinemhi_rows.get(game.game_id, {}) as Dictionary
+		var best_record: Dictionary = _pinemhi_best_rows.get(game.game_id, {}) as Dictionary
 		if RoomSpecs.backfine_nc == "ghostbest" and best_record.is_empty():
 			# BACKFINE NC seam: a Best section stands for a
 			# game whose install holds NO Best file, so the
