@@ -539,7 +539,15 @@ static func rows_for_stems(stem_rows_map: Dictionary, stems: Array) -> Dictionar
 ## (personal and Best independently), the title key as
 ## the stated fallback per shelf, and the struck
 ## evidence read from the monitor's marker stems (the
-## romfind title join as its fallback). Returns
+## romfind title join as its fallback). One guard the
+## challenge road never needed, stated plainly: the
+## title fallback (and the struck title join) never
+## serves a record whose file stem the db assigns to a
+## DIFFERENT game - that record is the other game's
+## board, and this shelf stands empty instead. The
+## fallback still rescues the db-drift case it exists
+## for: a shelf file whose stem no library game owns.
+## Returns
 ## {boards, notes}: boards maps EVERY game's id to
 ## {personal, best, struck} (empty records where PINemHi
 ## holds nothing - the honest empty state); a note
@@ -559,12 +567,51 @@ static func resolve_library_boards(cfg: PvldsConfig, db: VpsDatabase, games: Arr
 	var title_road_only: bool = debug_nc == "titlejoin"
 	var pers_by_stem: Dictionary = load_folder_rows_by_stem(folder)
 	var best_by_stem: Dictionary = load_folder_best_rows_by_stem(folder)
-	var pers_by_title: Dictionary = load_folder_rows(folder)
-	var best_by_title: Dictionary = load_folder_best_rows(folder)
+	# The title maps the fallback reads, built from the
+	# by-stem maps so every title record still carries the
+	# stem of the file it came from (first file per key
+	# wins, the loaders' discipline) - the cross-game
+	# guard below needs the stem to know whose record a
+	# title hit really is.
+	var pers_by_title: Dictionary = {}
+	for sk: Variant in pers_by_stem.keys():
+		var srec: Dictionary = pers_by_stem[sk] as Dictionary
+		var skey: String = title_key(str(srec.get("title", "")))
+		if skey != "" and not pers_by_title.has(skey):
+			pers_by_title[skey] = srec
+	var best_by_title: Dictionary = {}
+	for sk2: Variant in best_by_stem.keys():
+		var srec2: Dictionary = best_by_stem[sk2] as Dictionary
+		var skey2: String = title_key(str(srec2.get("title", "")))
+		if skey2 != "" and not best_by_title.has(skey2):
+			best_by_title[skey2] = srec2
+	# Every stem the db assigns to any library game, and
+	# its owner - the fallback's cross-game guard: a title
+	# record whose file stem belongs to a DIFFERENT game
+	# is that game's board, and is never served across.
+	var stem_owner: Dictionary = {}
+	if db != null and not title_road_only:
+		for gv0: Variant in games:
+			var g0: GameEntry = gv0 as GameEntry
+			if g0 == null or g0.game_id == "":
+				continue
+			for rk: Variant in db.rom_keys_of(g0.game_id):
+				if not stem_owner.has(str(rk)):
+					stem_owner[str(rk)] = g0.game_id
 	var marker_keys: Dictionary = {}
 	for mk: Variant in load_folder_marker_stems(folder).keys():
 		marker_keys[stem_key(str(mk))] = true
 	var unsupported_keys: Dictionary = load_folder_unsupported_keys(folder)
+	# The markers with their romfind title keys, for the
+	# struck title road's own cross-game guard: a marker
+	# whose stem belongs to another game strikes THAT
+	# game (by stem), never this one by title shape.
+	var marker_titles: Array = []
+	var romfind_titles: Dictionary = romfind_stem_titles(folder)
+	for mk2: Variant in load_folder_marker_stems(folder).keys():
+		var mtitle: String = str(romfind_titles.get(str(mk2), ""))
+		if mtitle != "":
+			marker_titles.append({"stem": stem_key(str(mk2)), "key": challenge_key(mtitle)})
 	for gv: Variant in games:
 		var g: GameEntry = gv as GameEntry
 		if g == null or g.game_id == "":
@@ -575,8 +622,10 @@ static func resolve_library_boards(cfg: PvldsConfig, db: VpsDatabase, games: Arr
 		var tkey: String = challenge_key(g.title)
 		var personal: Dictionary = {}
 		var personal_road: String = ""
+		var personal_why: String = ""
 		var best: Dictionary = {}
 		var best_road: String = ""
+		var best_why: String = ""
 		if not stems.is_empty():
 			personal = rows_for_stems(pers_by_stem, stems)
 			if not personal.is_empty():
@@ -585,13 +634,23 @@ static func resolve_library_boards(cfg: PvldsConfig, db: VpsDatabase, games: Arr
 			if not best.is_empty():
 				best_road = "ROM " + str(best.get("stem", ""))
 		if personal.is_empty():
-			personal = pers_by_title.get(tkey, {}) as Dictionary
-			if not personal.is_empty():
+			var trec: Dictionary = pers_by_title.get(tkey, {}) as Dictionary
+			var tstem: String = stem_key(str(trec.get("stem", "")))
+			var towner: String = str(stem_owner.get(tstem, ""))
+			if not trec.is_empty() and (title_road_only or towner == "" or towner == g.game_id):
+				personal = trec
 				personal_road = "title"
+			elif not trec.is_empty():
+				personal_why = "db ROMs [%s] have no Personal shelf files; the title record is ROM %s's (another game's)" % [", ".join(PackedStringArray(stems)), str(trec.get("stem", ""))]
 		if best.is_empty():
-			best = best_by_title.get(tkey, {}) as Dictionary
-			if not best.is_empty():
+			var btrec: Dictionary = best_by_title.get(tkey, {}) as Dictionary
+			var btstem: String = stem_key(str(btrec.get("stem", "")))
+			var btowner: String = str(stem_owner.get(btstem, ""))
+			if not btrec.is_empty() and (title_road_only or btowner == "" or btowner == g.game_id):
+				best = btrec
 				best_road = "title"
+			elif not btrec.is_empty():
+				best_why = "db ROMs [%s] have no Best shelf files; the title record is ROM %s's (another game's)" % [", ".join(PackedStringArray(stems)), str(btrec.get("stem", ""))]
 		var struck: bool = false
 		var struck_road: String = ""
 		if not title_road_only:
@@ -600,7 +659,17 @@ static func resolve_library_boards(cfg: PvldsConfig, db: VpsDatabase, games: Arr
 					struck = true
 					struck_road = "ROM " + str(sv2)
 					break
-		if not struck and unsupported_keys.has(tkey):
+			if not struck:
+				for mv: Variant in marker_titles:
+					var md: Dictionary = mv as Dictionary
+					if str(md.get("key", "")) != tkey:
+						continue
+					var mowner: String = str(stem_owner.get(str(md.get("stem", "")), ""))
+					if mowner == "" or mowner == g.game_id:
+						struck = true
+						struck_road = "title"
+						break
+		if not struck and title_road_only and unsupported_keys.has(tkey):
 			struck = true
 			struck_road = "title"
 		out[g.game_id] = {"personal": personal, "best": best, "struck": struck}
@@ -609,10 +678,10 @@ static func resolve_library_boards(cfg: PvldsConfig, db: VpsDatabase, games: Arr
 		var why: String = "no db identity" if stems.is_empty() and not title_road_only \
 			else "db ROMs [%s] have no shelf files" % ", ".join(PackedStringArray(stems)) \
 			if not stems.is_empty() else "the titlejoin NC road"
-		var ptxt: String = "no personal rows (%s)" % why if personal.is_empty() else \
+		var ptxt: String = "no personal rows (%s)" % (personal_why if personal_why != "" else why) if personal.is_empty() else \
 			"personal %s via %s" % [str((personal.get("rows", []) as Array)[0].get("score_text", "")),
 				personal_road if personal_road != "title" else "title key '%s' (%s)" % [tkey, why]]
-		var btxt: String = "no online rows (%s)" % why if best.is_empty() else \
+		var btxt: String = "no online rows (%s)" % (best_why if best_why != "" else why) if best.is_empty() else \
 			"online %s via %s" % [str((best.get("rows", []) as Array)[0].get("score_text", "")),
 				best_road if best_road != "title" else "title key '%s' (%s)" % [tkey, why]]
 		var line: String = "%s (library): %s; %s" % [g.title, ptxt, btxt]
