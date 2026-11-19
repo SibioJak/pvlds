@@ -87,6 +87,15 @@ func startDetachedInDir(path string, args []string, dir string) (int, error) {
 	return pid, nil
 }
 
+// spawnSetsid maps the FIX145 spawn flavour's one
+// platform-free decision (diag.go's spawnDetached) onto the
+// Linux start: the detached flavours are born in their own
+// session (Setsid - startDetached's shape); the console
+// flavour gets no Setsid, so the child stays in the helper's
+// session and process group like a shell's child stays in
+// the shell's.
+func spawnSetsid(detached bool) bool { return detached }
+
 // startDetachedInDirAndWait is the FIX143 spawn mode's leaf:
 // the same detached start as startDetachedInDir, but the
 // caller BLOCKS until the child exits — the helper process
@@ -95,11 +104,20 @@ func startDetachedInDir(path string, args []string, dir string) (int, error) {
 // life by its own child's. onStart, when given, is called
 // with the child's pid immediately after the start lands.
 func startDetachedInDirAndWait(path string, args []string, dir string, onStart func(pid int)) (int, error) {
+	return startSpawnInDirAndWait(path, args, dir, true, onStart)
+}
+
+// startSpawnInDirAndWait is startDetachedInDirAndWait with
+// the FIX145 spawn flavour's creation shape: detached=true
+// is the FIX143 leaf above, byte for byte; detached=false is
+// the console flavour - the same supervised start without
+// Setsid (spawnSetsid).
+func startSpawnInDirAndWait(path string, args []string, dir string, detached bool, onStart func(pid int)) (int, error) {
 	cmd := exec.Command(path, args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: spawnSetsid(detached)}
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
@@ -109,4 +127,30 @@ func startDetachedInDirAndWait(path string, args []string, dir string, onStart f
 	}
 	_ = cmd.Wait() // the exit code is the game's own; the supervision is the service
 	return pid, nil
+}
+
+// processExistsByName reports whether any live process's
+// image base name matches name (case-insensitive, a trailing
+// ".exe" on either side ignored - see b2s_sighting.go), via
+// the /proc exe symlinks - the same source findPIDsByExe
+// reads. The FIX145 B2S server sighting's Linux leaf.
+func processExistsByName(name string) bool {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if _, err := strconv.Atoi(e.Name()); err != nil {
+			continue
+		}
+		link, err := os.Readlink(filepath.Join("/proc", e.Name(), "exe"))
+		if err != nil {
+			continue
+		}
+		link = strings.TrimSuffix(link, " (deleted)")
+		if sameProcessName(filepath.Base(link), name) {
+			return true
+		}
+	}
+	return false
 }

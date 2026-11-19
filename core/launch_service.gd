@@ -150,6 +150,52 @@ static func spawn_pid_path_absolute() -> String:
 	return WatchdogContract.contract_dir_absolute().path_join(SPAWN_PID_FILE_NAME)
 
 
+## FIX145: the diagnostic seam file, beside the contract in
+## the app data folder. A plain-text key=value file
+## (pvlds_diag.txt) the field edits between launches; absent
+## = every seam at its default = 1.1.31 behaviour. The
+## watchdog reads the same file for its herd seam and its
+## log lines; this side reads only the spawn flavour:
+##   spawn=helper   the FIX143 assisted spawn (default)
+##   spawn=console  the assisted spawn, but the helper
+##                  starts the game as a normal child - no
+##                  detach flags (the helper reads the file
+##                  itself for this; see watchdog/diag.go)
+##   spawn=plain    the plain OS.create_process road below
+##                  (1.1.30's shape; no helper involved)
+## Unknown values degrade to the default, never to a broken
+## launch.
+const DIAG_FILE_NAME: String = "pvlds_diag.txt"
+const DIAG_SPAWN_FLAVOURS: Array[String] = ["helper", "console", "plain"]
+
+
+static func diag_file_path_absolute() -> String:
+	return WatchdogContract.contract_dir_absolute().path_join(DIAG_FILE_NAME)
+
+
+## The spawn flavour a seam-file text names. Pure; the
+## fix145 smoke pins it.
+static func parse_diag_spawn(text: String) -> String:
+	for line: String in text.split("\n"):
+		var t: String = line.strip_edges()
+		if t == "" or t.begins_with("#") or not t.contains("="):
+			continue
+		var key: String = t.get_slice("=", 0).strip_edges().to_lower()
+		var value: String = t.get_slice("=", 1).strip_edges().to_lower()
+		if key == "spawn" and DIAG_SPAWN_FLAVOURS.has(value):
+			return value
+	return "helper"
+
+
+## The spawn flavour in force for the next launch: the seam
+## file's word, or the default when there is no file.
+static func diag_spawn_flavour() -> String:
+	var path: String = LaunchService.diag_file_path_absolute()
+	if not FileAccess.file_exists(path):
+		return "helper"
+	return LaunchService.parse_diag_spawn(FileAccess.get_file_as_string(path))
+
+
 ## FIX143: spawn the game so it runs with game_working_dir()
 ## as its working directory. The spawn is assisted by the
 ## watchdog binary's spawn mode (watchdog/spawn_mode.go):
@@ -185,12 +231,32 @@ static func spawn_pid_path_absolute() -> String:
 ## NC seam: PVLDS_FIX143_NC=inherited forces the plain spawn
 ## (the pre-fix shape); the fix143 smoke's cwd leg must fail
 ## by name under it.
+##
+## FIX145: above the fallbacks sits the diag seam
+## (diag_spawn_flavour): spawn=plain takes that same plain
+## road as a first-class flavour - the 1.1.30 control in the
+## B2S diagnosis - and spawn=console rides this helper road
+## with the helper choosing a no-detach creation shape from
+## the same file. Defaults are this FIX143 shape, untouched.
 static func spawn_game(plan: LaunchPlan) -> Dictionary:
 	if OS.get_environment("PVLDS_FIX143_NC") == "inherited":
 		var nc_pid: int = OS.create_process(plan.exe_path, plan.args)
 		if nc_pid < 0:
 			return {"pid": -1, "game_pid": -1, "error": "the spawn returned no pid"}
 		return {"pid": nc_pid, "game_pid": nc_pid, "error": ""}
+	# FIX145: the diag seam's spawn flavour (diag_spawn_
+	# flavour above). "plain" takes the pre-FIX143 road on
+	# purpose - the 1.1.30 control; "helper" and "console"
+	# both ride the assisted spawn, and the helper reads the
+	# same seam file to choose its creation shape.
+	var flavour: String = LaunchService.diag_spawn_flavour()
+	print("PVLDS diag (FIX145): spawn flavour ", flavour)
+	if flavour == "plain":
+		push_warning("PVLDS: diag seam spawn=plain - spawning VPX without the working-directory fix (the 1.1.30 road, on purpose).")
+		var diag_pid: int = OS.create_process(plan.exe_path, plan.args)
+		if diag_pid < 0:
+			return {"pid": -1, "game_pid": -1, "error": "the spawn returned no pid"}
+		return {"pid": diag_pid, "game_pid": diag_pid, "error": ""}
 	var helper: String = LaunchService.resolve_watchdog_path()
 	if helper == "":
 		push_warning("PVLDS: watchdog executable not found; spawning VPX without the working-directory fix (FIX143).")

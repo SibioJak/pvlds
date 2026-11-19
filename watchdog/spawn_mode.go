@@ -86,13 +86,21 @@ func writeSpawnPidFile(pidFile string, pid int) error {
 // return value is the process exit code: 0 when the game was
 // started (and has since exited), 1 when the start failed,
 // 2 on a malformed invocation.
+//
+// FIX145: the creation shape follows the diag seam file
+// (diag.go) read from beside the pid file - the contract's
+// folder, where the launcher's own read of the same file
+// decided to use this helper at all. spawn=console starts
+// the game as a normal child (no detach flags); anything
+// else is the FIX143 detached shape, unchanged.
 func runSpawnMode(args []string) int {
 	dir, pidFile, exe, rest, ok := parseSpawnArgs(args)
 	if !ok {
 		fmt.Fprintln(os.Stderr, "pvlds-spawn: want <working-dir> <pid-file> <exe> [args...]")
 		return 2
 	}
-	_, err := startDetachedInDirAndWait(exe, rest, dir, func(pid int) {
+	detached := spawnDetached(loadDiagSettings(filepath.Dir(pidFile)).Spawn)
+	_, err := startSpawnInDirAndWait(exe, rest, dir, detached, func(pid int) {
 		if werr := writeSpawnPidFile(pidFile, pid); werr != nil {
 			fmt.Fprintf(os.Stderr, "pvlds-spawn: could not write the pid file %s: %v\n", pidFile, werr)
 		}

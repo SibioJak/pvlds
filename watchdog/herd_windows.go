@@ -734,15 +734,21 @@ func deliverPlayerFocus(gamePID int, targetHWND uintptr, rung int, machineryHWND
 		return true, true
 	}
 	fg, _, _ := procGetForegroundWindow.Call()
+	// FIX145 (diag.go): while the herd hold is in force, the
+	// activation-cycle excursions below are suppressed - the
+	// delivery falls through to the plain rung-1 delivery, so
+	// the sequence still delivers focus but nothing takes the
+	// foreground away from the player window and back during
+	// the held window.
 	// Reasserting an already-focused window sends no new activation
 	// transition. The default delivery must actually leave and return
 	// to it: Windows' focus reading can be healthy while VPX's input
 	// remains inactive. Rung 3 uses the same reliable excursion
 	// rather than depending on an optional game machinery window.
-	if fg == targetHWND {
+	if fg == targetHWND && !diagSuppressCycle {
 		return true, cyclePlayerActivation(targetHWND)
 	}
-	if rung == 3 && machineryHWND != 0 && machineryHWND != targetHWND {
+	if rung == 3 && !diagSuppressCycle && machineryHWND != 0 && machineryHWND != targetHWND {
 		var mPID uint32
 		procGetWindowThreadProcID.Call(machineryHWND, uintptr(unsafe.Pointer(&mPID)))
 		if int(mPID) == gamePID {

@@ -28,3 +28,11 @@ func startDetachedInDir(_ string, _ []string, _ string) (int, error) {
 func startDetachedInDirAndWait(_ string, _ []string, _ string, _ func(pid int)) (int, error) {
 	return 0, errors.New("startDetachedInDirAndWait: unsupported platform")
 }
+
+func startSpawnInDirAndWait(_ string, _ []string, _ string, _ bool, _ func(pid int)) (int, error) {
+	return 0, errors.New("startSpawnInDirAndWait: unsupported platform")
+}
+
+// processExistsByName has no leaf off Windows/Linux: no B2S
+// server runs here, so the FIX145 sighting reads absent.
+func processExistsByName(_ string) bool { return false }

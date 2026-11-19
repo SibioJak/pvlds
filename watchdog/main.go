@@ -121,7 +121,7 @@ import (
 // session header line alongside the launcher version the
 // contract carries, so a field log names both halves of the
 // pair that produced it.
-const WatchdogVersion = "1.1.31"
+const WatchdogVersion = "1.1.32"
 
 type Contract struct {
 	Version int  `json:"version"`
@@ -200,7 +200,7 @@ type Contract struct {
 	// resident launcher's hand-off cue. Absent/0 in contracts
 	// written before the field existed; the launcher treats 0
 	// as "not yet" and its load cap still bounds the wait.
-	RuntimeSeenUnix int64    `json:"runtime_seen_unix"`
+	RuntimeSeenUnix int64 `json:"runtime_seen_unix"`
 	// (focus_locked_unix stood here in 1.1.25–1.1.26: the
 	// focus sequence's lock stamp, written for the launcher's
 	// warp hold. FIX138 removed the field with the warp; the
@@ -440,6 +440,13 @@ func main() {
 	// return above never reaches here: a twin owns nothing.)
 	defer closePinemhiWatcher()
 	logf("watchdog: on duty (pid %d), contract %s", os.Getpid(), contractPath)
+	// FIX145: the diag seams in force at this boot, named in
+	// the log so every field launch self-documents (diag.go).
+	// The session header re-reads and re-names them per
+	// session - a field edit between launches lands without
+	// restarting the watchdog.
+	bootDiag := loadDiagSettings(cdir)
+	logf("watchdog: diag (FIX145): spawn=%s, herd=%s - %s", bootDiag.Spawn, bootDiag.Herd, bootDiag.source())
 
 	// The hold watch (hold_logic.go): polls the button on its
 	// own goroutine at 50 ms — the 400 ms main tick would smear
@@ -468,6 +475,12 @@ func main() {
 		pinemhiLatch      pinemhiStartLatch // WATCHERFIX: a failed watcher start logs once per spell, then latches
 		pinemhiRun        pinemhiRunLatch   // APPRUN: once a session makes the watcher wanted, it stays wanted for the whole app run
 		contractGoneCount int               // consecutive polls with the contract file missing (the stand-down debounce)
+		sessionDiag       diagSettings      // FIX145: this session's diag seams, re-read at the session header (diag.go)
+		sessionHerdHold   herdHold          // FIX145: this session's herd=held window (diag.go)
+		sessionB2S        b2sSighting       // FIX145: the B2S server process sighting (b2s_sighting.go)
+		holdLogSession    int               // FIX145: the session the hold start/lift lines belong to
+		holdLogActive     bool              // FIX145: the hold state last logged for holdLogSession
+		holdLogLifted     bool              // FIX145: the hold-lift line has been logged for holdLogSession
 	)
 
 	relaunch := func(c *Contract, why string) {
@@ -636,7 +649,51 @@ func main() {
 					} else if c.FocusHerding && actuationRung != 1 {
 						logf("watchdog: session %d: focus actuation: rung %d", c.SessionID, actuationRung)
 					}
+					// FIX145: the session's diag seams, re-read
+					// at the header so an edit of pvlds_diag.txt
+					// between launches takes effect on THIS
+					// session, and named in the log so the
+					// launch self-documents (diag.go). The
+					// session's herd-hold window starts here.
+					sessionDiag = loadDiagSettings(cdir)
+					sessionHerdHold.noteSession(c.SessionID)
+					logf("watchdog: session %d: diag (FIX145): spawn=%s, herd=%s - %s", c.SessionID, sessionDiag.Spawn, sessionDiag.Herd, sessionDiag.source())
 				}
+				// FIX145: the B2S server process sighting
+				// (b2s_sighting.go) - on the inventory tick's
+				// cadence, logged only when the fact changes:
+				// did B2SBackglassServerEXE ever exist during
+				// this session, answered by the log itself.
+				b2sPresent := processExistsByName(b2sServerImageName)
+				if sessionB2S.observe(c.SessionID, b2sPresent) {
+					if b2sPresent {
+						logf("watchdog: session %d: b2s server process: present (%s)", c.SessionID, b2sServerImageName)
+					} else {
+						logf("watchdog: session %d: b2s server process: absent", c.SessionID)
+					}
+				}
+				// FIX145: the herd hold (diag.go). While it is
+				// in force, herding does not run (the gate
+				// below) and the focus sequence's deliveries
+				// skip the activation cycle (the word is
+				// published to the leaf before the sequence
+				// ticks). The start and the lift each log
+				// once per session.
+				holdActiveNow := sessionHerdHold.active(sessionDiag, c.SessionID, time.Now().UnixMilli())
+				diagSuppressCycle = holdActiveNow
+				if holdLogSession != c.SessionID {
+					holdLogSession = c.SessionID
+					holdLogActive = false
+					holdLogLifted = false
+				}
+				if holdActiveNow && !holdLogActive {
+					logf("watchdog: session %d: diag: herd held - no focus herding, no activation cycle until 20s after focus lock (FIX145)", c.SessionID)
+				}
+				if !holdActiveNow && holdLogActive && !holdLogLifted {
+					holdLogLifted = true
+					logf("watchdog: session %d: diag: herd hold lifted - focus lock + 20s; herding and the activation cycle are live again (FIX145)", c.SessionID)
+				}
+				holdLogActive = holdActiveNow
 				// Target bookkeeping (FIX116 logging): the
 				// resolved player target (target.go) is logged
 				// when it appears, changes, or is lost, with
@@ -834,6 +891,9 @@ func main() {
 						}
 						logf("watchdog: session %d: focus not delivered - the player window holds the foreground, but its thread focus stayed on %s after %d %s", c.SessionID, playerFocusDesc(ws), focusMaxAttempts, attemptsWord)
 					case seqLogLocked:
+						// FIX145: the lock starts the herd
+						// hold's 20 s tail (diag.go).
+						sessionHerdHold.noteLock(c.SessionID, nowMs)
 						logf("watchdog: session %d: focus locked - the player window (%q) holds the foreground", c.SessionID, sessionFocus.playerClass())
 					case seqLogUnresolved:
 						logf("watchdog: session %d: focus unresolved - %s", c.SessionID, sessionFocus.reason())
@@ -849,7 +909,7 @@ func main() {
 				// mid-play, polluting the exit detector's
 				// signal below. Its assertion target is the
 				// resolved player HWND when one exists.
-				if herdingAllowed(c.FocusHerding, c.SessionState) {
+				if herdingAllowed(c.FocusHerding, c.SessionState) && !holdActiveNow {
 					herdTick(c.GamePID, c.SessionID, time.Now(), ws.playerHWND)
 				}
 				// Foreground-change forensics (fgwatch.go):

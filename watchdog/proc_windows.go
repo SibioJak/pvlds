@@ -173,6 +173,21 @@ func startDetachedInDir(path string, args []string, dir string) (int, error) {
 	return pid, nil
 }
 
+// spawnCreationFlags maps the FIX145 spawn flavour's one
+// platform-free decision (diag.go's spawnDetached) onto the
+// Windows creation flags: the detached flavours are born
+// DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP (no console,
+// own group - the 1.1.31 shape); the console flavour gets NO
+// flags at all, so the child inherits the helper's console
+// and process group like a cmd.exe child inherits the
+// shell's.
+func spawnCreationFlags(detached bool) uint32 {
+	if detached {
+		return detachedProcess | createNewProcessGroup
+	}
+	return 0
+}
+
 // startDetachedInDirAndWait is the FIX143 spawn mode's leaf:
 // the same detached start as startDetachedInDir, but the
 // caller BLOCKS until the child exits — the helper process
@@ -181,12 +196,21 @@ func startDetachedInDir(path string, args []string, dir string) (int, error) {
 // life by its own child's. onStart, when given, is called
 // with the child's pid immediately after the start lands.
 func startDetachedInDirAndWait(path string, args []string, dir string, onStart func(pid int)) (int, error) {
+	return startSpawnInDirAndWait(path, args, dir, true, onStart)
+}
+
+// startSpawnInDirAndWait is startDetachedInDirAndWait with
+// the FIX145 spawn flavour's creation shape: detached=true
+// is the FIX143 leaf above, byte for byte; detached=false is
+// the console flavour - the same supervised start with no
+// detach flags (spawnCreationFlags).
+func startSpawnInDirAndWait(path string, args []string, dir string, detached bool, onStart func(pid int)) (int, error) {
 	cmd := exec.Command(path, args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: detachedProcess | createNewProcessGroup,
+		CreationFlags: spawnCreationFlags(detached),
 		HideWindow:    false,
 	}
 	if err := cmd.Start(); err != nil {
@@ -198,4 +222,31 @@ func startDetachedInDirAndWait(path string, args []string, dir string, onStart f
 	}
 	_ = cmd.Wait() // the exit code is the game's own; the supervision is the service
 	return pid, nil
+}
+
+// processExistsByName reports whether any live process's
+// image base name matches name (case-insensitive, a trailing
+// ".exe" on either side ignored - see b2s_sighting.go), via
+// the Toolhelp snapshot's exe names. The FIX145 B2S server
+// sighting's Windows leaf.
+func processExistsByName(name string) bool {
+	snap, err := syscall.CreateToolhelp32Snapshot(syscall.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return false
+	}
+	defer syscall.CloseHandle(snap)
+	var entry syscall.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	if err := syscall.Process32First(snap, &entry); err != nil {
+		return false
+	}
+	for {
+		if sameProcessName(syscall.UTF16ToString(entry.ExeFile[:]), name) {
+			return true
+		}
+		if err := syscall.Process32Next(snap, &entry); err != nil {
+			break
+		}
+	}
+	return false
 }
