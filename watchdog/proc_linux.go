@@ -86,3 +86,27 @@ func startDetachedInDir(path string, args []string, dir string) (int, error) {
 	go cmd.Wait()
 	return pid, nil
 }
+
+// startDetachedInDirAndWait is the FIX143 spawn mode's leaf:
+// the same detached start as startDetachedInDir, but the
+// caller BLOCKS until the child exits — the helper process
+// supervises the game, living exactly as long as it does, so
+// the launcher (the helper's parent) can judge the game's
+// life by its own child's. onStart, when given, is called
+// with the child's pid immediately after the start lands.
+func startDetachedInDirAndWait(path string, args []string, dir string, onStart func(pid int)) (int, error) {
+	cmd := exec.Command(path, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return 0, err
+	}
+	pid := cmd.Process.Pid
+	if onStart != nil {
+		onStart(pid)
+	}
+	_ = cmd.Wait() // the exit code is the game's own; the supervision is the service
+	return pid, nil
+}

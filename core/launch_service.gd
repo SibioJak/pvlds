@@ -10,7 +10,13 @@ extends RefCounted
 ##               identity, make sure a watchdog is on duty.
 ##   Play        perform_launch() - persist state, write the session
 ##               contract (state "loading"), ensure the watchdog,
-##               spawn VPX detached. The launcher then STAYS RESIDENT
+##               spawn VPX detached THROUGH the watchdog binary's
+##               supervised spawn mode (FIX143: VPX must run with
+##               its own folder as its working directory - Godot's
+##               OS.create_process cannot set a child's, and the
+##               inherited one is FIX142's rank-1 suspect for
+##               script-started B2S dying under our launches).
+##               The launcher then STAYS RESIDENT
 ##               in the room while the table loads (M2 fix round: the
 ##               instant-exit choreography left the player staring
 ##               at a desktop/void for VPX's whole ~20s load; the
@@ -40,6 +46,10 @@ extends RefCounted
 const WATCHDOG_EXE_BASE: String = "LaunchPinWatchdog"
 const WATCHDOG_DEV_EXE_BASE: String = "pvlds_watchdog"
 const WATCHDOG_LOCK_NAME: String = "pvlds_watchdog.lock"
+## FIX143: the watchdog binary's one-shot spawn mode word
+## (watchdog/spawn_mode.go) - argv[1] where a normal run
+## carries the contract path.
+const SPAWN_MODE_ARG: String = "pvlds-spawn"
 
 
 static func watchdog_lock_path_absolute() -> String:
@@ -114,6 +124,101 @@ func spawn_watchdog() -> int:
 		return -1
 	var args: Array[String] = [WatchdogContract.contract_path_absolute()]
 	return OS.create_process(exe, args)
+
+
+## FIX143: the working directory a game spawn must carry -
+## the VPX exe's own folder, the directory a plain VPX launch
+## runs from. Pure; the fix143 smoke asserts the spawned
+## child observes exactly this directory.
+static func game_working_dir(exe_path: String) -> String:
+	return exe_path.get_base_dir()
+
+
+## The pid file the FIX143 spawn helper writes the game's
+## pid into (beside the contract; the helper is told the path
+## on its command line). Deleted before every spawn and read
+## once - it is a per-launch fact, never a standing record.
+const SPAWN_PID_FILE_NAME: String = "pvlds_spawn_pid.txt"
+## How long perform_launch waits for the helper to report
+## the game's pid. A healthy start reports in well under a
+## second; the bound exists so a wedged helper fails the
+## launch in words instead of hanging the Play press.
+const SPAWN_REPORT_TIMEOUT_MSEC: int = 10000
+
+
+static func spawn_pid_path_absolute() -> String:
+	return WatchdogContract.contract_dir_absolute().path_join(SPAWN_PID_FILE_NAME)
+
+
+## FIX143: spawn the game so it runs with game_working_dir()
+## as its working directory. The spawn is assisted by the
+## watchdog binary's spawn mode (watchdog/spawn_mode.go):
+## the same detached-start leaf that starts the PINemHi
+## watcher inside its own folder (WATCHERFIX) starts VPX
+## inside the VPX folder - and the helper then SUPERVISES,
+## living exactly as long as the game does.
+##
+## Why the supervision: Main's load wait judges the load by
+## OS.is_process_running on the pid perform_launch returns,
+## and Godot's is_process_running only believes the
+## launcher's OWN children - a live foreign pid reads dead
+## (bench-convicted in this round: a spawn-and-exit helper
+## left the load wait calling a live VPX dead inside its
+## grace). So this returns TWO pids:
+##   pid       the helper's - a true child of the launcher,
+##             alive exactly while the game is. Main's load
+##             wait reads it, as it read the game's before.
+##   game_pid  the game's own, reported by the helper
+##             through the pid file and polled for here (a
+##             healthy start reports in well under a second).
+##             perform_launch writes it into the contract,
+##             where the resident watchdog's duties aim.
+## A helper that dies without reporting, or never reports,
+## fails the launch with the reason - like the old pid<0.
+##
+## Fallbacks, both loud: no watchdog exe resolves -> the
+## plain OS.create_process spawn (the pre-FIX143 shape, cwd
+## inherited; both pids the game's) with a warning, so a
+## missing helper degrades to yesterday's behaviour instead
+## of a dead Play button.
+##
+## NC seam: PVLDS_FIX143_NC=inherited forces the plain spawn
+## (the pre-fix shape); the fix143 smoke's cwd leg must fail
+## by name under it.
+static func spawn_game(plan: LaunchPlan) -> Dictionary:
+	if OS.get_environment("PVLDS_FIX143_NC") == "inherited":
+		var nc_pid: int = OS.create_process(plan.exe_path, plan.args)
+		if nc_pid < 0:
+			return {"pid": -1, "game_pid": -1, "error": "the spawn returned no pid"}
+		return {"pid": nc_pid, "game_pid": nc_pid, "error": ""}
+	var helper: String = LaunchService.resolve_watchdog_path()
+	if helper == "":
+		push_warning("PVLDS: watchdog executable not found; spawning VPX without the working-directory fix (FIX143).")
+		var plain_pid: int = OS.create_process(plan.exe_path, plan.args)
+		if plain_pid < 0:
+			return {"pid": -1, "game_pid": -1, "error": "the spawn returned no pid"}
+		return {"pid": plain_pid, "game_pid": plain_pid, "error": ""}
+	var pid_path: String = LaunchService.spawn_pid_path_absolute()
+	if FileAccess.file_exists(pid_path):
+		DirAccess.remove_absolute(pid_path)
+	var shim_args: Array[String] = [SPAWN_MODE_ARG, LaunchService.game_working_dir(plan.exe_path), pid_path, plan.exe_path]
+	shim_args.append_array(plan.args)
+	var shim_pid: int = OS.create_process(helper, shim_args)
+	if shim_pid < 0:
+		return {"pid": -1, "game_pid": -1, "error": "the spawn helper could not be started"}
+	var waited: int = 0
+	while waited < SPAWN_REPORT_TIMEOUT_MSEC:
+		if FileAccess.file_exists(pid_path):
+			var game_pid: int = FileAccess.get_file_as_string(pid_path).strip_edges().to_int()
+			if game_pid > 0:
+				DirAccess.remove_absolute(pid_path)
+				return {"pid": shim_pid, "game_pid": game_pid, "error": ""}
+		if not OS.is_process_running(shim_pid):
+			return {"pid": -1, "game_pid": -1, "error": "the spawn helper exited without starting the game"}
+		OS.delay_msec(25)
+		waited += 25
+	OS.kill(shim_pid)
+	return {"pid": -1, "game_pid": -1, "error": "the spawn helper never reported the game's pid"}
 
 
 ## Make sure a watchdog is on duty; returns true when one is running
@@ -208,12 +313,23 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	c.last_checkin_unix = int(Time.get_unix_time_from_system())
 	c.save_to_disk()
 	ensure_watchdog()
-	var pid: int = OS.create_process(plan.exe_path, plan.args)
+	# FIX143: the assisted spawn - VPX runs with its own
+	# folder as its working directory (spawn_game above).
+	# The contract takes the GAME's pid (the watchdog's
+	# duties aim at it); the returned "pid" is the spawn
+	# helper's - the child Main's load wait watches, alive
+	# exactly while the game is.
+	var spawned: Dictionary = LaunchService.spawn_game(plan)
+	var pid: int = int(spawned.get("pid", -1))
 	if pid < 0:
 		c.session_state = "idle"
 		c.save_to_disk()
-		return {"ok": false, "error": "Could not start %s" % plan.exe_path, "plan": plan}
-	c.game_pid = pid
+		var why: String = str(spawned.get("error", ""))
+		var err: String = "Could not start %s" % plan.exe_path
+		if why != "":
+			err += " (%s)" % why
+		return {"ok": false, "error": err, "plan": plan}
+	c.game_pid = int(spawned.get("game_pid", pid))
 	c.save_to_disk()
 	return {"ok": true, "error": "", "plan": plan, "pid": pid, "session_id": c.session_id}
 

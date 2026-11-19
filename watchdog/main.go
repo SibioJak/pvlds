@@ -121,7 +121,7 @@ import (
 // session header line alongside the launcher version the
 // contract carries, so a field log names both halves of the
 // pair that produced it.
-const WatchdogVersion = "1.1.30"
+const WatchdogVersion = "1.1.31"
 
 type Contract struct {
 	Version int  `json:"version"`
@@ -391,6 +391,13 @@ var sessionFocusTracker playerFocusTracker
 var sessionActiveTracker playerActiveTracker
 
 func main() {
+	// FIX143 one-shot spawn mode (spawn_mode.go): decided
+	// before any log/lock/contract setup — a spawn must never
+	// disturb the resident watchdog's duties, and its stdout
+	// belongs to the launcher alone.
+	if len(os.Args) > 1 && os.Args[1] == spawnModeArg {
+		os.Exit(runSpawnMode(os.Args[2:]))
+	}
 	exe, _ := os.Executable()
 	dir := filepath.Dir(exe)
 	contractPath = filepath.Join(dir, "pvlds_watchdog_contract.json")
