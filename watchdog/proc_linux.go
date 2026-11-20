@@ -87,37 +87,36 @@ func startDetachedInDir(path string, args []string, dir string) (int, error) {
 	return pid, nil
 }
 
-// spawnSetsid maps the FIX145 spawn flavour's one
-// platform-free decision (diag.go's spawnDetached) onto the
-// Linux start: the detached flavours are born in their own
-// session (Setsid - startDetached's shape); the console
-// flavour gets no Setsid, so the child stays in the helper's
-// session and process group like a shell's child stays in
-// the shell's.
-func spawnSetsid(detached bool) bool { return detached }
+// gameSpawnSetsid pins the FIX148 game-spawn session shape:
+// the game is NOT born in its own session — no Setsid, the
+// plain birth the FIX147 neutral spawner proved (the child
+// stays in the helper's session and process group, like a
+// shell's child stays in the shell's). Setsid survives only
+// in startDetachedInDir, whose callers (the PINemHi watcher
+// start, the launcher relaunch) are not game spawns and keep
+// their shape. Unit-tested (spawn_mode_test.go).
+func gameSpawnSetsid() bool { return false }
 
-// startDetachedInDirAndWait is the FIX143 spawn mode's leaf:
-// the same detached start as startDetachedInDir, but the
+// startGameInDirAndWait is the spawn mode's leaf (FIX143's
+// supervised shape, FIX148's creation shape): a plain start
+// in the named directory — gameSpawnSetsid, no new session —
+// with env as the child's environment when non-nil (nil
+// keeps the inherited one untouched; the spawn mode passes a
+// scrubbed copy, see scrubGameEnv in spawn_mode.go). The
 // caller BLOCKS until the child exits — the helper process
 // supervises the game, living exactly as long as it does, so
 // the launcher (the helper's parent) can judge the game's
 // life by its own child's. onStart, when given, is called
 // with the child's pid immediately after the start lands.
-func startDetachedInDirAndWait(path string, args []string, dir string, onStart func(pid int)) (int, error) {
-	return startSpawnInDirAndWait(path, args, dir, true, onStart)
-}
-
-// startSpawnInDirAndWait is startDetachedInDirAndWait with
-// the FIX145 spawn flavour's creation shape: detached=true
-// is the FIX143 leaf above, byte for byte; detached=false is
-// the console flavour - the same supervised start without
-// Setsid (spawnSetsid).
-func startSpawnInDirAndWait(path string, args []string, dir string, detached bool, onStart func(pid int)) (int, error) {
+func startGameInDirAndWait(path string, args []string, dir string, env []string, onStart func(pid int)) (int, error) {
 	cmd := exec.Command(path, args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: spawnSetsid(detached)}
+	if env != nil {
+		cmd.Env = env
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: gameSpawnSetsid()}
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}

@@ -173,44 +173,41 @@ func startDetachedInDir(path string, args []string, dir string) (int, error) {
 	return pid, nil
 }
 
-// spawnCreationFlags maps the FIX145 spawn flavour's one
-// platform-free decision (diag.go's spawnDetached) onto the
-// Windows creation flags: the detached flavours are born
-// DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP (no console,
-// own group - the 1.1.31 shape); the console flavour gets NO
-// flags at all, so the child inherits the helper's console
-// and process group like a cmd.exe child inherits the
-// shell's.
-func spawnCreationFlags(detached bool) uint32 {
-	if detached {
-		return detachedProcess | createNewProcessGroup
-	}
+// gameSpawnCreationFlags pins the FIX148 game-spawn creation
+// shape: NO flags at all — the plain birth the FIX147 neutral
+// spawner proved (the child inherits the helper's console and
+// process group, like a cmd.exe child inherits the shell's).
+// The FIX143/FIX145 detached shape (DETACHED_PROCESS |
+// CREATE_NEW_PROCESS_GROUP) is deleted for game spawns; it
+// survives only in startDetachedInDir, whose callers (the
+// PINemHi watcher start, the launcher relaunch) are not game
+// spawns and keep their shape. Unit-tested
+// (proc_windows_test.go) so the flags can never creep back.
+func gameSpawnCreationFlags() uint32 {
 	return 0
 }
 
-// startDetachedInDirAndWait is the FIX143 spawn mode's leaf:
-// the same detached start as startDetachedInDir, but the
+// startGameInDirAndWait is the spawn mode's leaf (FIX143's
+// supervised shape, FIX148's creation shape): a plain start
+// in the named directory — gameSpawnCreationFlags, no detach
+// — with env as the child's environment when non-nil (nil
+// keeps the inherited one untouched; the spawn mode passes a
+// scrubbed copy, see scrubGameEnv in spawn_mode.go). The
 // caller BLOCKS until the child exits — the helper process
 // supervises the game, living exactly as long as it does, so
 // the launcher (the helper's parent) can judge the game's
 // life by its own child's. onStart, when given, is called
 // with the child's pid immediately after the start lands.
-func startDetachedInDirAndWait(path string, args []string, dir string, onStart func(pid int)) (int, error) {
-	return startSpawnInDirAndWait(path, args, dir, true, onStart)
-}
-
-// startSpawnInDirAndWait is startDetachedInDirAndWait with
-// the FIX145 spawn flavour's creation shape: detached=true
-// is the FIX143 leaf above, byte for byte; detached=false is
-// the console flavour - the same supervised start with no
-// detach flags (spawnCreationFlags).
-func startSpawnInDirAndWait(path string, args []string, dir string, detached bool, onStart func(pid int)) (int, error) {
+func startGameInDirAndWait(path string, args []string, dir string, env []string, onStart func(pid int)) (int, error) {
 	cmd := exec.Command(path, args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
+	if env != nil {
+		cmd.Env = env
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: spawnCreationFlags(detached),
+		CreationFlags: gameSpawnCreationFlags(),
 		HideWindow:    false,
 	}
 	if err := cmd.Start(); err != nil {

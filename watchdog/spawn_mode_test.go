@@ -54,7 +54,7 @@ func TestSupervisedSpawnReportsPidAndOutlivesTheChild(t *testing.T) {
 	out := filepath.Join(dir, "cwd.txt")
 	started := time.Now()
 	reported := 0
-	pid, err := startDetachedInDirAndWait("/bin/sh", []string{"-c", "pwd > " + out + "; sleep 1"}, dir, func(p int) {
+	pid, err := startGameInDirAndWait("/bin/sh", []string{"-c", "pwd > " + out + "; sleep 1"}, dir, nil, func(p int) {
 		reported = p
 	})
 	elapsed := time.Since(started)
@@ -105,4 +105,74 @@ func TestSpawnModeChildSeesTheNamedDir(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("the spawned child never wrote its cwd")
+}
+
+// FIX148: the env scrub. The game's environment must lose
+// SDL_JOYSTICK_DIRECTINPUT (the launcher's own SDL variable,
+// inherited by every process the launcher bears) and keep
+// everything else, byte for byte.
+func TestScrubGameEnv(t *testing.T) {
+	in := []string{"PATH=/usr/bin", "SDL_JOYSTICK_DIRECTINPUT=0", "OTHER=keep=me", "USER=x"}
+	out, removed := scrubGameEnv(in)
+	if !removed {
+		t.Fatal("the scrub must report the removal")
+	}
+	if len(out) != 3 {
+		t.Fatalf("scrubbed env = %v, want the other three entries untouched", out)
+	}
+	for _, e := range out {
+		if strings.HasPrefix(e, "SDL_JOYSTICK_DIRECTINPUT=") {
+			t.Fatalf("the scrubbed variable survived: %v", out)
+		}
+	}
+	if out[0] != "PATH=/usr/bin" || out[1] != "OTHER=keep=me" || out[2] != "USER=x" {
+		t.Fatalf("the surviving entries changed: %v", out)
+	}
+	// Case-insensitive key match (Windows environment keys
+	// are case-insensitive).
+	if _, removed := scrubGameEnv([]string{"sdl_joystick_directinput=0"}); !removed {
+		t.Fatal("a differently-cased key must still scrub")
+	}
+	// Absent: nothing removed, env returned whole.
+	out, removed = scrubGameEnv([]string{"PATH=/usr/bin"})
+	if removed || len(out) != 1 || out[0] != "PATH=/usr/bin" {
+		t.Fatalf("an env without the variable must pass through whole: %v removed=%v", out, removed)
+	}
+	// A key that merely starts with the name is not the variable.
+	if _, removed := scrubGameEnv([]string{"SDL_JOYSTICK_DIRECTINPUT_EXTRA=1"}); removed {
+		t.Fatal("a longer key sharing the prefix must not scrub")
+	}
+	// Empty env scrubs to empty, unremoved.
+	if out, removed := scrubGameEnv(nil); removed || len(out) != 0 {
+		t.Fatalf("nil env: got %v removed=%v", out, removed)
+	}
+}
+
+// FIX148 end-to-end on Linux: a child started through the
+// game leaf with a scrubbed env observes the scrubbed env.
+func TestGameSpawnChildSeesScrubbedEnv(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("exercised through /bin/sh on Linux; the Windows leaf shares the shape")
+	}
+	dir := t.TempDir()
+	out := filepath.Join(dir, "env.txt")
+	env, removed := scrubGameEnv([]string{"SDL_JOYSTICK_DIRECTINPUT=0", "PVLDS_WITNESS=alive"})
+	if !removed {
+		t.Fatal("the test env must contain the scrubbed variable")
+	}
+	_, err := startGameInDirAndWait("/bin/sh", []string{"-c", "env > " + out}, dir, env, nil)
+	if err != nil {
+		t.Fatalf("game spawn failed: %v", err)
+	}
+	data, rerr := os.ReadFile(out)
+	if rerr != nil {
+		t.Fatalf("the child never wrote its env: %v", rerr)
+	}
+	got := string(data)
+	if strings.Contains(got, "SDL_JOYSTICK_DIRECTINPUT") {
+		t.Fatalf("the child saw the scrubbed variable:\n%s", got)
+	}
+	if !strings.Contains(got, "PVLDS_WITNESS=alive") {
+		t.Fatalf("the child lost the rest of its environment:\n%s", got)
+	}
 }
