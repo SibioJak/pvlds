@@ -21,6 +21,12 @@ package main
 // continuous-presence stamp this tracker feeds (the launcher
 // holds its exit until the server has held steady), while
 // the sighting lines themselves stay exactly as they were.
+// FIX150 adds the second stamp the re-keyed gate reads: the
+// LATCHING first-sighting time (seenUnix below) - the gate
+// arms on every launch and releases early when the server
+// was never sighted at all, a fact the continuous stamp
+// alone cannot say (it reads 0 both for "never seen" and
+// for "seen, then gone").
 
 import (
 	"strings"
@@ -62,11 +68,21 @@ func sameProcessName(a string, b string) bool {
 // b2s_present_since_unix (main.go) - the pid-file precedent:
 // a fact the watchdog measures, stamped where the resident
 // launcher already polls.
+//
+// FIX150: seenAt is the LATCHING twin - the moment the
+// server was FIRST sighted this session. Unlike
+// presentSince it is never reset by absence: once the
+// server has been seen, the session's bring-up happened
+// (or is happening), and the gate's never-sighted early
+// release must not fire for it. It resets only on a
+// session change, like everything else here. Mirrored
+// into the contract as b2s_seen_unix beside the other.
 type b2sSighting struct {
 	sessionID    int
 	known        bool // an observation has been folded in for this session
 	present      bool
 	presentSince time.Time // start of the current continuous presence; zero while absent
+	seenAt       time.Time // first sighting this session; zero until sighted, latching
 	stableNoted  bool      // noteStable has reported this presence run's stability crossing
 }
 
@@ -76,7 +92,11 @@ func (t *b2sSighting) observe(sessionID int, present bool, now time.Time) (chang
 		t.known = false
 		t.present = false
 		t.presentSince = time.Time{}
+		t.seenAt = time.Time{}
 		t.stableNoted = false
+	}
+	if present && t.seenAt.IsZero() {
+		t.seenAt = now
 	}
 	if t.known && t.present == present {
 		return false
@@ -100,6 +120,17 @@ func (t *b2sSighting) presentSinceUnix() int64 {
 		return 0
 	}
 	return t.presentSince.Unix()
+}
+
+// seenUnix is the latching contract stamp: the unix second
+// the server was first sighted this session, or 0 if it has
+// not been sighted yet. Once non-zero it stays non-zero for
+// the rest of the session, whatever the current fact does.
+func (t *b2sSighting) seenUnix() int64 {
+	if t.seenAt.IsZero() {
+		return 0
+	}
+	return t.seenAt.Unix()
 }
 
 // noteStable reports true exactly once per continuous

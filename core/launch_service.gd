@@ -276,7 +276,9 @@ func checkin(config: PvldsConfig) -> WatchdogContract:
 	c.runtime_seen_unix = 0
 	# FIX149: a fresh arm buries the last session's B2S
 	# presence stamp and gate verdict with the sightings.
+	# FIX150: the latching seen stamp is buried with them.
 	c.b2s_present_since_unix = 0
+	c.b2s_seen_unix = 0
 	c.handoff_gate = ""
 	c.save_to_disk()
 	ensure_watchdog()
@@ -323,7 +325,9 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	# FIX149: the new session starts with no B2S presence
 	# and no gate verdict; the watchdog's sighting stamps
 	# the presence when (and if) the server comes up.
+	# FIX150: the seen latch starts unlatched too.
 	c.b2s_present_since_unix = 0
+	c.b2s_seen_unix = 0
 	c.handoff_gate = ""
 	c.game_started_unix = int(Time.get_unix_time_from_system())
 	c.launcher_path = LaunchService.launcher_path()
@@ -353,12 +357,14 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	return {"ok": true, "error": "", "plan": plan, "pid": pid, "session_id": c.session_id}
 
 
-## FIX149: record the hand-off gate's standing word for the
-## loading session ("held" while Main's load wait holds the
-## exit). The watchdog logs the word's transitions into its
-## own log; the release word rides mark_live's save instead
-## (below), so the verdict and the state change land in one
-## write. A session that is no longer loading takes no word.
+## FIX149/FIX150: record the hand-off gate's standing word
+## for the loading session ("armed" when Main's load wait
+## starts - the gate arms on every launch - then "held"
+## while the wait holds the exit). The watchdog logs the
+## word's transitions into its own log; the release word
+## rides mark_live's save instead (below), so the verdict
+## and the state change land in one write. A session that
+## is no longer loading takes no word.
 func stamp_handoff_gate(word: String) -> void:
 	var c: WatchdogContract = WatchdogContract.load_from_disk()
 	if c.session_state == "loading" and c.handoff_gate != word:
@@ -369,9 +375,10 @@ func stamp_handoff_gate(word: String) -> void:
 ## The hand-off point: the table is up and the launcher is about to
 ## exit. From here the watchdog's live rule owns the session - when
 ## VPX dies, it relaunches the launcher exactly once. FIX149: a
-## gate verdict ("" when no gate engaged) is stamped in the same
-## save, so the watchdog's log can carry the release word beside
-## the state change it rode in on.
+## gate verdict is stamped in the same save, so the watchdog's
+## log can carry the release word beside the state change it
+## rode in on. FIX150: the gate arms on every launch, so a
+## success settle always carries a release word.
 func mark_live(gate_verdict: String = "") -> void:
 	var c: WatchdogContract = WatchdogContract.load_from_disk()
 	if c.session_state == "loading":

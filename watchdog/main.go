@@ -121,7 +121,7 @@ import (
 // session header line alongside the launcher version the
 // contract carries, so a field log names both halves of the
 // pair that produced it.
-const WatchdogVersion = "1.1.34"
+const WatchdogVersion = "1.1.35"
 
 type Contract struct {
 	Version int  `json:"version"`
@@ -213,16 +213,35 @@ type Contract struct {
 	// launcher treats 0 as "not present", which is the truth
 	// for those builds' sessions too.
 	B2SPresentSinceUnix int64 `json:"b2s_present_since_unix"`
-	// HandoffGate is FIX149's gate verdict, owned by the
-	// LAUNCHER: "" while no gate has engaged for the session,
-	// "held" while the launcher is holding its exit for the
-	// B2S server, then the release word ("released-stable" /
-	// "released-cap") stamped in the same save that marks
-	// the session live. The watchdog never writes it; it
-	// LOGS its transitions (the disarm_reason pattern), so a
-	// field log carries the gate's verdict beside the
-	// sighting lines that decided it. Absent in older
-	// contracts: "" - no gate, nothing to log.
+	// B2SSeenUnix is FIX150's latching twin of the stamp
+	// above, also owned by THIS process: the unix second the
+	// B2S server was FIRST sighted this session, or 0 if it
+	// has not been sighted yet. It never resets within the
+	// session (the tracker resets it only on a session
+	// change). The re-keyed gate reads it for its
+	// never-sighted early release: the continuous stamp
+	// alone reads 0 both for "never seen" and for "seen,
+	// then gone", and only the first of those may release
+	// early. Maintained through the same merged writes as
+	// the stamp above. Absent in contracts written before
+	// the field existed; the launcher treats 0 as "not
+	// seen", which is the truth for those builds too.
+	B2SSeenUnix int64 `json:"b2s_seen_unix"`
+	// HandoffGate is the hand-off gate's word, owned by the
+	// LAUNCHER: "" only before the load wait starts, then
+	// "armed" (stamped when the load wait starts - FIX150:
+	// the gate arms on EVERY launch), "held" while the
+	// launcher is holding its exit for the B2S server, then
+	// the release word ("released-stable" /
+	// "released-nosighting" / "released-cap") stamped in
+	// the same save that marks the session live. The
+	// watchdog never writes it; it LOGS its transitions
+	// (the disarm_reason pattern), so a field log carries
+	// the gate's word beside the sighting lines that
+	// decided it. Absent in older contracts: "" - nothing
+	// to log. (FIX149 keyed the gate on a .directb2s
+	// filename and it never engaged in the field; FIX150
+	// re-keys it on this process's sighting stamps.)
 	HandoffGate string `json:"handoff_gate"`
 	// (focus_locked_unix stood here in 1.1.25–1.1.26: the
 	// focus sequence's lock stamp, written for the launcher's
@@ -290,10 +309,14 @@ func normalizeState(s string) string {
 // the log's job is to carry the fact, not to judge it.
 func handoffGateLogText(word string) string {
 	switch word {
+	case "armed":
+		return "armed - the launcher's load wait is watching for the B2S server"
 	case "held":
 		return "held - the launcher is holding its exit for the B2S server"
 	case "released-stable":
 		return "released - the B2S server held steady and the launcher handed off"
+	case "released-nosighting":
+		return "released - no B2S server was sighted and the launcher handed off"
 	case "released-cap":
 		return "released - the gate's cap was reached and the launcher handed off"
 	}
@@ -728,6 +751,17 @@ func main() {
 						}
 					})
 				}
+				// FIX150: the latching first-sighting stamp
+				// rides the same merged write discipline -
+				// it moves exactly once per session (0 ->
+				// the first sighting), so the write is rare.
+				if stamp := sessionB2S.seenUnix(); stamp != c.B2SSeenUnix {
+					writeContractMerged(func(mc *Contract) {
+						if mc.SessionID == c.SessionID {
+							mc.B2SSeenUnix = stamp
+						}
+					})
+				}
 				if sessionB2S.noteStable(time.Now(), handoffGateStableWindow) {
 					logf("watchdog: session %d: b2s server stable - continuously present for %s (the hand-off gate may release)", c.SessionID, handoffGateStableWindow)
 				}
@@ -1008,7 +1042,7 @@ func main() {
 				// platform leaves. When VPX dies, the ordinary
 				// death path below relaunches the launcher.
 				sightedNow, _ := gameWindowExists(c.GamePID, c.SessionID)
-				act, armedNow := sessionCloser.tick(time.Now().UnixMilli(), c.SessionID, c.SessionState, true, sightedNow, ws)
+				act, armedNow := sessionCloser.tick(time.Now().UnixMilli(), c.SessionID, c.SessionState, true, sightedNow, c.RuntimeSeenUnix > 0, ws)
 				if armedNow {
 					logf("watchdog: session %d: exit detector armed", c.SessionID)
 				}

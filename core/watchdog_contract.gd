@@ -107,8 +107,7 @@ extends RefCounted
 ##                    CONTINUOUS presence began (the watchdog's
 ##                    sighting tracker), or 0 while the server
 ##                    is absent. The resident launcher reads it
-##                    during its load wait: for a table with a
-##                    .directb2s beside it, the hand-off exit is
+##                    during its load wait: the hand-off exit is
 ##                    held until this presence has held 5
 ##                    seconds (the hand-off gate - the server
 ##                    was dying in the same breath as the
@@ -117,19 +116,38 @@ extends RefCounted
 ##                    a fresh session is armed (checkin /
 ##                    perform_launch), like the sighting stamps
 ##                    above. Schema stays v2.
-##   handoff_gate     FIX149: the hand-off gate's verdict for
-##                    the session, written by the LAUNCHER:
-##                    "" = no gate engaged, "held" while the
-##                    exit is being held for the B2S server,
-##                    then the release word ("released-stable"
-##                    / "released-cap") stamped by mark_live in
-##                    the save that marks the session live. The
-##                    watchdog never writes it; it logs its
-##                    transitions into its own log (the
-##                    disarm_reason pattern), so a field log
-##                    carries the verdict beside the sighting
-##                    lines. Cleared when a fresh session is
-##                    armed. Schema stays v2.
+##   b2s_seen_unix    FIX150: WATCHDOG-owned: the unix second
+##                    the B2S server was FIRST sighted this
+##                    session, or 0 if it has not been sighted
+##                    yet. A latch: absence never resets it
+##                    within the session (only a fresh arm
+##                    clears it, with the stamps above). The
+##                    gate reads it for the never-sighted early
+##                    release - the continuous stamp alone
+##                    reads 0 both for "never seen" and for
+##                    "seen, then gone", and only the first
+##                    may release early. The launcher never
+##                    writes it, except to CLEAR it on a fresh
+##                    arm. Schema stays v2.
+##   handoff_gate     FIX149/FIX150: the hand-off gate's word
+##                    for the session, written by the
+##                    LAUNCHER: "" only before the load wait
+##                    starts, "armed" when the load wait
+##                    starts (FIX150: the gate arms on EVERY
+##                    launch - FIX149 keyed it on a .directb2s
+##                    filename match, which failed in the
+##                    field and the gate never engaged),
+##                    "held" while the exit is being held for
+##                    the B2S server, then the release word
+##                    ("released-stable" / "released-
+##                    nosighting" / "released-cap") stamped
+##                    by mark_live in the save that marks the
+##                    session live. The watchdog never writes
+##                    it; it logs its transitions into its own
+##                    log (the disarm_reason pattern), so a
+##                    field log carries the gate's word beside
+##                    the sighting lines. Cleared when a fresh
+##                    session is armed. Schema stays v2.
 ##   (focus_locked_unix stood here in 1.1.25–1.1.26: the
 ##   focus sequence's lock stamp, the warp hold's cue. FIX138
 ##   removed the field with the warp - nothing consumed it
@@ -170,6 +188,7 @@ var game_started_unix: int = 0
 var game_window_seen_unix: int = 0
 var runtime_seen_unix: int = 0
 var b2s_present_since_unix: int = 0
+var b2s_seen_unix: int = 0
 var handoff_gate: String = ""
 var launcher_path: String = ""
 var launcher_args: Array[String] = []
@@ -231,6 +250,7 @@ static func load_from_disk() -> WatchdogContract:
 	c.game_window_seen_unix = int(d.get("game_window_seen_unix", 0))
 	c.runtime_seen_unix = int(d.get("runtime_seen_unix", 0))
 	c.b2s_present_since_unix = int(d.get("b2s_present_since_unix", 0))
+	c.b2s_seen_unix = int(d.get("b2s_seen_unix", 0))
 	c.handoff_gate = str(d.get("handoff_gate", ""))
 	c.launcher_path = str(d.get("launcher_path", ""))
 	c.launcher_pid = int(d.get("launcher_pid", 0))
@@ -269,6 +289,7 @@ func to_dictionary() -> Dictionary:
 	d["game_window_seen_unix"] = game_window_seen_unix
 	d["runtime_seen_unix"] = runtime_seen_unix
 	d["b2s_present_since_unix"] = b2s_present_since_unix
+	d["b2s_seen_unix"] = b2s_seen_unix
 	d["handoff_gate"] = handoff_gate
 	d["launcher_path"] = launcher_path
 	var la: Array = []

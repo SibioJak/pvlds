@@ -196,7 +196,7 @@ const (
 // per session. A new sessionID resets everything.
 type closer struct {
 	sessionID     int
-	excursion     bool  // arming half (b): a live tick whose foreground was not the editor
+	excursion     bool  // arming half (b): a live tick whose foreground was not the editor, or a loading tick carrying the runtime + player-foreground witness (FIX150, see tick)
 	armed         bool  // both arming halves latched; the arm is reported once, on its tick
 	editorSinceMs int64 // first tick of the current sustained editor foreground; 0 = not in it
 	stage         int   // 0 watching, 1 FEC sent, 2 WM_CLOSE sent, 3 gave up
@@ -225,18 +225,45 @@ func (cl *closer) notePush(sessionID int, nowMs int64) {
 
 // tick advances the detector by one watchdog tick. sighted is
 // the sighting gate's latch for this session (the contract's
-// game_window_seen - arming half (a)). The second return reports
-// the arm event: true on exactly the tick the detector armed,
-// so the caller can log it once per session.
-func (cl *closer) tick(nowMs int64, sessionID int, state string, alive bool, sighted bool, ws windowState) (closeAction, bool) {
+// game_window_seen - arming half (a)). runtimeSighted is the
+// session's runtime stamp (the contract's runtime_seen): the
+// table's runtime demonstrably existed - the load was over
+// and play began. The second return reports the arm event:
+// true on exactly the tick the detector armed, so the caller
+// can log it once per session.
+func (cl *closer) tick(nowMs int64, sessionID int, state string, alive bool, sighted bool, runtimeSighted bool, ws windowState) (closeAction, bool) {
 	if sessionID != cl.sessionID {
 		*cl = closer{sessionID: sessionID}
 	}
 	if state != "live" || !alive {
-		// Never while the launcher is resident/loading, never
-		// against a dead process. Arming observations are a
-		// live-session story only; a broken editor foreground
-		// also restarts the sustain clock.
+		// Never fires while the launcher is resident/loading,
+		// never against a dead process; the sustain clock
+		// does not run here either. But ONE observation is
+		// gathered in the loading phase (FIX150): the
+		// excursion may latch, on play evidence the load
+		// cannot counterfeit - the runtime has been sighted
+		// (the table is genuinely up) AND the foreground is
+		// the PLAYER window itself. Merely "not the editor"
+		// is worth nothing here (the load's own foreground
+		// cycling is all not-the-editor - the inert-during-
+		// loading pin keeps that law), and the sighting
+		// alone stamps off the editor canvas seconds into a
+		// load. The hand-off gate (FIX149/150) holds the
+		// launcher's exit while a table is already playing,
+		// so a fast table can land in its editor before the
+		// session ever goes live; without this latch its
+		// excursion - which happened in here - would be
+		// invisible, the detector would never arm, and the
+		// editor would never be closed. The arm still
+		// completes only in live (below), the sustain still
+		// runs only in live, and the push guard still
+		// clears a latch the one-shot handoff push precedes
+		// (notePush) - a push that lands means the player
+		// window took the foreground at the hand-off, and
+		// the next live tick re-latches on play's own story.
+		if state == "loading" && alive && runtimeSighted && ws.fgIsPlayer {
+			cl.excursion = true
+		}
 		cl.editorSinceMs = 0
 		return closeNone, false
 	}

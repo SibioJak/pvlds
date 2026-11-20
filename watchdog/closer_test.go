@@ -22,10 +22,12 @@ import "testing"
 
 // tickIn is one scripted tick's inputs to the detector.
 type tickIn struct {
-	state   string
-	alive   bool
-	sighted bool
-	fgEd    bool // the foreground is the editor window
+	state    string
+	alive    bool
+	sighted  bool
+	runtime  bool // the session's runtime has been sighted (FIX150's loading witness half)
+	fgEd     bool // the foreground is the editor window
+	fgPlayer bool // the foreground is the player window itself
 }
 
 var (
@@ -41,7 +43,7 @@ func drive(c *closer, session int, fromMs int64, n int, stepMs int64, in tickIn)
 	var out []closeAction
 	arms := 0
 	for i := 0; i < n; i++ {
-		a, armed := c.tick(fromMs+int64(i)*stepMs, session, in.state, in.alive, in.sighted, windowState{fgIsEditor: in.fgEd, editorHWND: 99})
+		a, armed := c.tick(fromMs+int64(i)*stepMs, session, in.state, in.alive, in.sighted, in.runtime, windowState{fgIsEditor: in.fgEd, fgIsPlayer: in.fgPlayer, editorHWND: 99})
 		if a != closeNone {
 			out = append(out, a)
 		}
@@ -160,6 +162,66 @@ func TestDetectorInertDuringLoading(t *testing.T) {
 	}
 	if got, _ := drive(c, 1, 16800, 1, 100, fgEditor); len(got) != 1 || got[0] != closeFEC {
 		t.Fatalf("expected FEC after the post-arm sustain, got %v", got)
+	}
+}
+
+// FIX150 (the hand-off gate era): the gate holds the
+// launcher's exit while the table is already playing, so a
+// fast table's whole play phase - and its exit landing -
+// can happen inside the loading phase. The excursion may
+// therefore latch during loading, but only on the witness
+// the load cannot counterfeit: the runtime has been
+// sighted AND the foreground is the player window itself.
+// Nothing arms or fires during loading; the arm completes
+// on the first live tick, the sustain runs from there, and
+// the close fires on it - the pre-gate choreography,
+// restored for a table that exited during the hold.
+func TestDetectorLoadingWitnessLatches(t *testing.T) {
+	c := &closer{}
+	// Loading: runtime sighted, the player window holds the
+	// foreground (play, witnessed). Inert: no arm, no fire.
+	loadPlay := tickIn{state: "loading", alive: true, sighted: true, runtime: true, fgPlayer: true}
+	if got, arms := drive(c, 1, 0, 30, 100, loadPlay); arms != 0 || len(got) != 0 {
+		t.Fatalf("armed/fired during loading on the witness (arms=%d, actions=%v)", arms, got)
+	}
+	// The table lands in its editor, still loading: inert,
+	// and the sustain does not pre-run.
+	loadEd := tickIn{state: "loading", alive: true, sighted: true, runtime: true, fgEd: true}
+	if got, arms := drive(c, 1, 3000, 30, 100, loadEd); arms != 0 || len(got) != 0 {
+		t.Fatalf("armed/fired during loading on the landing (arms=%d, actions=%v)", arms, got)
+	}
+	// Live, the editor still holding the foreground: the
+	// arm completes on the first live tick (the latched
+	// excursion + the sighting), the sustain runs its full
+	// length from there, then the close fires.
+	if got, arms := drive(c, 1, 6000, 12, 100, fgEditor); arms != 1 || len(got) != 0 {
+		t.Fatalf("expected exactly the arm inside the sustain (arms=%d, actions=%v)", arms, got)
+	}
+	if got, _ := drive(c, 1, 7300, 1, 100, fgEditor); len(got) != 1 || got[0] != closeFEC {
+		t.Fatalf("expected FEC at the sustain boundary, got %v", got)
+	}
+}
+
+// The witness is a conjunction - either half alone latches
+// nothing. Player foreground during loading WITHOUT the
+// runtime is the load's own story (the focus sequence puts
+// it there while the table is still coming up); the
+// runtime without the player foreground is a table up
+// behind a dialog. After either, a live editor continuation
+// arms nothing - the inert-during-loading law, unchanged
+// for every input the witness does not cover.
+func TestDetectorLoadingNoWitnessNoLatch(t *testing.T) {
+	noRuntime := &closer{}
+	loadPlay := tickIn{state: "loading", alive: true, sighted: true, fgPlayer: true}
+	drive(noRuntime, 1, 0, 30, 100, loadPlay)
+	if got, arms := drive(noRuntime, 1, 3000, 50, 100, fgEditor); arms != 0 || len(got) != 0 {
+		t.Fatalf("armed/fired without the runtime witness (arms=%d, actions=%v)", arms, got)
+	}
+	noPlayer := &closer{}
+	loadBehind := tickIn{state: "loading", alive: true, sighted: true, runtime: true}
+	drive(noPlayer, 1, 0, 30, 100, loadBehind)
+	if got, arms := drive(noPlayer, 1, 3000, 50, 100, fgEditor); arms != 0 || len(got) != 0 {
+		t.Fatalf("armed/fired without the player-foreground witness (arms=%d, actions=%v)", arms, got)
 	}
 }
 
