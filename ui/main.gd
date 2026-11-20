@@ -747,6 +747,15 @@ var _lockout_setup_fired: bool = false
 const LAUNCH_SETTLE_MSEC: int = 1500 ## table runtime up + this long = hand off
 const LAUNCH_CAP_MSEC: int = 45000 ## never hold the room hostage to a stuck load
 const LAUNCH_DEAD_GRACE_MSEC: int = 1500 ## a dead spawn pid gets this long for the watchdog's by-path window report before the launch is called failed
+## FIX149 (the hand-off gate): for a table with a .directb2s
+## beside it, a met hand-off cue does not exit at once - the
+## exit waits until the B2S server (the watchdog's contract
+## stamp) has been CONTINUOUSLY present this long...
+const HANDOFF_GATE_STABLE_SEC: int = 5 ## must agree with the watchdog's handoffGateStableWindow (watchdog/main.go)
+## ...or until this long after launch, whichever comes first,
+## so a server that never stabilises cannot trap the player
+## in the room. Both sit well inside LAUNCH_CAP_MSEC.
+const HANDOFF_GATE_CAP_MSEC: int = 30000
 var _launch_pending: bool = false
 var _launch_game: GameEntry = null
 var _launch_pid: int = 0
@@ -754,6 +763,9 @@ var _launch_session_id: int = 0
 var _launch_started_msec: int = 0
 var _launch_runtime_seen_msec: int = -1
 var _launch_pid_dead_msec: int = -1
+var _launch_has_glass: bool = false ## FIX149: the launched build's table file has a .directb2s beside it - the gate's key
+var _launch_gate_held_logged: bool = false ## FIX149: the gate's hold has been printed + stamped for this launch
+var _launch_gate_verdict: String = "" ## FIX149: "" while the gate has not released; then released-stable | released-cap
 var _xr_session_ending: bool = false ## latched by the OpenXR session_ending signal when present
 
 # Scan machinery. The scan (db load + folder walk + matching) runs on a
@@ -3247,6 +3259,13 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 		_launch_started_msec = Time.get_ticks_msec()
 		_launch_runtime_seen_msec = -1
 		_launch_pid_dead_msec = -1
+		# FIX149: the gate keys on the launched table's glass -
+		# the same existence check the art path uses. A table
+		# with no .directb2s has no B2S bring-up to protect and
+		# keeps the pre-gate timing exactly.
+		_launch_has_glass = ArtProvider.find_directb2s(build.file_path) != ""
+		_launch_gate_held_logged = false
+		_launch_gate_verdict = ""
 		# RETURN: record where this launch came from, on disk
 		# NOW - the load wait can exit this process at
 		# hand-off, and the record is what the return boot
@@ -3293,6 +3312,12 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 ## the hyperspace warp could hold until the table was genuinely
 ## up; FIX138 deleted the warp and restored this form - the
 ## lock stamp went with it.)
+## FIX149: the three SUCCESS settles route through the
+## hand-off gate (_settle_launch_gated) - for a table carrying
+## a .directb2s, a met cue holds the exit until the B2S server
+## has held steady (or the gate's cap passes). The failure
+## settle and the hold-exit disarm do NOT route through it:
+## they keep their instant timing, gate or no gate.
 func _poll_launch() -> void:
 	if _shot_launch_path != "":
 		_poll_shot_launch()
@@ -3310,7 +3335,7 @@ func _poll_launch() -> void:
 				_settle_launch(false, "VPX closed while the table was loading")
 				return
 	if _xr_enabled and _xr_session_exiting():
-		_settle_launch(true, "the XR session changed hands")
+		_settle_launch_gated("the XR session changed hands")
 		return
 	var contract: WatchdogContract = WatchdogContract.load_from_disk()
 	if contract.session_id == _launch_session_id and contract.hold_exit_fired_unix > 0:
@@ -3330,10 +3355,49 @@ func _poll_launch() -> void:
 		if _launch_runtime_seen_msec < 0:
 			_launch_runtime_seen_msec = now
 		elif now - _launch_runtime_seen_msec >= LAUNCH_SETTLE_MSEC:
-			_settle_launch(true, "VPX's runtime is up")
+			_settle_launch_gated("VPX's runtime is up")
 			return
 	if now - _launch_started_msec >= LAUNCH_CAP_MSEC:
-		_settle_launch(true, "the load cap was reached")
+		_settle_launch_gated("the load cap was reached")
+
+
+## FIX149 (the hand-off gate): a SUCCESS settle asked for by
+## _poll_launch's cues, routed through the gate. For a table
+## with no .directb2s this is _settle_launch(true, ...) exactly
+## as before - the gate never engages. For a glass table, the
+## exit holds until the watchdog's contract stamp shows the
+## B2S server CONTINUOUSLY present for HANDOFF_GATE_STABLE_SEC
+## (released-stable) or HANDOFF_GATE_CAP_MSEC after launch
+## passes (released-cap); while it holds, the poll keeps
+## running, so the failure settle above and the hold-exit
+## path keep their instant timing - the gate delays only the
+## hand-off, never a failure. The verdict is printed here and
+## stamped into the contract by mark_live, where the watchdog
+## logs it beside the sighting lines. Why: in the field
+## (sessions 316/320) the server came up ~3s into the load and
+## died the same second the launcher exited at the hand-off -
+## the exit's VR handover churns VPX while the table script's
+## Controller.Run() is still mid-flight. Holding the exit
+## until the bring-up has demonstrably finished removes our
+## exit from that window.
+func _settle_launch_gated(reason: String) -> void:
+	if _launch_has_glass and _launch_gate_verdict == "":
+		var contract: WatchdogContract = WatchdogContract.load_from_disk()
+		var now_unix: int = int(Time.get_unix_time_from_system())
+		if contract.session_id == _launch_session_id and contract.b2s_present_since_unix > 0 \
+				and now_unix - contract.b2s_present_since_unix >= HANDOFF_GATE_STABLE_SEC:
+			_launch_gate_verdict = "released-stable"
+		elif Time.get_ticks_msec() - _launch_started_msec >= HANDOFF_GATE_CAP_MSEC:
+			_launch_gate_verdict = "released-cap"
+		else:
+			if not _launch_gate_held_logged:
+				_launch_gate_held_logged = true
+				_launch_service.stamp_handoff_gate("held")
+				print("PVLDS LAUNCH: hand-off gate: held - the table has a backglass; holding the exit until its server holds steady for %ds (cap %ds)" % [HANDOFF_GATE_STABLE_SEC, HANDOFF_GATE_CAP_MSEC / 1000])
+			return
+	if _launch_gate_verdict != "":
+		print("PVLDS LAUNCH: hand-off gate: %s" % _launch_gate_verdict)
+	_settle_launch(true, reason)
 
 
 ## The wait resolves. Success: mark the session live and exit
@@ -3347,7 +3411,7 @@ func _settle_launch(ok: bool, reason: String) -> void:
 	_launch_game = null
 	var elapsed: float = float(Time.get_ticks_msec() - _launch_started_msec) / 1000.0
 	if ok:
-		_launch_service.mark_live()
+		_launch_service.mark_live(_launch_gate_verdict)
 		print("PVLDS LAUNCH: hand-off complete (%s) after %.1fs; launcher exiting" % [reason, elapsed])
 		_intentional_launch_exit = true
 		_request_art_warm_stop()

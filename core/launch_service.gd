@@ -274,6 +274,10 @@ func checkin(config: PvldsConfig) -> WatchdogContract:
 	c.game_pid = 0
 	c.game_window_seen_unix = 0
 	c.runtime_seen_unix = 0
+	# FIX149: a fresh arm buries the last session's B2S
+	# presence stamp and gate verdict with the sightings.
+	c.b2s_present_since_unix = 0
+	c.handoff_gate = ""
 	c.save_to_disk()
 	ensure_watchdog()
 	return c
@@ -316,6 +320,11 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	c.game_pid = 0
 	c.game_window_seen_unix = 0
 	c.runtime_seen_unix = 0
+	# FIX149: the new session starts with no B2S presence
+	# and no gate verdict; the watchdog's sighting stamps
+	# the presence when (and if) the server comes up.
+	c.b2s_present_since_unix = 0
+	c.handoff_gate = ""
 	c.game_started_unix = int(Time.get_unix_time_from_system())
 	c.launcher_path = LaunchService.launcher_path()
 	c.launcher_args = LaunchService.launcher_args()
@@ -344,13 +353,31 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	return {"ok": true, "error": "", "plan": plan, "pid": pid, "session_id": c.session_id}
 
 
+## FIX149: record the hand-off gate's standing word for the
+## loading session ("held" while Main's load wait holds the
+## exit). The watchdog logs the word's transitions into its
+## own log; the release word rides mark_live's save instead
+## (below), so the verdict and the state change land in one
+## write. A session that is no longer loading takes no word.
+func stamp_handoff_gate(word: String) -> void:
+	var c: WatchdogContract = WatchdogContract.load_from_disk()
+	if c.session_state == "loading" and c.handoff_gate != word:
+		c.handoff_gate = word
+		c.save_to_disk()
+
+
 ## The hand-off point: the table is up and the launcher is about to
 ## exit. From here the watchdog's live rule owns the session - when
-## VPX dies, it relaunches the launcher exactly once.
-func mark_live() -> void:
+## VPX dies, it relaunches the launcher exactly once. FIX149: a
+## gate verdict ("" when no gate engaged) is stamped in the same
+## save, so the watchdog's log can carry the release word beside
+## the state change it rode in on.
+func mark_live(gate_verdict: String = "") -> void:
 	var c: WatchdogContract = WatchdogContract.load_from_disk()
 	if c.session_state == "loading":
 		c.session_state = "live"
+		if gate_verdict != "":
+			c.handoff_gate = gate_verdict
 		c.save_to_disk()
 
 
