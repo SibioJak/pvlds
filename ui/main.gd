@@ -319,6 +319,8 @@ var _layout_probe_results: Dictionary = {} ## layout mode: panel index -> RoomVi
 var _layout_probes_in_flight: bool = false
 var _smoke_launch_game: String = ""
 var _smoke_verdict_pending: bool = false ## a smoke launch is riding the load wait; its settle prints the verdict and quits
+var _smoke_stepaside_game: String = "" ## --pvlds-smoke-stepaside: fire one real launch and let the FIX151 step-aside take the app out; the harness judges from outside
+var _smoke_stepaside_pending: bool = false ## a step-aside smoke launch is in flight; only its spawn-failure branch speaks
 var _shot_launch_path: String = ""
 var _shot_launch_fired: bool = false
 var _shot_launch_at_msec: int = 0
@@ -888,6 +890,9 @@ func _ready() -> void:
 	var smoke_idx: int = user_args.find("--pvlds-smoke-launch")
 	if smoke_idx >= 0 and smoke_idx + 1 < user_args.size():
 		_smoke_launch_game = user_args[smoke_idx + 1]
+	var stepaside_idx: int = user_args.find("--pvlds-smoke-stepaside")
+	if stepaside_idx >= 0 and stepaside_idx + 1 < user_args.size():
+		_smoke_stepaside_game = user_args[stepaside_idx + 1]
 	var shot_launch_idx: int = user_args.find("--pvlds-shot-launch")
 	if shot_launch_idx >= 0 and shot_launch_idx + 1 < user_args.size():
 		_shot_launch_path = user_args[shot_launch_idx + 1]
@@ -1371,7 +1376,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _smoke_snappybench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _shot_panelfit_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_submitnav or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_loading or _smoke_scoremark or _smoke_pinemhi2 or _smoke_starfield) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_stepaside_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _smoke_snappybench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _shot_panelfit_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_submitnav or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_loading or _smoke_scoremark or _smoke_pinemhi2 or _smoke_starfield) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1379,7 +1384,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	if _smoke_launch_game != "" or _shot_launch_path != "" or _smoke_lockout:
+	if _smoke_launch_game != "" or _smoke_stepaside_game != "" or _shot_launch_path != "" or _smoke_lockout:
 		if OS.has_environment("PVLDS_SMOKE_EXE"):
 			_config.vpx_exe_path = OS.get_environment("PVLDS_SMOKE_EXE")
 		if OS.has_environment("PVLDS_SMOKE_ARGS"):
@@ -1940,6 +1945,11 @@ func _finish_scan() -> void:
 		var gid: String = _smoke_launch_game
 		_smoke_launch_game = ""
 		_smoke_launch(gid)
+		return
+	if _smoke_stepaside_game != "":
+		var gid2: String = _smoke_stepaside_game
+		_smoke_stepaside_game = ""
+		_smoke_stepaside(gid2)
 		return
 	if _enter_room_after_scan:
 		_enter_room_after_scan = false
@@ -3266,6 +3276,53 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 		_launch_started_unix = int(Time.get_unix_time_from_system())
 		_launch_runtime_seen_msec = -1
 		_launch_pid_dead_msec = -1
+		# RETURN: record where this launch came from, on disk
+		# NOW - every exit this launch can take (the step-aside
+		# below, the load wait's hand-off) leaves this process,
+		# and the record is what the return boot reads to land
+		# the player back on the launching surface (see
+		# _apply_return_origin). The room names the origin
+		# (its view, the launched game); a failed load clears
+		# it again in _settle_launch.
+		var origin: Dictionary = _room.launch_origin_for(game) if _room != null \
+			else {"surface": "library", "challenge_id": ""}
+		origin["stamp"] = int(Time.get_unix_time_from_system())
+		_state.set_return_origin(origin)
+		_state.save_to_disk()
+		if not _step_aside_suppressed():
+			# FIX151: STEP ASIDE. The session is armed and the
+			# watchdog holds it; this process now leaves -
+			# immediately, cleanly, on its own terms, before
+			# VPX's runtime is even up. The field evidence
+			# (FIX150's godot.log): at the VR handover the
+			# environment's session transfer sends this app a
+			# window-close request; the load wait ignores it
+			# and the process dies ~1s later anyway, mid-load,
+			# without settling. The FIX149/150 gate guarded
+			# that settle and kept the app in the transfer
+			# storm longer. The world that works (the FIX147
+			# spawner cell) has no LaunchPin in the transfer
+			# at all. NO disarm, no contract change: the
+			# session stays armed/"loading" exactly as a
+			# settle leaves it, minus mark_live - the
+			# watchdog's promotion (a loading session whose
+			# supervising launcher is gone promotes to live)
+			# owns the session from here, and its relaunch
+			# brings this app back when the table exits. The
+			# exit is an intentional launch exit, like the
+			# settle's: a stray window close on the way out
+			# must not disarm. The art warmer stops first, as
+			# on every deliberate quit - an unstopped pass
+			# hangs shutdown. The load wait never starts; the
+			# FIX149/150 gate below is DORMANT in this build,
+			# reached only by the dev contexts
+			# _step_aside_suppressed() names.
+			_intentional_launch_exit = true
+			_request_art_warm_stop()
+			print("PVLDS LAUNCH: %s -> build %s (pid %d); stepping aside - the watchdog owns the session from here" % [
+				game.title, build.file_name, _launch_pid])
+			get_tree().quit()
+			return
 		# FIX150: the hand-off gate arms on EVERY launch - its
 		# key is the watchdog's B2S sighting, not a filename
 		# (FIX149 keyed it on a .directb2s stem match beside
@@ -3274,22 +3331,14 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 		# is stamped into the contract NOW, so the watchdog's
 		# log carries the gate's word from the load wait's
 		# first moment - no launch passes unwitnessed.
+		# FIX151: this whole wait path is dormant for product
+		# launches (the step-aside above pre-empts it); it
+		# still serves the dev contexts that ride the wait
+		# in-process.
 		_launch_gate_held_logged = false
 		_launch_gate_verdict = ""
 		_launch_service.stamp_handoff_gate("armed")
 		print("PVLDS LAUNCH: hand-off gate: armed - watching for the B2S server (stable %ds, no-sighting %ds, cap %ds)" % [HANDOFF_GATE_STABLE_SEC, HANDOFF_GATE_NOSIGHTING_SEC, HANDOFF_GATE_CAP_MSEC / 1000])
-		# RETURN: record where this launch came from, on disk
-		# NOW - the load wait can exit this process at
-		# hand-off, and the record is what the return boot
-		# reads to land the player back on the launching
-		# surface (see _apply_return_origin). The room names
-		# the origin (its view, the launched game); a failed
-		# load clears it again in _settle_launch.
-		var origin: Dictionary = _room.launch_origin_for(game) if _room != null \
-			else {"surface": "library", "challenge_id": ""}
-		origin["stamp"] = int(Time.get_unix_time_from_system())
-		_state.set_return_origin(origin)
-		_state.save_to_disk()
 		print("PVLDS LAUNCH: %s -> build %s (pid %d); staying in the room while it loads" % [
 			game.title, build.file_name, _launch_pid])
 		if _room != null:
@@ -3297,12 +3346,61 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 	elif _smoke_verdict_pending:
 		printerr("PVLDS SMOKE LAUNCH: FAIL - ", str(result["error"]))
 		get_tree().quit(1)
+	elif _smoke_stepaside_pending:
+		printerr("PVLDS STEPASIDE SMOKE: FAIL - ", str(result["error"]))
+		get_tree().quit(1)
 	else:
 		var msg: String = "Launch failed: %s" % str(result["error"])
 		printerr("PVLDS LAUNCH: ", msg)
 		_show_desk(msg)
 		if _desk != null:
 			_desk.show_message(msg + " Fix the setup here, then re-enter the room.")
+
+
+## FIX151: the contexts in which the step-aside must NOT fire.
+## The step-aside is this build's product behaviour; it
+## fires only on a plain product boot, with NO dev hook
+## active. The census below is every entry flag the CLI
+## arg parse can set (read off the parse block, complete
+## at FIX151): the drivers that call the launch door
+## directly set a pending flag first (the launch, lockout
+## and loading drivers, the scanwall, the pinemhi1/2,
+## return, tournament and submit-family smokes), and the
+## input-driving hooks reach the door through the room's
+## own input path with only their hook flag set - the nav
+## smoke is the standing example: its Y leg fires a real
+## launch from a card press, and a step-aside there ends
+## the app mid-smoke with no verdict (the floor caught
+## exactly that in this round's first build). The shot
+## launch is the brief's named case: a dev QA hook that
+## shares the door so it can photograph the LOADING room
+## mid-wait, then disarms and quits itself - stepping
+## aside would leave it nothing to photograph and no wait
+## to judge. None of these flags can be set in the field.
+## The FIX151 smoke driver is deliberately NOT in this
+## list - it exists to walk the product road.
+func _step_aside_suppressed() -> bool:
+	return _shot_launch_path != "" or _shot_path != "" \
+		or _shot_mimic_prefix != "" or _shot_panel112_path != "" \
+		or _shot_panelfit_path != "" or _shot_pop_prefix != "" \
+		or _shot_setup_panel_path != "" or _shot_slide_path != "" \
+		or _shot_strip_prefix != "" \
+		or _smoke_verdict_pending or _lockout_smoke_pending \
+		or _smoke_autofind or _smoke_backstep or _smoke_backtrim \
+		or _smoke_bootface or _smoke_bootfocus or _smoke_cardback \
+		or _smoke_compose or _smoke_desk or _smoke_desk127 \
+		or _smoke_deskcenter or _smoke_deskcolor or _smoke_deskedit \
+		or _smoke_dpadexit or _smoke_facecache or _smoke_focusfix \
+		or _smoke_grad or _smoke_identity or _smoke_input \
+		or _smoke_jumpbench or _smoke_landing or _smoke_letters \
+		or _smoke_loading or _smoke_lockout or _smoke_motion \
+		or _smoke_nav or _smoke_phantom or _smoke_pinemhi1 \
+		or _smoke_pinemhi2 or _smoke_placard or _smoke_quitwarm \
+		or _smoke_readout or _smoke_return or _smoke_roomsubmit \
+		or _smoke_scanwall or _smoke_scoremark or _smoke_setup_panel \
+		or _smoke_setuplook or _smoke_snappybench or _smoke_starfield \
+		or _smoke_submitnav or _smoke_submitpanel or _smoke_sweep \
+		or _smoke_swingprobe or _smoke_tournament or _smoke_xpress
 
 
 ## The load wait's poll (every frame; the checks are cheap and the
@@ -29865,6 +29963,24 @@ func _smoke_launch(game_id: String) -> void:
 		get_tree().quit(1)
 		return
 	_smoke_verdict_pending = true
+	var build: TableBuild = game.resolve_default_build(_state)
+	_on_launch_requested(game, build)
+
+
+## --pvlds-smoke-stepaside: fire a real launch through the
+## real door and let the FIX151 step-aside take the app out
+## at the spawn. Deliberately sets NO suppression flag - the
+## harness judges the step-aside from outside (the app's
+## prompt exit, the contract it left behind, the watchdog's
+## log), the way the field will meet it. The pending flag
+## only speaks if the spawn itself fails.
+func _smoke_stepaside(game_id: String) -> void:
+	var game: GameEntry = _scanner.game_by_id(game_id) if _scanner != null else null
+	if game == null:
+		printerr("PVLDS STEPASIDE SMOKE: FAIL - game not found: ", game_id)
+		get_tree().quit(1)
+		return
+	_smoke_stepaside_pending = true
 	var build: TableBuild = game.resolve_default_build(_state)
 	_on_launch_requested(game, build)
 

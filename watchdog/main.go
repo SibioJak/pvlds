@@ -77,7 +77,12 @@
 //     user put a window there, and never past three silent
 //     reclamations per window. Both duties live under the
 //     focus_herding switch, which now gates the whole focus
-//     family (FIX116),
+//     family (FIX116). FIX151 adds the diag seam on top of
+//     the switch: pvlds_diag.txt beside the contract may
+//     carry herd=off, which stands the whole family down
+//     for a session (diag.go) - the field's second cell
+//     when a launch's focus attention is itself the
+//     suspect,
 //   - in a live session, log EVERY foreground identity change
 //     (fgwatch.go): the mid-play input-loss forensics. The
 //     window inventory lines print only on window-SET changes
@@ -121,7 +126,7 @@ import (
 // session header line alongside the launcher version the
 // contract carries, so a field log names both halves of the
 // pair that produced it.
-const WatchdogVersion = "1.1.35"
+const WatchdogVersion = "1.1.36"
 
 type Contract struct {
 	Version int  `json:"version"`
@@ -539,6 +544,7 @@ func main() {
 		pinemhiRun        pinemhiRunLatch   // APPRUN: once a session makes the watcher wanted, it stays wanted for the whole app run
 		contractGoneCount int               // consecutive polls with the contract file missing (the stand-down debounce)
 		sessionB2S        b2sSighting       // the B2S server process sighting (b2s_sighting.go)
+		sessionDiag       diagState         // FIX151: the session's latched pvlds_diag.txt state (diag.go)
 		gateLogSession    int               // FIX149: the session the hand-off gate log last spoke for
 		gateLogValue      string            // FIX149: the gate verdict last logged for that session
 	)
@@ -693,6 +699,11 @@ func main() {
 				// log, and two field cases turned on it.
 				if focusHeaderLog != c.SessionID {
 					focusHeaderLog = c.SessionID
+					// FIX151: latch this session's diag herd
+					// state here, before any focus duty reads
+					// it (the header tick precedes the focus
+					// block below, every tick of the session).
+					sessionDiag = readDiag(cdir)
 					herdingWord := "off"
 					if c.FocusHerding {
 						herdingWord = "on"
@@ -709,6 +720,16 @@ func main() {
 						launcherVersion = "unknown"
 					}
 					logf("watchdog: session %d: %s (pid %d); focus herding %s (as received); watchdog %s, launcher %s", c.SessionID, filepath.Base(c.GameExePath), c.GamePID, herdingWord, WatchdogVersion, launcherVersion)
+					// FIX151: the diag herd state, logged beside
+					// the header whenever the seam is in play -
+					// herd off, or a diag file that was read and
+					// did not say off. A silent default run (no
+					// file) keeps the log's standing shape.
+					if sessionDiag.herdOff {
+						logf("watchdog: session %d: diag herd: off (pvlds_diag.txt) - no focus herding, no activation cycle, no focus sequence this session", c.SessionID)
+					} else if sessionDiag.present {
+						logf("watchdog: session %d: diag herd: on (pvlds_diag.txt present; herd not off)", c.SessionID)
+					}
 					// FIX117: a non-default actuation setting
 					// names itself in the header - a field log
 					// proves which act produced (or didn't
@@ -868,7 +889,7 @@ func main() {
 				// from facts after our last foreground touch),
 				// and it runs BEFORE the detector's tick
 				// below, so the record precedes the reading.
-				if c.FocusHerding {
+				if c.FocusHerding && !sessionDiag.herdOff {
 					nowMs := time.Now().UnixMilli()
 					// The player-thread focus feed (fgwatch.go):
 					// the player window's thread focus, logged
@@ -977,7 +998,7 @@ func main() {
 				// mid-play, polluting the exit detector's
 				// signal below. Its assertion target is the
 				// resolved player HWND when one exists.
-				if herdingAllowed(c.FocusHerding, c.SessionState) {
+				if herdingAllowed(c.FocusHerding && !sessionDiag.herdOff, c.SessionState) {
 					herdTick(c.GamePID, c.SessionID, time.Now(), ws.playerHWND)
 				}
 				// Foreground-change forensics (fgwatch.go):
@@ -1014,7 +1035,7 @@ func main() {
 				// exit detector exactly like the sequence's
 				// assertions, and it likewise runs BEFORE the
 				// detector's tick below.
-				if c.FocusHerding && c.SessionState == "live" && sessionFocus.done() {
+				if c.FocusHerding && !sessionDiag.herdOff && c.SessionState == "live" && sessionFocus.done() {
 					nowMs := time.Now().UnixMilli()
 					closerBusy := sessionCloser.stage == 1 || sessionCloser.stage == 2 ||
 						sessionHold.stage == 1 || sessionHold.stage == 2
