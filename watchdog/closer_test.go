@@ -14,9 +14,13 @@ import "testing"
 // present composite can never complete on Chris's rig because
 // the window the sighting stamps off - a hidden "CVFrame" - is
 // VPX's editor canvas and persists in the editor state. The
-// detector arms on (sighting stamped) + (a live foreground
-// excursion away from the editor), then fires when the editor
-// holds the foreground for editorForegroundSustainMs. The duty
+// detector arms on (sighting stamped) + (a play excursion:
+// the player window holding the foreground - FIX153; a merely
+// non-editor foreground is the load's own cycling and arms
+// nothing), then fires when the editor holds the foreground
+// for editorForegroundSustainMs. A session that never latches
+// play and never stamps its runtime is closed at the
+// never-played bound instead (FIX153's editor landing). The duty
 // is unconditional (no switch, no hold gesture - both stricken
 // 2026-10-22): tick() takes no enabled flag.
 
@@ -31,7 +35,12 @@ type tickIn struct {
 }
 
 var (
-	fgPlayer  = tickIn{state: "live", alive: true, sighted: true, fgEd: false}
+	// FIX153: the excursion tick is the PLAYER WINDOW holding
+	// the foreground - the fixture now actually sets fgPlayer
+	// (it never did: the old tests scripted a generic
+	// non-editor foreground, the exact looseness FIX153
+	// removes from the live latch).
+	fgPlayer  = tickIn{state: "live", alive: true, sighted: true, fgEd: false, fgPlayer: true}
 	fgEditor  = tickIn{state: "live", alive: true, sighted: true, fgEd: true}
 	fgLoading = tickIn{state: "loading", alive: true, sighted: false, fgEd: true}
 )
@@ -55,7 +64,7 @@ func drive(c *closer, session int, fromMs int64, n int, stepMs int64, in tickIn)
 }
 
 // arm walks the prologue every firing sequence has: one live
-// tick with the foreground away from the editor (the
+// tick with the player window holding the foreground (the
 // excursion), with the sighting already stamped. Asserts the
 // arm event fired exactly once.
 func arm(t *testing.T, c *closer, session int, atMs int64) {
@@ -101,16 +110,19 @@ func TestDetectorSustainResetsWhenForegroundLeaves(t *testing.T) {
 	}
 }
 
-// Scenario (a)/(d) defensive core: the editor holds the
-// foreground from the spawn instant and never leaves it. Even
-// with the sighting stamped (a table demonstrably played), the
-// detector never arms - there was no excursion - so a silent
-// exit inside that state is undetectable BY DESIGN and the
-// duty must not guess at it.
+// Defensive core: the editor holds the foreground from the
+// spawn instant and never leaves it. Even with the sighting
+// stamped, the detector never arms - there was no excursion -
+// so a silent exit inside that state is undetectable BY
+// DESIGN and the duty must not guess at it. (What happens
+// when this state outlives the never-played bound is
+// FIX153's editor-landing leg, below - the bound is a
+// separate judgement, not an arm; this drive stays well
+// inside it.)
 func TestDetectorNoExcursionNeverArms(t *testing.T) {
 	c := &closer{}
-	// 120s of editor foreground, sighted the whole time.
-	got, arms := drive(c, 1, 0, 1200, 100, fgEditor)
+	// 60s of editor foreground, sighted the whole time.
+	got, arms := drive(c, 1, 0, 600, 100, fgEditor)
 	if arms != 0 || len(got) != 0 {
 		t.Fatalf("armed/fired without an excursion (arms=%d, actions=%v)", arms, got)
 	}
@@ -311,6 +323,133 @@ func TestDetectorPushGuardNewSession(t *testing.T) {
 	c.notePush(2, 5000)
 	if got, arms := drive(c, 2, 5100, 30, 100, fgEditor); arms != 0 || len(got) != 0 {
 		t.Fatalf("session 2 inherited state across notePush (arms=%d, actions=%v)", arms, got)
+	}
+}
+
+// FIX153 leg (a) - the session 329 replay, and the NC against
+// the pre-FIX153 law. A cold-spawn session, live from the
+// spawn's first seconds: the sighting stamps off the editor
+// canvas, the runtime stamps, the foreground cycles editor ->
+// Preparing Table dialog -> editor, and the editor then holds
+// the foreground well past the sustain while the table is
+// STILL LOADING. Under the old live latch the dialog tick
+// (merely not-the-editor) armed the detector and the editor's
+// hold killed the table; here nothing may arm and nothing may
+// fire. Leg (b) rides the same session: the player foreground
+// arrives late (the load finished), play proceeds, and a
+// genuine exit landing afterwards fires exactly as before.
+func TestFix153Session329Replay(t *testing.T) {
+	c := &closer{}
+	// Spawn instant: live (promoted), editor foreground, the
+	// sighting not yet stamped.
+	spawn := tickIn{state: "live", alive: true, sighted: false, fgEd: true}
+	if got, arms := drive(c, 1, 0, 10, 100, spawn); arms != 0 || len(got) != 0 {
+		t.Fatalf("acted at the spawn instant (arms=%d, actions=%v)", arms, got)
+	}
+	// The sighting stamps; the editor still holds the
+	// foreground mid-load.
+	loadEd := tickIn{state: "live", alive: true, sighted: true, fgEd: true}
+	if got, arms := drive(c, 1, 1000, 10, 100, loadEd); arms != 0 || len(got) != 0 {
+		t.Fatalf("armed on the mid-load editor foreground (arms=%d, actions=%v)", arms, got)
+	}
+	// The runtime stamps and the Preparing Table dialog takes
+	// the foreground for a tick - the old law's arming tick.
+	dialog := tickIn{state: "live", alive: true, sighted: true, runtime: true, fgEd: false}
+	if got, arms := drive(c, 1, 2000, 1, 100, dialog); arms != 0 || len(got) != 0 {
+		t.Fatalf("the dialog tick armed the detector (arms=%d, actions=%v)", arms, got)
+	}
+	// The editor resumes and holds for 3s - past the sustain,
+	// with the sighting AND the runtime both stamped. This is
+	// the exact window session 329 died in: no arm, no fire.
+	loadEdRt := tickIn{state: "live", alive: true, sighted: true, runtime: true, fgEd: true}
+	if got, arms := drive(c, 1, 2100, 30, 100, loadEdRt); arms != 0 || len(got) != 0 {
+		t.Fatalf("fired on a loading table (arms=%d, actions=%v)", arms, got)
+	}
+	if c.armed {
+		t.Fatalf("detector armed during the load")
+	}
+	// The player window takes the foreground - the load
+	// finished. NOW the excursion latches and the arm lands.
+	play := tickIn{state: "live", alive: true, sighted: true, runtime: true, fgPlayer: true}
+	if got, arms := drive(c, 1, 5100, 10, 100, play); arms != 1 || len(got) != 0 {
+		t.Fatalf("expected exactly the arm when play took the foreground (arms=%d, actions=%v)", arms, got)
+	}
+	// A genuine exit landing: the editor holds the foreground
+	// and the close fires on the full sustain (leg (b)).
+	exitEd := tickIn{state: "live", alive: true, sighted: true, runtime: true, fgEd: true}
+	if got, _ := drive(c, 1, 6100, 12, 100, exitEd); len(got) != 0 {
+		t.Fatalf("fired inside the post-play sustain: %v", got)
+	}
+	if got, _ := drive(c, 1, 7300, 1, 100, exitEd); len(got) != 1 || got[0] != closeFEC {
+		t.Fatalf("expected FEC after the post-play sustain, got %v", got)
+	}
+}
+
+// FIX153 leg (c) - the editor landing: live from spawn, the
+// sighting stamped (the editor canvas qualifies), the runtime
+// NEVER stamps, the player foreground NEVER happens, the
+// editor holds the foreground throughout. The exit detector
+// never arms (nothing to arm on), and at the never-played
+// bound the landing resolves on the standing ladder - its own
+// action first, then the ordinary escalation and give-up -
+// instead of hanging forever. One tick before the bound:
+// still nothing.
+func TestFix153EditorLandingBound(t *testing.T) {
+	c := &closer{}
+	landing := tickIn{state: "live", alive: true, sighted: true, fgEd: true}
+	// 400ms cadence (the watchdog's real tick) up to one tick
+	// before the bound: no arm, no action.
+	if got, arms := drive(c, 1, 0, 300, 400, landing); arms != 0 || len(got) != 0 {
+		t.Fatalf("acted before the bound (arms=%d, actions=%v)", arms, got)
+	}
+	if c.armed {
+		t.Fatalf("an editor landing armed the exit detector")
+	}
+	// The bound tick (t=120000): the landing fires, in its
+	// own words.
+	got, arms := drive(c, 1, 120000, 1, 400, landing)
+	if arms != 0 || len(got) != 1 || got[0] != closeNeverPlayed {
+		t.Fatalf("expected the never-played fire at the bound, got arms=%d actions=%v", arms, got)
+	}
+	// The ladder completes unarmed: WM_CLOSE after the FEC
+	// grace, the give-up after its window, then silence.
+	if got, _ := drive(c, 1, 120400, 9, 400, landing); len(got) != 0 {
+		t.Fatalf("escalated inside the grace: %v", got)
+	}
+	if got, _ := drive(c, 1, 124000, 1, 400, landing); len(got) != 1 || got[0] != closeWMClose {
+		t.Fatalf("expected WM_CLOSE after the grace, got %v", got)
+	}
+	if got, _ := drive(c, 1, 124400, 29, 400, landing); len(got) != 0 {
+		t.Fatalf("gave up early: %v", got)
+	}
+	if got, _ := drive(c, 1, 136000, 1, 400, landing); len(got) != 1 || got[0] != closeGiveUp {
+		t.Fatalf("expected the give-up, got %v", got)
+	}
+	if got, _ := drive(c, 1, 136400, 50, 400, landing); len(got) != 0 {
+		t.Fatalf("acted after the landing's give-up: %v", got)
+	}
+}
+
+// FIX153 bound exclusions: the bound judges ONLY the
+// never-became-a-table shape. A session whose runtime stamped
+// (a table demonstrably exists, however invisible its play)
+// sits in the editor past the bound untouched - its landing
+// is the standing undetectable-by-design case, not a landing
+// to close on a clock. And a session that latched play but
+// never sighted (no arm possible) is likewise untouched: play
+// happened, so it is not the bound's subject either.
+func TestFix153BoundExclusions(t *testing.T) {
+	runtimeUp := &closer{}
+	rtEd := tickIn{state: "live", alive: true, sighted: true, runtime: true, fgEd: true}
+	if got, arms := drive(runtimeUp, 1, 0, 400, 400, rtEd); arms != 0 || len(got) != 0 {
+		t.Fatalf("the bound fired on a runtime-stamped session (arms=%d, actions=%v)", arms, got)
+	}
+	latched := &closer{}
+	playBlind := tickIn{state: "live", alive: true, sighted: false, fgPlayer: true}
+	drive(latched, 1, 0, 5, 400, playBlind) // play latches; no sighting, no arm
+	edBlind := tickIn{state: "live", alive: true, sighted: false, fgEd: true}
+	if got, arms := drive(latched, 1, 2000, 400, 400, edBlind); arms != 0 || len(got) != 0 {
+		t.Fatalf("the bound fired on a play-latched session (arms=%d, actions=%v)", arms, got)
 	}
 }
 

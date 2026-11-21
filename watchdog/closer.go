@@ -34,12 +34,45 @@ package main
 //   has stamped for this session (sighting.go; the table
 //   demonstrably loaded - the editor frame is up from VPX's
 //   start, so an unstamped session is a load, not an exit), and
-//   (b) an EXCURSION: at least one live tick whose foreground
-//   was NOT the editor window (play demonstrably took the
-//   foreground story away from the editor; without one, an
-//   editor foreground is just the spawn state continuing, and
-//   a silent exit inside it is undetectable BY DESIGN - the
-//   detector stays unarmed rather than guess).
+//   (b) an EXCURSION: the PLAYER WINDOW has held the foreground
+//   (play demonstrably took the foreground story away from the
+//   editor; without one, an editor foreground is just the spawn
+//   state continuing, and a silent exit inside it is
+//   undetectable BY DESIGN - the detector stays unarmed rather
+//   than guess).
+//
+//   FIX153 (session 329, 2026-11-21): the excursion witness used
+//   to be any live tick whose foreground was not the editor.
+//   On the cold-spawn road the session is promoted to live ~1s
+//   after spawn, so most of a load runs under that loose law:
+//   the "Preparing Table" dialog (not the editor) latched the
+//   excursion, the detector armed mid-load, and the editor's
+//   ordinary mid-load foreground hold completed the sustain
+//   and killed the table 2s after its runtime stamped - the
+//   player window appeared in the same second as the firing.
+//   The loading-phase latch (FIX150) already required the one
+//   witness a load cannot counterfeit - the player window
+//   itself in the foreground - and the live latch now requires
+//   the same witness, so both phases share one law. The
+//   sighting + runtime pair is deliberately NOT a latch: in
+//   329 both had stamped mid-load, before the player window
+//   existed in the foreground story, so they cannot tell a
+//   load from play on this rig.
+//
+//   THE NEVER-PLAYED BOUND (FIX153): a live session that has
+//   neither latched the excursion nor stamped its runtime has
+//   no evidence a table ever existed - the table failed into
+//   its editor (an editor landing). The standing
+//   never-materialised law (main.go's pendingTimeoutSec) covers
+//   a game that never APPEARED; an editor landing's process is
+//   alive, which is the one shape it cannot reach. So at
+//   neverPlayedBoundMs of live time the detector fires the
+//   same close ladder under its own action (closeNeverPlayed),
+//   and the ordinary death path brings the launcher back. A
+//   session whose runtime stamped is never the bound's subject
+//   (a table demonstrably exists), and neither is one that
+//   latched play (its exits are the armed detector's business,
+//   or undetectable by the design above).
 //
 //   THE PUSH GUARD (the one-shot focus handoff, main.go): at
 //   the hand-off the watchdog deliberately pushes the
@@ -166,10 +199,11 @@ const (
 type closeAction int
 
 const (
-	closeNone    closeAction = iota
-	closeFEC                 // send the FrontEndControls CLOSE_APP request now
-	closeWMClose             // send WM_CLOSE to the editor window now
-	closeGiveUp              // nothing landed; log it and leave VPX alone
+	closeNone        closeAction = iota
+	closeFEC                     // send the FrontEndControls CLOSE_APP request now
+	closeWMClose                 // send WM_CLOSE to the editor window now
+	closeGiveUp                  // nothing landed; log it and leave VPX alone
+	closeNeverPlayed             // FIX153: the never-played bound fired; send the FEC request now (the ladder then advances exactly as for closeFEC)
 )
 
 const (
@@ -187,21 +221,32 @@ const (
 	// After WM_CLOSE, wait this long for the process to die
 	// before concluding the close did not land.
 	closeGiveUpMs = 12000
+	// FIX153: how long a live session may run with no play
+	// excursion latched and no runtime stamped before it is
+	// judged an editor landing and closed on the ladder. The
+	// scale deliberately mirrors main.go's pendingTimeoutSec -
+	// the standing never-materialised bound - and real loads
+	// (~8s) sit two orders of magnitude inside it.
+	neverPlayedBoundMs = pendingTimeoutSec * 1000
 )
 
 // closer is the per-session exit detector + close ladder. The
 // duty is unconditional - there is no switch - but it only acts
-// in a live session with the game process alive, armed as
-// described above, and fires each escalation step at most once
-// per session. A new sessionID resets everything.
+// in a live session with the game process alive: the exit
+// judgement armed as described above, or the never-played
+// bound (FIX153) for a session that never armed at all. It
+// fires each escalation step at most once per session. A new
+// sessionID resets everything.
 type closer struct {
 	sessionID     int
-	excursion     bool  // arming half (b): a live tick whose foreground was not the editor, or a loading tick carrying the runtime + player-foreground witness (FIX150, see tick)
+	excursion     bool  // arming half (b): the player window held the foreground - on a live tick (subject to the push guard), or on a loading tick carrying the runtime witness as well (FIX150/FIX153, see tick)
 	armed         bool  // both arming halves latched; the arm is reported once, on its tick
 	editorSinceMs int64 // first tick of the current sustained editor foreground; 0 = not in it
 	stage         int   // 0 watching, 1 FEC sent, 2 WM_CLOSE sent, 3 gave up
 	actionAtMs    int64 // when the current stage's action went out
 	pushMs        int64 // when this session's one-shot focus handoff fired; 0 = no push (yet)
+	liveSinceMs   int64 // FIX153: the first live tick's clock - the never-played bound measures from here
+	liveClocked   bool  // FIX153: liveSinceMs stands (a first live tick at t=0 must not read as unset)
 }
 
 // notePush records the session's one-shot focus handoff (the
@@ -267,13 +312,26 @@ func (cl *closer) tick(nowMs int64, sessionID int, state string, alive bool, sig
 		cl.editorSinceMs = 0
 		return closeNone, false
 	}
-	// Arming. The excursion half registers on any live tick
-	// whose foreground is away from the editor - before or
-	// after the sighting stamps; both orders arm - EXCEPT a
-	// tick at or before the session's recorded focus push:
-	// that foreground may be the push's own placement, not
-	// play's (the push guard, see the header).
-	if !ws.fgIsEditor && !cl.excursion && (cl.pushMs == 0 || nowMs > cl.pushMs) {
+	// FIX153: the never-played bound's clock starts at the
+	// session's first live tick (the cold-spawn road
+	// promotes ~1s after spawn, so this is effectively
+	// the game's age).
+	if !cl.liveClocked {
+		cl.liveSinceMs = nowMs
+		cl.liveClocked = true
+	}
+	// Arming. The excursion half registers on a live tick
+	// whose foreground is the PLAYER WINDOW - before or
+	// after the sighting stamps; both orders arm - EXCEPT
+	// a tick at or before the session's recorded focus
+	// push: that foreground may be the push's own
+	// placement, not play's (the push guard, see the
+	// header). FIX153: merely "not the editor" no longer
+	// registers - a load's own foreground cycling (the
+	// Preparing Table dialog, Virtual Desktop's window)
+	// is all not-the-editor, and session 329 armed on
+	// exactly that and killed a loading table.
+	if ws.fgIsPlayer && !cl.excursion && (cl.pushMs == 0 || nowMs > cl.pushMs) {
 		cl.excursion = true
 	}
 	armedNow := false
@@ -281,44 +339,62 @@ func (cl *closer) tick(nowMs int64, sessionID int, state string, alive bool, sig
 		cl.armed = true
 		armedNow = true
 	}
-	if !cl.armed {
-		// Unarmed, the editor holding the foreground is the
-		// load/spawn state continuing - never an exit, and the
-		// sustain clock does not run.
-		cl.editorSinceMs = 0
+	if cl.armed || cl.stage > 0 {
+		// The sustain and the ladder. The stage half also
+		// runs unarmed when a ladder is already in flight:
+		// the never-played bound (below) starts one without
+		// an arm, and its escalation and give-up must still
+		// complete on editor ticks.
+		if !ws.fgIsEditor {
+			// The foreground left the editor: any sustain in
+			// progress is broken, and a ladder already fired
+			// pauses here (its stage waits for the editor state
+			// to return, exactly as the window-trigger ladder
+			// did) - it never advances against a foreground that
+			// says the player is somewhere else.
+			cl.editorSinceMs = 0
+			return closeNone, armedNow
+		}
+		if cl.editorSinceMs == 0 {
+			cl.editorSinceMs = nowMs
+		}
+		switch cl.stage {
+		case 0:
+			if nowMs-cl.editorSinceMs >= editorForegroundSustainMs {
+				cl.stage = 1
+				cl.actionAtMs = nowMs
+				return closeFEC, armedNow
+			}
+		case 1:
+			if nowMs-cl.actionAtMs >= fecGraceMs {
+				cl.stage = 2
+				cl.actionAtMs = nowMs
+				return closeWMClose, armedNow
+			}
+		case 2:
+			if nowMs-cl.actionAtMs >= closeGiveUpMs {
+				cl.stage = 3
+				return closeGiveUp, armedNow
+			}
+		}
 		return closeNone, armedNow
 	}
-	if !ws.fgIsEditor {
-		// The foreground left the editor: any sustain in
-		// progress is broken, and a ladder already fired
-		// pauses here (its stage waits for the editor state
-		// to return, exactly as the window-trigger ladder
-		// did) - it never advances against a foreground that
-		// says the player is somewhere else.
-		cl.editorSinceMs = 0
-		return closeNone, armedNow
+	// FIX153, the never-played bound: live this long with
+	// no play excursion latched and no runtime ever
+	// stamped, the table demonstrably never became a
+	// table - it failed into its editor. Close it on the
+	// standing ladder (its own action, so the log tells
+	// the landing apart from an exit) and let the death
+	// path bring the launcher back. Judged only on an
+	// editor-foreground tick: the landing state itself.
+	if !cl.excursion && !runtimeSighted && ws.fgIsEditor && nowMs-cl.liveSinceMs >= neverPlayedBoundMs {
+		cl.stage = 1
+		cl.actionAtMs = nowMs
+		return closeNeverPlayed, armedNow
 	}
-	if cl.editorSinceMs == 0 {
-		cl.editorSinceMs = nowMs
-	}
-	switch cl.stage {
-	case 0:
-		if nowMs-cl.editorSinceMs >= editorForegroundSustainMs {
-			cl.stage = 1
-			cl.actionAtMs = nowMs
-			return closeFEC, armedNow
-		}
-	case 1:
-		if nowMs-cl.actionAtMs >= fecGraceMs {
-			cl.stage = 2
-			cl.actionAtMs = nowMs
-			return closeWMClose, armedNow
-		}
-	case 2:
-		if nowMs-cl.actionAtMs >= closeGiveUpMs {
-			cl.stage = 3
-			return closeGiveUp, armedNow
-		}
-	}
+	// Unarmed, the editor holding the foreground is the
+	// load/spawn state continuing - never an exit, and the
+	// sustain clock does not run.
+	cl.editorSinceMs = 0
 	return closeNone, armedNow
 }

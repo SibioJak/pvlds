@@ -126,7 +126,7 @@ import (
 // session header line alongside the launcher version the
 // contract carries, so a field log names both halves of the
 // pair that produced it.
-const WatchdogVersion = "1.1.37"
+const WatchdogVersion = "1.1.38"
 
 type Contract struct {
 	Version int  `json:"version"`
@@ -1135,6 +1135,14 @@ func main() {
 				case closeFEC:
 					ack := sendFrontEndControlsClose(c.GamePID)
 					logf("watchdog: session %d: editor has held the foreground for %dms - table exit; sent PinSim::FrontEndControls CLOSE_APP (acknowledged: %v)", c.SessionID, editorForegroundSustainMs, ack)
+				case closeNeverPlayed:
+					// FIX153: the never-played bound - the
+					// table failed into its editor and no
+					// play ever latched. The same orderly
+					// request; when VPX dies the death path
+					// below relaunches the launcher.
+					ack := sendFrontEndControlsClose(c.GamePID)
+					logf("watchdog: session %d: no play latched and no table runtime in %ds - the table never became a table (editor landing); sent PinSim::FrontEndControls CLOSE_APP (acknowledged: %v)", c.SessionID, neverPlayedBoundMs/1000, ack)
 				case closeWMClose:
 					ok := sendEditorClose(ws.editorHWND)
 					logf("watchdog: session %d: VPX still open after the FrontEndControls request; sent WM_CLOSE to the editor window (posted: %v)", c.SessionID, ok)
