@@ -217,48 +217,17 @@ type Contract struct {
 	// written before the field existed; the launcher treats 0
 	// as "not yet" and its load cap still bounds the wait.
 	RuntimeSeenUnix int64 `json:"runtime_seen_unix"`
-	// B2SPresentSinceUnix is FIX149's hand-off gate feed,
-	// owned by THIS process (b2s_sighting.go's tracker): the
-	// unix second the B2S server's CONTINUOUS presence began,
-	// or 0 while it is absent. Maintained on the sighting's
-	// cadence through writeContractMerged, session-guarded,
-	// exactly like the sighting stamps above; the resident
-	// launcher reads it during its load wait and holds its
-	// hand-off exit until the presence has held 5s. Absent in
-	// contracts written before the field existed; the
-	// launcher treats 0 as "not present", which is the truth
-	// for those builds' sessions too.
-	B2SPresentSinceUnix int64 `json:"b2s_present_since_unix"`
-	// B2SSeenUnix is FIX150's latching twin of the stamp
-	// above, also owned by THIS process: the unix second the
-	// B2S server was FIRST sighted this session, or 0 if it
-	// has not been sighted yet. It never resets within the
-	// session (the tracker resets it only on a session
-	// change). The re-keyed gate reads it for its
-	// never-sighted early release: the continuous stamp
-	// alone reads 0 both for "never seen" and for "seen,
-	// then gone", and only the first of those may release
-	// early. Maintained through the same merged writes as
-	// the stamp above. Absent in contracts written before
-	// the field existed; the launcher treats 0 as "not
-	// seen", which is the truth for those builds too.
-	B2SSeenUnix int64 `json:"b2s_seen_unix"`
-	// HandoffGate is the hand-off gate's word, owned by the
-	// LAUNCHER: "" only before the load wait starts, then
-	// "armed" (stamped when the load wait starts - FIX150:
-	// the gate arms on EVERY launch), "held" while the
-	// launcher is holding its exit for the B2S server, then
-	// the release word ("released-stable" /
-	// "released-nosighting" / "released-cap") stamped in
-	// the same save that marks the session live. The
-	// watchdog never writes it; it LOGS its transitions
-	// (the disarm_reason pattern), so a field log carries
-	// the gate's word beside the sighting lines that
-	// decided it. Absent in older contracts: "" - nothing
-	// to log. (FIX149 keyed the gate on a .directb2s
-	// filename and it never engaged in the field; FIX150
-	// re-keys it on this process's sighting stamps.)
-	HandoffGate string `json:"handoff_gate"`
+	// (b2s_present_since_unix / b2s_seen_unix /
+	// handoff_gate stood here in 1.1.34-1.1.39:
+	// FIX149/150's hand-off gate and its sighting
+	// feed. FIX155 removed the gate and the fields
+	// with it; the sighting tracker itself stays
+	// (b2s_sighting.go) - its present/absent lines
+	// are the standing B2S health signal and its
+	// seen latch feeds the name window's expiry
+	// in-process. A stale contract carrying the
+	// keys is parsed without them and they are
+	// never written again. Schema stays v2.)
 	// (spawn_pending / game_args / game_cwd stood here
 	// in 1.1.37–1.1.39: FIX152's cold spawn - the launch
 	// order this process fired itself. FIX155 removed
@@ -281,14 +250,6 @@ type Contract struct {
 
 const (
 	tickInterval = 400 * time.Millisecond
-	// handoffGateStableWindow is FIX149's stability window:
-	// how long the B2S server must be CONTINUOUSLY present
-	// before the launcher's hand-off gate releases on the
-	// stability word. The launcher judges the same window
-	// off the contract stamp (ui/main.gd's
-	// HANDOFF_GATE_STABLE_SEC - the two must agree; this
-	// side owns only the log line that names the crossing).
-	handoffGateStableWindow = 5 * time.Second
 	pendingTimeoutSec = 120   // session armed but the game never appeared
 	healthyWindowSec  = 20    // a relaunched launcher living this long is healthy
 	maxStrikes        = 3     // fast-death strikes before disarm + exit
@@ -326,26 +287,6 @@ func normalizeState(s string) string {
 		return "live"
 	}
 	return s
-}
-
-// handoffGateLogText renders the launcher's hand-off gate
-// verdict word (contract handoff_gate, FIX149) as the line
-// this log speaks for it. An unknown word is quoted as-is -
-// the log's job is to carry the fact, not to judge it.
-func handoffGateLogText(word string) string {
-	switch word {
-	case "armed":
-		return "armed - the launcher's load wait is watching for the B2S server"
-	case "held":
-		return "held - the launcher is holding its exit for the B2S server"
-	case "released-stable":
-		return "released - the B2S server held steady and the launcher handed off"
-	case "released-nosighting":
-		return "released - no B2S server was sighted and the launcher handed off"
-	case "released-cap":
-		return "released - the gate's cap was reached and the launcher handed off"
-	}
-	return word
 }
 
 func readContract() (*Contract, error) {
@@ -569,8 +510,6 @@ func main() {
 		contractGoneCount int               // consecutive polls with the contract file missing (the stand-down debounce)
 		sessionB2S        b2sSighting       // the B2S server process sighting (b2s_sighting.go)
 		sessionDiag       diagState         // FIX151: the session's latched pvlds_diag.txt state (diag.go)
-		gateLogSession    int               // FIX149: the session the hand-off gate log last spoke for
-		gateLogValue      string            // FIX149: the gate verdict last logged for that session
 	)
 
 	relaunch := func(c *Contract, why string) {
@@ -638,16 +577,6 @@ func main() {
 		}
 		now := time.Now().Unix()
 		sessionActive := c.SessionState == "loading" || c.SessionState == "live"
-		// FIX149: the hand-off gate's verdicts, logged on
-		// transition (the disarm_reason pattern - the
-		// launcher writes the word, this log carries it), so
-		// a field log shows the gate holding and releasing
-		// beside the sighting lines that decided it.
-		if c.HandoffGate != "" && (c.SessionID != gateLogSession || c.HandoffGate != gateLogValue) {
-			logf("watchdog: session %d: hand-off gate: %s", c.SessionID, handoffGateLogText(c.HandoffGate))
-			gateLogSession = c.SessionID
-			gateLogValue = c.HandoffGate
-		}
 		// FIX155: the name window's resident trigger
 		// (namewindow.go) - the first tick observing a
 		// new armed loading session carrying a table
@@ -782,6 +711,11 @@ func main() {
 				// this session, answered by the log itself.
 				// Born as a FIX145 diagnostic; kept in FIX148
 				// as a standing health signal for the B2S fix.
+				// FIX155: the tracker also feeds the name
+				// window's expiry in-process (its seen latch,
+				// read at the loop's end) - its contract
+				// stamps, the hand-off gate's feed, are gone
+				// with the gate.
 				b2sPresent := processExistsByName(b2sServerImageName)
 				if sessionB2S.observe(c.SessionID, b2sPresent, time.Now()) {
 					if b2sPresent {
@@ -789,36 +723,6 @@ func main() {
 					} else {
 						logf("watchdog: session %d: b2s server process: absent", c.SessionID)
 					}
-				}
-				// FIX149: maintain the hand-off gate's feed -
-				// the contract's b2s_present_since_unix stamp
-				// mirrors the tracker's continuous-presence
-				// clock (0 while absent). Written merged and
-				// session-guarded, only when the stamp
-				// actually moves, like the sighting stamps
-				// below. The stability crossing is logged
-				// once per presence run: it is the moment the
-				// gate's release condition first holds.
-				if stamp := sessionB2S.presentSinceUnix(); stamp != c.B2SPresentSinceUnix {
-					writeContractMerged(func(mc *Contract) {
-						if mc.SessionID == c.SessionID {
-							mc.B2SPresentSinceUnix = stamp
-						}
-					})
-				}
-				// FIX150: the latching first-sighting stamp
-				// rides the same merged write discipline -
-				// it moves exactly once per session (0 ->
-				// the first sighting), so the write is rare.
-				if stamp := sessionB2S.seenUnix(); stamp != c.B2SSeenUnix {
-					writeContractMerged(func(mc *Contract) {
-						if mc.SessionID == c.SessionID {
-							mc.B2SSeenUnix = stamp
-						}
-					})
-				}
-				if sessionB2S.noteStable(time.Now(), handoffGateStableWindow) {
-					logf("watchdog: session %d: b2s server stable - continuously present for %s (the hand-off gate may release)", c.SessionID, handoffGateStableWindow)
 				}
 				// Target bookkeeping (FIX116 logging): the
 				// resolved player target (target.go) is logged

@@ -747,31 +747,13 @@ var _lockout_setup_fired: bool = false
 const LAUNCH_SETTLE_MSEC: int = 1500 ## table runtime up + this long = hand off
 const LAUNCH_CAP_MSEC: int = 45000 ## never hold the room hostage to a stuck load
 const LAUNCH_DEAD_GRACE_MSEC: int = 1500 ## a dead spawn pid gets this long for the watchdog's by-path window report before the launch is called failed
-## The hand-off gate (FIX149, re-keyed FIX150): a met
-## hand-off cue does not exit at once - the exit waits until
-## the B2S server (the watchdog's contract stamps) has been
-## CONTINUOUSLY present this long...
-const HANDOFF_GATE_STABLE_SEC: int = 5 ## must agree with the watchdog's handoffGateStableWindow (watchdog/main.go)
-## ...or, if the server was NEVER sighted, until this long
-## after launch (every living sighting on record arrived by
-## +3.6s; this is margin, so a table with no B2S bring-up is
-## not held for the full cap)...
-const HANDOFF_GATE_NOSIGHTING_SEC: int = 10
-## ...or until this long after launch, whichever comes
-## first, so a server that flickers and never stabilises
-## cannot trap the player in the room. All three sit well
-## inside LAUNCH_CAP_MSEC.
-const HANDOFF_GATE_CAP_MSEC: int = 30000
 var _launch_pending: bool = false
 var _launch_game: GameEntry = null
 var _launch_pid: int = 0
 var _launch_session_id: int = 0
 var _launch_started_msec: int = 0
-var _launch_started_unix: int = 0 ## FIX150: the launch moment in the stamps' own (unix) grain, for the no-sighting release
 var _launch_runtime_seen_msec: int = -1
 var _launch_pid_dead_msec: int = -1
-var _launch_gate_held_logged: bool = false ## FIX149: the gate's hold has been printed + stamped for this launch
-var _launch_gate_verdict: String = "" ## FIX149/FIX150: "" while the gate has not released; then released-stable | released-nosighting | released-cap
 var _xr_session_ending: bool = false ## latched by the OpenXR session_ending signal when present
 
 # Scan machinery. The scan (db load + folder walk + matching) runs on a
@@ -3271,7 +3253,6 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 		_launch_pid = int(result.get("pid", -1))
 		_launch_session_id = int(result.get("session_id", 0))
 		_launch_started_msec = Time.get_ticks_msec()
-		_launch_started_unix = int(Time.get_unix_time_from_system())
 		_launch_runtime_seen_msec = -1
 		_launch_pid_dead_msec = -1
 		# RETURN: record where this launch came from, on disk
@@ -3286,23 +3267,6 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 		origin["stamp"] = int(Time.get_unix_time_from_system())
 		_state.set_return_origin(origin)
 		_state.save_to_disk()
-		# FIX150: the hand-off gate arms on EVERY launch - its
-		# key is the watchdog's B2S sighting, not a filename
-		# (FIX149 keyed it on a .directb2s stem match beside
-		# the build, which came back empty on Chris's machine
-		# and the gate never engaged in the field). The arming
-		# is stamped into the contract NOW, so the watchdog's
-		# log carries the gate's word from the load wait's
-		# first moment - no launch passes unwitnessed.
-		# FIX151: this whole wait path is dormant for product
-		# launches (the step-aside above pre-empts it); it
-		# still serves the dev contexts that ride the wait
-		# in-process. FIX152: the cold spawn above pre-empts
-		# it the same way - the product road never waits.
-		_launch_gate_held_logged = false
-		_launch_gate_verdict = ""
-		_launch_service.stamp_handoff_gate("armed")
-		print("PVLDS LAUNCH: hand-off gate: armed - watching for the B2S server (stable %ds, no-sighting %ds, cap %ds)" % [HANDOFF_GATE_STABLE_SEC, HANDOFF_GATE_NOSIGHTING_SEC, HANDOFF_GATE_CAP_MSEC / 1000])
 		print("PVLDS LAUNCH: %s -> build %s (pid %d); staying in the room while it loads" % [
 			game.title, build.file_name, _launch_pid])
 		if _room != null:
@@ -3337,13 +3301,11 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 ## the hyperspace warp could hold until the table was genuinely
 ## up; FIX138 deleted the warp and restored this form - the
 ## lock stamp went with it.)
-## FIX149/FIX150: the three SUCCESS settles route through
-## the hand-off gate (_settle_launch_gated) - a met cue holds
-## the exit until the gate releases (the B2S server held
-## steady, or was never sighted, or the gate's cap passes).
-## The failure settle and the hold-exit disarm do NOT route
-## through it: they keep their instant timing, gate or no
-## gate.
+## (FIX149/150's hand-off gate routed the three SUCCESS
+## settles through a B2S-stability hold until FIX155
+## removed it: the cues settle at once again, the
+## pre-FIX149 shape. The failure settle and the hold-exit
+## disarm keep their instant timing, as they always did.)
 func _poll_launch() -> void:
 	if _shot_launch_path != "":
 		_poll_shot_launch()
@@ -3361,7 +3323,7 @@ func _poll_launch() -> void:
 				_settle_launch(false, "VPX closed while the table was loading")
 				return
 	if _xr_enabled and _xr_session_exiting():
-		_settle_launch_gated("the XR session changed hands")
+		_settle_launch(true, "the XR session changed hands")
 		return
 	var contract: WatchdogContract = WatchdogContract.load_from_disk()
 	if contract.session_id == _launch_session_id and contract.hold_exit_fired_unix > 0:
@@ -3381,64 +3343,10 @@ func _poll_launch() -> void:
 		if _launch_runtime_seen_msec < 0:
 			_launch_runtime_seen_msec = now
 		elif now - _launch_runtime_seen_msec >= LAUNCH_SETTLE_MSEC:
-			_settle_launch_gated("VPX's runtime is up")
+			_settle_launch(true, "VPX's runtime is up")
 			return
 	if now - _launch_started_msec >= LAUNCH_CAP_MSEC:
-		_settle_launch_gated("the load cap was reached")
-
-
-## The hand-off gate (FIX149, re-keyed FIX150): a SUCCESS
-## settle asked for by _poll_launch's cues, routed through
-## the gate. The gate arms on EVERY launch (FIX149 keyed it
-## on a .directb2s filename match beside the build; the
-## match came back empty on Chris's machine, the gate never
-## engaged in the field, and the exit theory went untested -
-## filenames are the wrong instrument; the watchdog's
-## sighting is ground truth). The exit holds until the first
-## of these reads true in the contract's stamps:
-##   released-stable:    the server has been CONTINUOUSLY
-##                       present for HANDOFF_GATE_STABLE_SEC;
-##   released-nosighting: the server was never sighted and
-##                       HANDOFF_GATE_NOSIGHTING_SEC have
-##                       passed since launch (no bring-up
-##                       exists to protect);
-##   released-cap:       HANDOFF_GATE_CAP_MSEC after launch
-##                       (a server that flickers and never
-##                       holds 5s cannot trap the player).
-## While it holds, the poll keeps running, so the failure
-## settle above and the hold-exit path keep their instant
-## timing - the gate delays only the hand-off, never a
-## failure. The verdict is printed here and stamped into
-## the contract by mark_live, where the watchdog logs it
-## beside the sighting lines. Why: in the field (sessions
-## 316/320) the server came up ~3s into the load and died
-## the same second the launcher exited at the hand-off -
-## the exit's VR handover churns VPX while the table
-## script's Controller.Run() is still mid-flight. Holding
-## the exit until the bring-up has demonstrably finished
-## removes our exit from that window.
-func _settle_launch_gated(reason: String) -> void:
-	if _launch_gate_verdict == "":
-		var contract: WatchdogContract = WatchdogContract.load_from_disk()
-		var now_unix: int = int(Time.get_unix_time_from_system())
-		var same_session: bool = contract.session_id == _launch_session_id
-		if same_session and contract.b2s_present_since_unix > 0 \
-				and now_unix - contract.b2s_present_since_unix >= HANDOFF_GATE_STABLE_SEC:
-			_launch_gate_verdict = "released-stable"
-		elif same_session and contract.b2s_seen_unix == 0 \
-				and now_unix - _launch_started_unix >= HANDOFF_GATE_NOSIGHTING_SEC:
-			_launch_gate_verdict = "released-nosighting"
-		elif Time.get_ticks_msec() - _launch_started_msec >= HANDOFF_GATE_CAP_MSEC:
-			_launch_gate_verdict = "released-cap"
-		else:
-			if not _launch_gate_held_logged:
-				_launch_gate_held_logged = true
-				_launch_service.stamp_handoff_gate("held")
-				print("PVLDS LAUNCH: hand-off gate: held - holding the exit until the B2S server holds steady for %ds, or is never sighted by %ds (cap %ds)" % [HANDOFF_GATE_STABLE_SEC, HANDOFF_GATE_NOSIGHTING_SEC, HANDOFF_GATE_CAP_MSEC / 1000])
-			return
-	if _launch_gate_verdict != "":
-		print("PVLDS LAUNCH: hand-off gate: %s" % _launch_gate_verdict)
-	_settle_launch(true, reason)
+		_settle_launch(true, "the load cap was reached")
 
 
 ## The wait resolves. Success: mark the session live and exit
@@ -3452,7 +3360,7 @@ func _settle_launch(ok: bool, reason: String) -> void:
 	_launch_game = null
 	var elapsed: float = float(Time.get_ticks_msec() - _launch_started_msec) / 1000.0
 	if ok:
-		_launch_service.mark_live(_launch_gate_verdict)
+		_launch_service.mark_live()
 		print("PVLDS LAUNCH: hand-off complete (%s) after %.1fs; launcher exiting" % [reason, elapsed])
 		_intentional_launch_exit = true
 		_request_art_warm_stop()
@@ -30664,6 +30572,27 @@ func _run_core_test() -> void:
 	_expect(not contract4.pinemhi_manage and contract4.pinemhi_folder == ""
 		and contract4.pinemhi_watcher_pid == 0 and contract4.pinemhi_watcher_state == "",
 		"pinemhi2b: a contract without the watcher keys loads them off/empty", failures)
+	# FIX155: the B2S name feed + the retired hunt fields.
+	# A fresh contract carries the launched table's path
+	# and NONE of the retired keys (the cold spawn's order
+	# fields, the hand-off gate and its sighting feed); a
+	# stale contract still carrying those keys loads
+	# clean - the keys are ignored, and the table path
+	# defaults empty (no name feed for that session).
+	contract.game_table_path = "D:/vPinball/VisualPinball/Tables/Big Chief (Williams 1965)_Teisen_MOD.vpx"
+	_expect(contract.save_to_disk(), "fix155: contract carrying the table path saves", failures)
+	var contract5: WatchdogContract = WatchdogContract.load_from_disk()
+	_expect(contract5.game_table_path == "D:/vPinball/VisualPinball/Tables/Big Chief (Williams 1965)_Teisen_MOD.vpx",
+		"fix155: the contract's table path round-trips (the B2S name feed)", failures)
+	var written5: Dictionary = contract5.to_dictionary()
+	_expect(not written5.has("spawn_pending") and not written5.has("game_args") and not written5.has("game_cwd")
+		and not written5.has("handoff_gate") and not written5.has("b2s_present_since_unix") and not written5.has("b2s_seen_unix"),
+		"fix155: the written contract carries no cold-spawn or hand-off-gate keys", failures)
+	_expect(_write_text_file(contract_file, "{\"session_state\": \"loading\", \"spawn_pending\": true, \"game_args\": [\"-play\", \"D:/Tables/X.vpx\"], \"game_cwd\": \"D:/\", \"handoff_gate\": \"held\", \"b2s_seen_unix\": 9}"),
+		"fix155: stale contract with the retired keys written", failures)
+	var stale5: WatchdogContract = WatchdogContract.load_from_disk()
+	_expect(stale5.session_state == "loading" and stale5.game_table_path == "",
+		"fix155: a contract carrying the retired keys loads clean (keys ignored, no table path)", failures)
 	if contract_backup != "":
 		var cf: FileAccess = FileAccess.open(contract_file, FileAccess.WRITE)
 		if cf != null:
