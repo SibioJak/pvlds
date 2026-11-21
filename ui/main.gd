@@ -29052,6 +29052,36 @@ func _desk127_save_legs() -> void:
 	cen = _desk.fix127_census()
 	_desk127_expect(str(cen["pinemhi_save_text"]) == "PINemHi settings saved",
 		"pinemhi save: the saved settings read PINemHi settings saved")
+	# FIX154 (phase 2): the bottom bar's Save Options is
+	# the same button in a second seat - ONE state
+	# source. Both labels must agree at rest, across a
+	# dirtying edit, and across a save pressed on the
+	# BAR button (which must land the same config file
+	# the top button's press writes - the same save,
+	# not a copy of it).
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["save_bottom_text"]) == str(cen["save_text"]),
+		"save bottom: the bar button stands in step with the top button (got '%s' vs '%s')" % [str(cen["save_bottom_text"]), str(cen["save_text"])])
+	_desk127_expect(bool(cen["save_bottom_in_bar"]) and bool(cen["save_bottom_left_of_enter"]),
+		"save bottom: the bar button stands in the bottom bar, left of Enter")
+	_desk127_set_exe(OS.get_environment("PVLDS_DESK127_STAGED_EXE"))
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["save_text"]) == "Save Options" and str(cen["save_bottom_text"]) == "Save Options",
+		"save bottom: an edit flips BOTH labels to Save Options (got '%s' / '%s')" % [str(cen["save_text"]), str(cen["save_bottom_text"])])
+	_desk._save_button_bottom.pressed.emit()
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["save_text"]) == "Options Saved" and str(cen["save_bottom_text"]) == "Options Saved",
+		"save bottom: a press on the BAR button lands BOTH labels clean (got '%s' / '%s')" % [str(cen["save_text"]), str(cen["save_bottom_text"])])
+	var after_bottom: PvldsConfig = PvldsConfig.new()
+	_desk127_expect(after_bottom.load_from_disk() and after_bottom.vpx_exe_path == OS.get_environment("PVLDS_DESK127_STAGED_EXE"),
+		"save bottom: the bar button's press wrote the config FILE (the same save, not a copy)")
+	# Leave the desk as the legs above left it: the GL
+	# exe restored and saved, through the top button.
+	_desk127_set_exe(OS.get_environment("PVLDS_DESK127_GL_EXE"))
+	_desk._save_button.pressed.emit()
+	cen = _desk.fix127_census()
+	_desk127_expect(str(cen["save_text"]) == "Options Saved" and str(cen["save_bottom_text"]) == "Options Saved",
+		"save bottom: clean on both seats after the restore")
 
 
 func _desk127_grab(file_name: String) -> void:

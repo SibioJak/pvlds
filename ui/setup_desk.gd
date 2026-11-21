@@ -26,6 +26,7 @@ var _folder_rows: VBoxContainer
 var _folder_edits: Array[LineEdit] = []
 var _folder_lights: Array[Label] = [] ## FIX127: one health light per folder row, parallel to _folder_edits
 var _save_button: Button ## FIX127: Save Options - stateful (Save Options / Options Saved)
+var _save_button_bottom: Button ## FIX154 (phase 2): Save Options' second seat, in the bottom bar - same state, same press (see _refresh_field_states)
 var _scan_button: Button
 var _stats_label: Label
 var _scan_ipdb_label: Label ## FIX127: the IPDB coverage line, riding in the Scan area (decision 9)
@@ -307,7 +308,15 @@ func _refresh_field_states() -> void:
 	_set_light(_shots_light, dir_light_state(_shots_edit.text))
 	_set_light(_pinemhi_light, dir_light_state(_pinemhi_edit.text))
 	if _save_button != null:
-		_save_button.text = "Options Saved" if not _any_dirty() else "Save Options"
+		# FIX154 (phase 2): ONE state source - the label is
+		# computed once, off the same _any_dirty() every
+		# refresh already ran, and BOTH seats wear it: the
+		# top button and the bottom bar's. No second
+		# computation exists to drift from this one.
+		var save_text: String = "Options Saved" if not _any_dirty() else "Save Options"
+		_save_button.text = save_text
+		if _save_button_bottom != null:
+			_save_button_bottom.text = save_text
 	if _wovp_save_button != null:
 		_wovp_save_button.text = "Key saved" if snap_wovp != "" and not _wovp_dirty() else "Save key"
 	if _shots_save_button != null:
@@ -1179,6 +1188,17 @@ func _build_ui() -> void:
 	var bar_row: HBoxContainer = HBoxContainer.new()
 	bar_row.add_theme_constant_override("separation", 12)
 	_bottom_bar.add_child(bar_row)
+	# FIX154 (phase 2): Save Options' second seat - the
+	# same stateful button at the bar's left, so the
+	# persist-without-scanning door is reachable without
+	# scrolling back to step 1. Same handler, same label
+	# source (_refresh_field_states); Enter stays the
+	# bar's primary - the wide, centred, large-type door.
+	_save_button_bottom = Button.new()
+	_save_button_bottom.text = "Save Options"
+	_save_button_bottom.pressed.connect(_on_save_options_pressed)
+	_save_button_bottom.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	bar_row.add_child(_save_button_bottom)
 	var bar_spacer_l: Control = Control.new()
 	bar_spacer_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bar_row.add_child(bar_spacer_l)
@@ -1197,6 +1217,17 @@ func _build_ui() -> void:
 	var bar_spacer_r: Control = Control.new()
 	bar_spacer_r.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bar_row.add_child(bar_spacer_r)
+	# FIX154 (phase 2): the balance - an invisible spacer
+	# at the bar's right mirroring the Save button's
+	# width, so the two expanding spacers split a
+	# symmetric remainder and Enter keeps the bar's
+	# exact middle (the FIX128 law) with the second seat
+	# standing at its left.
+	var bar_balance: Control = Control.new()
+	bar_balance.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar_row.add_child(bar_balance)
+	_save_button_bottom.resized.connect(func() -> void:
+		bar_balance.custom_minimum_size.x = _save_button_bottom.size.x)
 
 	_dialog = FileDialog.new()
 	_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -1910,6 +1941,9 @@ func fix127_census() -> Dictionary:
 		"shots_light": _light_state(_shots_light),
 		"pinemhi_light": _light_state(_pinemhi_light),
 		"save_text": _save_button.text if _save_button != null else "",
+		"save_bottom_text": _save_button_bottom.text if _save_button_bottom != null else "",
+		"save_bottom_in_bar": _bottom_bar != null and _save_button_bottom != null and _bottom_bar.is_ancestor_of(_save_button_bottom),
+		"save_bottom_left_of_enter": _save_button_bottom != null and _enter_button != null and _save_button_bottom.get_parent() == _enter_button.get_parent() and _save_button_bottom.get_index() < _enter_button.get_index(),
 		"scan_text": _scan_button.text if _scan_button != null else "",
 		"wovp_save_text": _wovp_save_button.text if _wovp_save_button != null else "",
 		"shots_save_text": _shots_save_button.text if _shots_save_button != null else "",
