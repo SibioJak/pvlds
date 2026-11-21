@@ -238,13 +238,9 @@ var nameFeedSession int
 // older launcher's session) gets no window and no
 // log line; a path naming no .vpx file logs the
 // feed's own line and the launch goes ahead - the
-// feed is an assist, never a gate. (In FIX155's
-// first phase a session still carrying the cold
-// spawn's marker is skipped: that road raises its
-// window at its own firing, exactly as FIX154 left
-// it. The marker's removal retires the exception.)
+// feed is an assist, never a gate.
 func observeNameFeed(c *Contract, now time.Time) {
-	if !c.Armed || c.SessionState != "loading" || c.SessionID == 0 || c.SessionID == nameFeedSession || c.SpawnPending {
+	if !c.Armed || c.SessionState != "loading" || c.SessionID == 0 || c.SessionID == nameFeedSession {
 		return
 	}
 	nameFeedSession = c.SessionID
