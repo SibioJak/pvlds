@@ -280,6 +280,13 @@ func checkin(config: PvldsConfig) -> WatchdogContract:
 	c.b2s_present_since_unix = 0
 	c.b2s_seen_unix = 0
 	c.handoff_gate = ""
+	# FIX152: a boot consumes whatever session stood in
+	# the contract - a cold spawn's launch order is
+	# consumed with it (the watchdog's own abandonment
+	# line covers the firing that never happens).
+	c.spawn_pending = false
+	c.game_args.clear()
+	c.game_cwd = ""
 	c.save_to_disk()
 	ensure_watchdog()
 	return c
@@ -288,7 +295,15 @@ func checkin(config: PvldsConfig) -> WatchdogContract:
 ## Play. On success (result["ok"]) VPX is spawned and loading; the
 ## session is in the "loading" state and the launcher stays resident
 ## until the hand-off (mark_live) or the failure (fail_launch).
-func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, build: TableBuild) -> Dictionary:
+##
+## FIX152: cold=true is the cold spawn - the contract is armed
+## exactly as below, but carrying the spawn_pending marker and
+## the full launch spec (game_args / game_cwd), and NO spawn
+## happens here: the caller quits on the strength of the order
+## and the watchdog fires the spawn itself once the launcher
+## is dead and a settle delay of quiet has passed. The result
+## carries pid 0 and "cold": true.
+func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, build: TableBuild, cold: bool = false) -> Dictionary:
 	var plan: LaunchPlan = LaunchPlan.build_plan(config, game, build)
 	if not plan.valid:
 		return {"ok": false, "error": plan.error, "plan": plan}
@@ -329,6 +344,17 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	c.b2s_present_since_unix = 0
 	c.b2s_seen_unix = 0
 	c.handoff_gate = ""
+	# FIX152: the cold spawn's marker + spec ride the arm
+	# (a resident launch buries them - the fresh session
+	# starts clean either way). game_cwd is the FIX143
+	# working directory, named here so the watchdog's
+	# spawn uses exactly the folder this spawn would have.
+	c.spawn_pending = cold
+	c.game_args.clear()
+	c.game_cwd = ""
+	if cold:
+		c.game_args.append_array(plan.args)
+		c.game_cwd = LaunchService.game_working_dir(plan.exe_path)
 	c.game_started_unix = int(Time.get_unix_time_from_system())
 	c.launcher_path = LaunchService.launcher_path()
 	c.launcher_args = LaunchService.launcher_args()
@@ -336,6 +362,11 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	c.last_checkin_unix = int(Time.get_unix_time_from_system())
 	c.save_to_disk()
 	ensure_watchdog()
+	if cold:
+		# The order stands in the contract; the watchdog
+		# owns the firing. No pid exists yet - the
+		# watchdog writes the game's pid when it spawns.
+		return {"ok": true, "error": "", "plan": plan, "pid": 0, "session_id": c.session_id, "cold": true}
 	# FIX143: the assisted spawn - VPX runs with its own
 	# folder as its working directory (spawn_game above).
 	# The contract takes the GAME's pid (the watchdog's

@@ -129,6 +129,41 @@ extends RefCounted
 ##                    may release early. The launcher never
 ##                    writes it, except to CLEAR it on a fresh
 ##                    arm. Schema stays v2.
+##   spawn_pending    FIX152: the cold spawn's marker, written
+##                    by the LAUNCHER: true when the armed
+##                    "loading" session is a launch ORDER, not
+##                    a launched game - the launcher has quit
+##                    (or is quitting) without spawning, and
+##                    the watchdog is to fire the spawn itself
+##                    once the launcher is dead and a settle
+##                    delay of quiet has passed (the field
+##                    evidence: every dying launch overlapped
+##                    the spawn with the app's own VR-session
+##                    teardown; every living one had no
+##                    teardown in flight). The watchdog clears
+##                    it in the write that lands the game's
+##                    pid. Absent in contracts written before
+##                    the field existed: loads default false -
+##                    the resident spawn, today's behaviour
+##                    for those builds' sessions. Schema
+##                    stays v2.
+##   game_args        FIX152: the launch spec's argv - the
+##                    plan's fully resolved argument list
+##                    (template expanded, {table} already
+##                    substituted), written by the launcher
+##                    alongside spawn_pending so the watchdog
+##                    can fire the cold spawn verbatim. The
+##                    watchdog never writes it; a fresh arm
+##                    without the marker clears it. Absent in
+##                    older contracts: loads default empty.
+##                    Schema stays v2.
+##   game_cwd         FIX152: the launch spec's working
+##                    directory (the VPX folder - the FIX143
+##                    cwd, named in the contract so the
+##                    watchdog's spawn uses exactly the
+##                    directory the launcher would have).
+##                    Written and cleared with game_args.
+##                    Schema stays v2.
 ##   handoff_gate     FIX149/FIX150: the hand-off gate's word
 ##                    for the session, written by the
 ##                    LAUNCHER: "" only before the load wait
@@ -189,6 +224,9 @@ var game_window_seen_unix: int = 0
 var runtime_seen_unix: int = 0
 var b2s_present_since_unix: int = 0
 var b2s_seen_unix: int = 0
+var spawn_pending: bool = false
+var game_args: Array[String] = []
+var game_cwd: String = ""
 var handoff_gate: String = ""
 var launcher_path: String = ""
 var launcher_args: Array[String] = []
@@ -251,6 +289,14 @@ static func load_from_disk() -> WatchdogContract:
 	c.runtime_seen_unix = int(d.get("runtime_seen_unix", 0))
 	c.b2s_present_since_unix = int(d.get("b2s_present_since_unix", 0))
 	c.b2s_seen_unix = int(d.get("b2s_seen_unix", 0))
+	c.spawn_pending = bool(d.get("spawn_pending", false))
+	c.game_cwd = str(d.get("game_cwd", ""))
+	c.game_args.clear()
+	var ga: Variant = d.get("game_args", [])
+	if ga is Array:
+		var garr: Array = ga
+		for item: Variant in garr:
+			c.game_args.append(str(item))
 	c.handoff_gate = str(d.get("handoff_gate", ""))
 	c.launcher_path = str(d.get("launcher_path", ""))
 	c.launcher_pid = int(d.get("launcher_pid", 0))
@@ -290,6 +336,12 @@ func to_dictionary() -> Dictionary:
 	d["runtime_seen_unix"] = runtime_seen_unix
 	d["b2s_present_since_unix"] = b2s_present_since_unix
 	d["b2s_seen_unix"] = b2s_seen_unix
+	d["spawn_pending"] = spawn_pending
+	var gargs: Array = []
+	for a: String in game_args:
+		gargs.append(a)
+	d["game_args"] = gargs
+	d["game_cwd"] = game_cwd
 	d["handoff_gate"] = handoff_gate
 	d["launcher_path"] = launcher_path
 	var la: Array = []

@@ -11,6 +11,19 @@ package main
 //	           focus guard. Sightings, supervision, exit
 //	           detection and the closer are untouched.
 //
+// FIX152 adds the cold spawn's tuning key:
+//
+//	spawn_delay_sec=<n>   the cold spawn's settle delay:
+//	           how many seconds of quiet must pass after
+//	           the launcher's death is first observed
+//	           before the watchdog fires the pending
+//	           spawn. Integer seconds; an absent, junk or
+//	           negative value is no setting at all and
+//	           the default (5s, coldspawn.go) stands. The
+//	           field protocol's tuning knob: if 5s of
+//	           quiet is not enough, 10 is a diag edit,
+//	           not a rebuild.
+//
 // The file lives beside the contract (the app data dir -
 // the place the FIX145 protocol used and the place the
 // FIX151 field protocol puts it). An absent file is the
@@ -24,6 +37,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -31,6 +45,13 @@ import (
 type diagState struct {
 	present bool // the file was there (its contents may still be junk)
 	herdOff bool // it carries herd=off
+	// spawnDelaySec is FIX152's cold-spawn settle delay
+	// as the file stated it; spawnDelaySet says whether
+	// a usable value stood there at all (an absent, junk
+	// or negative value is no setting, and the caller's
+	// default stands).
+	spawnDelaySec int
+	spawnDelaySet bool
 }
 
 // readDiag reads and parses the diag file in dir.
@@ -41,8 +62,18 @@ func readDiag(dir string) diagState {
 	}
 	st := diagState{present: true}
 	for _, line := range strings.Split(string(data), "\n") {
-		if k, v, ok := parseDiagLine(line); ok && k == "herd" && v == "off" {
+		k, v, ok := parseDiagLine(line)
+		if !ok {
+			continue
+		}
+		if k == "herd" && v == "off" {
 			st.herdOff = true
+		}
+		if k == "spawn_delay_sec" {
+			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+				st.spawnDelaySec = n
+				st.spawnDelaySet = true
+			}
 		}
 	}
 	return st

@@ -126,7 +126,7 @@ import (
 // session header line alongside the launcher version the
 // contract carries, so a field log names both halves of the
 // pair that produced it.
-const WatchdogVersion = "1.1.36"
+const WatchdogVersion = "1.1.37"
 
 type Contract struct {
 	Version int  `json:"version"`
@@ -248,6 +248,26 @@ type Contract struct {
 	// filename and it never engaged in the field; FIX150
 	// re-keys it on this process's sighting stamps.)
 	HandoffGate string `json:"handoff_gate"`
+	// SpawnPending, GameArgs and GameCwd are FIX152's cold
+	// spawn: the marker and the launch spec, owned by the
+	// LAUNCHER. SpawnPending=true on an armed "loading"
+	// session means the contract is a launch ORDER, not a
+	// launched game: the launcher quit without spawning,
+	// and THIS process is to fire the spawn itself once
+	// the launcher is dead and a settle delay of quiet
+	// has passed (coldspawn.go carries the machine).
+	// GameArgs is the plan's resolved argv (template
+	// expanded, table substituted) and GameCwd the
+	// working directory (the VPX folder), both verbatim
+	// from the launcher's own spawn spec. The watchdog
+	// clears SpawnPending in the write that lands the
+	// game's pid; it never writes GameArgs/GameCwd.
+	// Absent in contracts written before the fields
+	// existed: false/empty - the resident spawn, those
+	// builds' behaviour.
+	SpawnPending bool     `json:"spawn_pending"`
+	GameArgs     []string `json:"game_args"`
+	GameCwd      string   `json:"game_cwd"`
 	// (focus_locked_unix stood here in 1.1.25–1.1.26: the
 	// focus sequence's lock stamp, written for the launcher's
 	// warp hold. FIX138 removed the field with the warp; the
@@ -439,7 +459,14 @@ type holdLadder struct {
 func gameAlive(c *Contract) (bool, int) {
 	contractAlive := c.GamePID > 0 && processAlive(c.GamePID)
 	var discovered []int
-	if c.GamePID == 0 && c.GameExePath != "" {
+	// FIX152: a standing cold-spawn order (spawn_pending,
+	// no pid yet) runs NO discovery - the order's game is
+	// not born, and discovery would adopt any live
+	// same-exe process (a player's open editor; the
+	// FIX113 disaster's shape) as the session's game.
+	// The firing writes the pid and clears the marker in
+	// one write; discovery resumes with it.
+	if c.GamePID == 0 && c.GameExePath != "" && !c.SpawnPending {
 		discovered = findPIDsByExe(c.GameExePath)
 	}
 	return resolveSessionGamePID(c.GamePID, contractAlive, discovered, os.Getpid())
@@ -522,6 +549,10 @@ func main() {
 	holdW := &holdWatchState{}
 	go holdW.run()
 	var sessionHold holdLadder
+	var sessionColdSpawn coldSpawnState // FIX152: the cold
+	// spawn's firing machine (coldspawn.go) - one pending
+	// launch order at a time, latched when first sighted
+	// and resolved or abandoned in the log's own words.
 
 	var (
 		sawGameAlive      bool
@@ -597,6 +628,11 @@ func main() {
 				// true.
 				contractGoneCount++
 				if contractGoneCount >= contractGoneTicks {
+					// FIX152: a contract that goes away
+					// over a standing cold-spawn order
+					// abandons it (logged first, in the
+					// cold spawn's own words).
+					sessionColdSpawn.noteAbandoned("the contract went away before the spawn")
 					logf("watchdog: contract file gone; standing down")
 					return
 				}
@@ -609,6 +645,11 @@ func main() {
 			if reason == "" {
 				reason = "player Exit"
 			}
+			// FIX152: a disarm over a standing cold-spawn
+			// order abandons it - the spawn never fires
+			// for a disarmed session, and the log says so
+			// in the cold spawn's own words first.
+			sessionColdSpawn.noteAbandoned(fmt.Sprintf("the contract was disarmed (%s) before the spawn", reason))
 			logf("watchdog: contract disarmed (%s); standing down", reason)
 			return
 		}
@@ -623,6 +664,29 @@ func main() {
 			logf("watchdog: session %d: hand-off gate: %s", c.SessionID, handoffGateLogText(c.HandoffGate))
 			gateLogSession = c.SessionID
 			gateLogValue = c.HandoffGate
+		}
+		// FIX152: the cold spawn's tick (coldspawn.go) - a
+		// standing launch order is fired from here, once
+		// the launcher is dead and the quiet has passed.
+		// While an order stands the session has no game:
+		// the duties below stay inert by their own gates
+		// (gameAlive runs no discovery under the marker,
+		// and the never-materialised law stands down -
+		// the two guards stand in their places).
+		switch sessionColdSpawn.tick(c, cdir, time.Now()) {
+		case coldStoodDown:
+			// A hold-exit inside the pending window: the
+			// machine disarmed by the gesture (written
+			// there) - stand down, the gesture's shape
+			// everywhere.
+			return
+		case coldFailed:
+			// The spawn failed and the session stands
+			// marked failed: relaunch the launcher so
+			// the failure surfaces (the standing
+			// machinery), then carry on.
+			relaunch(c, "cold spawn failed")
+			continue
 		}
 		alive, gpid := gameAlive(c)
 		if alive && gpid > 0 && gpid != c.GamePID {
@@ -1143,10 +1207,16 @@ func main() {
 					relaunch(c, "game exited")
 					continue
 				}
-			} else if c.GameStartedUnix > 0 && now-c.GameStartedUnix > pendingTimeoutSec && !launcherAlive(c, 0) {
+			} else if !c.SpawnPending && c.GameStartedUnix > 0 && now-c.GameStartedUnix > pendingTimeoutSec && !launcherAlive(c, 0) {
 				// The launcher spawned... something that never
 				// appeared, and the launcher is gone too. Bring the
 				// player back rather than stranding them at a desktop.
+				// FIX152: a standing cold-spawn order is exempt -
+				// its game is unborn BY DESIGN (the launcher is
+				// supposed to be gone; the firing is this
+				// process's own pending duty, and the order's
+				// stuck bound in coldspawn.go owns a launcher
+				// that never dies).
 				logf("watchdog: session %d never materialised in %ds; relaunching launcher", c.SessionID, pendingTimeoutSec)
 				relaunch(c, "session never materialised")
 				continue

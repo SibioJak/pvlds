@@ -321,6 +321,8 @@ var _smoke_launch_game: String = ""
 var _smoke_verdict_pending: bool = false ## a smoke launch is riding the load wait; its settle prints the verdict and quits
 var _smoke_stepaside_game: String = "" ## --pvlds-smoke-stepaside: fire one real launch and let the FIX151 step-aside take the app out; the harness judges from outside
 var _smoke_stepaside_pending: bool = false ## a step-aside smoke launch is in flight; only its spawn-failure branch speaks
+var _smoke_coldspawn_game: String = "" ## --pvlds-smoke-coldspawn: fire one real launch and let the FIX152 cold spawn take the app out (the watchdog fires the spawn); the harness judges from outside
+var _smoke_coldspawn_pending: bool = false ## a cold-spawn smoke launch is in flight; only its launch-failure branch speaks
 var _shot_launch_path: String = ""
 var _shot_launch_fired: bool = false
 var _shot_launch_at_msec: int = 0
@@ -893,6 +895,9 @@ func _ready() -> void:
 	var stepaside_idx: int = user_args.find("--pvlds-smoke-stepaside")
 	if stepaside_idx >= 0 and stepaside_idx + 1 < user_args.size():
 		_smoke_stepaside_game = user_args[stepaside_idx + 1]
+	var coldspawn_idx: int = user_args.find("--pvlds-smoke-coldspawn")
+	if coldspawn_idx >= 0 and coldspawn_idx + 1 < user_args.size():
+		_smoke_coldspawn_game = user_args[coldspawn_idx + 1]
 	var shot_launch_idx: int = user_args.find("--pvlds-shot-launch")
 	if shot_launch_idx >= 0 and shot_launch_idx + 1 < user_args.size():
 		_shot_launch_path = user_args[shot_launch_idx + 1]
@@ -1376,7 +1381,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	elif (_smoke_launch_game != "" or _smoke_stepaside_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _smoke_snappybench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _shot_panelfit_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_submitnav or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_loading or _smoke_scoremark or _smoke_pinemhi2 or _smoke_starfield) and not configured:
+	elif (_smoke_launch_game != "" or _smoke_stepaside_game != "" or _smoke_coldspawn_game != "" or _smoke_lockout or _smoke_dpadexit or _smoke_nav or _smoke_input or _smoke_letters or _smoke_bootfocus or _smoke_cardback or _smoke_motion or _smoke_swingprobe or _smoke_landing or _smoke_facecache or _smoke_compose or _smoke_identity or _smoke_jumpbench or _smoke_snappybench or _shot_pop_prefix != "" or _shot_strip_prefix != "" or _shot_mimic_prefix != "" or _smoke_setup_panel or _smoke_scanwall or _shot_setup_panel_path != "" or _shot_panelfit_path != "" or _smoke_tournament or _smoke_roomsubmit or _smoke_submitnav or _smoke_return or _smoke_focusfix or _smoke_backstep or _smoke_pinemhi1 or _smoke_loading or _smoke_scoremark or _smoke_pinemhi2 or _smoke_starfield) and not configured:
 		# The smoke hook prefers a real installed config (its whole
 		# point is integrating against one); seeding is only the
 		# fallback. Seeding over a real config also breaks in exports,
@@ -1384,7 +1389,7 @@ func _ready() -> void:
 		_seeded_dummy = true
 		_seed_dummy_config()
 		configured = true
-	if _smoke_launch_game != "" or _smoke_stepaside_game != "" or _shot_launch_path != "" or _smoke_lockout:
+	if _smoke_launch_game != "" or _smoke_stepaside_game != "" or _smoke_coldspawn_game != "" or _shot_launch_path != "" or _smoke_lockout:
 		if OS.has_environment("PVLDS_SMOKE_EXE"):
 			_config.vpx_exe_path = OS.get_environment("PVLDS_SMOKE_EXE")
 		if OS.has_environment("PVLDS_SMOKE_ARGS"):
@@ -1950,6 +1955,11 @@ func _finish_scan() -> void:
 		var gid2: String = _smoke_stepaside_game
 		_smoke_stepaside_game = ""
 		_smoke_stepaside(gid2)
+		return
+	if _smoke_coldspawn_game != "":
+		var gid3: String = _smoke_coldspawn_game
+		_smoke_coldspawn_game = ""
+		_smoke_coldspawn(gid3)
 		return
 	if _enter_room_after_scan:
 		_enter_room_after_scan = false
@@ -3266,7 +3276,16 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 		return
 	if _launch_pending:
 		return ## one load at a time; the room's buttons are dead too
-	var result: Dictionary = _launch_service.perform_launch(_config, _state, game, build)
+	# FIX152: the product road is the COLD SPAWN - the same
+	# census that gated FIX151's step-aside gates it (a
+	# plain product boot, no dev hook): the launch writes
+	# its order into the contract and this app quits
+	# WITHOUT spawning; the watchdog fires the spawn once
+	# the app is dead and the quiet has passed. Suppressed
+	# contexts keep the resident road (perform_launch
+	# spawns, the load wait below runs) exactly as before.
+	var cold: bool = not _step_aside_suppressed()
+	var result: Dictionary = _launch_service.perform_launch(_config, _state, game, build, cold)
 	if bool(result["ok"]):
 		_launch_pending = true
 		_launch_game = game
@@ -3289,38 +3308,46 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 		origin["stamp"] = int(Time.get_unix_time_from_system())
 		_state.set_return_origin(origin)
 		_state.save_to_disk()
-		if not _step_aside_suppressed():
-			# FIX151: STEP ASIDE. The session is armed and the
-			# watchdog holds it; this process now leaves -
-			# immediately, cleanly, on its own terms, before
-			# VPX's runtime is even up. The field evidence
-			# (FIX150's godot.log): at the VR handover the
-			# environment's session transfer sends this app a
-			# window-close request; the load wait ignores it
-			# and the process dies ~1s later anyway, mid-load,
-			# without settling. The FIX149/150 gate guarded
-			# that settle and kept the app in the transfer
-			# storm longer. The world that works (the FIX147
-			# spawner cell) has no LaunchPin in the transfer
-			# at all. NO disarm, no contract change: the
-			# session stays armed/"loading" exactly as a
-			# settle leaves it, minus mark_live - the
-			# watchdog's promotion (a loading session whose
-			# supervising launcher is gone promotes to live)
-			# owns the session from here, and its relaunch
-			# brings this app back when the table exits. The
-			# exit is an intentional launch exit, like the
-			# settle's: a stray window close on the way out
-			# must not disarm. The art warmer stops first, as
-			# on every deliberate quit - an unstopped pass
-			# hangs shutdown. The load wait never starts; the
-			# FIX149/150 gate below is DORMANT in this build,
-			# reached only by the dev contexts
-			# _step_aside_suppressed() names.
+		if cold:
+			# FIX152: COLD SPAWN. The launch order stands in
+			# the contract (spawn_pending + the resolved
+			# spec) and the watchdog holds the session; this
+			# process now leaves - immediately, cleanly,
+			# BEFORE anything is spawned. The road here:
+			# FIX149/150's gate guarded a hand-off settle
+			# the environment never let run (the app died
+			# unsettled at the VR handover in every B2S
+			# session); FIX151's step-aside took the app
+			# out at the spawn and the server still died -
+			# the spawn itself overlapped this app's
+			# session teardown (it dies at +0s, VPX's
+			# runtime arrives at +2s, teardown still in
+			# flight). Every living launch on record -
+			# the editor, the command line, the FIX147
+			# spawner, the 18:03 control where this app
+			# was closed SECONDS before the spawner ran -
+			# had no teardown in flight when VPX started.
+			# So the spawn waits for quiet: the watchdog
+			# watches this process die, lets a settle
+			# delay pass, and only then fires the
+			# FIX148-shaped spawn itself. NO disarm, no
+			# contract change beyond the order itself:
+			# the session stays armed/"loading", and the
+			# watchdog's promotion owns it once the game
+			# is up; its relaunch brings this app back
+			# when the table exits. The exit is an
+			# intentional launch exit, like the settle's:
+			# a stray window close on the way out must not
+			# disarm. The art warmer stops first, as on
+			# every deliberate quit - an unstopped pass
+			# hangs shutdown. The load wait never starts;
+			# the FIX149/150 gate below stays DORMANT for
+			# product launches, reached only by the dev
+			# contexts _step_aside_suppressed() names.
 			_intentional_launch_exit = true
 			_request_art_warm_stop()
-			print("PVLDS LAUNCH: %s -> build %s (pid %d); stepping aside - the watchdog owns the session from here" % [
-				game.title, build.file_name, _launch_pid])
+			print("PVLDS LAUNCH: %s -> build %s; cold spawn - the launch order is with the watchdog, which spawns once this app is gone and the quiet has passed" % [
+				game.title, build.file_name])
 			get_tree().quit()
 			return
 		# FIX150: the hand-off gate arms on EVERY launch - its
@@ -3334,7 +3361,8 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 		# FIX151: this whole wait path is dormant for product
 		# launches (the step-aside above pre-empts it); it
 		# still serves the dev contexts that ride the wait
-		# in-process.
+		# in-process. FIX152: the cold spawn above pre-empts
+		# it the same way - the product road never waits.
 		_launch_gate_held_logged = false
 		_launch_gate_verdict = ""
 		_launch_service.stamp_handoff_gate("armed")
@@ -3349,6 +3377,9 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 	elif _smoke_stepaside_pending:
 		printerr("PVLDS STEPASIDE SMOKE: FAIL - ", str(result["error"]))
 		get_tree().quit(1)
+	elif _smoke_coldspawn_pending:
+		printerr("PVLDS COLDSPAWN SMOKE: FAIL - ", str(result["error"]))
+		get_tree().quit(1)
 	else:
 		var msg: String = "Launch failed: %s" % str(result["error"])
 		printerr("PVLDS LAUNCH: ", msg)
@@ -3360,7 +3391,10 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 ## FIX151: the contexts in which the step-aside must NOT fire.
 ## The step-aside is this build's product behaviour; it
 ## fires only on a plain product boot, with NO dev hook
-## active. The census below is every entry flag the CLI
+## active. FIX152: the same census now gates the COLD
+## SPAWN (the product road's current shape - the launch
+## order is written and the app quits unspawned); the
+## function's name keeps its FIX151 coinage. The census below is every entry flag the CLI
 ## arg parse can set (read off the parse block, complete
 ## at FIX151): the drivers that call the launch door
 ## directly set a pending flag first (the launch, lockout
@@ -3378,7 +3412,9 @@ func _on_launch_requested(game: GameEntry, build: TableBuild) -> void:
 ## aside would leave it nothing to photograph and no wait
 ## to judge. None of these flags can be set in the field.
 ## The FIX151 smoke driver is deliberately NOT in this
-## list - it exists to walk the product road.
+## list - it exists to walk the product road. FIX152:
+## the cold-spawn smoke driver is likewise absent, for
+## the same reason.
 func _step_aside_suppressed() -> bool:
 	return _shot_launch_path != "" or _shot_path != "" \
 		or _shot_mimic_prefix != "" or _shot_panel112_path != "" \
@@ -29981,6 +30017,27 @@ func _smoke_stepaside(game_id: String) -> void:
 		get_tree().quit(1)
 		return
 	_smoke_stepaside_pending = true
+	var build: TableBuild = game.resolve_default_build(_state)
+	_on_launch_requested(game, build)
+
+
+## --pvlds-smoke-coldspawn: fire a real launch through the
+## real door and let the FIX152 cold spawn take the app
+## out - the launch order lands in the contract and the
+## app quits unspawned; the watchdog fires the spawn
+## itself after the quiet. Deliberately sets NO
+## suppression flag - the harness judges the cold spawn
+## from outside (the app's prompt exit, the pending
+## contract it left behind, the watchdog's log), the way
+## the field will meet it. The pending flag only speaks
+## if the launch itself fails before the order stands.
+func _smoke_coldspawn(game_id: String) -> void:
+	var game: GameEntry = _scanner.game_by_id(game_id) if _scanner != null else null
+	if game == null:
+		printerr("PVLDS COLDSPAWN SMOKE: FAIL - game not found: ", game_id)
+		get_tree().quit(1)
+		return
+	_smoke_coldspawn_pending = true
 	var build: TableBuild = game.resolve_default_build(_state)
 	_on_launch_requested(game, build)
 
