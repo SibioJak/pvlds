@@ -262,6 +262,19 @@ func (s *coldSpawnState) startHelper(c *Contract, cdir string, now time.Time) co
 	}
 	pidFile := filepath.Join(cdir, spawnPidFileName)
 	os.Remove(pidFile) // a stale report is a per-launch fact, never a record
+	// FIX154: raise the name window BEFORE the birth
+	// (namewindow.go). The B2S name scrape runs when
+	// VPX's script initialises - seconds into the load
+	// this spawn is about to start - and reads the
+	// table's name off a desktop window that must
+	// already exist. A spec naming no table file gets
+	// no window, logged in the feed's own words; the
+	// launch goes ahead either way.
+	if title, ok := nameWindowTitleForArgs(c.GameArgs); ok {
+		raiseNameWindow(c.SessionID, title, now)
+	} else {
+		logf("watchdog: session %d: name window: the launch spec names no table file - no window raised", c.SessionID)
+	}
 	args := []string{spawnModeArg, cwd, pidFile, c.GameExePath}
 	args = append(args, c.GameArgs...)
 	helperPID, err := startDetached(self, args)

@@ -126,7 +126,7 @@ import (
 // session header line alongside the launcher version the
 // contract carries, so a field log names both halves of the
 // pair that produced it.
-const WatchdogVersion = "1.1.38"
+const WatchdogVersion = "1.1.39"
 
 type Contract struct {
 	Version int  `json:"version"`
@@ -541,6 +541,10 @@ func main() {
 	// started or adopted watcher alike. (The twin-instance
 	// return above never reaches here: a twin owns nothing.)
 	defer closePinemhiWatcher()
+	// FIX154: a name window still up at stand-down comes
+	// down with the watch - it is this process's window,
+	// and the drop logs its edge like any other.
+	defer dropNameWindow("the watchdog is standing down")
 	logf("watchdog: on duty (pid %d), contract %s", os.Getpid(), contractPath)
 
 	// The hold watch (hold_logic.go): polls the button on its
@@ -1232,6 +1236,18 @@ func main() {
 		} else {
 			sawGameAlive = false
 		}
+
+		// FIX154: the name window's expiry judgement
+		// (namewindow.go) - one per tick, fed the
+		// session's latched B2S sighting (the tracker's
+		// latch read only when it belongs to THIS
+		// session, so a previous session's sighting is
+		// never spent on this one's window). The ticks
+		// that `continue` above judge a tick late; the
+		// stand-down returns are covered by the deferred
+		// drop.
+		b2sSeen := sessionB2S.sessionID == c.SessionID && sessionB2S.seenUnix() != 0
+		judgeNameWindow(c, b2sSeen, time.Now())
 
 		// ---- PINemHi watcher duty (pinemhi.go) ------------------
 		// APPRUN (2026-11-17): the watcher starts - or is
