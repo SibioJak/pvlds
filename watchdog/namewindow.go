@@ -33,12 +33,20 @@ package main
 // an empty name.
 //
 // The fix is to hold the window the scrape reads:
-// while a cold-spawn launch is in flight, the
-// watchdog keeps ONE tiny window titled exactly
-// "Visual Pinball - [<launched table's stem>]"
-// (raised in coldspawn.go BEFORE the spawn fires).
-// The DLL scrapes the real name, the EXE receives
-// it, and the exact-name glass loads. Field proof
+// while a launch is in flight, the watchdog keeps
+// ONE tiny window titled exactly "Visual Pinball -
+// [<launched table's stem>]". FIX154 raised it
+// inside the cold spawn, before the watchdog fired
+// the birth itself. FIX155 moves the trigger to the
+// resident road (the launcher spawns VPX itself and
+// stays open): the contract is armed BEFORE the
+// spawn and carries the table's path, so the
+// watchdog raises the window on the first tick it
+// observes the new loading session - within one
+// 400 ms poll of the arm, seconds before VPX's
+// script initialises and the scrape runs. The DLL
+// scrapes the real name, the EXE receives it, and
+// the exact-name glass loads. Field proof
 // (2026-11-21): a command-prompt window with that
 // title left open during a LaunchPin launch of Big
 // Chief - table loaded, B2S active. No table, B2S,
@@ -76,30 +84,10 @@ var (
 	nameWindowDestroy = destroyNameWindow
 )
 
-// tableStemFromArgs finds the launched table's file
-// stem in a launch argv (the cold spawn's game_args):
-// the element naming a .vpx file. The launcher's
-// tokenizer keeps a quoted path in ONE element with
-// the quotes consumed, but a hand-written template
-// can embed the path in a larger element
-// (--file=<path>) or leave quotes on it - both are
-// read here. The stem is the file's base name minus
-// the .vpx extension, verbatim otherwise (spaces,
-// parens, underscores preserved - the B2S scrape and
-// the glass lookup are exact-match on it). Pure;
-// unit-tested.
-func tableStemFromArgs(args []string) (string, bool) {
-	for _, a := range args {
-		p := strings.Trim(strings.TrimSpace(a), "\"")
-		if !strings.HasSuffix(strings.ToLower(p), ".vpx") {
-			continue
-		}
-		if stem, ok := tableFileStem(p); ok {
-			return stem, true
-		}
-	}
-	return "", false
-}
+// (FIX154 derived the stem from the cold spawn's
+// game_args argv; FIX155's contract carries the
+// table's path itself, and tableFileStem below is
+// the one derivation both roads' facts flow through.)
 
 // tableFileStem derives the stem from one table file
 // path. Both separator spellings are read on any host
@@ -120,11 +108,12 @@ func nameWindowTitle(stem string) string {
 	return "Visual Pinball - [" + stem + "]"
 }
 
-// nameWindowTitleForArgs is the cold spawn's one
-// question: what should this launch's window be
-// titled - and is there a table in the spec at all?
-func nameWindowTitleForArgs(args []string) (string, bool) {
-	stem, ok := tableStemFromArgs(args)
+// nameWindowTitleForPath is the resident trigger's
+// one question: what should this launch's window be
+// titled - and does the contract's table path name
+// a table at all?
+func nameWindowTitleForPath(tablePath string) (string, bool) {
+	stem, ok := tableFileStem(tablePath)
 	if !ok {
 		return "", false
 	}
@@ -229,4 +218,43 @@ func judgeNameWindow(c *Contract, b2sSeen bool, now time.Time) {
 	if reason := sessionNameWindow.judge(c.SessionID, c.SessionState, b2sSeen, now); reason != "" {
 		dropNameWindow(reason)
 	}
+}
+
+// nameFeedSession is the session the resident
+// trigger below has already made its decision for
+// (0 = none yet): one feed decision per session, so
+// a session is never re-judged tick after tick.
+var nameFeedSession int
+
+// observeNameFeed is FIX155's resident trigger: the
+// main loop feeds it every tick's contract, and the
+// first tick that observes a NEW armed loading
+// session carrying a table path raises that
+// session's name window. The contract is armed
+// before the spawn, so the raise lands within one
+// poll of the arm - ahead of the game's birth, and
+// seconds ahead of the script init that runs the
+// scrape. A contract carrying no table path (an
+// older launcher's session) gets no window and no
+// log line; a path naming no .vpx file logs the
+// feed's own line and the launch goes ahead - the
+// feed is an assist, never a gate. (In FIX155's
+// first phase a session still carrying the cold
+// spawn's marker is skipped: that road raises its
+// window at its own firing, exactly as FIX154 left
+// it. The marker's removal retires the exception.)
+func observeNameFeed(c *Contract, now time.Time) {
+	if !c.Armed || c.SessionState != "loading" || c.SessionID == 0 || c.SessionID == nameFeedSession || c.SpawnPending {
+		return
+	}
+	nameFeedSession = c.SessionID
+	if c.GameTablePath == "" {
+		return
+	}
+	title, ok := nameWindowTitleForPath(c.GameTablePath)
+	if !ok {
+		logf("watchdog: session %d: name window: the launch names no table file (%q) - no window raised", c.SessionID, c.GameTablePath)
+		return
+	}
+	raiseNameWindow(c.SessionID, title, now)
 }

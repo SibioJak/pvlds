@@ -269,8 +269,11 @@ func (s *coldSpawnState) startHelper(c *Contract, cdir string, now time.Time) co
 	// table's name off a desktop window that must
 	// already exist. A spec naming no table file gets
 	// no window, logged in the feed's own words; the
-	// launch goes ahead either way.
-	if title, ok := nameWindowTitleForArgs(c.GameArgs); ok {
+	// launch goes ahead either way. FIX155: the title
+	// derives from the contract's game_table_path -
+	// the same field the resident trigger reads (the
+	// arm writes it on every launch).
+	if title, ok := nameWindowTitleForPath(c.GameTablePath); ok {
 		raiseNameWindow(c.SessionID, title, now)
 	} else {
 		logf("watchdog: session %d: name window: the launch spec names no table file - no window raised", c.SessionID)

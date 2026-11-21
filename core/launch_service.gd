@@ -287,6 +287,9 @@ func checkin(config: PvldsConfig) -> WatchdogContract:
 	c.spawn_pending = false
 	c.game_args.clear()
 	c.game_cwd = ""
+	# FIX155: the consumed session's name feed goes with
+	# it - a boot never inherits a table name.
+	c.game_table_path = ""
 	c.save_to_disk()
 	ensure_watchdog()
 	return c
@@ -334,6 +337,12 @@ func perform_launch(config: PvldsConfig, state: StateStore, game: GameEntry, bui
 	c.session_id += 1
 	c.session_state = "loading"
 	c.game_exe_path = plan.exe_path
+	# FIX155: the B2S name feed rides every arm - the
+	# launched table's path, from which the watchdog
+	# derives the stem for its name window (the contract
+	# is saved below, before the spawn, so the window is
+	# up before VPX's script initialises).
+	c.game_table_path = plan.table_path
 	c.game_pid = 0
 	c.game_window_seen_unix = 0
 	c.runtime_seen_unix = 0

@@ -82,6 +82,21 @@ extends RefCounted
 ##                    the one relaunch. (Schema v1 called these
 ##                    "launching" / "playing"; loads normalize them.)
 ##   game_exe_path    the VPX executable of the live session
+##   game_table_path  FIX155: the launched build's full .vpx
+##                    path, written by the launcher on the
+##                    launch arm (before the spawn) and
+##                    cleared at check-in. It is the B2S
+##                    name feed on the resident road: the
+##                    watchdog derives the table's file
+##                    stem from it and holds the FIX154
+##                    name window ("Visual Pinball -
+##                    [<stem>]") while the session loads,
+##                    so the B2S DLL's editor-title scrape
+##                    finds the filename a separate-process
+##                    launch otherwise never hands it.
+##                    Absent in contracts written before
+##                    the field existed: loads default ""
+##                    and no window is raised. Schema v2.
 ##   game_pid         VPX process id once spawned (0 = not yet / none)
 ##   game_started_unix
 ##   game_window_seen_unix  stamped by the watchdog when the game's
@@ -218,6 +233,7 @@ var hold_exit_fired_unix: int = 0
 var session_id: int = 0
 var session_state: String = "idle"
 var game_exe_path: String = ""
+var game_table_path: String = ""
 var game_pid: int = 0
 var game_started_unix: int = 0
 var game_window_seen_unix: int = 0
@@ -283,6 +299,7 @@ static func load_from_disk() -> WatchdogContract:
 	c.session_state = str(d.get("session_state", "idle"))
 	c.session_state = WatchdogContract.normalize_state(c.session_state)
 	c.game_exe_path = str(d.get("game_exe_path", ""))
+	c.game_table_path = str(d.get("game_table_path", ""))
 	c.game_pid = int(d.get("game_pid", 0))
 	c.game_started_unix = int(d.get("game_started_unix", 0))
 	c.game_window_seen_unix = int(d.get("game_window_seen_unix", 0))
@@ -330,6 +347,7 @@ func to_dictionary() -> Dictionary:
 	d["session_id"] = session_id
 	d["session_state"] = session_state
 	d["game_exe_path"] = game_exe_path
+	d["game_table_path"] = game_table_path
 	d["game_pid"] = game_pid
 	d["game_started_unix"] = game_started_unix
 	d["game_window_seen_unix"] = game_window_seen_unix

@@ -44,71 +44,135 @@ func swapNameWindowFake(t *testing.T) *nameWindowFake {
 	f := &nameWindowFake{}
 	oldCreate, oldDestroy := nameWindowCreate, nameWindowDestroy
 	oldState := sessionNameWindow
+	oldFeed := nameFeedSession
 	nameWindowCreate, nameWindowDestroy = f.create, f.destroy
 	sessionNameWindow = nameWindowState{}
+	nameFeedSession = 0
 	t.Cleanup(func() {
 		nameWindowCreate, nameWindowDestroy = oldCreate, oldDestroy
 		sessionNameWindow = oldState
+		nameFeedSession = oldFeed
 	})
 	return f
 }
 
 func TestNameWindowTitleDerivation(t *testing.T) {
+	// FIX155: the contract carries the table's path;
+	// the derivation is path -> stem -> title (the
+	// FIX154 legs derived from the cold spawn's argv -
+	// the same cases, one feed earlier).
 	cases := []struct {
 		name string
-		args []string
+		path string
 		want string
 		ok   bool
 	}{
 		{
 			"the brief's exact case",
-			[]string{"-play", `D:\vPinball\VisualPinball\Tables\Big Chief (Williams 1965)_Teisen_MOD.vpx`},
+			`D:\vPinball\VisualPinball\Tables\Big Chief (Williams 1965)_Teisen_MOD.vpx`,
 			"Visual Pinball - [Big Chief (Williams 1965)_Teisen_MOD]", true,
 		},
 		{
-			"quoted path element",
-			[]string{"-play", `"D:\Tables\Some Table (Maker 1980).vpx"`},
-			"Visual Pinball - [Some Table (Maker 1980)]", true,
-		},
-		{
-			"path embedded in a larger element",
-			[]string{`--file=D:\Tables\Embedded.vpx`},
-			"Visual Pinball - [Embedded]", true,
-		},
-		{
 			"forward slashes",
-			[]string{"-play", "D:/Tables/Forward.vpx"},
+			"D:/Tables/Forward.vpx",
 			"Visual Pinball - [Forward]", true,
 		},
 		{
 			"uppercase extension",
-			[]string{"-play", `D:\Tables\Upper.VPX`},
+			`D:\Tables\Upper.VPX`,
 			"Visual Pinball - [Upper]", true,
 		},
 		{
 			"relative path",
-			[]string{"-play", `Tables\Rel.vpx`},
+			`Tables\Rel.vpx`,
 			"Visual Pinball - [Rel]", true,
 		},
 		{
-			"no table in the spec",
-			[]string{"-play", "-minimized"},
+			"no table in the path",
+			`D:\Tables\notes.txt`,
 			"", false,
 		},
 		{
-			"empty spec",
-			nil,
+			"empty path",
+			"",
 			"", false,
 		},
 	}
 	for _, tc := range cases {
-		got, ok := nameWindowTitleForArgs(tc.args)
+		got, ok := nameWindowTitleForPath(tc.path)
 		if ok != tc.ok || got != tc.want {
-			t.Errorf("%s: nameWindowTitleForArgs(%q) = (%q, %t), want (%q, %t)", tc.name, tc.args, got, ok, tc.want, tc.ok)
+			t.Errorf("%s: nameWindowTitleForPath(%q) = (%q, %t), want (%q, %t)", tc.name, tc.path, got, ok, tc.want, tc.ok)
 		}
 	}
 	if _, ok := tableFileStem(".vpx"); ok {
 		t.Errorf("tableFileStem(%q): a bare extension is not a table", ".vpx")
+	}
+}
+
+// FIX155 invariant leg: a resident launch contract -
+// the table's name carried, no spawn fields anywhere
+// in the decision - makes the watchdog raise the
+// name window with the exact Big Chief title, once
+// per session, and the standing expiry drops it on
+// the B2S sighting and on session end.
+func TestNameWindowResidentTrigger(t *testing.T) {
+	f := swapNameWindowFake(t)
+	t0 := time.Unix(1_700_000_000, 0)
+	title := "Visual Pinball - [Big Chief (Williams 1965)_Teisen_MOD]"
+	resident := &Contract{
+		Armed:         true,
+		SessionID:     7,
+		SessionState:  "loading",
+		GameTablePath: `D:\vPinball\VisualPinball\Tables\Big Chief (Williams 1965)_Teisen_MOD.vpx`,
+	}
+
+	// First observation of the loading session: the
+	// window goes up with the exact title.
+	observeNameFeed(resident, t0)
+	if !sessionNameWindow.up() || sessionNameWindow.sessionID != 7 {
+		t.Fatalf("after the first observation: tracker = %+v, want up for session 7", sessionNameWindow)
+	}
+	if len(f.events) != 1 || f.events[0] != "create:"+title {
+		t.Fatalf("after the first observation: events = %v, want [create:%s]", f.events, title)
+	}
+
+	// The same session observed again: no second
+	// window, no replacement churn.
+	observeNameFeed(resident, t0.Add(time.Second))
+	if len(f.events) != 1 {
+		t.Fatalf("second observation of the session: events = %v, want no new events", f.events)
+	}
+
+	// The B2S sighting drops it (the standing expiry).
+	judgeNameWindow(resident, true, t0.Add(2*time.Second))
+	if sessionNameWindow.up() {
+		t.Fatalf("after the sighting: tracker still up")
+	}
+
+	// A later session raises its own window, and the
+	// session's end drops it.
+	next := &Contract{Armed: true, SessionID: 8, SessionState: "loading", GameTablePath: `D:\Tables\Other.vpx`}
+	observeNameFeed(next, t0)
+	if !sessionNameWindow.up() || sessionNameWindow.sessionID != 8 {
+		t.Fatalf("next session: tracker = %+v, want up for session 8", sessionNameWindow)
+	}
+	judgeNameWindow(&Contract{SessionID: 8, SessionState: "returned"}, false, t0.Add(time.Second))
+	if sessionNameWindow.up() {
+		t.Fatalf("after session end: tracker still up")
+	}
+
+	// A session carrying no table path (an older
+	// launcher's contract) gets no window at all.
+	observeNameFeed(&Contract{Armed: true, SessionID: 9, SessionState: "loading"}, t0)
+	if sessionNameWindow.up() {
+		t.Fatalf("nameless session: a window went up")
+	}
+	// A live-first observation (the watch began
+	// mid-session) raises nothing - the scrape has
+	// already run by then.
+	observeNameFeed(&Contract{Armed: true, SessionID: 10, SessionState: "live", GameTablePath: `D:\Tables\Late.vpx`}, t0)
+	if sessionNameWindow.up() {
+		t.Fatalf("live-first session: a window went up")
 	}
 }
 

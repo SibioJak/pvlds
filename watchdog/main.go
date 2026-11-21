@@ -126,7 +126,7 @@ import (
 // session header line alongside the launcher version the
 // contract carries, so a field log names both halves of the
 // pair that produced it.
-const WatchdogVersion = "1.1.39"
+const WatchdogVersion = "1.1.40"
 
 type Contract struct {
 	Version int  `json:"version"`
@@ -197,6 +197,17 @@ type Contract struct {
 	SessionID          int    `json:"session_id"`
 	SessionState       string `json:"session_state"`
 	GameExePath        string `json:"game_exe_path"`
+	// GameTablePath is FIX155's B2S name feed on the
+	// resident road: the launched build's full .vpx
+	// path, written by the launcher on the launch arm
+	// (before its spawn) and cleared at check-in. The
+	// name window's resident trigger (namewindow.go)
+	// derives the table's stem from it and raises the
+	// window on the first tick that observes the new
+	// loading session. Absent in contracts written
+	// before the field existed: "" - no window, the
+	// pre-feed behaviour for those builds' sessions.
+	GameTablePath string `json:"game_table_path"`
 	GamePID            int    `json:"game_pid"`
 	GameStartedUnix    int64  `json:"game_started_unix"`
 	GameWindowSeenUnix int64  `json:"game_window_seen_unix"`
@@ -669,6 +680,16 @@ func main() {
 			gateLogSession = c.SessionID
 			gateLogValue = c.HandoffGate
 		}
+		// FIX155: the name window's resident trigger
+		// (namewindow.go) - the first tick observing a
+		// new armed loading session carrying a table
+		// path raises the session's name window. The
+		// contract was armed before the spawn, so the
+		// window is up ahead of the scrape the B2S DLL
+		// runs at script init; the expiry judgement
+		// runs at the loop's end, as it did for the
+		// cold road's raise.
+		observeNameFeed(c, time.Now())
 		// FIX152: the cold spawn's tick (coldspawn.go) - a
 		// standing launch order is fired from here, once
 		// the launcher is dead and the quiet has passed.
