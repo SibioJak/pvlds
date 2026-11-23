@@ -53,6 +53,22 @@ func fgSeqDialog() windowState {
 func fgSeqVD() windowState    { return seqWS(vdWindowClass, vdPID, hwFVD, hwFSDL, sdlWindowClass) }
 func fgSeqThird() windowState { return seqWS("OtherApp", 424242, hwFThird, hwFSDL, sdlWindowClass) }
 
+// fgSeqB2S is the B2S server exe's DMD window (session
+// 389's grabber): a window of the B2SBackglassServerEXE
+// process - not the game pid, but game family by the
+// server's name (FIX156's classification).
+const (
+	hwFB2S = uintptr(0xB2)
+	b2sPID = 8704
+)
+
+func fgSeqB2S() windowState {
+	ws := seqWS("WindowsForms10.Window.8.app.0.141b42a_r10_ad1", b2sPID, hwFB2S, hwFSDL, sdlWindowClass)
+	ws.fgProcName = "B2SBackglassServerEXE.exe"
+	ws.fgTitle = "B2S DMD"
+	return ws
+}
+
 // fgSeqThirdBGFX: droscoe's launch shape - the target is the
 // VPPlayer window; the foreground sits on a third process
 // (the streamer) with no desktop-input evidence either way.
@@ -78,53 +94,58 @@ func seqDrive(s *focusSequence, fromMs, runtimeUpMs int64, ws windowState, maxTi
 }
 
 func TestFocusSession35Shape(t *testing.T) {
-	// Session 35: the load's shuffle (dialog, SDL blip) ends
-	// with PinMAME holding the foreground into the live
-	// phase; the sequence asserts once the shuffle has
-	// settled AND the load has had its floor, verifies, and
-	// locks on the dwell - then a late re-grab inside the
-	// launch window reopens it and it re-locks.
+	// Session 35: the load's shuffle (dialog, SDL blip)
+	// ends with PinMAME holding the foreground into the
+	// live phase. Under FIX156 the shuffle is the settle
+	// guard's whole duty: each family holder is answered
+	// on the tick it is seen, the player then holds
+	// through the dwell, and the session locks 3.2 s
+	// after runtime-up. A late re-grab inside the launch
+	// window reopens the sequence, and the re-lock is the
+	// legacy machinery's (settle + floor) - the guard
+	// does not re-arm.
 	var s focusSequence
 	up := int64(10000)
-	seqTick(&s, up, up, fgSeqDialog())
-	seqTick(&s, up+400, up, fgSeqSDL())
-	seqTick(&s, up+800, up, fgSeqMAME())
-	act, at := seqDrive(&s, up+1200, up, fgSeqMAME(), 40)
-	if act != seqAssert {
-		t.Fatalf("settle+floor: got action %v at +%dms, want the assertion", act, at-up)
+	if res := seqTick(&s, up, up, fgSeqDialog()); res.action != seqSettleAssert {
+		t.Fatalf("dialog: got %v, want the guard's answer on the tick", res.action)
 	}
-	if at-up < focusResolveFloorMs {
-		t.Fatalf("assertion at +%dms rel. runtime, before the %dms floor", at-up, focusResolveFloorMs)
+	seqTick(&s, up+400, up, fgSeqSDL())
+	res := seqTick(&s, up+800, up, fgSeqMAME())
+	if res.action != seqSettleAssert {
+		t.Fatalf("PinMAME grab: got %v, want the guard's answer on the tick", res.action)
+	}
+	if got := s.settleGrab(); got != `"MAME" (pid 5264)` {
+		t.Fatalf("settleGrab() = %s, want the MAME holder named", got)
+	}
+	if got := s.settleInterrupted(); got != 400 {
+		t.Fatalf("settleInterrupted() = %dms, want the 400ms blip the grab interrupted", got)
+	}
+	act, at := seqDrive(&s, up+1200, up, fgSeqSDL(), 10)
+	if act != seqLogLocked || at != up+3200 {
+		t.Fatalf("hold: got (%v, +%dms), want the settle lock at +3200", act, at-up)
+	}
+	if !s.settleLockUsed() || s.settleLockElapsed() != 3200 || s.settleAssertCount() != 2 {
+		t.Fatalf("settle lock facts: used=%v elapsed=%d asserts=%d, want (true, 3200, 2)",
+			s.settleLockUsed(), s.settleLockElapsed(), s.settleAssertCount())
+	}
+	// The late re-grab: MAME takes it again inside the
+	// launch window - the sequence reopens.
+	if res := seqTick(&s, at+400, up, fgSeqMAME()); res.action != seqLogReopen {
+		t.Fatalf("re-grab inside the window: got %v, want the reopen", res.action)
+	}
+	// It settles again, asserts again (the legacy
+	// assertion, at the floor), and re-locks.
+	act, at3 := seqDrive(&s, at+800, up, fgSeqMAME(), 30)
+	if act != seqAssert {
+		t.Fatalf("post-reopen settle: got %v, want the legacy assertion", act)
 	}
 	if got := s.before(); got != `"MAME" (pid 5264)` {
 		t.Fatalf("before() = %s, want the MAME holder named", got)
 	}
-	if res := s.noteAssert(at, true); res != seqNone {
-		t.Fatalf("noteAssert = %v, want none", res)
-	}
-	if res := seqTick(&s, at+250, up, fgSeqSDL()); res.action != seqNone {
+	s.noteAssert(at3, true)
+	if res := seqTick(&s, at3+250, up, fgSeqSDL()); res.action != seqNone {
 		t.Fatalf("verify tick: got %v, want none (dwell running)", res.action)
 	}
-	act, at2 := seqDrive(&s, at+650, up, fgSeqSDL(), 10)
-	if act != seqLogLocked {
-		t.Fatalf("dwell: got %v, want FocusLocked", act)
-	}
-	if at2 < at+250+focusDwellMs {
-		t.Fatalf("locked at +%dms, before the %dms dwell ran", at2-at, focusDwellMs)
-	}
-	// The late re-grab: MAME takes it again inside the
-	// launch window - the sequence reopens.
-	res := seqTick(&s, at2+400, up, fgSeqMAME())
-	if res.action != seqLogReopen {
-		t.Fatalf("re-grab inside the window: got %v, want the reopen", res.action)
-	}
-	// It settles again, asserts again, and re-locks.
-	act, at3 := seqDrive(&s, at2+800, up, fgSeqMAME(), 20)
-	if act != seqAssert {
-		t.Fatalf("post-reopen settle: got %v, want the assertion", act)
-	}
-	s.noteAssert(at3, true)
-	seqTick(&s, at3+250, up, fgSeqSDL())
 	act, _ = seqDrive(&s, at3+650, up, fgSeqSDL(), 10)
 	if act != seqLogLocked {
 		t.Fatalf("post-reopen dwell: got %v, want FocusLocked again", act)
@@ -133,9 +154,12 @@ func TestFocusSession35Shape(t *testing.T) {
 
 func TestFocusSession39Shape(t *testing.T) {
 	// Session 39: the editor holds the whole spawn (the lull
-	// - its clock must not start the settle), a one-tick SDL
-	// blip passes, then PinMAME grabs at +6s and keeps it.
-	// The assertion waits for PinMAME's own settle.
+	// - the settle guard never answers the editor, exactly
+	// as the sequence never did), a one-tick SDL blip
+	// passes, then PinMAME grabs at +6s. Under FIX156 the
+	// grab is answered on the tick it is seen - it no
+	// longer waits for PinMAME's own settle - and the
+	// player then holds into the guard's lock.
 	var s focusSequence
 	up := int64(10000)
 	for now := up; now <= up+2800; now += 400 {
@@ -144,19 +168,12 @@ func TestFocusSession39Shape(t *testing.T) {
 		}
 	}
 	seqTick(&s, up+3200, up, fgSeqSDL()) // the blip
-	seqTick(&s, up+6000, up, fgSeqMAME())
-	act, at := seqDrive(&s, up+6400, up, fgSeqMAME(), 20)
-	if act != seqAssert {
-		t.Fatalf("got %v, want the assertion against settled PinMAME", act)
+	if res := seqTick(&s, up+6000, up, fgSeqMAME()); res.action != seqSettleAssert {
+		t.Fatalf("PinMAME grab: got %v, want the guard's answer on the tick", res.action)
 	}
-	if at != up+8800 {
-		t.Fatalf("assertion at +%dms rel. runtime, want +8800 (PinMAME's settle)", at-up)
-	}
-	s.noteAssert(at, true)
-	seqTick(&s, at+250, up, fgSeqSDL())
-	act, _ = seqDrive(&s, at+650, up, fgSeqSDL(), 10)
-	if act != seqLogLocked {
-		t.Fatalf("got %v, want FocusLocked", act)
+	act, at := seqDrive(&s, up+6400, up, fgSeqSDL(), 10)
+	if act != seqLogLocked || at != up+8400 {
+		t.Fatalf("got (%v, +%dms), want the settle lock at +8400", act, at-up)
 	}
 }
 
@@ -227,8 +244,13 @@ func TestFocusSession203LateMAMEFreshInput(t *testing.T) {
 
 func TestFocusSession37Shape(t *testing.T) {
 	// Session 37: the editor lulls, then the SDL window
-	// comes up and simply stays - the sequence locks with
-	// zero assertions.
+	// comes up and simply stays - the session locks with
+	// zero assertions of either path. Under FIX156 the
+	// lock is the settle guard's: the hold starts at the
+	// first grid tick at/after +7000 (+7200) and its
+	// dwell completes at +9200 - the same tick the old
+	// floor-bound lock landed on, reached by the guard
+	// without the floor.
 	var s focusSequence
 	up := int64(10000)
 	lockedAt := int64(-1)
@@ -238,7 +260,7 @@ func TestFocusSession37Shape(t *testing.T) {
 			ws = fgSeqSDL()
 		}
 		res := seqTick(&s, now, up, ws)
-		if res.action == seqAssert {
+		if res.action == seqAssert || res.action == seqSettleAssert {
 			t.Fatalf("at +%dms: an assertion was ordered against a settled player", now-up)
 		}
 		if res.action == seqLogLocked && lockedAt < 0 {
@@ -246,27 +268,30 @@ func TestFocusSession37Shape(t *testing.T) {
 		}
 	}
 	if lockedAt != up+9200 {
-		t.Fatalf("locked at +%dms rel. runtime, want +9200 (the first 400ms-grid tick past floor 8000 + dwell 2000 from +7000)", lockedAt-up)
+		t.Fatalf("locked at +%dms rel. runtime, want +9200 (the dwell from the +7200 hold, on the guard's watch)", lockedAt-up)
+	}
+	if !s.settleLockUsed() || s.settleLockElapsed() != 9200 || s.settleAssertCount() != 0 {
+		t.Fatalf("settle lock facts: used=%v elapsed=%d asserts=%d, want (true, 9200, 0)",
+			s.settleLockUsed(), s.settleLockElapsed(), s.settleAssertCount())
 	}
 }
 
 func TestFocusBGFXThirdPartySteal(t *testing.T) {
 	// Droscoe's launch: the target is the VPPlayer window,
 	// the foreground sits on a third process (his streamer)
-	// with no input evidence. The sequence asserts to the
-	// BGFX player window - the act no pre-FIX116 code path
-	// could perform - verifies, and locks.
+	// with no input evidence. Under FIX156 the settle
+	// guard answers the foreign holder on the tick it is
+	// seen - the assertion to the BGFX player window, the
+	// act no pre-FIX116 code path could perform - and the
+	// player then holds into the guard's lock.
 	var s focusSequence
 	up := int64(2000)
-	act, at := seqDrive(&s, up, up, fgSeqThirdBGFX(), 40)
-	if act != seqAssert || at != up+focusResolveFloorMs {
-		t.Fatalf("got (%v, +%dms), want the assertion at the floor", act, at-up)
+	if res := seqTick(&s, up, up, fgSeqThirdBGFX()); res.action != seqSettleAssert {
+		t.Fatalf("got %v, want the guard's answer on the tick", res.action)
 	}
-	s.noteAssert(at, true)
-	seqTick(&s, at+250, up, fgSeqVP())
-	act, _ = seqDrive(&s, at+650, up, fgSeqVP(), 10)
-	if act != seqLogLocked {
-		t.Fatalf("got %v, want FocusLocked on the VPPlayer window", act)
+	act, at := seqDrive(&s, up+400, up, fgSeqVP(), 10)
+	if act != seqLogLocked || at != up+2400 {
+		t.Fatalf("got (%v, +%dms), want the settle lock at +2400", act, at-up)
 	}
 	if s.playerClass() != playerWindowClass {
 		t.Fatalf("playerClass() = %q, want %q (the lock line's subject)", s.playerClass(), playerWindowClass)
@@ -275,52 +300,51 @@ func TestFocusBGFXThirdPartySteal(t *testing.T) {
 
 func TestFocusBGFXPlayerFromStart(t *testing.T) {
 	// The BGFX player holds the foreground from the first
-	// tick: locked at the floor with zero assertions.
+	// tick: zero assertions, and under FIX156 the lock
+	// lands at the dwell on the settle guard's watch -
+	// the floor no longer gates an undisturbed hold.
 	var s focusSequence
 	up := int64(2000)
-	for now := up; now < up+focusResolveFloorMs; now += 400 {
+	for now := up; now < up+focusDwellMs; now += 400 {
 		if res := seqTick(&s, now, up, fgSeqVP()); res.action != seqNone {
-			t.Fatalf("at +%dms: got %v, want silence before the floor", now-up, res.action)
+			t.Fatalf("at +%dms: got %v, want silence inside the dwell", now-up, res.action)
 		}
 	}
-	if res := seqTick(&s, up+focusResolveFloorMs, up, fgSeqVP()); res.action != seqLogLocked {
-		t.Fatalf("at the floor: got %v, want FocusLocked", res.action)
+	if res := seqTick(&s, up+focusDwellMs, up, fgSeqVP()); res.action != seqLogLocked {
+		t.Fatalf("at the dwell: got %v, want FocusLocked", res.action)
+	}
+	if !s.settleLockUsed() {
+		t.Fatal("settleLockUsed() = false after the guard's lock")
 	}
 }
 
 func TestFocusStubbornHolder(t *testing.T) {
-	// The holder never yields: three verified attempts, then
-	// the exhaustion IS the resolution.
+	// The holder never yields. Under FIX156 the settle
+	// guard answers it on every tick of the duty window -
+	// no verify phase, no spacing; the next tick's
+	// snapshot is the read-back - and at the deadline the
+	// guard stands down and the sequence resolves on the
+	// shared episode record: the foreground would not
+	// move, and the count is the real one.
 	var s focusSequence
 	up := int64(2000)
-	act, at := seqDrive(&s, up, up, fgSeqMAME(), 40)
-	if act != seqAssert {
-		t.Fatalf("got %v, want the first assertion", act)
-	}
-	asserts := 1
-	for cycle := 0; cycle < 2; cycle++ {
-		s.noteAssert(at, true)
-		if res := seqTick(&s, at+250, up, fgSeqMAME()); res.action != seqNone {
-			t.Fatalf("cycle %d verify tick: got %v, want none", cycle, res.action)
-		}
-		res := seqTick(&s, at+1000, up, fgSeqMAME())
-		if res.action != seqAssert {
-			t.Fatalf("cycle %d verdict tick: got %v, want the retry assertion", cycle, res.action)
+	asserts := 0
+	for now := up; now < up+focusDeadlineMs; now += 400 {
+		res := seqTick(&s, now, up, fgSeqMAME())
+		if res.action != seqSettleAssert {
+			t.Fatalf("at +%dms: got %v, want the guard's per-tick answer", now-up, res.action)
 		}
 		asserts++
-		at += 1000
 	}
-	s.noteAssert(at, true)
-	seqTick(&s, at+250, up, fgSeqMAME())
-	res := seqTick(&s, at+1000, up, fgSeqMAME())
+	if asserts < 40 {
+		t.Fatalf("guard assertions = %d, want a per-tick answer across the duty window", asserts)
+	}
+	res := seqTick(&s, up+focusDeadlineMs, up, fgSeqMAME())
 	if res.action != seqLogUnresolved {
-		t.Fatalf("third verdict: got %v, want FocusUnresolved", res.action)
+		t.Fatalf("deadline: got %v, want FocusUnresolved", res.action)
 	}
-	if asserts != 3 {
-		t.Fatalf("assertions = %d, want exactly %d", asserts, focusMaxAttempts)
-	}
-	if !strings.Contains(s.reason(), "would not move after 3 attempts") {
-		t.Fatalf("reason = %q, want the stubborn-holder wording", s.reason())
+	if !strings.Contains(s.reason(), "would not move after") || !strings.Contains(s.reason(), "MAME") {
+		t.Fatalf("reason = %q, want the stubborn-holder wording naming MAME", s.reason())
 	}
 	if !s.done() {
 		t.Fatal("done() = false after the resolution")
@@ -347,46 +371,75 @@ func TestFocusEditorAtDeadline(t *testing.T) {
 func TestFocusEditorDuringVerifyAborts(t *testing.T) {
 	// An assertion is in flight and the editor takes the
 	// foreground: the sequence resolves at once - the exit
-	// detector owns what happens next.
+	// detector owns what happens next. The in-flight
+	// assertion is the hand-off tick's: with no runtime
+	// anchor the settle guard never arms, so the legacy
+	// verify machinery owns the shape end to end.
 	var s focusSequence
-	up := int64(2000)
-	_, at := seqDrive(&s, up, up, fgSeqMAME(), 40)
-	s.noteAssert(at, true)
-	res := seqTick(&s, at+250, up, fgSeqEditor())
+	res := s.tick(5000, 1, 0, focusInputs{ws: fgSeqMAME(), state: "live", handoff: true})
+	if res.action != seqAssert {
+		t.Fatalf("hand-off tick: got %v, want the assertion", res.action)
+	}
+	s.noteAssert(5000, true)
+	res = seqTick(&s, 5250, 0, fgSeqEditor())
 	if res.action != seqLogUnresolved || s.reason() != "the editor holds the foreground" {
 		t.Fatalf("got (%v, %q), want the editor abort", res.action, s.reason())
 	}
 }
 
 func TestFocusDialogLull(t *testing.T) {
-	// The load dialog holds past the floor: still a lull -
-	// no settle runs under it. PinMAME after it settles and
-	// is asserted on its own clock.
+	// The load dialog holds. Under FIX156 it is a
+	// game-family holder like any other, and the settle
+	// guard answers it on the tick it is seen - the launch
+	// is no longer silent under it. The lull rule itself
+	// survives for the legacy settle: after the guard's
+	// lock and a reopen, a dialog's stability still does
+	// not count toward a settle resolution (its clock
+	// restarts every tick it holds).
 	var s focusSequence
 	up := int64(2000)
-	for now := up; now <= up+9000; now += 400 {
-		if res := seqTick(&s, now, up, fgSeqDialog()); res.action != seqNone {
-			t.Fatalf("dialog lull at +%dms: got %v, want silence", now-up, res.action)
-		}
+	if res := seqTick(&s, up, up, fgSeqDialog()); res.action != seqSettleAssert {
+		t.Fatalf("dialog: got %v, want the guard's answer on the tick", res.action)
 	}
-	seqTick(&s, up+9200, up, fgSeqMAME())
-	act, at := seqDrive(&s, up+9600, up, fgSeqMAME(), 20)
-	if act != seqAssert || at != up+12000 {
-		t.Fatalf("got (%v, +%dms), want the assertion at +12000 (PinMAME's settle)", act, at-up)
+	act, at := seqDrive(&s, up+400, up, fgSeqSDL(), 10)
+	if act != seqLogLocked {
+		t.Fatalf("got %v, want the settle lock behind the answered dialog", act)
+	}
+	if res := seqTick(&s, at+400, up, fgSeqDialog()); res.action != seqLogReopen {
+		t.Fatalf("dialog re-grab: got %v, want the reopen", res.action)
+	}
+	for now := at + 800; now < up+focusDeadlineMs; now += 400 {
+		if res := seqTick(&s, now, up, fgSeqDialog()); res.action == seqAssert {
+			t.Fatalf("at +%dms: an assertion rode the dialog's stability (the lull)", now-up)
+		}
 	}
 }
 
 func TestFocusDeliberateHolderRespected(t *testing.T) {
 	// A third process takes the foreground WITH desktop
-	// input landing on it (the player alt-tabbed): the
-	// sequence never asserts against it, and the deadline
-	// names the deliberate change.
+	// input landing on it (the player alt-tabbed). The
+	// sequence's provenance veto no longer gets the first
+	// word during the duty window: the settle guard's law
+	// is survivals, so it answers - and the holder, being
+	// genuinely the user's, survives three answers and
+	// the guard yields to it. From then on nothing asserts
+	// against it (the sequence's own veto agrees), and
+	// the deadline names the deliberate change.
 	var s focusSequence
 	up := int64(2000)
-	for now := up; now < up+focusDeadlineMs; now += 400 {
+	third := func(now int64) windowState {
 		ws := fgSeqThird()
 		ws.inputAgeMs = now - up // input landed as it took the foreground
-		if res := seqTick(&s, now, up, ws); res.action != seqNone {
+		return ws
+	}
+	for i, want := range []seqAction{seqSettleAssert, seqSettleAssert, seqSettleAssert, seqLogSettleYield} {
+		now := up + int64(i)*400
+		if res := seqTick(&s, now, up, third(now)); res.action != want {
+			t.Fatalf("tick %d: got %v, want %v", i, res.action, want)
+		}
+	}
+	for now := up + 1600; now < up+focusDeadlineMs; now += 400 {
+		if res := seqTick(&s, now, up, third(now)); res.action != seqNone {
 			t.Fatalf("at +%dms: got %v, want respect for the deliberate holder", now-up, res.action)
 		}
 	}
@@ -448,9 +501,13 @@ func TestFocusHandoffTick(t *testing.T) {
 
 func TestFocusDeadlineShuffle(t *testing.T) {
 	// The foreground shuffles every tick (MAME <-> Virtual
-	// Desktop), so nothing ever settles: at the deadline the
-	// sequence makes its one final attempt, and a verified
-	// placement still locks.
+	// Desktop), so nothing ever settles: under FIX156 the
+	// settle guard answers every tick of the shuffle (the
+	// VD window never survives an answer - the foreground
+	// leaves it on the next tick - so the yield never
+	// trips), and at the deadline the guard stands down
+	// and the sequence makes its one final attempt; a
+	// verified placement still locks.
 	var s focusSequence
 	up := int64(2000)
 	for now, i := up, 0; now < up+focusDeadlineMs; now, i = now+400, i+1 {
@@ -458,9 +515,12 @@ func TestFocusDeadlineShuffle(t *testing.T) {
 		if i%2 == 1 {
 			ws = fgSeqVD()
 		}
-		if res := seqTick(&s, now, up, ws); res.action != seqNone {
-			t.Fatalf("shuffle at +%dms: got %v, want silence until the deadline", now-up, res.action)
+		if res := seqTick(&s, now, up, ws); res.action != seqSettleAssert {
+			t.Fatalf("shuffle at +%dms: got %v, want the guard's answer", now-up, res.action)
 		}
+	}
+	if s.settleYielded() {
+		t.Fatal("the guard yielded during the shuffle: no window survived an answer")
 	}
 	res := seqTick(&s, up+focusDeadlineMs, up, fgSeqMAME())
 	if res.action != seqAssert {
@@ -507,24 +567,28 @@ func TestFocusDeadlineFinalAttemptBrokenHold(t *testing.T) {
 func TestFocusNoTargetAttemptLoggedOnce(t *testing.T) {
 	// The leaf reports no target at the attempt: the
 	// sequence logs it once and stands the attempt down -
-	// and a later real attempt can still lock.
+	// and a later real attempt can still lock. Under
+	// FIX156 the only assertion phase a no-target report
+	// can answer is the hand-off tick's (the guard answers
+	// only with a target in hand and never enters the
+	// verify phase), so the shape enters through the
+	// hand-off; the once-only latch then binds the
+	// episode's later attempts too, and the eventual lock
+	// rides the guard once the runtime anchor lands.
 	var s focusSequence
-	up := int64(2000)
-	_, at := seqDrive(&s, up, up, fgSeqMAME(), 40)
-	if res := s.noteAssert(at, false); res != seqLogNoTarget {
+	res := s.tick(5000, 1, 0, focusInputs{ws: fgSeqMAME(), state: "live", handoff: true})
+	if res.action != seqAssert {
+		t.Fatalf("hand-off tick: got %v, want the assertion", res.action)
+	}
+	if res := s.noteAssert(5000, false); res != seqLogNoTarget {
 		t.Fatalf("noteAssert(false) = %v, want the no-target log", res)
 	}
-	act, at2 := seqDrive(&s, at+400, up, fgSeqMAME(), 20)
-	if act != seqAssert {
-		t.Fatalf("got %v, want a second attempt after the spacing", act)
-	}
-	if res := s.noteAssert(at2, false); res != seqNone {
+	if res := s.noteAssert(5000, false); res != seqNone {
 		t.Fatalf("second noteAssert(false) = %v, want the log only once", res)
 	}
-	// The player takes it on its own and holds: locked
-	// without any verified assertion (past the floor).
-	seqTick(&s, at2+400, up, fgSeqSDL())
-	act, _ = seqDrive(&s, at2+800, up, fgSeqSDL(), 10)
+	// The anchor lands; the player comes up and holds:
+	// the guard locks the session.
+	act, _ := seqDrive(&s, 20000, 20000, fgSeqSDL(), 10)
 	if act != seqLogLocked {
 		t.Fatalf("got %v, want FocusLocked", act)
 	}
@@ -641,20 +705,33 @@ func TestFocusDeliveryAfterVerifiedAssertion(t *testing.T) {
 	// it; the verify lands the player window) while the
 	// thread focus still sits elsewhere: the delivery is due
 	// on the verify tick itself - the foreground is ours, the
-	// inner switch is the remaining half.
+	// inner switch is the remaining half. Under FIX156 the
+	// guard never enters the verify phase, so the shape
+	// enters through the hand-off tick's assertion - whose
+	// verify still owes the FIX118 blind delivery, and the
+	// guard's completion deferral leaves that delivery
+	// untouched when the anchor lands.
 	var s focusSequence
 	up := int64(2000)
-	act, at := seqDrive(&s, up, up, fgSeqMAME(), 40)
-	if act != seqAssert {
-		t.Fatalf("got %v, want the assertion at the floor", act)
+	res := seqTickIn(&s, up, up, focusInputs{ws: fgSeqMAME(), state: "live", handoff: true})
+	if res.action != seqAssert {
+		t.Fatalf("hand-off tick: got %v, want the assertion", res.action)
 	}
-	s.noteAssert(at, true)
-	res := seqTick(&s, at+250, up, fgSeqFocus(hwFMAME, "MAME"))
+	s.noteAssert(up, true)
+	res = seqTick(&s, up+250, up, fgSeqFocus(hwFMAME, "MAME"))
 	if res.action != seqDeliverFocus {
 		t.Fatalf("verify tick: got %v, want the delivery behind the verified assertion", res.action)
 	}
 	if !res.notePush {
 		t.Fatal("a real delivery moves the foreground value: notePush must ride it")
+	}
+	s.noteDeliver(true)
+	res = seqTick(&s, up+1250, up, fgSeqFocus(hwFMAME, "MAME"))
+	if res.action != seqDeliverFocus {
+		t.Fatalf("delivery-due tick: got %v, want the FIX118 delivery behind the blind hand-off", res.action)
+	}
+	if s.deliverWasUnconditional() {
+		t.Fatal("deliverWasUnconditional() = true; the delivery follows a verified assertion")
 	}
 }
 
@@ -731,8 +808,12 @@ func TestFocusProbeReplacesDelivery(t *testing.T) {
 
 func TestFocusReaderUnavailableDegradesTo116(t *testing.T) {
 	// No reader (unknown) and a failed reader alike: the
-	// born-foreground shape behaves EXACTLY as 1.1.6 - zero
-	// deliveries, zero probe lines, the floor lock.
+	// born-foreground shape orders nothing FIX117 - zero
+	// deliveries, zero probe lines - and locks on the
+	// plain foreground record. Under FIX156 the lock is
+	// the settle guard's at the dwell; the 1.1.6 surface
+	// it degrades to is the absence of delivery machinery,
+	// which is what this leg guards.
 	for _, read := range []int{focusReadUnknown, focusReadFailed} {
 		var s focusSequence
 		up := int64(2000)
@@ -741,8 +822,8 @@ func TestFocusReaderUnavailableDegradesTo116(t *testing.T) {
 		ws.playerFocusHWND = hwFMAME // facts the reader never delivered - must be ignored
 		ws.playerFocusClass = "MAME"
 		act, at := seqDrive(&s, up, up, ws, 40)
-		if act != seqLogLocked || at != up+focusResolveFloorMs {
-			t.Fatalf("read=%d: got (%v, +%dms), want the plain 1.1.6 floor lock", read, act, at-up)
+		if act != seqLogLocked || at != up+focusDwellMs {
+			t.Fatalf("read=%d: got (%v, +%dms), want the plain dwell lock with no delivery", read, act, at-up)
 		}
 	}
 	// And with the focus already ON the player window, a
@@ -751,7 +832,7 @@ func TestFocusReaderUnavailableDegradesTo116(t *testing.T) {
 	up := int64(2000)
 	act, _ := seqDrive(&s, up, up, fgSeqFocus(hwFVP, playerWindowClass), 40)
 	if act != seqLogLocked {
-		t.Fatalf("healthy focus: got %v, want the floor lock with no delivery", act)
+		t.Fatalf("healthy focus: got %v, want the dwell lock with no delivery", act)
 	}
 }
 
@@ -1011,5 +1092,145 @@ func TestFocusLockedHandoffRetriesAtSpacing(t *testing.T) {
 	}
 	if res := seqTickIn(&s, at+focusAssertSpacingMs, up, in); res.action != seqDeliverFocus {
 		t.Fatalf("locked hand-off retry: got %v, want delivery", res.action)
+	}
+}
+
+// ----------------------------------------------------------------
+// FIX156: the settle guard. The convicted shape (session
+// 389, Doctor Who): after runtime-up, family windows grab
+// the foreground for seconds at a time while the sequence's
+// settle/floor cadence is still winding up, and the user's
+// input in those seconds is lost. The guard answers a grab
+// on the tick it is seen, yields to a foreign window that
+// survives three answers, and ends its duty at its lock.
+
+func TestFocusSettleGuardDoctorWhoReplay(t *testing.T) {
+	// Session 389 replayed at the guard's tick: the player
+	// holds, the B2S DMD window grabs - answered on that
+	// tick; the player holds, the VPinMAME window grabs -
+	// answered on that tick; the player then holds
+	// unbroken for the settle period and the session locks
+	// 3.6 s after runtime-up, where the field took 14 s.
+	// No grab is ever held longer than the tick that
+	// answers it.
+	var s focusSequence
+	up := int64(10000)
+	if res := seqTick(&s, up, up, fgSeqSDL()); res.action != seqNone {
+		t.Fatalf("player's first hold: got %v, want silence", res.action)
+	}
+	res := seqTick(&s, up+400, up, fgSeqB2S())
+	if res.action != seqSettleAssert {
+		t.Fatalf("B2S grab: got %v, want the guard's answer on the tick", res.action)
+	}
+	if got := s.settleGrab(); !strings.Contains(got, "B2SBackglassServerEXE") {
+		t.Fatalf("settleGrab() = %s, want the B2S server named", got)
+	}
+	if got := s.settleInterrupted(); got != 400 {
+		t.Fatalf("settleInterrupted() = %dms, want the 400ms hold the grab interrupted", got)
+	}
+	if res := seqTick(&s, up+800, up, fgSeqSDL()); res.action != seqNone {
+		t.Fatalf("restored hold: got %v, want silence", res.action)
+	}
+	res = seqTick(&s, up+1200, up, fgSeqMAME())
+	if res.action != seqSettleAssert {
+		t.Fatalf("MAME grab: got %v, want the guard's answer on the tick", res.action)
+	}
+	if got := s.settleGrab(); !strings.Contains(got, `"MAME"`) {
+		t.Fatalf("settleGrab() = %s, want the MAME holder named", got)
+	}
+	if got := s.settleInterrupted(); got != 400 {
+		t.Fatalf("settleInterrupted() = %dms, want the 400ms hold the grab interrupted", got)
+	}
+	act, at := seqDrive(&s, up+1600, up, fgSeqSDL(), 10)
+	if act != seqLogLocked || at != up+3600 {
+		t.Fatalf("hold: got (%v, +%dms), want the settle lock at +3600", act, at-up)
+	}
+	if !s.settleLockUsed() {
+		t.Fatal("settleLockUsed() = false after the guard's lock")
+	}
+	if got := s.settleLockElapsed(); got != 3600 {
+		t.Fatalf("settleLockElapsed() = %dms, want 3600 (the field's 14 s, beaten)", got)
+	}
+	if got := s.settleAssertCount(); got != 2 {
+		t.Fatalf("settleAssertCount() = %d, want the 2 answered grabs", got)
+	}
+	if s.done() {
+		t.Fatal("done() = true at the lock: the reopen watch still owns the launch window")
+	}
+}
+
+func TestFocusSettleGuardYieldReplay(t *testing.T) {
+	// A foreign window (a third process, no game relation)
+	// takes the foreground during the duty window and keeps
+	// it through the guard's answers: each survival is read
+	// on the next tick, and at the third the guard yields -
+	// deliberate use - and stands down for the session. No
+	// branch asserts over it afterwards, and the deadline
+	// names it deliberate use.
+	var s focusSequence
+	up := int64(2000)
+	for i, want := range []seqAction{seqSettleAssert, seqSettleAssert, seqSettleAssert, seqLogSettleYield} {
+		res := seqTick(&s, up+int64(i)*400, up, fgSeqThird())
+		if res.action != want {
+			t.Fatalf("tick %d: got %v, want %v", i, res.action, want)
+		}
+	}
+	if !s.settleYielded() {
+		t.Fatal("settleYielded() = false after the third survival")
+	}
+	if s.settleOnDuty() {
+		t.Fatal("settleOnDuty() = true after the yield: the guard must stand down")
+	}
+	// Silence from then on, through the floor and the
+	// settle: the yielded window is never asserted over
+	// again by any branch.
+	for now := up + 1600; now < up+focusDeadlineMs; now += 400 {
+		if res := seqTick(&s, now, up, fgSeqThird()); res.action != seqNone {
+			t.Fatalf("at +%dms: got %v, want silence after the yield", now-up, res.action)
+		}
+	}
+	res := seqTick(&s, up+focusDeadlineMs, up, fgSeqThird())
+	if res.action != seqLogUnresolved || !strings.Contains(s.reason(), "deliberate use") {
+		t.Fatalf("deadline: got (%v, %q), want the deliberate-use resolution", res.action, s.reason())
+	}
+}
+
+func TestFocusSettleGuardDoesNotRearm(t *testing.T) {
+	// The guard's lock ends its duty for the session: a
+	// later family grab inside the launch window reopens
+	// the sequence (the standing law) and is worked by the
+	// pre-existing machinery at its own cadence - the
+	// guard never answers again.
+	var s focusSequence
+	up := int64(10000)
+	act, at := seqDrive(&s, up, up, fgSeqSDL(), 10)
+	if act != seqLogLocked || at != up+focusDwellMs {
+		t.Fatalf("got (%v, +%dms), want the guard's lock at the dwell", act, at-up)
+	}
+	if !s.settleLockUsed() {
+		t.Fatal("settleLockUsed() = false after the guard's lock")
+	}
+	if res := seqTick(&s, at+400, up, fgSeqMAME()); res.action != seqLogReopen {
+		t.Fatalf("late grab: got %v, want the reopen", res.action)
+	}
+	assertAt := int64(-1)
+	for now := at + 800; now <= up+focusDeadlineMs; now += 400 {
+		res := seqTick(&s, now, up, fgSeqMAME())
+		if res.action == seqSettleAssert {
+			t.Fatalf("at +%dms: the guard answered after its lock - it must not re-arm", now-up)
+		}
+		if res.action == seqAssert {
+			assertAt = now
+			break
+		}
+	}
+	if assertAt < 0 {
+		t.Fatal("the legacy machinery never asserted against the post-lock grab")
+	}
+	s.noteAssert(assertAt, true)
+	seqTick(&s, assertAt+250, up, fgSeqSDL())
+	act, _ = seqDrive(&s, assertAt+650, up, fgSeqSDL(), 10)
+	if act != seqLogLocked {
+		t.Fatalf("got %v, want FocusLocked again from the legacy machinery", act)
 	}
 }

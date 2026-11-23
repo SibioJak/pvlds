@@ -126,7 +126,7 @@ import (
 // session header line alongside the launcher version the
 // contract carries, so a field log names both halves of the
 // pair that produced it.
-const WatchdogVersion = "1.1.40"
+const WatchdogVersion = "1.1.41"
 
 type Contract struct {
 	Version int  `json:"version"`
@@ -192,11 +192,11 @@ type Contract struct {
 	// read. The close duty itself stays unconditional — the
 	// hold is an ADDITIONAL, separately gated exit, not a
 	// switch on the closer.
-	HoldExitEnabled    bool   `json:"hold_exit_enabled"`
-	HoldExitFiredUnix  int64  `json:"hold_exit_fired_unix"`
-	SessionID          int    `json:"session_id"`
-	SessionState       string `json:"session_state"`
-	GameExePath        string `json:"game_exe_path"`
+	HoldExitEnabled   bool   `json:"hold_exit_enabled"`
+	HoldExitFiredUnix int64  `json:"hold_exit_fired_unix"`
+	SessionID         int    `json:"session_id"`
+	SessionState      string `json:"session_state"`
+	GameExePath       string `json:"game_exe_path"`
 	// GameTablePath is FIX155's B2S name feed on the
 	// resident road: the launched build's full .vpx
 	// path, written by the launcher on the launch arm
@@ -207,7 +207,7 @@ type Contract struct {
 	// loading session. Absent in contracts written
 	// before the field existed: "" - no window, the
 	// pre-feed behaviour for those builds' sessions.
-	GameTablePath string `json:"game_table_path"`
+	GameTablePath      string `json:"game_table_path"`
 	GamePID            int    `json:"game_pid"`
 	GameStartedUnix    int64  `json:"game_started_unix"`
 	GameWindowSeenUnix int64  `json:"game_window_seen_unix"`
@@ -249,7 +249,7 @@ type Contract struct {
 }
 
 const (
-	tickInterval = 400 * time.Millisecond
+	tickInterval      = 400 * time.Millisecond
 	pendingTimeoutSec = 120   // session armed but the game never appeared
 	healthyWindowSec  = 20    // a relaunched launcher living this long is healthy
 	maxStrikes        = 3     // fast-death strikes before disarm + exit
@@ -873,6 +873,29 @@ func main() {
 						if sessionFocus.noteAssert(nowMs, attempted) == seqLogNoTarget {
 							logf("watchdog: session %d: focus sequence: no player window to assert (standing down this attempt)", c.SessionID)
 						}
+					case seqSettleAssert:
+						// FIX156: the settle guard's answer to
+						// a grab - the same leaf, the same
+						// exit-detector record, no verify
+						// phase (the next tick's snapshot is
+						// the read-back). The line names the
+						// grabber and the player hold it
+						// interrupted.
+						attempted, ok := activatePlayerWindow(c.GamePID, ws.playerHWND)
+						if attempted {
+							sessionCloser.notePush(c.SessionID, nowMs)
+						}
+						verdict := "refused"
+						if ok {
+							verdict = "accepted"
+						}
+						if interrupted := sessionFocus.settleInterrupted(); interrupted > 0 {
+							logf("watchdog: session %d: focus settle guard: answered %s (interrupted a %.1fs player hold) - asserting the player window; SetForegroundWindow %s", c.SessionID, sessionFocus.settleGrab(), float64(interrupted)/1000, verdict)
+						} else {
+							logf("watchdog: session %d: focus settle guard: answered %s (the player had not yet held the foreground) - asserting the player window; SetForegroundWindow %s", c.SessionID, sessionFocus.settleGrab(), verdict)
+						}
+					case seqLogSettleYield:
+						logf("watchdog: session %d: focus settle guard: %s survived %d re-assertions - deliberate use; the guard stands down for this session", c.SessionID, sessionFocus.settleGrab(), settleYieldSurvivals)
 					case seqDeliverFocus:
 						// The FIX117 delivery: the rung leaf
 						// performs the act; the line names the
@@ -921,7 +944,11 @@ func main() {
 						}
 						logf("watchdog: session %d: focus not delivered - the player window holds the foreground, but its thread focus stayed on %s after %d %s", c.SessionID, playerFocusDesc(ws), focusMaxAttempts, attemptsWord)
 					case seqLogLocked:
-						logf("watchdog: session %d: focus locked - the player window (%q) holds the foreground", c.SessionID, sessionFocus.playerClass())
+						if sessionFocus.settleLockUsed() {
+							logf("watchdog: session %d: focus locked - the player window (%q) holds the foreground (settle guard: locked %.1fs after runtime-up, %d grabs answered)", c.SessionID, sessionFocus.playerClass(), float64(sessionFocus.settleLockElapsed())/1000, sessionFocus.settleAssertCount())
+						} else {
+							logf("watchdog: session %d: focus locked - the player window (%q) holds the foreground", c.SessionID, sessionFocus.playerClass())
+						}
 					case seqLogUnresolved:
 						logf("watchdog: session %d: focus unresolved - %s", c.SessionID, sessionFocus.reason())
 					case seqLogReopen:
@@ -936,7 +963,18 @@ func main() {
 				// mid-play, polluting the exit detector's
 				// signal below. Its assertion target is the
 				// resolved player HWND when one exists.
-				if herdingAllowed(c.FocusHerding && !sessionDiag.herdOff, c.SessionState) {
+				// FIX156: while the launch sequence's settle
+				// guard is on duty it is the loading era's only
+				// assertion path - it answers in one tick what
+				// herding answers on a 2 s grace / 3 s interval,
+				// and two brains never assert in the same era.
+				// Herding resumes when the guard stands down -
+				// except after a guard yield, when it stays
+				// down for the session (deliberate use won;
+				// herdBrain's own yield latch is session-wide
+				// the same way).
+				if herdingAllowed(c.FocusHerding && !sessionDiag.herdOff, c.SessionState) &&
+					!sessionFocus.settleOnDuty() && !sessionFocus.settleYielded() {
 					herdTick(c.GamePID, c.SessionID, time.Now(), ws.playerHWND)
 				}
 				// Foreground-change forensics (fgwatch.go):

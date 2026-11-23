@@ -159,6 +159,47 @@ package main
 // whose focusRead is not unknown) - a leaf with no reader
 // has no delivery to order with, and the degradation there
 // stays exact 1.1.6 behaviour, as TestFocusHandoffTick pins.
+//
+// FIX156 - THE SETTLE GUARD: the field verdict on 1.1.40
+// (Chris, session 389 Doctor Who; session 388 Earthshaker
+// the same shape, shorter) convicted the CADENCE above:
+// after runtime-up the player window did not HOLD the
+// foreground - the B2S DMD window grabbed it for ~3 s,
+// the player took it, the VPinMAME window grabbed it for
+// ~3-4 s - and "focus locked" landed 14 s after
+// runtime-up (6 s on 388), because the sequence only
+// asserts at a settle resolution (past the 8 s floor), at
+// the deadline, or at the hand-off tick, with attempts
+// spaced a second apart. His recenter press in a grab's
+// seconds went to a window that was not the player and
+// was lost. So, from the runtime anchor until the player
+// window has held the foreground continuously for the
+// dwell (the lock's own hold length), a SETTLE GUARD
+// rides inside this sequence's tracking phase: a grab by
+// a game-family window (the game pid's own windows, or
+// the B2S server exe's) or a foreign one is answered on
+// the tick it is seen with an immediate re-assert of the
+// player window - no settle, no floor, no spacing, no
+// verify phase; the next tick's snapshot is the
+// read-back. Foreign holders additionally feed the
+// yield law: a window that survives three guard
+// re-assertions is deliberate use, the guard stands
+// down for the session, and the sequence's own branches
+// refuse that window from then on. The guard is a duty
+// of THIS machine, not a second one: while it is on
+// duty its block owns the tick and returns before the
+// branches below run, so no tick can order two
+// assertions; its assertions feed the same per-holder
+// episode bookkeeping (attempts / episodeHWND /
+// beforeDesc) and leave through the same leaf, recorded
+// with the exit detector like every assertion here. It
+// never intercepts the hand-off tick (that moment and
+// its blind delivery predate it), never answers the
+// editor frame (the absolute refusal stands), and
+// stands down for good at its lock, at a yield, or at
+// the launch deadline - the branches below then resolve
+// the session exactly as they always have, and a later
+// grab is theirs (the guard does not re-arm).
 
 import "fmt"
 
@@ -206,6 +247,12 @@ const (
 	// holder took the foreground counts as deliberate-use
 	// evidence against asserting over it.
 	focusIntentWindowMs = 1000
+	// FIX156: how many times a foreign window may survive
+	// a settle-guard re-assertion before the guard judges
+	// it deliberate use and stands down for the session -
+	// the yield law's standing shape (herdMaxFails,
+	// guardMaxReclaims).
+	settleYieldSurvivals = 3
 )
 
 // seqAction is what one sequence tick decided - and what the
@@ -222,6 +269,8 @@ const (
 	seqDeliverFocus                   // FIX117: deliver focus into the player thread now (leaf call), rung per the contract
 	seqProbe                          // FIX117: the diagnostic message probe (leaf call) - never combined with a rung
 	seqLogFocusNotDelivered           // FIX117: the delivery budget ended, foreground held, focus undelivered (log-only)
+	seqSettleAssert                   // FIX156: the settle guard answers a grab - raise the player target now (leaf call)
+	seqLogSettleYield                 // FIX156: the settle guard yielded to a foreign window (deliberate use) and stood down
 )
 
 // seqResult is one tick's full report: the action, and whether
@@ -309,6 +358,25 @@ type focusSequence struct {
 	// it). Session-scoped, not episode-scoped: exactly once.
 	handoffDeliveryDone  bool
 	deliverUnconditional bool
+
+	// FIX156 settle-guard bookkeeping. Session-scoped like
+	// the hand-off obligation: the guard arms once (when
+	// the runtime anchor lands), stands down once (its
+	// lock, a yield, or the launch deadline), and never
+	// re-arms. settleSurvivals counts, per foreign window,
+	// the guard assertions it survived (still holding the
+	// foreground at the next guard tick's read).
+	settleArmed         bool
+	settleDone          bool
+	settleYield         bool
+	settleYieldHWND     uintptr
+	settleAssertHWND    uintptr
+	settleSurvivals     map[uintptr]int
+	settleAsserts       int
+	settleGrabDesc      string
+	settleInterruptedMs int64
+	settleLock          bool
+	settleLockElapsedMs int64
 }
 
 func (s *focusSequence) reset(sessionID int) {
@@ -337,6 +405,44 @@ func (s *focusSequence) beforeIsGameFamily() bool { return s.beforeGameFamily }
 // playerClass names the player window's class at the lock -
 // the lock log line's subject.
 func (s *focusSequence) playerClass() string { return s.lockedClass }
+
+// settleOnDuty reports whether the settle guard currently
+// owns the session's focus duty (armed, not yet stood
+// down). main.go reads it to gate loading herding: while
+// the guard is on duty it is the loading era's only
+// assertion path.
+func (s *focusSequence) settleOnDuty() bool { return s.settleArmed && !s.settleDone }
+
+// settleYielded reports whether the guard stood down on a
+// foreign window's survivals this session. main.go reads
+// it to keep loading herding down for the rest of the
+// session: deliberate use won, and no second brain
+// re-opens that judgement.
+func (s *focusSequence) settleYielded() bool { return s.settleYield }
+
+// settleGrab names the holder the last guard assertion (or
+// the yield) answered - the guard log lines' subject.
+func (s *focusSequence) settleGrab() string { return s.settleGrabDesc }
+
+// settleInterrupted names the player hold the latest grab
+// interrupted, in milliseconds (0 = the player had not yet
+// held the foreground) - the guard assertion line's
+// measure of what the grab cost.
+func (s *focusSequence) settleInterrupted() int64 { return s.settleInterruptedMs }
+
+// settleLockUsed reports whether the session's lock was
+// declared while the settle guard was on duty - the lock
+// log line carries the settle form then.
+func (s *focusSequence) settleLockUsed() bool { return s.settleLock }
+
+// settleLockElapsed names the lock's distance from the
+// runtime anchor, in milliseconds - the settle lock
+// line's comparison number.
+func (s *focusSequence) settleLockElapsed() int64 { return s.settleLockElapsedMs }
+
+// settleAssertCount names how many grabs the guard
+// answered this session - the settle lock line's count.
+func (s *focusSequence) settleAssertCount() int { return s.settleAsserts }
 
 // focusOwed reports whether a focus delivery is owed on this
 // snapshot: the player window holds the foreground, a target
@@ -558,12 +664,24 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 	if s.runtimeUp == 0 && runtimeUpMs != 0 {
 		s.runtimeUp = runtimeUpMs
 	}
+	// FIX156: the runtime anchor arms the settle guard
+	// (once - settleDone latches its stand-down, and the
+	// flag is only ever set while it has not stood down).
+	if s.runtimeUp != 0 && !s.settleDone {
+		s.settleArmed = true
+	}
 
 	// Foreground identity tracking: a change restarts the
 	// settle clock, the dwell clock, and - when the HOLDER
 	// changed - the assertion episode.
 	fgChanged := ws.fgHWND != s.fgHWND || ws.fgClass != s.fgClass || ws.fgPID != s.fgPID
 	if fgChanged {
+		// FIX156: a change AWAY from the player window ends
+		// a hold the settle guard may be asked about: keep
+		// its length (playerSinceMs is zeroed below).
+		if s.playerSinceMs != 0 && !ws.fgIsPlayer {
+			s.settleInterruptedMs = nowMs - s.playerSinceMs
+		}
 		s.fgHWND, s.fgClass, s.fgPID = ws.fgHWND, ws.fgClass, ws.fgPID
 		s.fgSinceMs = nowMs
 		if ws.fgHWND != s.episodeHWND {
@@ -687,6 +805,16 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 
 	// Tracking (phase 0).
 
+	// FIX156: the settle guard's tick. While it is on duty
+	// it owns every grab (see settleTick); the branches
+	// below run only on the ticks it falls through, so no
+	// tick can order two assertions.
+	if s.settleArmed && !s.settleDone {
+		if res, handled := s.settleTick(nowMs, in); handled {
+			return res
+		}
+	}
+
 	// The lock: the player HWND holding the foreground
 	// through the dwell, behind a verified assertion of ours
 	// or past the resolve floor (a holder who was never
@@ -737,6 +865,17 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 				}
 			}
 		}
+		// FIX156: a lock declared while the settle guard
+		// was on duty is a settle lock, whoever's branch
+		// declares it (the guard's own completion falls
+		// through to here while a focus delivery is owed,
+		// and this branch then does the declaring): the
+		// lock line carries the guard's numbers.
+		if s.settleArmed && !s.settleDone {
+			s.settleDone = true
+			s.settleLock = true
+			s.settleLockElapsedMs = nowMs - s.runtimeUp
+		}
 		s.phase = 2
 		s.lockedClass = ws.playerClass
 		if s.runtimeUp == 0 {
@@ -756,7 +895,7 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 	if in.handoff && !s.handoffSeen {
 		s.handoffSeen = true
 		res := seqResult{notePush: true}
-		if !ws.fgIsPlayer && !ws.fgIsEditor && ws.playerHWND != 0 &&
+		if !ws.fgIsPlayer && !ws.fgIsEditor && ws.playerHWND != 0 && ws.fgHWND != s.settleYieldHWND &&
 			!sequenceDeliberateEvidence(nowMs, s.fgSinceMs, ws) && s.attempts < focusMaxAttempts {
 			r := s.orderAssert(nowMs, ws)
 			r.notePush = true
@@ -846,6 +985,16 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 	// The settle resolution: a real holder, stable through
 	// the settle constant, past the resolve floor.
 	if s.pastFloor(nowMs) && nowMs-s.fgSinceMs >= focusSettleMs && !focusLullHolder(ws) {
+		if s.settleYieldHWND != 0 && ws.fgHWND == s.settleYieldHWND {
+			// FIX156: the settle guard yielded to this
+			// window this session - its survivals judged
+			// it deliberate use, and no branch re-opens
+			// that judgement. The deadline names it, via
+			// the latch set here as in the evidence branch
+			// below.
+			s.deliberate = true
+			return seqResult{}
+		}
 		if sequenceDeliberateEvidence(nowMs, s.fgSinceMs, ws) {
 			// Visited, not stolen: watch it, and remember the
 			// judgement - the deadline reads the latch, not
@@ -871,6 +1020,112 @@ func (s *focusSequence) tick(nowMs int64, sessionID int, runtimeUpMs int64, in f
 		return s.orderAssert(nowMs, ws)
 	}
 	return seqResult{}
+}
+
+// settleTick is the FIX156 settle guard's one tick,
+// called from the top of the tracking phase while the
+// guard is on duty (armed at the runtime anchor, not yet
+// stood down). handled=false means the guard has no
+// business with this tick and the caller falls through
+// to the sequence's own branches - the player-hold ticks
+// it is only watching, the editor (the absolute
+// refusal), no window, no target, the hand-off tick,
+// and the deadline tick it stands down on. Every other
+// tick it owns outright, so no tick can order two
+// assertions.
+func (s *focusSequence) settleTick(nowMs int64, in focusInputs) (seqResult, bool) {
+	ws := in.ws
+	// The duty window's hard end is the launch window's
+	// own: at the deadline the guard stands down and the
+	// sequence's deadline machinery resolves the session
+	// as it always has.
+	if s.pastDeadline(nowMs) {
+		s.settleDone = true
+		return seqResult{}, false
+	}
+	// The hand-off tick is the sequence's own moment -
+	// its assertion and the FIX118 blind delivery predate
+	// the guard and are never competed with.
+	if in.handoff && !s.handoffSeen {
+		return seqResult{}, false
+	}
+	// The survival read: the foreign window the guard's
+	// last assertion answered either still holds the
+	// foreground (the assertion was survived - counted
+	// toward the yield) or it does not (the assertion
+	// landed; nothing is counted). A read deferred by an
+	// intervening hand-off or verify tick is taken at
+	// the next guard tick, against that tick's facts.
+	if s.settleAssertHWND != 0 {
+		if ws.fgHWND == s.settleAssertHWND && !ws.fgIsPlayer {
+			if s.settleSurvivals == nil {
+				s.settleSurvivals = map[uintptr]int{}
+			}
+			s.settleSurvivals[ws.fgHWND]++
+			if s.settleSurvivals[ws.fgHWND] >= settleYieldSurvivals {
+				s.settleAssertHWND = 0
+				s.settleDone = true
+				s.settleYield = true
+				s.settleYieldHWND = ws.fgHWND
+				s.deliberate = true
+				s.settleGrabDesc = holderDesc(ws.fgClass, ws.fgPID, ws.fgProcName, ws.fgTitle)
+				return seqResult{action: seqLogSettleYield}, true
+			}
+		}
+		s.settleAssertHWND = 0
+	}
+	switch {
+	case ws.fgIsPlayer:
+		// Watching the hold. Completion is the lock
+		// itself, on the lock's own terms: the player
+		// HWND holding the foreground continuously for
+		// the dwell. While a delivery is owed and
+		// placeable the guard falls through instead -
+		// a thread-focus delivery (FIX117) or the blind
+		// hand-off delivery (FIX118) is worked by the
+		// lock branch below at the resolution moment,
+		// and that branch does the declaring; the
+		// guard's stand-down and numbers are recorded
+		// there.
+		if s.playerSinceMs != 0 && nowMs-s.playerSinceMs >= focusDwellMs && !focusOwed(ws) &&
+			!(s.handoffSeen && s.unconditionalDue(nowMs, ws)) {
+			s.settleDone = true
+			s.settleLock = true
+			s.settleLockElapsedMs = nowMs - s.runtimeUp
+			s.phase = 2
+			s.lockedClass = ws.playerClass
+			return seqResult{action: seqLogLocked}, true
+		}
+		return seqResult{}, false
+	case ws.fgIsEditor, ws.fgHWND == 0, ws.playerHWND == 0:
+		// The editor is never answered (its foreground is
+		// the exit detector's landing); no window at all
+		// and no player target are not grabs. The
+		// sequence's branches own all three.
+		return seqResult{}, false
+	}
+	// A grab: the foreground sits on a window that is
+	// not the player. Game-family (the game pid's own
+	// windows - VPinMAME, the loading dialog - or the
+	// B2S server exe's windows) or foreign, it is
+	// answered on THIS tick: no settle, no floor, no
+	// spacing, no verify phase - the slow cadence is
+	// the fault the guard exists to remove. The answer
+	// feeds the sequence's per-holder episode
+	// bookkeeping, so the attempt budget is one budget
+	// across both assertion paths. A foreign grab also
+	// arms the survival read above for the next tick.
+	family := ws.fgIsGame || isB2SServerName(ws.fgProcName)
+	s.attempts++
+	s.episodeHWND = ws.fgHWND
+	s.beforeDesc = holderDesc(ws.fgClass, ws.fgPID, ws.fgProcName, ws.fgTitle)
+	s.beforeGameFamily = ws.fgIsGame && !ws.fgIsPlayer
+	s.settleGrabDesc = s.beforeDesc
+	if !family {
+		s.settleAssertHWND = ws.fgHWND
+	}
+	s.settleAsserts++
+	return seqResult{action: seqSettleAssert, notePush: true}, true
 }
 
 // noteAssert reports the caller's assertion attempt back: the
