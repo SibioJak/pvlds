@@ -922,6 +922,13 @@ static var debug_backstep_nc: String = ""
 ## originview smoke's per-filter return legs fail by name.
 ## Empty in every real run.
 static var debug_originview_nc: String = ""
+## Negative-control seam for the FIX157 round (the harness
+## env PVLDS_FIX157_NC, set by Main before any room exists):
+## "noseat" makes launch_origin_for write the pre-FIX157
+## record - WoVP challenge rows only, no seat in it - so the
+## return smoke's weekly legs fail by name. Empty in every
+## real run.
+static var debug_fix157_nc: String = ""
 ## Negative-control seam for the blank-board heal (the
 ## harness env PVLDS_GRADFIX4_NC, set by Main before any room
 ## exists): "solidboard" makes every board render land
@@ -1174,6 +1181,8 @@ var _launching_game_id: String = "" ## a launch is in its load wait (Main owns i
 var _launch_marker_surface: String = "wall" ## FIX139: which surface the standing wait launched from - "wall" (the launching panel's LOADING marker stands) or "detail" (the detail's Play quad carries the state instead)
 var _launch_panel_mode: String = "" ## FIX140: the mode of the panel the standing wall launch was pressed on ("board"/"card"), recorded at the press (see _launch_focused_card) - the marker writer keys on it, since one game can now hold a panel per mode; "" = no wall press recorded (the writer falls back to the card)
 var _launch_panel_seat: String = "" ## FIX141: the seat of the panel the standing wall launch was pressed on (see pool_seat_for_idx), recorded beside _launch_panel_mode - one game can now hold a panel per row, so the marker writer keys on the seat too
+var _launch_seat: String = "" ## FIX157: the pool seat of the panel the standing launch came from, recorded at every launch door (the wall press and the plinth copy it from _launch_panel_seat; the detail's Play adopts the seat of the panel that opened the detail, _detail_seat) - launch_origin_for prefers the tournament row standing at this seat, so two rows of one game can no longer misname the origin
+var _detail_seat: String = "" ## FIX157: the pool seat of the panel whose activation opened the standing detail view ("" when the detail was opened any other way); _on_detail_play adopts it as the launch's seat, _on_detail_closed clears it
 var _failed_game_id: String = "" ## last launch died during its load; its button says FAILED until the user moves on
 var _status_note: String = "" ## transient banner suffix: "Launching X..." / "Launch failed: X - reason"
 var _db_warning_active: bool = false ## FIX114: the standing database warning's state (Main drives it from the last landed scan's database kind - see set_db_warning_active)
@@ -2680,6 +2689,91 @@ func set_ipdb_facts(facts: Dictionary, stamp: int) -> void:
 	_ipdb_stamp = stamp
 
 
+## FIX157: THE tournament place law - the one rebuild every
+## tournament data landing runs (set_wovp_data and
+## set_pinemhi_weekly both call this; the law used to be
+## carried as two copies, and the copies are where this
+## bug breed lives). The player's place survives a boards
+## landing: _rebuild_wall drops the focus to nothing, and a
+## fetch lands on every tournament entry (the rail press
+## asks for one; a return restore asks too) - so a player
+## standing focused on a panel when the live boards arrived
+## lost his focus to the rebuild, and the return landing's
+## seat with it (the RETURN round's submit loop: exit
+## table, back at its board, Y - with no focus there is no
+## Y). The place is read BEFORE the recompute and re-seated
+## after, when it still stands: the focused panel's game
+## and - FIX157 - its POOL SEAT, or the rail stop the focus
+## stands on. The seat matters because one game can stand
+## at several seats (a WoVP challenge card and a PINemHi
+## weekly board of the same table): the game alone names
+## the FIRST match, so a weekly return the restore had
+## seated on its board was moved to the game's challenge
+## card by the boot fetch's landing (convicted on the
+## return smoke's WEEKLY scenario: the place law re-seated
+## Medieval Madness wk:main -> ch:fixture-ch-extra-bw2).
+## The seat names the place first; the game keeps its
+## standing road for places that carry no seat (a seat
+## that no longer stands falls back to the game's first
+## standing panel, exactly the pre-FIX157 landing). Focus
+## anywhere else (a modal panel's quads) reads no place and
+## keeps the rebuild's own landing exactly. The FOCUSFIX
+## tail completes a cold entry's seat: no real challenge
+## stood before this rebuild (only the notice panel), the
+## preserved place is the TOURNAMENT stop the entry landed
+## on, and the centred row is now a challenge - focus moves
+## up to the centred challenge card, so real and drawn
+## focus agree after the rebuild too.
+func _tournament_place_law_rebuild() -> void:
+	var place_id: String = ""
+	var place_seat: String = ""
+	var place_stop: String = ""
+	if _focused != null and _panels.has(_focused):
+		place_id = _focused.payload
+		place_seat = pool_seat_for_idx(_panels.find(_focused))
+	elif _focused != null:
+		# A rail stop's focus is a place too: a return that
+		# lands at the room's default (the TOURNAMENT stop)
+		# must still be standing on it after the entry
+		# fetch's rebuild, not nowhere.
+		for k: Variant in _rail_quads.keys():
+			if _rail_quads[k] == _focused:
+				place_stop = str(k)
+				break
+	# FOCUSFIX: was a real challenge standing before this
+	# rebuild? A cold entry (no cached boards) can only
+	# stand its notice panel, so its seat waits for the
+	# boards themselves - read BEFORE the recompute.
+	var had_challenge: bool = false
+	for row0: Variant in _tournament_rows:
+		if str((row0 as Dictionary).get("kind", "")) == "challenge":
+			had_challenge = true
+			break
+	_recompute_visible()
+	_rebuild_wall()
+	var seated: bool = false
+	if place_seat != "":
+		var sidx: int = _tournament_row_index_for_seat(place_seat)
+		if sidx >= 0:
+			_set_centre(sidx, true)
+			if sidx < _panels.size():
+				_set_focused(_panels[sidx])
+			seated = true
+	if not seated and place_id != "":
+		for i: int in range(_visible_games.size()):
+			if _visible_games[i].game_id == place_id:
+				_set_centre(i, true)
+				if i < _panels.size():
+					_set_focused(_panels[i])
+				break
+	elif not seated and place_stop != "":
+		_land_on_rail_stop(place_stop)
+	if not had_challenge and place_stop == "tournament" and debug_focus_nc != "tournland" \
+			and _centre_index >= 0 and _centre_index < _tournament_rows.size() \
+			and str((_tournament_rows[_centre_index] as Dictionary).get("kind", "")) == "challenge":
+		_land_on_wall_card()
+
+
 func set_wovp_data(d: Dictionary) -> void:
 	_wovp_has_key = bool(d.get("has_key", false))
 	_wovp_user_id = str(d.get("user_id", ""))
@@ -2710,61 +2804,12 @@ func set_wovp_data(d: Dictionary) -> void:
 		# when the live boards arrived lost his focus to the
 		# rebuild, and the return landing's seat with it (the
 		# submit loop's first step: exit table, back at its
-		# board, Y - with no focus there is no Y). The place
-		# law is refresh_library's own (GRADFIX14 item 2)
-		# carried to this rebuild: the focused card's game is
-		# read before the recompute and re-seated after, when
-		# it still stands. Focus anywhere else (a rail stop,
-		# a modal panel's quads) reads no place and keeps
-		# today's landing exactly.
-		var place_id: String = ""
-		var place_stop: String = ""
-		if _focused != null and _panels.has(_focused):
-			place_id = _focused.payload
-		elif _focused != null:
-			# A rail stop's focus is a place too: a return
-			# that lands at the room's default (the TOURNAMENT
-			# stop) must still be standing on it after the
-			# entry fetch's rebuild, not nowhere.
-			for k: Variant in _rail_quads.keys():
-				if _rail_quads[k] == _focused:
-					place_stop = str(k)
-					break
-		# FOCUSFIX: was a real challenge standing before
-		# this rebuild? A cold entry (no cached boards) can
-		# only stand its notice panel, so its seat waits for
-		# the boards themselves - read BEFORE the recompute.
-		var had_challenge: bool = false
-		for row0: Variant in _tournament_rows:
-			if str((row0 as Dictionary).get("kind", "")) == "challenge":
-				had_challenge = true
-				break
-		_recompute_visible()
-		_rebuild_wall()
-		if place_id != "":
-			for i: int in range(_visible_games.size()):
-				if _visible_games[i].game_id == place_id:
-					_set_centre(i, true)
-					if i < _panels.size():
-						_set_focused(_panels[i])
-					break
-		elif place_stop != "":
-			_land_on_rail_stop(place_stop)
-		# FOCUSFIX: the boards just landed under a cold
-		# entry - the notice wall is replaced by real
-		# challenges while the preserved place is the
-		# TOURNAMENT stop the entry landed on. The entry's
-		# seat completes now: focus moves up to the centred
-		# challenge card (the addendum's refresh-rebuild
-		# clause - real and drawn focus agree after the
-		# rebuild too). Any other preserved place (a card,
-		# another stop, a wall that already held challenges)
-		# keeps the place law's landing exactly; the NC seam
-		# holds the old landing throughout.
-		if not had_challenge and place_stop == "tournament" and debug_focus_nc != "tournland" \
-				and _centre_index >= 0 and _centre_index < _tournament_rows.size() \
-				and str((_tournament_rows[_centre_index] as Dictionary).get("kind", "")) == "challenge":
-			_land_on_wall_card()
+		# board, Y - with no focus there is no Y). The law
+		# itself is the one tournament place law now (FIX157:
+		# _tournament_place_law_rebuild, shared with
+		# set_pinemhi_weekly - the two carried copies are
+		# where the same-game wrong-seat bug lived).
+		_tournament_place_law_rebuild()
 	else:
 		# Fresh boards can give the flipped card a back it
 		# did not have (or change the one it has): the back's
@@ -2809,40 +2854,13 @@ func set_pinemhi_weekly(d: Dictionary) -> void:
 	_pinemhi2_shots = (d.get("shots", {}) as Dictionary).duplicate() ## FIX132: and their tables' author-shot URLs
 	_pinemhi2_games = (d.get("games", {}) as Dictionary).duplicate() ## FIX134: and their tables' db game ids (the launch resolution)
 	if _tournament:
-		# The place law, carried from set_wovp_data: the
-		# focused card's game (or the rail stop) is read
-		# before the recompute and re-seated after, when it
-		# still stands; a cold entry whose seat waited for
-		# real boards completes on the centred challenge.
-		var place_id: String = ""
-		var place_stop: String = ""
-		if _focused != null and _panels.has(_focused):
-			place_id = _focused.payload
-		elif _focused != null:
-			for k: Variant in _rail_quads.keys():
-				if _rail_quads[k] == _focused:
-					place_stop = str(k)
-					break
-		var had_challenge: bool = false
-		for row0: Variant in _tournament_rows:
-			if str((row0 as Dictionary).get("kind", "")) == "challenge":
-				had_challenge = true
-				break
-		_recompute_visible()
-		_rebuild_wall()
-		if place_id != "":
-			for i: int in range(_visible_games.size()):
-				if _visible_games[i].game_id == place_id:
-					_set_centre(i, true)
-					if i < _panels.size():
-						_set_focused(_panels[i])
-					break
-		elif place_stop != "":
-			_land_on_rail_stop(place_stop)
-		if not had_challenge and place_stop == "tournament" and debug_focus_nc != "tournland" \
-				and _centre_index >= 0 and _centre_index < _tournament_rows.size() \
-				and str((_tournament_rows[_centre_index] as Dictionary).get("kind", "")) == "challenge":
-			_land_on_wall_card()
+		# The one tournament place law (FIX157:
+		# _tournament_place_law_rebuild, shared with
+		# set_wovp_data): the standing place is read before
+		# the recompute and re-seated after, when it still
+		# stands; a cold entry whose seat waited for real
+		# boards completes on the centred challenge.
+		_tournament_place_law_rebuild()
 
 
 ## PINEMHI2: the board spec a weekly row renders - its
@@ -3046,6 +3064,23 @@ func tournament_rows() -> Array:
 ## the tournament surface with an empty ID, which restores
 ## to the room's default landing. Everywhere else the origin
 ## is the library.
+## FIX157: the tournament half names the launching ROW, not
+## just its game. Every seat-bearing row can name the
+## origin - a WoVP challenge by its challenge (seat
+## "ch:<id>") and a PINemHi weekly contest by its contest
+## (seat "wk:<id>") - and the record carries the row's pool
+## seat beside the challenge ID. Before this, the scan below
+## matched challenge rows only: a weekly launch fell through
+## to an empty challenge ID, and the return - holding a
+## record that named no row - took the gone-challenge
+## fallback (the TOURNAMENT rail stop) while the launched
+## board stood right there (Chris's field report, 2026-11-23:
+## a PINemHi tournie table played from its detail screen
+## returned focus to the filter bar). When two seat-bearing
+## rows stand for one game, the row the launch was actually
+## pressed/opened on (its seat recorded at the door, see
+## _launch_seat) names the origin; the first match is the
+## fallback for doors that record no seat.
 func launch_origin_for(game: GameEntry) -> Dictionary:
 	## ORIGINVIEW NC (PVLDS_ORIGINVIEW_NC=nofilter): the
 	## record drops the filter - the pre-ORIGINVIEW shape -
@@ -3055,17 +3090,34 @@ func launch_origin_for(game: GameEntry) -> Dictionary:
 	if game == null or not _tournament:
 		return {"surface": "library", "challenge_id": "",
 			"filter": filter, "game_id": game_id}
-	for row: Variant in _tournament_rows:
-		var r: Dictionary = row as Dictionary
-		if str(r.get("kind", "")) != "challenge":
+	## FIX157 NC (PVLDS_FIX157_NC=noseat): the record drops
+	## the seat and the weekly rows - the pre-FIX157 shape -
+	## so the return smoke's weekly legs fail by name.
+	var noseat: bool = debug_fix157_nc == "noseat"
+	var fallback: Dictionary = {}
+	for i: int in range(_tournament_rows.size()):
+		var r: Dictionary = _tournament_rows[i] as Dictionary
+		var kind: String = str(r.get("kind", ""))
+		if kind != "challenge" and (noseat or kind != "pinemhi"):
 			continue
 		var row_game: GameEntry = r.get("game") as GameEntry
-		if row_game != null and row_game.game_id == game.game_id:
-			var ch: WovpChallenge = r.get("challenge") as WovpChallenge
-			return {"surface": "tournament",
-				"challenge_id": ch.challenge_id if ch != null else "",
-				"filter": filter, "game_id": game_id}
-	return {"surface": "tournament", "challenge_id": "",
+		if row_game == null or row_game.game_id != game.game_id:
+			continue
+		var seat: String = "" if noseat else pool_seat_for_idx(i)
+		if seat == "" and kind == "pinemhi":
+			continue ## a weekly row with no contest names no seat - it cannot name an origin
+		var ch: WovpChallenge = r.get("challenge") as WovpChallenge
+		var record: Dictionary = {"surface": "tournament",
+			"challenge_id": ch.challenge_id if ch != null else "",
+			"seat": seat,
+			"filter": filter, "game_id": game_id}
+		if seat != "" and seat == _launch_seat:
+			return record
+		if fallback.is_empty():
+			fallback = record
+	if not fallback.is_empty():
+		return fallback
+	return {"surface": "tournament", "challenge_id": "", "seat": "",
 		"filter": filter, "game_id": game_id}
 
 
@@ -3085,6 +3137,19 @@ func _tournament_row_index_for_challenge(challenge_id: String) -> int:
 	return -1
 
 
+## FIX157: the row index of one seat in the standing
+## tournament view (see pool_seat_for_idx) - or -1 when no
+## row stands at it (the contest rolled over, the challenge
+## ended, the rows refreshed away).
+func _tournament_row_index_for_seat(seat: String) -> int:
+	if seat == "":
+		return -1
+	for i: int in range(_tournament_rows.size()):
+		if pool_seat_for_idx(i) == seat:
+			return i
+	return -1
+
+
 ## The challenge ID of the focused card in the Tournament
 ## Room, or "" when focus stands anywhere else (a rail stop,
 ## a state row, the library). The return smoke's read of
@@ -3100,6 +3165,21 @@ func tournament_focused_challenge_id() -> String:
 		return ""
 	var ch: WovpChallenge = r.get("challenge") as WovpChallenge
 	return ch.challenge_id if ch != null else ""
+
+
+## FIX157: the pool seat of the focused panel in the
+## Tournament Room ("ch:<id>" / "wk:<id>"), or "" when focus
+## stands anywhere else (a rail stop, a seatless row, the
+## library). The seat twin of tournament_focused_challenge_id
+## - the return smoke's read of where a weekly return
+## landing actually put the player.
+func tournament_focused_seat() -> String:
+	if not _tournament or _focused == null:
+		return ""
+	var idx: int = _panels.find(_focused)
+	if idx < 0:
+		return ""
+	return pool_seat_for_idx(idx)
 
 
 ## The Tournament Room's warning line (READOUT): the
@@ -3590,7 +3670,12 @@ func _b_exit_tournament() -> void:
 ## its first row. Either way a fetch is requested, exactly as
 ## a manual entry asks, so the board beside the card is live
 ## for what the player came back to do (Y - submit).
-func restore_tournament_return(challenge_id: String) -> void:
+## FIX157: the seat the record carries (launch_origin_for)
+## names the row across both families - a weekly contest's
+## return seats its board exactly as a challenge's seats its
+## card; before, the challenge-only lookup sent every weekly
+## return down the no-longer-standing fallback above.
+func restore_tournament_return(challenge_id: String, seat: String = "") -> void:
 	_failed_game_id = ""
 	_status_note = ""
 	_tournament = true
@@ -3600,12 +3685,21 @@ func restore_tournament_return(challenge_id: String) -> void:
 	_recompute_visible()
 	_rebuild_wall()
 	_persist_view()
-	var idx: int = _tournament_row_index_for_challenge(challenge_id)
+	# FIX157: the record's seat names the launching row
+	# across both families (challenge and weekly); the
+	# challenge ID keeps its standing road for records
+	# written before the seat rode along.
+	var idx: int = _tournament_row_index_for_seat(seat)
+	if idx < 0:
+		idx = _tournament_row_index_for_challenge(challenge_id)
 	if idx >= 0:
 		_set_centre(idx, true)
 		if idx < _panels.size():
 			_set_focused(_panels[idx])
-		print("ROOM RETURN: back to the Tournament Room - challenge %s standing, focused" % challenge_id)
+		if seat != "":
+			print("ROOM RETURN: back to the Tournament Room - seat %s standing, focused" % seat)
+		else:
+			print("ROOM RETURN: back to the Tournament Room - challenge %s standing, focused" % challenge_id)
 	else:
 		_land_on_rail_stop("tournament")
 		print("ROOM RETURN: back to the Tournament Room - challenge '%s' no longer standing, default landing" % challenge_id)
@@ -9558,6 +9652,10 @@ func _activate(quad: ClickableQuad) -> void:
 			var game: GameEntry = _scanner.game_by_id(quad.payload)
 			if game != null:
 				quad.pulse()
+				# FIX157: remember which panel opened this
+				# detail - if its Play launches, that panel's
+				# seat is the launch's seat (see _detail_seat).
+				_detail_seat = pool_seat_for_idx(_panels.find(quad))
 				_open_detail(game)
 		"panel_launch":
 			var game2: GameEntry = _scanner.game_by_id(quad.payload)
@@ -9576,6 +9674,7 @@ func _activate(quad: ClickableQuad) -> void:
 					var oidx: int = _panels.find(owner as ClickableQuad) if owner != null else -1
 					_launch_panel_mode = "board" if (oidx >= 0 and _tourn_board_panel_idx(oidx)) else "card"
 					_launch_panel_seat = pool_seat_for_idx(oidx) ## FIX141: the pressed panel's seat, beside its mode
+					_launch_seat = _launch_panel_seat ## FIX157: the launch's seat, for the origin record
 					_selected_game_id = game2.game_id
 					_persist_view()
 					launch_requested.emit(game2, build)
@@ -9629,6 +9728,7 @@ func _launch_focused_card() -> void:
 	# either.
 	_launch_panel_mode = "board" if _tourn_board_panel_idx(idx) else "card"
 	_launch_panel_seat = pool_seat_for_idx(idx)
+	_launch_seat = _launch_panel_seat ## FIX157: the launch's seat, for the origin record
 	_selected_game_id = game.game_id
 	_persist_view()
 	launch_requested.emit(game, build)
@@ -10463,6 +10563,11 @@ func _open_detail(game: GameEntry) -> void:
 ## Detail Play forwards into the same launch path as the card's
 ## Launch button (default build, or the armed play-once build).
 func _on_detail_play(game: GameEntry, build: TableBuild) -> void:
+	# FIX157: the launch's seat is the seat of the panel that
+	# opened this detail (recorded at the open, _detail_seat) -
+	# the detail itself stands on no panel, so without this the
+	# origin record could not name the launching row.
+	_launch_seat = _detail_seat
 	_selected_game_id = game.game_id
 	_persist_view()
 	launch_requested.emit(game, build)
@@ -13042,6 +13147,7 @@ func board_pop_offset(idx: int) -> Vector3:
 
 func _on_detail_closed() -> void:
 	_mode = "wall"
+	_detail_seat = "" ## FIX157: the detail is gone; its seat must never leak into a later launch
 	# Favorites / recents may have changed in detail: rebuild the wall.
 	_recompute_visible()
 	_rebuild_wall()

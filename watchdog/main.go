@@ -126,7 +126,7 @@ import (
 // session header line alongside the launcher version the
 // contract carries, so a field log names both halves of the
 // pair that produced it.
-const WatchdogVersion = "1.1.41"
+const WatchdogVersion = "1.1.42"
 
 type Contract struct {
 	Version int  `json:"version"`

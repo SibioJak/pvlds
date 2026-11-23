@@ -521,7 +521,7 @@ var _sn_from: ClickableQuad = null ## focus as the in-flight step was injected
 var _sn_after: int = 6 ## the phase the script executor hands over to when its script runs out
 var _sn_step_msec: int = 0
 var _sn_cool_until: int = 0
-var _smoke_return: bool = false ## --pvlds-smoke-return (RETURN round): the return-to-origin smoke - a launch boot fires a real launch (from the Tournament Room or the library wall) and the hand-off exits; a verify boot on the same staged HOME judges where the return landing put the player. Modes in PVLDS_RETURN_SMOKE_MODE: launch_tourn | launch_lib | verify_tourn | verify_lib | verify_vanish. PVLDS_RETURN_NC=oldway on the verify boot must fail the "tourn: returns to the tournament room" leg by name
+var _smoke_return: bool = false ## --pvlds-smoke-return (RETURN round): the return-to-origin smoke - a launch boot fires a real launch (from the Tournament Room or the library wall) and the hand-off exits; a verify boot on the same staged HOME judges where the return landing put the player. Modes in PVLDS_RETURN_SMOKE_MODE: launch_tourn | launch_lib | verify_tourn | verify_lib | verify_vanish | launch_weekly | launch_weekly_detail | launch_tourn_detail | launch_lib_detail | verify_weekly (FIX157: the weekly + detail doors; PVLDS_FIX157_NC=noseat on the launch boot must fail the "weekly: the launched contest stands focused" leg by name). PVLDS_RETURN_NC=oldway on the verify boot must fail the "tourn: returns to the tournament room" leg by name
 var _ret_mode: String = ""
 var _ret_phase: int = 0
 var _ret_wait: int = 0
@@ -531,6 +531,7 @@ var _ret_deadline: int = 0
 var _ret_idx: int = -1 ## the target's row/panel index (the Twilight Zone challenge, or its library card)
 var _ret_filter: String = "" ## ORIGINVIEW: PVLDS_RETURN_SMOKE_FILTER - the filter view the launch_filter boot launches from / the verify_filter boot judges
 var _ret_game: String = "" ## ORIGINVIEW: PVLDS_RETURN_SMOKE_GAME - the launched game's id the verify_filter boots judge (the script reads it off boot 1's log + the origin record)
+var _ret_detail: bool = false ## FIX157: the *_detail launch modes route the launch through the target's detail view (open it, press its Play) instead of the wall A-press
 var _ret_seen_pending: bool = false ## the load wait was seen running (a settle back to not-pending with the process alive is a FAILED load, not a return)
 var _ret_grace: int = 0 ## frames the settled-but-still-standing state gets to exit before it is called a failed settle (a successful settle's quit lands at the frame's end; the driver can see the settled state first)
 var _bt_phase: int = 0
@@ -1109,6 +1110,11 @@ func _ready() -> void:
 	# the pre-ORIGINVIEW shape - so the originview smoke's
 	# per-filter return legs fail by name.
 	RoomView.debug_originview_nc = OS.get_environment("PVLDS_ORIGINVIEW_NC")
+	# FIX157's negative-control seam (PVLDS_FIX157_NC=
+	# noseat): the launch-origin record drops its seat and
+	# the weekly rows - the pre-FIX157 shape - so the return
+	# smoke's weekly legs fail by name.
+	RoomView.debug_fix157_nc = OS.get_environment("PVLDS_FIX157_NC")
 	# GRADFIX10's input negative-control seam (PVLDS_INPUT_NC=
 	# dpadmove | notrig): restores the pre-nuke D-pad movement
 	# or the unread triggers, so the input smoke's matching
@@ -3217,7 +3223,7 @@ func _apply_return_origin() -> void:
 		if oldway:
 			print("PVLDS RETURN: a tournament origin stands but is ignored (NC oldway) - the pre-RETURN landing")
 			return
-		_room.restore_tournament_return(str(origin.get("challenge_id", "")))
+		_room.restore_tournament_return(str(origin.get("challenge_id", "")), str(origin.get("seat", "")))
 	elif surface == "library":
 		if oldway:
 			return ## pre-RETURN, a library record changed nothing
@@ -19502,6 +19508,7 @@ func _ff_finish_smoke() -> void:
 
 const RET_TZ_ID: String = "fixture-ch-br-r4"
 const RET_TZ_TITLE: String = "Twilight Zone"
+const RET_MM_TITLE: String = "Medieval Madness" ## FIX157: the weekly smoke's target game (the staged "main" contest's table)
 
 
 func _ret_expect(ok: bool, label: String) -> void:
@@ -19531,11 +19538,36 @@ func _ret_challenge_idx(challenge_id: String) -> int:
 	return -1
 
 
+## FIX157: the standing row index of one PINemHi weekly
+## contest (kind "pinemhi"), or -1 when it does not stand.
+func _ret_weekly_idx(contest_id: String) -> int:
+	var rows: Array = _room.tournament_rows()
+	for i: int in range(rows.size()):
+		var row: Dictionary = rows[i] as Dictionary
+		if str(row.get("kind", "")) == "pinemhi":
+			var contest: Dictionary = row.get("contest", {}) as Dictionary
+			if str(contest.get("id", "")) == contest_id:
+				return i
+	return -1
+
+
 func _ret_tz_game_id() -> String:
 	if _scanner == null:
 		return ""
 	for g: GameEntry in _scanner.games:
 		if g != null and g.title == RET_TZ_TITLE:
+			return g.game_id
+	return ""
+
+
+## FIX157: the weekly target's game id (Medieval Madness,
+## resolved by ROM against the letter library) - the twin
+## of _ret_tz_game_id for the verify_weekly pool leg.
+func _ret_mm_game_id() -> String:
+	if _scanner == null:
+		return ""
+	for g: GameEntry in _scanner.games:
+		if g != null and g.title == RET_MM_TITLE:
 			return g.game_id
 	return ""
 
@@ -19573,14 +19605,26 @@ func _drive_return_smoke() -> void:
 		0:
 			if _room != null and _room.visible and _room.wall_ready:
 				_ret_deadline = Time.get_ticks_msec() + 45000
-				if _ret_mode == "launch_tourn":
+				if _ret_mode == "launch_tourn" or _ret_mode == "launch_tourn_detail":
 					_room._handle_rail("tournament")
 					_ret_expect(_room.tournament_active(), "launch: the TOURNAMENT stop raises the Tournament Room")
+					_ret_detail = _ret_mode.ends_with("_detail")
 					_ret_phase = 1
-				elif _ret_mode == "launch_lib":
+				elif _ret_mode == "launch_weekly" or _ret_mode == "launch_weekly_detail":
+					# FIX157: the weekly door - the Tournament
+					# Room again, but the target is a PINemHi
+					# weekly contest's board (the Medieval
+					# Madness "main" contest the harness stages
+					# through the weekly cache + stub).
+					_room._handle_rail("tournament")
+					_ret_expect(_room.tournament_active(), "launch: the TOURNAMENT stop raises the Tournament Room")
+					_ret_detail = _ret_mode.ends_with("_detail")
+					_ret_phase = 8
+				elif _ret_mode == "launch_lib" or _ret_mode == "launch_lib_detail":
 					# A fresh room stands on the VR filter;
 					# the library leg plays from the full shelf.
 					_room._handle_rail("filter:all")
+					_ret_detail = _ret_mode.ends_with("_detail")
 					_ret_phase = 5
 				elif _ret_mode == "launch_filter":
 					# ORIGINVIEW: stand in the named filter
@@ -19608,7 +19652,7 @@ func _drive_return_smoke() -> void:
 				_room._set_centre(_ret_idx, false)
 				_room._set_focused(_room._panels[_ret_idx])
 				_ret_deadline = Time.get_ticks_msec() + 20000
-				_ret_phase = 2
+				_ret_phase = 9 if _ret_detail else 2
 				_ret_wait = 0
 			elif Time.get_ticks_msec() > _ret_deadline:
 				_ret_expect(false, "launch: the boards never went live against the stub")
@@ -19630,7 +19674,7 @@ func _drive_return_smoke() -> void:
 			_room._set_centre(_ret_idx, false)
 			_room._set_focused(_room._panels[_ret_idx])
 			_ret_deadline = Time.get_ticks_msec() + 20000
-			_ret_phase = 2
+			_ret_phase = 9 if _ret_detail else 2
 			_ret_wait = 0
 		6:
 			# launch_filter (ORIGINVIEW): the view stands;
@@ -19708,7 +19752,12 @@ func _drive_return_smoke() -> void:
 					_ret_verify_legs()
 					_ret_finish_smoke()
 			elif _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy():
-				if _ret_wait >= 15:
+				if _ret_mode == "verify_weekly" and _ret_weekly_idx("main") < 0 and _ret_wait <= 300:
+					# FIX157: the weekly rows are not standing
+					# yet - keep waiting (past 300 the legs
+					# judge as the room stands).
+					pass
+				elif _ret_wait >= 15:
 					_ret_verify_legs()
 					_ret_finish_smoke()
 			elif _ret_wait > 300:
@@ -19721,10 +19770,88 @@ func _drive_return_smoke() -> void:
 			elif Time.get_ticks_msec() > _ret_deadline:
 				_ret_expect(false, "verify: the boards never went live against the stub")
 				_ret_finish_smoke()
+		8:
+			# FIX157 launch_weekly: the weekly rows stand
+			# behind the WoVP rows; wait for the full row set
+			# (boards live, so the weekly index is final),
+			# then seat the "main" contest's board - owned,
+			# resolved by ROM to Medieval Madness.
+			var wready: bool = false
+			if _wovp_boards_live and _wovp_client != null and not _wovp_client.is_busy():
+				_ret_idx = _ret_weekly_idx("main")
+				if _ret_idx >= 0 and _ret_idx < _room._panels.size():
+					var wrow: Dictionary = _room.tournament_rows()[_ret_idx] as Dictionary
+					wready = bool(wrow.get("owned", false))
+			if wready:
+				get_viewport().warp_mouse(Vector2(512, 764))
+				_room._set_centre(_ret_idx, false)
+				_room._set_focused(_room._panels[_ret_idx])
+				_ret_deadline = Time.get_ticks_msec() + 20000
+				_ret_phase = 9 if _ret_detail else 2
+				_ret_wait = 0
+			elif Time.get_ticks_msec() > _ret_deadline:
+				_ret_expect(false, "launch: the weekly contest never stood owned in the tournament view")
+				_ret_finish_smoke()
+		9:
+			# FIX157 detail door: open the seated target's
+			# detail (the panel activation - the pointer's
+			# own door), then press its Play in phase 10.
+			if _room._mode == "detail":
+				_ret_expect(true, "launch: the target's detail stands open")
+				_ret_phase = 10
+				_ret_wait = 0
+			elif _ret_idx >= 0 and _ret_idx < _room._panels.size():
+				_room._activate(_room._panels[_ret_idx])
+				if _ret_wait > 600:
+					_ret_expect(false, "launch: the target's detail never opened")
+					_ret_finish_smoke()
+			elif Time.get_ticks_msec() > _ret_deadline:
+				_ret_expect(false, "launch: no target panel stands for the detail door")
+				_ret_finish_smoke()
+		10:
+			# FIX157 detail door: press the detail's own
+			# Play quad (the real Play path - DetailView's
+			# play_requested into the room's launch door),
+			# then the shared hand-off wait (phase 4) judges.
+			var play_quad: ClickableQuad = null
+			for q: ClickableQuad in _room._detail.get_clickables():
+				if q.action_id == "detail_play":
+					play_quad = q
+					break
+			_ret_expect(play_quad != null, "launch: the detail carries its Play quad")
+			if play_quad != null:
+				_room._activate(play_quad)
+				_ret_deadline = Time.get_ticks_msec() + 120000
+				_ret_phase = 4
+				_ret_wait = 0
+			elif _ret_wait > 600:
+				_ret_expect(false, "launch: the detail's Play never appeared")
+				_ret_finish_smoke()
 
 
 func _ret_verify_legs() -> void:
 	match _ret_mode:
+		"verify_weekly":
+			# FIX157: the weekly invariant - the return focus
+			# is the launched contest's own board card (seat
+			# wk:main, the Medieval Madness contest), never
+			# the filter bar. THE field bug's leg: it runs
+			# against both weekly launch doors (wall and
+			# detail) and, with PVLDS_FIX157_NC=noseat on the
+			# launch boot, must FAIL by this name.
+			_ret_expect(_room.tournament_active(), "weekly: returns to the tournament room")
+			_ret_expect(_room.tournament_focused_seat() == "wk:main",
+				"weekly: the launched contest stands focused")
+			var widx: int = _ret_weekly_idx("main")
+			_ret_expect(widx >= 0 and _room.centre_index() == widx,
+				"weekly: the launched contest stands centred")
+			var wpool: Dictionary = _room.pool_nodes(_ret_mm_game_id(), "board", "wk:main")
+			_ret_expect(not wpool.is_empty() and wpool.get("root") != null and _room.focused_quad() == (wpool.get("root") as ClickableQuad),
+				"weekly: the focused panel is the launching card (pool: game, board, wk:main)")
+			var stopw: ClickableQuad = _room._rail_quads.get("tournament") as ClickableQuad
+			_ret_expect(stopw == null or _room.focused_quad() != stopw,
+				"weekly: the focus is not the filter bar's TOURNAMENT stop")
+			_grad_save_grab("return_weekly.png")
 		"verify_tourn":
 			_ret_expect(_room.tournament_active(), "tourn: returns to the tournament room")
 			_ret_expect(_room.tournament_focused_challenge_id() == RET_TZ_ID,

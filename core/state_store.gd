@@ -99,6 +99,10 @@ func load_from_disk() -> void:
 				## before them simply carries neither.
 				"filter": str(rd.get("filter", "")),
 				"game_id": str(rd.get("game_id", "")),
+				## FIX157: the launching row's pool seat rides
+				## the same parse - a record written before it
+				## simply carries none.
+				"seat": str(rd.get("seat", "")),
 				"stamp": int(rd.get("stamp", 0)),
 			}
 	# GRADFIX11: the file-age tracker round-trips with the
