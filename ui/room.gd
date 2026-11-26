@@ -1254,6 +1254,12 @@ var _placard_back: ClickableQuad = null
 var _placard_up: bool = false
 var _placard_gen: int = 0
 var _placard_message: String = "" ## the message the standing placard carries (a launch failure rides it too)
+var _decl: Node3D = null ## FIX158: the declaration panel's holder; in the tree only while the declaration stands
+var _decl_face: ClickableQuad = null
+var _decl_back: ClickableQuad = null
+var _decl_up: bool = false
+var _decl_gen: int = 0
+var _decl_set: Dictionary = {} ## FIX158: the completeness read the standing declaration carries (PvldsConfig.declaration_missing)
 var _setup_panel: Node3D = null ## the in-room SETUP panel's holder; in the tree only while the panel stands
 var _setup_panel_face: ClickableQuad = null
 var _setup_panel_scan_btn: ClickableQuad = null
@@ -1959,6 +1965,7 @@ func _telemetry_context() -> Dictionary:
 		"setup_panel_up": _setup_panel_up,
 		"submit_panel_up": _submit_panel_up,
 		"placard_up": _placard_up,
+		"decl_up": _decl_up,
 		"launch_wait": _launching_game_id != "",
 		"focused_panel_index": _panels.find(_focused) if _focused != null else -1,
 		"centre_index": _centre_index,
@@ -3244,7 +3251,7 @@ func _build_tournament_rows() -> Array:
 	if not _wovp_has_key:
 		rows.append(_tournament_state_row([
 			"No WoVP key yet.",
-			"Add your key in SETUP - PASTE KEY there (copy it first), or paste it on the desktop desk.",
+			"Add your key in SETUP - PASTE KEY there (copy it first), or paste it in LaunchPin's desktop window.",
 			"The key lives only on this PC.",
 		]))
 	elif _wovp_challenges.is_empty():
@@ -4894,7 +4901,7 @@ func _refresh_window() -> void:
 	var fc: int = _grid_coord(_centre_index).x
 	_panel_window_lo = maxi(0, fc - VISIBLE_HALF_COLUMNS)
 	_panel_window_hi = mini(_columns - 1, fc + VISIBLE_HALF_COLUMNS)
-	var browsing: bool = _mode == "wall" and not _placard_up and not _setup_panel_up and not _submit_panel_up and _launching_game_id == ""
+	var browsing: bool = _mode == "wall" and not _placard_up and not _decl_up and not _setup_panel_up and not _submit_panel_up and _launching_game_id == ""
 	for idx: int in range(_panels.size()):
 		var c: int = _grid_coord(idx).x
 		var vis: bool = c >= _panel_window_lo and c <= _panel_window_hi
@@ -5155,6 +5162,11 @@ func _rebuild_wall() -> void:
 		# path) must not resurrect live controls behind it.
 		_inert_room_quads()
 		_set_focused(_placard_back)
+	if _decl_up:
+		# The same law behind the declaration: a rebuild while
+		# it stands must not resurrect live controls behind it.
+		_inert_room_quads()
+		_set_focused(_decl_back)
 	if _setup_panel_up:
 		# The same law behind the SETUP panel: the scan-landing
 		# refresh must not resurrect live controls behind it,
@@ -8553,6 +8565,11 @@ func _refresh_focusables() -> void:
 		# The placard owns the room: BACK is the only focus stop.
 		if _placard_back != null:
 			_focusables.append(_placard_back)
+	elif _decl_up:
+		# The declaration owns the room the same way: BACK is
+		# the only focus stop.
+		if _decl_back != null:
+			_focusables.append(_decl_back)
 	elif _setup_panel_up:
 		# The SETUP panel owns the room: its eight buttons are
 		# the only focus stops (see show_setup_panel).
@@ -8784,7 +8801,7 @@ func _panel_for(q: ClickableQuad) -> ClickableQuad:
 ## scrolling. With no hovered card, retain the centred card's
 ## visual selection for keyboard/gamepad navigation.
 func _pop_target_panel() -> ClickableQuad:
-	if _mode != "wall" or _placard_up or _setup_panel_up or _submit_panel_up or _launching_game_id != "":
+	if _mode != "wall" or _placard_up or _decl_up or _setup_panel_up or _submit_panel_up or _launching_game_id != "":
 		return null
 	var hovered: ClickableQuad = _panel_for(_rig.hovered) if _rig != null else null
 	if hovered != null and hovered.pick_enabled and hovered.is_visible_in_tree():
@@ -8828,7 +8845,7 @@ func _follow_centre(delta: float = 0.0) -> void:
 
 
 func _edge_scroll_enabled() -> bool:
-	return is_visible_in_tree() and _mode == "wall" and not _placard_up and not _setup_panel_up \
+	return is_visible_in_tree() and _mode == "wall" and not _placard_up and not _decl_up and not _setup_panel_up \
 		and not _submit_panel_up and not _submissions_panel_up and _launching_game_id == ""
 
 
@@ -9485,7 +9502,7 @@ func _update_flip(delta: float) -> void:
 	# or the room left the plain wall (detail, placard,
 	# SETUP panel, the load wait). The turn closes; it never
 	# holds the room hostage while doing so.
-	if _flip_open and (_centre_index != _flip_idx or _mode != "wall" or _placard_up \
+	if _flip_open and (_centre_index != _flip_idx or _mode != "wall" or _placard_up or _decl_up \
 			or _setup_panel_up or _launching_game_id != ""):
 		_flip_open = false
 	var target: float = 1.0 if _flip_open else 0.0
@@ -9627,6 +9644,13 @@ func _activate(quad: ClickableQuad) -> void:
 			quad.pulse()
 			hide_submissions_panel()
 		return
+	if _decl_up:
+		# While the declaration stands, everything else is
+		# inert - the placard's lock, word for word.
+		if quad.action_id == "decl_back":
+			quad.pulse()
+			hide_declaration()
+		return
 	if _placard_up:
 		# While the placard stands, everything else is inert. The
 		# pick flags already say so for the pointer; this is the
@@ -9706,7 +9730,7 @@ func _activate(quad: ClickableQuad) -> void:
 ## the slide's pending travel then drops whole at its far
 ## point, by its own rule.
 func _launch_focused_card() -> void:
-	if _mode != "wall" or _placard_up or _setup_panel_up or _submit_panel_up or _focused == null:
+	if _mode != "wall" or _placard_up or _decl_up or _setup_panel_up or _submit_panel_up or _focused == null:
 		return
 	var idx: int = _panels.find(_focused)
 	if idx < 0 or idx >= _visible_games.size():
@@ -9745,7 +9769,7 @@ func _launch_focused_card() -> void:
 func _a_press() -> void:
 	if _focused == null:
 		return
-	if _mode == "wall" and not _placard_up and not _setup_panel_up and not _submit_panel_up and _panels.has(_focused):
+	if _mode == "wall" and not _placard_up and not _decl_up and not _setup_panel_up and not _submit_panel_up and _panels.has(_focused):
 		_launch_focused_card()
 	else:
 		_activate(_focused)
@@ -9777,7 +9801,7 @@ func _info_focused_card() -> void:
 		# the command itself ("Y - SUBMIT A SCORE").
 		_open_submit_for_focused()
 		return
-	if _mode != "wall" or _placard_up or _setup_panel_up or _focused == null:
+	if _mode != "wall" or _placard_up or _decl_up or _setup_panel_up or _focused == null:
 		return
 	if not _panels.has(_focused):
 		return
@@ -9937,7 +9961,7 @@ func _page_travel_landing(key: String, after_swap: Callable) -> Callable:
 ## no submissions. While any panel or the placard owns
 ## the room, X does nothing at all.
 func _x_press() -> void:
-	if _submissions_panel_up or _submit_panel_up or _setup_panel_up or _placard_up:
+	if _submissions_panel_up or _submit_panel_up or _setup_panel_up or _placard_up or _decl_up:
 		return
 	if _tournament:
 		show_submissions_panel()
@@ -9965,7 +9989,7 @@ func _x_press() -> void:
 ## empty-filter guard has already fallen back to ALL, whose
 ## first panel takes the focus.
 func _toggle_focused_favorite() -> void:
-	if _mode != "wall" or _placard_up or _setup_panel_up or _launching_game_id != "" or _focused == null or _tournament:
+	if _mode != "wall" or _placard_up or _decl_up or _setup_panel_up or _launching_game_id != "" or _focused == null or _tournament:
 		# The Tournament Room is a standings surface, not a
 		# browsing one: X is inert there (a board face carries
 		# no favorite mark to flip, and the in-place re-render
@@ -10011,7 +10035,7 @@ func _rerender_panel_face(idx: int) -> void:
 ## point on a drum, because there is no swap. A press that
 ## lands mid-swing simply retargets the swing.
 func _page_travel(step: int, after_swap: Callable) -> void:
-	if _mode != "wall" or _placard_up or _setup_panel_up or _launching_game_id != "":
+	if _mode != "wall" or _placard_up or _decl_up or _setup_panel_up or _launching_game_id != "":
 		return
 	var target_page: int = clampi(_page + step, 0, page_count() - 1)
 	var idx: int = clampi(target_page * PAGE_SIZE, 0, maxi(0, _visible_games.size() - 1))
@@ -10237,7 +10261,7 @@ func _rail_anchor_step(step: int) -> void:
 ## NOTHING in the bar zone (rail or strip focus) moves
 ## the wall; nothing on the wall reaches the bar.
 func _bumper_page(step: int) -> void:
-	if _launching_game_id != "" or _placard_up or _setup_panel_up or _submit_panel_up or _mode != "wall":
+	if _launching_game_id != "" or _placard_up or _decl_up or _setup_panel_up or _submit_panel_up or _mode != "wall":
 		return
 	# The strip country spends its bumpers at home
 	# (GRADFIX14 supersession (a)): one slot along the
@@ -10479,7 +10503,7 @@ func wall_anchor_columns() -> Array[int]:
 ##   view. The grammar reconciles as: anchors = the
 ##   focused block's own columns.
 func _trigger_anchor(step: int) -> void:
-	if _launching_game_id != "" or _placard_up or _setup_panel_up or _submit_panel_up or _mode != "wall":
+	if _launching_game_id != "" or _placard_up or _decl_up or _setup_panel_up or _submit_panel_up or _mode != "wall":
 		return
 	if _focused == null:
 		return
@@ -10584,6 +10608,11 @@ func _on_detail_play(game: GameEntry, build: TableBuild) -> void:
 ## everything else. A Launch fired blind behind a setup session
 ## would be a state bug waiting to happen.
 func show_setup_placard(message: String = "") -> void:
+	# FIX158: the desk opening supersedes a standing
+	# declaration - cleared FIRST, while its pick snapshot
+	# still restores the live states the placard's own
+	# snapshot must record.
+	clear_declaration()
 	_placard_message = message
 	if _placard == null:
 		_build_placard()
@@ -10675,6 +10704,114 @@ func _fill_placard_textures(gen: int, message: String) -> void:
 	if gen != _placard_gen or not _placard_up or _placard_back == null:
 		return
 	_placard_back.set_texture(btex)
+
+
+## --------------------------------------------------- declaration (FIX158)
+
+## Detect and Declare: Main raises this panel at room entry
+## when the desktop preliminaries are incomplete (the read is
+## PvldsConfig.declaration_missing; Main calls only when its
+## required set is non-empty). The words are Chris's approved
+## copy, composed by RoomSpecs.declaration_spec - the panel
+## names each missing item and where it lives, in the room,
+## instead of letting an unconfigured state present as
+## normal. Presentation is the placard's family: while it
+## stands the room behind it is inert (the shared pick
+## snapshot), focus is confined to BACK, and BACK - by pad,
+## B, D-pad Right, or pointer - dismisses it and hands the
+## room back. It informs; it does not jail the entry: the
+## room stands around it, and Main re-raises it at most once
+## per entry while the preliminaries stay incomplete.
+func show_declaration(decl: Dictionary) -> void:
+	clear_setup_placard()
+	_decl_set = decl
+	if _decl == null:
+		_build_declaration()
+	if not _decl_up:
+		_pick_snapshot.clear()
+		for q: ClickableQuad in _room_pickables():
+			_pick_snapshot[q] = q.pick_enabled
+		_decl_up = true
+		add_child(_decl)
+		ClickableQuad.face_point(_decl, EYE)
+		_inert_room_quads()
+	_refresh_focusables()
+	_set_focused(_decl_back)
+	_decl_gen += 1
+	_fill_declaration_textures(_decl_gen)
+
+
+## The declaration's BACK: tear it down and hand the room
+## back. No signal - no desk stands alongside it for Main to
+## close (the placard's dismissal carries one; this does not).
+func hide_declaration() -> void:
+	if not _decl_up:
+		return
+	clear_declaration()
+
+
+## Silent teardown for Main's own routes (a fresh room entry,
+## the desk opening over it): the entry re-judges the
+## preliminaries itself, so no stale declaration may stand.
+func clear_declaration() -> void:
+	if not _decl_up:
+		return
+	_decl_up = false
+	_decl_gen += 1
+	if _decl != null:
+		# Freed, not parked - the placard's law (an out-of-tree
+		# holder orphans its render resources).
+		if _decl.get_parent() != null:
+			remove_child(_decl)
+		_decl.queue_free()
+		_decl = null
+		_decl_face = null
+		_decl_back = null
+	_restore_room_pick_states()
+	_set_focused(null)
+	_refresh_focusables()
+
+
+func is_declaration_up() -> bool:
+	return _decl_up
+
+
+func declaration_set() -> Dictionary:
+	return _decl_set
+
+
+func declaration_back_quad() -> ClickableQuad:
+	return _decl_back
+
+
+func _build_declaration() -> void:
+	_decl = Node3D.new()
+	_decl.name = "DeclarationPanel"
+	_decl.position = Vector3(0.0, 1.30, -1.72)
+	var placeholder: Texture2D = TextureFactory.make_solid(Color(0.07, 0.07, 0.11))
+	_decl_face = ClickableQuad.new()
+	_decl_face.setup("decl_face", "", placeholder, Vector2(1.36, 1.04))
+	_decl_face.position = Vector3(0.0, 0.10, 0.0)
+	_decl_face.pick_enabled = false
+	_decl.add_child(_decl_face)
+	_decl_back = ClickableQuad.new()
+	_decl_back.setup("decl_back", "", placeholder, Vector2(0.44, 0.15))
+	_decl_back.position = Vector3(0.0, -0.52, 0.0)
+	_decl.add_child(_decl_back)
+	# No face_point here: the holder is oriented in
+	# show_declaration, once it is inside the tree (the
+	# placard's note, word for word).
+
+
+func _fill_declaration_textures(gen: int) -> void:
+	var tex: Texture2D = await _factory.render_texture(RoomSpecs.declaration_spec(_decl_set), Vector2i(1152, 880))
+	if gen != _decl_gen or not _decl_up or _decl_face == null:
+		return
+	_decl_face.set_texture(tex)
+	var btex: Texture2D = await _factory.render_texture(RoomSpecs.button_spec("BACK", true), Vector2i(512, 164))
+	if gen != _decl_gen or not _decl_up or _decl_back == null:
+		return
+	_decl_back.set_texture(btex)
 
 
 ## Every quad the placard stands in front of, in one list: the
@@ -11309,7 +11446,7 @@ func _fill_setup_button(gen: int, quad: ClickableQuad, text: String, accent: boo
 ## sending, submitted, refused. No dead panels, no crashes.
 
 func _open_submit_for_focused() -> void:
-	if not _tournament or _mode != "wall" or _placard_up or _setup_panel_up or _submit_panel_up:
+	if not _tournament or _mode != "wall" or _placard_up or _decl_up or _setup_panel_up or _submit_panel_up:
 		return
 	if _focused == null or _launching_game_id != "":
 		return
@@ -13366,7 +13503,7 @@ func _process(delta: float) -> void:
 	# panel or placard up, no load wait, a card focused.
 	# Anything else ends it, and the stepped landing settles
 	# the drum at the roll's standing target.
-	if _nc_roll_dir != 0 and (_mode != "wall" or _tournament or _placard_up or _setup_panel_up \
+	if _nc_roll_dir != 0 and (_mode != "wall" or _tournament or _placard_up or _decl_up or _setup_panel_up \
 			or deaf or _focused == null or _panels.find(_focused) < 0):
 		_nc_roll_dir = 0
 	# The hold bookkeeping: the poll counts the discrete
@@ -13495,6 +13632,8 @@ func _process(delta: float) -> void:
 			hide_submissions_panel() ## B is BACK on the submissions panel too
 		elif _setup_panel_up:
 			hide_setup_panel() ## B is BACK on the SETUP panel too
+		elif _decl_up:
+			hide_declaration() ## B is BACK on the declaration too (FIX158)
 		elif _tournament and _mode == "wall" and debug_b_nc != "nobexit":
 			_b_exit_tournament() ## B leaves the Tournament view for Table Select (GRADFIX4 item 4)
 		elif _mode == "wall" and not _tournament and not _placard_up and _joy_b_armed \
@@ -13590,6 +13729,8 @@ func _process(delta: float) -> void:
 			hide_submissions_panel() ## on the submissions panel D-pad Right is BACK too
 		elif _setup_panel_up:
 			hide_setup_panel() ## on the SETUP panel the BACK button goes back - it never exits
+		elif _decl_up:
+			hide_declaration() ## on the declaration D-pad Right is BACK too (FIX158)
 		elif not _placard_up:
 			# BACKSTEP: the press is BACK - from a filter
 			# view its first step is home to the main

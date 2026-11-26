@@ -20,6 +20,24 @@ const CARD_BG: Color = Color(0.055, 0.055, 0.095)
 const BUTTON_BG: Color = Color(0.11, 0.11, 0.17)
 const BUTTON_BG_ACCENT: Color = Color(0.36, 0.25, 0.06)
 
+## ---- FIX158 (Detect and Declare): the approved copy,
+## VERBATIM (Chris, 2026-11-26, edited line by line and
+## signed off - do not reword). The desktop side is never
+## given a name of its own anywhere in it: it is LaunchPin,
+## opened without VR, on the user's desktop. The core
+## test's FIX158 copy legs assert these consts equal the
+## brief's literals byte-for-byte.
+const DECL_TITLE: String = "Setup isn't finished yet"
+const DECL_BODY: String = "You can look around, but no table can launch until these are set. Quit to your desktop and open LaunchPin without using VR. A desktop setup screen will appear, with the following options:"
+const DECL_REQ_VPX: String = "Visual Pinball's location — not set"
+const DECL_REQ_FOLDERS: String = "A folder holding your tables — none set"
+const DECL_OPT_HEAD: String = "For scores, when you're ready:"
+const DECL_OPT_PINEMHI: String = "PINemHi folder — your personal bests stay off until it's set"
+const DECL_OPT_WOVP: String = "World of Virtual Pinball key — tournament submissions stay off until it's set"
+const DECL_CLOSING: String = "Everything else — room, display, controls — is set right here in VR, on the SETUP panel."
+## Surface 3: the in-VR SETUP panel's head line, verbatim.
+const SETUP_PANEL_HEAD_LINE: String = "Room and score settings. Visual Pinball's location and your table folders are set in LaunchPin's desktop window."
+
 ## ---- Tournament board presentation (the TR3 polish round).
 ## Boards are NOT table cards: they stand at their own, larger
 ## window and render at their own face size, and an owned
@@ -450,23 +468,63 @@ static func letter_spec(label: String, state: String) -> Dictionary:
 ## centered title / sub / body, no band. The caller's message (a
 ## launch failure's reason) rides on top when one is provided.
 static func placard_spec(message: String) -> Dictionary:
-	var body: String = "Finish in Initial Setup on your PC, then come back - or go back to the room now with BACK below."
+	var body: String = "Finish on your PC, then come back - or go back to the room now with BACK below."
 	if message != "":
 		body = message + "\n\n" + body
 	return {
 		"kind": "banner",
 		"bg": Color(0.05, 0.05, 0.09),
-		# ENDGAME (Part A): the placard stands in the room FOR
-		# the desk, so it wears the desk's name - FIRST SETUP
-		# (the two setups carry two names; see setup_panel_spec).
-		# DESKHEAD: the desk is renamed - Initial Setup now,
-		# here and in the body/sub that name it.
-		"title": "Initial Setup",
+		# The placard stands in the room FOR the desk, so it
+		# wears the desk's name. FIX158 census: the desk's name
+		# is the app's name - the desktop side carries no name
+		# of its own (the superseded ENDGAME two-names scheme
+		# called it Initial Setup; Chris's approved FIX158 copy
+		# never names it, and a name of its own reads as a
+		# second program to go looking for).
+		"title": "LaunchPin",
 		"title_size": 84,
-		"sub": "Initial Setup is open on your desktop",
+		"sub": "LaunchPin's setup screen is open on your desktop",
 		"sub_size": 42,
 		"body": body,
 		"body_size": 36,
+	}
+
+
+## FIX158: the declaration panel's face - Surface 1 of the
+## approved copy, composed from the DECL_* literals and the
+## completeness read (PvldsConfig.declaration_missing):
+## the paragraph, then ONLY the missing required lines,
+## then the optional block (its heading + ONLY the unset
+## optionals; the block is omitted whole when both are set),
+## then the closing line. Blocks stand apart by blank lines;
+## item lines wear a bullet as presentation, the words
+## themselves verbatim. The caller (Main) only raises the
+## panel when the required set is non-empty, so the required
+## block always carries at least one line.
+static func declaration_spec(decl: Dictionary) -> Dictionary:
+	var required: Array = decl.get("required", []) as Array
+	var optional: Array = decl.get("optional", []) as Array
+	var lines: Array[String] = [DECL_BODY, ""]
+	if required.has("vpx"):
+		lines.append("• " + DECL_REQ_VPX)
+	if required.has("folders"):
+		lines.append("• " + DECL_REQ_FOLDERS)
+	if not optional.is_empty():
+		lines.append("")
+		lines.append(DECL_OPT_HEAD)
+		if optional.has("pinemhi"):
+			lines.append("• " + DECL_OPT_PINEMHI)
+		if optional.has("wovp"):
+			lines.append("• " + DECL_OPT_WOVP)
+	lines.append("")
+	lines.append(DECL_CLOSING)
+	return {
+		"kind": "banner",
+		"bg": Color(0.05, 0.05, 0.09),
+		"title": DECL_TITLE,
+		"title_size": 62,
+		"body": "\n".join(lines),
+		"body_size": 33,
 	}
 
 
@@ -582,14 +640,17 @@ static func setup_panel_spec(health: Dictionary, message: String) -> Dictionary:
 		"title": "IN-VR SETUP",
 		"title_size": 76,
 		"title_color": STRIP_LABEL_ACCENT,
-		# ENDGAME (Part A): the standing sub carries the
-		# pointer too - it is the one line of the face that
-		# always shows (the body can run long with health
-		# lines and clip; the sub never does).
-		# DESKHEAD: the standing sub names the desk - the name
-		# follows the rename (Initial Setup); the panel's own
-		# name above does not move.
-		"sub": message if message != "" else "Day-to-day settings, right here in the room. Paths and first-time setup live in Initial Setup on your PC.",
+		# ENDGAME (Part A): the standing sub carried the
+		# pointer too. FIX158: the pointer's job moves to the
+		# face's head line (Surface 3 of the approved copy,
+		# the "head_line" key below - CardFace stands it
+		# between the sub and the sections, always), and the
+		# sub keeps only its own half. The desk half of the
+		# old sub named the desktop side "Initial Setup";
+		# the approved copy never names it (see DECL_*).
+		"sub": message if message != "" else "Day-to-day settings, right here in the room.",
+		# FIX158 (Surface 3, verbatim): the panel's head line.
+		"head_line": SETUP_PANEL_HEAD_LINE,
 		"sub_size": 38,
 		"sub_color": STRIP_LABEL_REST,
 		"body": "\n".join(lines),

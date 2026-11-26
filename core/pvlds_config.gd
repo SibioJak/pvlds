@@ -298,3 +298,29 @@ func save_to_disk() -> bool:
 
 func is_configured() -> bool:
 	return not table_folders.is_empty()
+
+
+## FIX158 (Detect and Declare): the preliminaries completeness
+## read the room entry judges by - WIDER than is_configured()
+## (which stays the boot-routing test, folders only, exactly
+## as it was). REQUIRED: the VPX executable is set AND the
+## file it names exists (a stale path launches nothing, so it
+## declares like an unset one), and at least one table folder
+## is set. OPTIONAL: the PINemHi folder and the WoVP key -
+## tracked in their own set, named in the declaration's
+## scores block, and NEVER part of the required set, so they
+## can never raise the panel on their own. Item keys are the
+## declaration spec's vocabulary (RoomSpecs.declaration_spec):
+## "vpx" / "folders" / "pinemhi" / "wovp".
+func declaration_missing() -> Dictionary:
+	var required: Array[String] = []
+	if vpx_exe_path == "" or not FileAccess.file_exists(vpx_exe_path):
+		required.append("vpx")
+	if table_folders.is_empty():
+		required.append("folders")
+	var optional: Array[String] = []
+	if pinemhi_folder == "":
+		optional.append("pinemhi")
+	if wovp_api_key == "":
+		optional.append("wovp")
+	return {"required": required, "optional": optional}

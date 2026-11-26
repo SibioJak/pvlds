@@ -135,6 +135,7 @@ var _body_label: Label
 var _body_rich: RichTextLabel ## PANELFIT: the body label's rich twin - stands only for a spec carrying "body_number_color" (its numbers coloured); hidden for every other spec, asserted per spec like display_type
 var _sections_box: VBoxContainer ## PANEL112: the SETUP panel's sectioned body - one tinted band per spec section (header + rich lines), rebuilt per spec like the chips; stands only for a spec carrying "body_sections" (today only the SETUP panel's), hidden for every other spec
 var _footer_label: Label ## PANEL112: the sectioned face's quiet footer line (the SETUP panel's pointer line), standing under the bands, unbanded; same per-spec discipline as _sections_box
+var _head_label: Label ## FIX158: a spec's standing head line (today only the SETUP panel's, Surface 3 of the approved copy), standing between the sub and the body/sections in the body's own dress; same per-spec discipline as _footer_label - no key, no head line, every other face renders exactly as before
 var _chips_row: HBoxContainer
 var _rows_box: VBoxContainer ## the board kind's stacked rows (score / divider / note)
 var _board_art_frame: PanelContainer ## board kind (FIX132): the framed picture header under the band - stands only while a board spec carries "art_texture" (today only the PINemHi weekly boards: the table's author shot in the family's teal frame)
@@ -346,6 +347,15 @@ func _init() -> void:
 	_sub_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_sub_label.add_theme_color_override("font_color", Color(0.75, 0.78, 0.88))
 	_vbox.add_child(_sub_label)
+
+	# FIX158: the head line's seat - between the sub and the
+	# body, built beside them and hidden; it stands only
+	# while a spec carries "head_line" (see apply_spec).
+	_head_label = Label.new()
+	_head_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_head_label.add_theme_color_override("font_color", Color(0.85, 0.86, 0.92))
+	_head_label.visible = false
+	_vbox.add_child(_head_label)
 
 	_body_label = Label.new()
 	_body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -921,6 +931,23 @@ func apply_spec(spec: Dictionary) -> void:
 	_discipline_label(_title_label, int(spec.get("title_max_lines", 0)))
 	_discipline_label(_sub_label, int(spec.get("sub_max_lines", 0)))
 	_discipline_label(_body_label, int(spec.get("body_max_lines", 0)))
+
+	# FIX158: the head line - a spec carrying "head_line"
+	# (today only the SETUP panel's) stands it between the
+	# sub and the body in the body's own dress (same size,
+	# same ink, the display font when the spec wears it).
+	# Asserted and restored on every spec, like the footer:
+	# no key, no head line.
+	var head_text: String = str(spec.get("head_line", ""))
+	_head_label.visible = head_text != ""
+	if _head_label.visible:
+		_head_label.text = head_text
+		_head_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if centered else HORIZONTAL_ALIGNMENT_LEFT
+		_head_label.add_theme_font_size_override("font_size", body_px)
+		if display_type:
+			_head_label.add_theme_font_override("font", DISPLAY_FONT_REGULAR)
+		elif _head_label.has_theme_font_override("font"):
+			_head_label.remove_theme_font_override("font")
 
 	# PANEL112 (item 2): the section bands, rebuilt per spec
 	# like the chips (one CardFace serves every render, so
@@ -1680,6 +1707,10 @@ func section_metrics() -> Dictionary:
 	if _footer_label.visible:
 		out["footer_rect"] = _footer_label.get_global_rect()
 		out["footer_lines"] = _footer_label.get_line_count()
+	if _head_label.visible:
+		out["head_rect"] = _head_label.get_global_rect()
+		out["head_lines"] = _head_label.get_line_count()
+		out["head_text"] = _head_label.text
 	return out
 
 

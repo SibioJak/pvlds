@@ -53,7 +53,9 @@ var _pinemhi_save_button: Button ## FIX127: member (was a build local) - its lab
 var _shots_edit: LineEdit
 var _shots_label: Label
 var _shots_save_button: Button ## FIX127: member (was a build local) - its label is stateful
-var _title_label: Label ## the title block: "Initial Setup" (DESKHEAD: renamed from FIRST SETUP)
+var _title_label: Label ## the title block: "LaunchPin" (FIX158 census: the desk's name is the app's name - the desktop side carries no name of its own; DESKHEAD's "Initial Setup" is retired)
+var _head_line_1: Label ## FIX158: Surface 2 line 1, standing under the title (census: head_lines)
+var _head_line_2: Label ## FIX158: Surface 2 line 2, under line 1 (census: head_lines)
 var _title_box: VBoxContainer ## the head's box - holds the title ALONE (census: title_dress). FIX127: a bare box now - the gradient name-plate panel went with the section bars (decision 2)
 var _advanced_fold: _Fold ## DESKEDIT: the Advanced fold (the Launch arguments template's home)
 var _db_note: Label ## DESKEDIT: the VPS database explanation line under the field
@@ -95,7 +97,15 @@ var _hunt_census: Dictionary = {} ## AUTOFIND: the hunt's result as run (empty =
 ## the bars show, one step's content stands open, and a
 ## finished step's bar gains a check; in the full desk
 ## the bars hide and every content stands.
-const STEP_NAMES: Array[String] = ["Initial Setup", "High Score Setup", "Art", "Advanced"]
+const STEP_NAMES: Array[String] = ["Locations", "High Score Setup", "Art", "Advanced"]
+
+## FIX158 (Surface 2): the desk head's two lines, VERBATIM
+## (Chris's approved copy, 2026-11-26 - do not reword). They
+## stand directly under the title, in both desk modes. The
+## core test's FIX158 copy legs assert these consts equal
+## the brief's literals byte-for-byte.
+const HEAD_LINE_1: String = "Start here. This window is LaunchPin's desktop face — the only place it learns where Visual Pinball is and where your tables live."
+const HEAD_LINE_2: String = "Additional VR options are found in the headset by pressing the SETUP button."
 var _step_bars: Array[Button] = []
 var _step_contents: Array[VBoxContainer] = []
 var _step_skips: Array[Button] = []
@@ -477,7 +487,7 @@ func _reset_folds() -> void:
 
 
 ## Smoke census of the title block (the BOOTFACE legs). The
-## desk wears its full Initial Setup dress on every show since
+## desk wears its full dress on every show since
 ## BOOTFACE: the boot pass has its own face now, so the desk
 ## only ever stands when it is stood upon for real (BOOTSHELL's
 ## two-dress machinery is retired). DESKEDIT: the dress is
@@ -489,6 +499,14 @@ func title_dress() -> Dictionary:
 	return {
 		"title": _title_label.text if _title_label != null else "",
 		"panel_children": _title_box.get_child_count() if _title_box != null else 0,
+	}
+
+
+## FIX158: the desk head's Surface 2 lines, as they stand.
+func head_lines() -> Dictionary:
+	return {
+		"line1": _head_line_1.text if _head_line_1 != null else "",
+		"line2": _head_line_2.text if _head_line_2 != null else "",
 	}
 
 
@@ -640,23 +658,31 @@ func _build_ui() -> void:
 	_title_box.add_theme_constant_override("separation", 4)
 	vbox.add_child(_title_box)
 	_title_label = Label.new()
-	# ENDGAME (Part A): the two setups carry two names. This
-	# desk is Initial Setup - the one-time, important initial
-	# setup; the room's panel is IN-VR SETUP.
-	# DESKEDIT: the panel holds the title ALONE. Both
-	# sub-lines are gone - "Done once, on your PC, before you
-	# play." by Chris's order, and the pointer to the IN-VR
-	# panel because a first-time user hasn't seen the room
-	# yet and shouldn't be told about surfaces he hasn't met.
-	# The desk goes straight into the work (the intro below).
-	# DESKHEAD: the desk is renamed - FIRST SETUP is Initial
-	# Setup now (Chris's wording), here and everywhere the
-	# name stands (the placard, the guidance lines).
-	_title_label.text = "Initial Setup"
+	# ENDGAME (Part A) named this desk Initial Setup, one of
+	# two setup names; DESKEDIT then held the title ALONE in
+	# its box (both sub-lines deleted), and title_dress still
+	# reads the box that way. FIX158 census: the two-names
+	# scheme is superseded - the desktop side carries no name
+	# of its own in Chris's approved copy (a name of its own
+	# reads as a second program to go looking for), so the
+	# title is the app's name, and the head's words are the
+	# approved Surface 2 lines standing under the box.
+	_title_label.text = "LaunchPin"
 	_title_label.add_theme_font_override("font", DeskTheme.FONT_MEDIUM)
 	_title_label.add_theme_font_size_override("font_size", 34)
 	_title_label.add_theme_color_override("font_color", Color(0.96, 0.96, 0.98))
 	_title_box.add_child(_title_label)
+	# FIX158 (Surface 2): the head lines - directly under the
+	# title box, above the update banner and the intro, in
+	# both desk modes (the shells stand in both presentations).
+	_head_line_1 = Label.new()
+	_head_line_1.text = HEAD_LINE_1
+	_head_line_1.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(_head_line_1)
+	_head_line_2 = Label.new()
+	_head_line_2.text = HEAD_LINE_2
+	_head_line_2.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(_head_line_2)
 	# AUTOFIND: the Update Available banner - directly
 	# under the title panel, in the amber family, standing
 	# only when Main says a newer LaunchPin VR exists (it
@@ -731,7 +757,7 @@ func _build_ui() -> void:
 	var step3: VBoxContainer = _step_contents[2]
 	var step4: VBoxContainer = _step_contents[3]
 
-	# -- Step 1: Initial Setup. The VPX executable, the
+	# -- Step 1: Locations. The VPX executable, the
 	# table folders the intro sentence promises, and the
 	# scan that reads them. The folders stand directly
 	# under the VPX block in BOTH modes (CHECKLIST item 2:

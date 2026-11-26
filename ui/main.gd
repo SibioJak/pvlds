@@ -326,6 +326,11 @@ var _smoke_placard: bool = false ## --pvlds-smoke-placard: drive the setup-placa
 var _placard_smoke_phase: int = 0
 var _placard_smoke_wait: int = 0
 var _placard_smoke_failures: int = 0
+var _smoke_decl: bool = false ## --pvlds-smoke-decl: FIX158 - drive the declaration contract (room mode: the real entry raises it; desk mode: the desk head lines)
+var _decl_smoke_phase: int = 0
+var _decl_smoke_wait: int = 0
+var _decl_smoke_failures: int = 0
+var _decl_smoke_mode: String = "" ## PVLDS_DECL_SMOKE_MODE: "room" | "desk"
 var _smoke_setup_panel: bool = false ## --pvlds-smoke-setup-panel: drive the in-room SETUP panel contract once the room is up
 var _setup_panel_smoke_phase: int = 0
 var _setup_panel_smoke_wait: int = 0
@@ -894,6 +899,9 @@ func _ready() -> void:
 		_shot_mimic_real = OS.get_environment("PVLDS_MIMIC_REAL") == "1"
 	if user_args.has("--pvlds-smoke-placard"):
 		_smoke_placard = true
+	if user_args.has("--pvlds-smoke-decl"):
+		_smoke_decl = true
+		_decl_smoke_mode = OS.get_environment("PVLDS_DECL_SMOKE_MODE")
 	if user_args.has("--pvlds-smoke-setup-panel"):
 		_smoke_setup_panel = true
 	if user_args.has("--pvlds-smoke-scanwall"):
@@ -1637,6 +1645,8 @@ func _process(_delta: float) -> void:
 	_poll_launch()
 	if _smoke_placard:
 		_drive_placard_smoke()
+	if _smoke_decl:
+		_drive_decl_smoke()
 	if _smoke_setup_panel:
 		_drive_setup_panel_smoke()
 	if _smoke_scanwall:
@@ -2172,7 +2182,7 @@ func _wovp_key_hash() -> int:
 ## plain words - whose it is once a test has resolved it.
 func _wovp_health_line() -> String:
 	if _config == null or _config.wovp_api_key == "":
-		return "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in Initial Setup."
+		return "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in LaunchPin's desktop window."
 	match _wovp_identity_state:
 		"ok":
 			return "WoVP: key saved - it belongs to %s." % _wovp_user_name
@@ -3158,6 +3168,7 @@ func _enter_room() -> void:
 		# Entering the room (e.g. Enter the Room on the desk while a
 		# placard stood in the headset) never leaves a stale placard.
 		_room.clear_setup_placard()
+		_room.clear_declaration()
 		_room.clear_setup_panel()
 		_room.clear_submit_panel()
 		_room.clear_submissions_panel()
@@ -3187,6 +3198,29 @@ func _enter_room() -> void:
 	# rescan): make sure a warm pass is queued.
 	if _art_warmer != null and _scanner != null:
 		_art_warmer.warm_library(_scanner.games)
+	# FIX158 (Detect and Declare): the entry judges the desktop
+	# preliminaries and declares any missing REQUIRED item in
+	# the room (see _apply_declaration).
+	_apply_declaration()
+
+
+## FIX158 (Detect and Declare): on room entry, read the
+## preliminaries (PvldsConfig.declaration_missing) and, when
+## any REQUIRED item is missing, stand the declaration panel
+## in the room naming what is missing. All required set: no
+## panel, ever. The panel is raised here and nowhere else, so
+## it stands at most once per entry (every entry route -
+## boot auto-enter, the desk's Enter the Room, the
+## post-session re-entry - passes through _enter_room, whose
+## adopt branch clears any stale declaration first).
+func _apply_declaration() -> void:
+	if _room == null or _config == null:
+		return
+	var decl: Dictionary = _config.declaration_missing()
+	if (decl.get("required", []) as Array).is_empty():
+		_room.clear_declaration()
+	else:
+		_room.show_declaration(decl)
 
 
 ## RETURN round: route a room entry back to the surface that
@@ -4955,6 +4989,132 @@ func _finish_placard_smoke() -> void:
 		get_tree().quit(1)
 
 
+# -------------------------------------------------- decl smoke
+
+## --pvlds-smoke-decl (FIX158): the Detect-and-Declare
+## contract on the real paths. Room mode: the staged config
+## carries table folders and NO VPX path, so the boot
+## auto-enters the room exactly as a first-timer's would and
+## _apply_declaration must stand the panel - naming the VPX
+## item, not folders - with the wall inert behind it and
+## focus confined to its BACK; BACK then hands the room
+## back. Desk mode: an unconfigured boot stands the desk;
+## its head must carry Surface 2's two lines verbatim under
+## a title that reads LaunchPin. Grabs (PVLDS_GRAB_DIR)
+## prove both faces render.
+func _drive_decl_smoke() -> void:
+	if _decl_smoke_mode == "desk":
+		_drive_decl_smoke_desk()
+		return
+	match _decl_smoke_phase:
+		0:
+			if _room != null and _room.visible and _room.wall_ready:
+				_decl_smoke_wait = 0
+				_decl_smoke_phase = 1
+			else:
+				_decl_smoke_wait += 1
+				if _decl_smoke_wait > 3600:
+					_decl_smoke_fail("room: the room never came up")
+					_finish_decl_smoke()
+		1:
+			_decl_smoke_wait += 1
+			if _decl_smoke_wait >= 30:
+				# 30 frames in: the declaration's texture fill
+				# has landed (asserted below by its size).
+				_decl_expect(_room.is_declaration_up(), "room: the declaration stands on entry")
+				var dset: Dictionary = _room.declaration_set()
+				var req: Array = dset.get("required", []) as Array
+				_decl_expect(req == ["vpx"], "room: the declaration names the VPX item alone (got %s)" % str(req))
+				var inert: bool = true
+				for q: ClickableQuad in _room._panels:
+					if q.pick_enabled:
+						inert = false
+				for q2: ClickableQuad in _room._panel_launches:
+					if q2 != null and q2.pick_enabled:
+						inert = false
+				for k: Variant in _room._rail_quads.keys():
+					var rq: ClickableQuad = _room._rail_quads[k] as ClickableQuad
+					if rq != null and rq.pick_enabled:
+						inert = false
+				_decl_expect(inert, "room: every wall/rail control is inert behind the declaration")
+				var back: ClickableQuad = _room.declaration_back_quad()
+				_decl_expect(back != null, "room: the declaration has a BACK control")
+				_decl_expect(_room._focusables.size() == 1 and _room._focusables[0] == back,
+					"room: focus navigation is confined to BACK")
+				var ftex: Texture2D = _room._decl_face.current_texture() if _room._decl_face != null else null
+				_decl_expect(ftex != null and ftex.get_size() == Vector2(1152, 880),
+					"room: the declaration face carries its rendered texture (got %s)" % (str(ftex.get_size()) if ftex != null else "none"))
+				_decl_save_grab("decl_room.png")
+				if back != null:
+					_room._activate(back)
+				_decl_smoke_wait = 0
+				_decl_smoke_phase = 2
+		2:
+			_decl_smoke_wait += 1
+			if _decl_smoke_wait >= 3:
+				_decl_expect(not _room.is_declaration_up(), "BACK: the declaration comes down")
+				_decl_expect(_room.visible, "BACK: the room is still up")
+				var live: bool = true
+				for q3: ClickableQuad in _room._panels:
+					if not q3.pick_enabled:
+						live = false
+				_decl_expect(live, "BACK: the wall's controls are live again")
+				_decl_expect(_room._focusables.size() > 1, "BACK: focus navigation roams the room again")
+				_finish_decl_smoke()
+
+
+func _drive_decl_smoke_desk() -> void:
+	match _decl_smoke_phase:
+		0:
+			if _desk != null and _desk.visible:
+				_decl_smoke_wait += 1
+				if _decl_smoke_wait >= 10:
+					var hl: Dictionary = _desk.head_lines()
+					_decl_expect(str(hl.get("line1", "")) == SetupDesk.HEAD_LINE_1,
+						"desk: head line 1 is Surface 2 verbatim (got '%s')" % str(hl.get("line1", "")).left(48))
+					_decl_expect(str(hl.get("line2", "")) == SetupDesk.HEAD_LINE_2,
+						"desk: head line 2 is Surface 2 verbatim (got '%s')" % str(hl.get("line2", "")).left(48))
+					_decl_expect(str(_desk.title_dress().get("title", "")) == "LaunchPin",
+						"desk: the title reads LaunchPin")
+					_decl_save_grab("decl_desk.png")
+					_finish_decl_smoke()
+			else:
+				_decl_smoke_wait += 1
+				if _decl_smoke_wait > 3600:
+					_decl_smoke_fail("desk: the desk never came up")
+					_finish_decl_smoke()
+
+
+func _decl_expect(cond: bool, label: String) -> void:
+	if cond:
+		print("  ok - decl smoke: ", label)
+	else:
+		_decl_smoke_fail(label)
+
+
+func _decl_smoke_fail(label: String) -> void:
+	_decl_smoke_failures += 1
+	printerr("  FAIL - decl smoke: ", label)
+
+
+func _decl_save_grab(name: String) -> void:
+	var dir: String = OS.get_environment("PVLDS_GRAB_DIR")
+	if dir == "":
+		return
+	var img: Image = get_viewport().get_texture().get_image()
+	var err: Error = img.save_png(dir.path_join(name))
+	print("DECL GRAB: ", name, " err=", err, " size=", img.get_size())
+
+
+func _finish_decl_smoke() -> void:
+	if _decl_smoke_failures == 0:
+		print("PVLDS DECL SMOKE: PASS")
+		get_tree().quit(0)
+	else:
+		printerr("PVLDS DECL SMOKE: FAIL (%d)" % _decl_smoke_failures)
+		get_tree().quit(1)
+
+
 # --------------------------------------------- setup panel smoke
 
 ## --pvlds-smoke-setup-panel: the in-room SETUP panel contract.
@@ -6063,7 +6223,7 @@ func _drive_shot_panelfit() -> void:
 					"matched": 252, "game_matched": 110,
 					"db_ok": true, "db_kind": "sample",
 					"missing": 82, "unplaced": 1,
-					"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in Initial Setup.",
+					"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in LaunchPin's desktop window.",
 					"pinemhi_line": "PINemHi: on, but no PINemHi folder found - set the folder to show your personal bests on tournament boards.",
 					"ipdb_line": "IPDB data: 340 of 344 games",
 					"shots_line": "Screenshots folder: C:\\Users\\cfond\\Pictures\\Virtual Desktop - 128 screenshots on file, newest first in the room.",
@@ -6300,7 +6460,7 @@ func _drive_shot_panel112() -> void:
 						"matched": 252, "game_matched": 110,
 						"db_ok": true, "db_kind": "sample",
 						"missing": 82, "unplaced": 1,
-						"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in Initial Setup.",
+						"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in LaunchPin's desktop window.",
 						"pinemhi_line": "PINemHi: on, but no PINemHi folder found - set the folder to show your personal bests on tournament boards.",
 						"ipdb_line": "IPDB data: 340 of 344 games",
 						"shots_line": "Screenshots folder: C:\\Users\\cfond\\Pictures\\Virtual Desktop - 128 screenshots on file, newest first in the room.",
@@ -6308,7 +6468,7 @@ func _drive_shot_panel112() -> void:
 					_room.set_setup_panel_message("VPS database downloaded (5.2 MB). It will be used by the next scan.")
 				else:
 					_room.set_setup_health({
-						"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in Initial Setup.",
+						"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in LaunchPin's desktop window.",
 						"pinemhi_line": "PINemHi: on, but no PINemHi folder found - set the folder to show your personal bests on tournament boards.",
 						"ipdb_line": "IPDB data: 340 of 344 games",
 						"shots_line": "Screenshots folder: C:\\Users\\cfond\\Pictures\\Virtual Desktop - 128 screenshots on file, newest first in the room.",
@@ -17861,7 +18021,7 @@ func _submit_stub_lines() -> Array:
 ## must ignore.
 
 const RS_ADDAMS_ID: String = "fixture-ch-season-main-w3"
-const RS_UNSET_WORDS: String = "No screenshots folder set yet - set it in Initial Setup (Screenshots section); the room reads photos from there."
+const RS_UNSET_WORDS: String = "No screenshots folder set yet - set it in LaunchPin's desktop window (Screenshots section); the room reads photos from there."
 const RS_EMPTY_WORDS: String = "No screenshots in that folder yet - take the shot in the headset first; it lands there."
 const RS_NOKEY_WORDS: String = "No WoVP key saved - submissions use the same key as the boards. Add it in SETUP."
 
@@ -27547,8 +27707,8 @@ func _drive_bootface_smoke() -> void:
 					var fdress: Dictionary = _desk.title_dress()
 					_bootface_expect(_boot_face == null,
 						"firstrun: the boot face never appears")
-					_bootface_expect(str(fdress["title"]) == "Initial Setup",
-						"firstrun: the title reads Initial Setup (got '%s')" % str(fdress["title"]))
+					_bootface_expect(str(fdress["title"]) == "LaunchPin",
+						"firstrun: the title reads LaunchPin (got '%s')" % str(fdress["title"]))
 					_bootface_expect(int(fdress["panel_children"]) == 1,
 						"firstrun: the head is the title alone (DESKEDIT: both sub-lines deleted - nothing names a surface the reader hasn't met)")
 					_bootface_expect(not _desk._scanned,
@@ -27658,8 +27818,8 @@ func _drive_bootface_smoke() -> void:
 				_bootface_expect(not _room.visible,
 					"setup-open: the room hides for the desk (the flat path)")
 				_bootface_expect(_desk.visible, "setup-open: the desk shows")
-				_bootface_expect(str(dress3["title"]) == "Initial Setup",
-					"setup-open: the title reads Initial Setup (got '%s')" % str(dress3["title"]))
+				_bootface_expect(str(dress3["title"]) == "LaunchPin",
+					"setup-open: the title reads LaunchPin (got '%s')" % str(dress3["title"]))
 				_bootface_expect(int(dress3["panel_children"]) == 1,
 					"setup-open: the head is the title alone (DESKEDIT)")
 				# DESKEXIT: the desk opens knowing the boot
@@ -28055,8 +28215,8 @@ func _drive_deskedit_firstrun() -> void:
 				var dress: Dictionary = _desk.title_dress()
 				var cen: Dictionary = _desk.deskedit_census()
 				var chk: Dictionary = _desk.checklist_census()
-				_deskedit_expect(str(dress["title"]) == "Initial Setup",
-					"firstrun: the title reads Initial Setup")
+				_deskedit_expect(str(dress["title"]) == "LaunchPin",
+					"firstrun: the title reads LaunchPin")
 				_deskedit_expect(int(dress["panel_children"]) == 1,
 					"firstrun: the head panel holds the title alone (both sub-lines deleted)")
 				_deskedit_expect(str(cen["intro"]) == "Point LaunchPin at your VPX executable and your table folder(s).",
@@ -28096,7 +28256,7 @@ func _drive_deskedit_firstrun() -> void:
 				_deskedit_expect((chk["contents_visible"] as Array) == [true, false, false, false],
 					"checklist: only step 1's content stands (got %s)" % str(chk["contents_visible"]))
 				var bars: Array = chk["bars"] as Array
-				_deskedit_expect(bars.size() == 4 and str((bars[0] as Dictionary)["text"]) == "1. Initial Setup"
+				_deskedit_expect(bars.size() == 4 and str((bars[0] as Dictionary)["text"]) == "1. Locations"
 					and str((bars[1] as Dictionary)["text"]) == "2. High Score Setup (optional)"
 					and str((bars[2] as Dictionary)["text"]) == "3. Art (optional)"
 					and str((bars[3] as Dictionary)["text"]) == "4. Advanced (optional)",
@@ -28201,7 +28361,7 @@ func _drive_deskedit_firstrun() -> void:
 				_deskedit_expect((chk9["done"] as Array) == [true, false, false, false],
 					"checklist: the landed scan marks step 1 done (got %s)" % str(chk9["done"]))
 				var bars9: Array = chk9["bars"] as Array
-				_deskedit_expect(str((bars9[0] as Dictionary)["text"]) == "1. Initial Setup  ✓",
+				_deskedit_expect(str((bars9[0] as Dictionary)["text"]) == "1. Locations  ✓",
 					"checklist: step 1's bar gains the check (got '%s')" % str((bars9[0] as Dictionary)["text"]))
 				_deskedit_expect(int(chk9["open_step"]) == 1,
 					"checklist: the walk opens step 2 after the scan (got %d)" % int(chk9["open_step"]))
@@ -32093,7 +32253,7 @@ func _run_core_test() -> void:
 	var p112_health: Dictionary = {
 		"files": 363, "games": 344, "matched": 252, "game_matched": 110,
 		"db_ok": true, "db_kind": "sample", "missing": 82, "unplaced": 1,
-		"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in Initial Setup.",
+		"wovp_line": "WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in LaunchPin's desktop window.",
 		"pinemhi_line": "PINemHi: on, but no PINemHi folder found - set the folder to show your personal bests on tournament boards.",
 		"ipdb_line": "IPDB data: 340 of 344 games",
 		"shots_line": "Screenshots folder: C:\\Users\\cfond\\Pictures\\Virtual Desktop - 128 screenshots on file, newest first in the room.",
@@ -32108,7 +32268,7 @@ func _run_core_test() -> void:
 				"Database matched 252 of 363 builds (110 more by game only)",
 				"Missing backglass: 82 table files have no .directb2s beside them. The list is missing_b2s.txt in the app data folder.",
 				"Files I couldn't place: 1 table files match no database game. The list is unplaced_files.txt in the app data folder."]],
-			["SCORES", ["WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in Initial Setup.",
+			["SCORES", ["WoVP: no key saved. Copy your key, then press PASTE KEY below - or add it in LaunchPin's desktop window.",
 				"PINemHi: on, but no PINemHi folder found - set the folder to show your personal bests on tournament boards.",
 				"Screenshots folder: C:\\Users\\cfond\\Pictures\\Virtual Desktop - 128 screenshots on file, newest first in the room."]],
 			["DATA", ["That database is the bundled SAMPLE - it cannot identify real tables. Download the VPS database below.",
@@ -33630,6 +33790,107 @@ func _run_core_test() -> void:
 			d.list_dir_end()
 		DirAccess.remove_absolute(path)
 	af_rm.call(af_base)
+
+	# --- FIX158 (Detect and Declare): the completeness read
+	# and the approved copy, byte-for-byte. Synthetic configs
+	# throughout; the one real file is a touched temp exe, so
+	# the "set AND exists" leg reads a true positive. The
+	# legs prove the read and that the strings in code are
+	# the approved strings; the FIX158 smoke proves the panel
+	# stands in the room on the real entry path.
+	var fx158_root: String = "user://core_test_fix158"
+	var fx158_user: DirAccess = DirAccess.open("user://")
+	if fx158_user != null and not fx158_user.dir_exists("core_test_fix158"):
+		fx158_user.make_dir("core_test_fix158")
+	var fx158_exe_abs: String = ProjectSettings.globalize_path(fx158_root.path_join("VPinballX_GL64.exe"))
+	var fx158_touch: FileAccess = FileAccess.open(fx158_exe_abs, FileAccess.WRITE)
+	if fx158_touch != null:
+		fx158_touch.close()
+	var fx158_cfg: PvldsConfig = PvldsConfig.new()
+	var fx158_m: Dictionary = fx158_cfg.declaration_missing()
+	_expect((fx158_m.get("required", []) as Array) == ["vpx", "folders"],
+		"fix158: a blank config names both required items", failures)
+	_expect((fx158_m.get("optional", []) as Array) == ["pinemhi", "wovp"],
+		"fix158: a blank config tracks both optionals, separately", failures)
+	# Folders set, VPX unset - the live field case: VPX named alone.
+	fx158_cfg.table_folders = ["/tables"]
+	fx158_m = fx158_cfg.declaration_missing()
+	_expect((fx158_m.get("required", []) as Array) == ["vpx"],
+		"fix158: folders set + VPX unset names the VPX item alone", failures)
+	# VPX set but the file is gone: still the VPX item (a stale
+	# path launches nothing, so it declares like an unset one).
+	fx158_cfg.vpx_exe_path = "/no/such/path/VPinballX_GL64.exe"
+	fx158_m = fx158_cfg.declaration_missing()
+	_expect((fx158_m.get("required", []) as Array) == ["vpx"],
+		"fix158: a VPX path naming no file is still missing", failures)
+	# VPX set and standing, folders gone: folders named alone.
+	fx158_cfg.vpx_exe_path = fx158_exe_abs
+	fx158_cfg.table_folders = []
+	fx158_m = fx158_cfg.declaration_missing()
+	_expect((fx158_m.get("required", []) as Array) == ["folders"],
+		"fix158: VPX standing + no folders names the folders item alone", failures)
+	# All required set: the required set is empty - no panel,
+	# ever - while the optionals still track in their own set.
+	fx158_cfg.table_folders = ["/tables"]
+	fx158_m = fx158_cfg.declaration_missing()
+	_expect((fx158_m.get("required", []) as Array).is_empty(),
+		"fix158: all required set -> the required set is empty", failures)
+	_expect((fx158_m.get("optional", []) as Array) == ["pinemhi", "wovp"],
+		"fix158: optionals never enter the required set", failures)
+	fx158_cfg.pinemhi_folder = "/pinemhi"
+	fx158_cfg.wovp_api_key = "PVLDS-FIX158-KEY"
+	fx158_m = fx158_cfg.declaration_missing()
+	_expect((fx158_m.get("optional", []) as Array).is_empty() and (fx158_m.get("required", []) as Array).is_empty(),
+		"fix158: a complete config declares nothing missing", failures)
+	DirAccess.remove_absolute(fx158_exe_abs)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(fx158_root))
+	# The copy legs: the consts ARE the approved literals.
+	_expect(RoomSpecs.DECL_TITLE == "Setup isn't finished yet",
+		"fix158 copy: the headline is the approved literal", failures)
+	_expect(RoomSpecs.DECL_BODY == "You can look around, but no table can launch until these are set. Quit to your desktop and open LaunchPin without using VR. A desktop setup screen will appear, with the following options:",
+		"fix158 copy: the paragraph is the approved literal", failures)
+	_expect(RoomSpecs.DECL_REQ_VPX == "Visual Pinball's location — not set",
+		"fix158 copy: the VPX item is the approved literal", failures)
+	_expect(RoomSpecs.DECL_REQ_FOLDERS == "A folder holding your tables — none set",
+		"fix158 copy: the folders item is the approved literal", failures)
+	_expect(RoomSpecs.DECL_OPT_HEAD == "For scores, when you're ready:",
+		"fix158 copy: the optional heading is the approved literal", failures)
+	_expect(RoomSpecs.DECL_OPT_PINEMHI == "PINemHi folder — your personal bests stay off until it's set",
+		"fix158 copy: the PINemHi item is the approved literal", failures)
+	_expect(RoomSpecs.DECL_OPT_WOVP == "World of Virtual Pinball key — tournament submissions stay off until it's set",
+		"fix158 copy: the WoVP item is the approved literal", failures)
+	_expect(RoomSpecs.DECL_CLOSING == "Everything else — room, display, controls — is set right here in VR, on the SETUP panel.",
+		"fix158 copy: the closing line is the approved literal", failures)
+	_expect(RoomSpecs.SETUP_PANEL_HEAD_LINE == "Room and score settings. Visual Pinball's location and your table folders are set in LaunchPin's desktop window.",
+		"fix158 copy: the SETUP panel head line is the approved literal", failures)
+	_expect(SetupDesk.HEAD_LINE_1 == "Start here. This window is LaunchPin's desktop face — the only place it learns where Visual Pinball is and where your tables live.",
+		"fix158 copy: the desk head line 1 is the approved literal", failures)
+	_expect(SetupDesk.HEAD_LINE_2 == "Additional VR options are found in the headset by pressing the SETUP button.",
+		"fix158 copy: the desk head line 2 is the approved literal", failures)
+	# The composition legs: the spec names only what is
+	# missing, and the optional block stands or falls whole.
+	var fx158_all: Dictionary = RoomSpecs.declaration_spec({"required": ["vpx", "folders"], "optional": ["pinemhi", "wovp"]})
+	var fx158_all_body: String = str(fx158_all.get("body", ""))
+	_expect(str(fx158_all.get("title", "")) == RoomSpecs.DECL_TITLE,
+		"fix158: the declaration spec's title is the headline", failures)
+	_expect(fx158_all_body.begins_with(RoomSpecs.DECL_BODY) and fx158_all_body.ends_with(RoomSpecs.DECL_CLOSING),
+		"fix158: the full declaration opens with the paragraph and ends with the closing line", failures)
+	_expect(fx158_all_body.contains(RoomSpecs.DECL_REQ_VPX) and fx158_all_body.contains(RoomSpecs.DECL_REQ_FOLDERS)
+		and fx158_all_body.contains(RoomSpecs.DECL_OPT_HEAD) and fx158_all_body.contains(RoomSpecs.DECL_OPT_PINEMHI)
+		and fx158_all_body.contains(RoomSpecs.DECL_OPT_WOVP),
+		"fix158: the full declaration carries every line verbatim", failures)
+	var fx158_vpx_body: String = str(RoomSpecs.declaration_spec({"required": ["vpx"], "optional": []}).get("body", ""))
+	_expect(fx158_vpx_body.contains(RoomSpecs.DECL_REQ_VPX) and not fx158_vpx_body.contains(RoomSpecs.DECL_REQ_FOLDERS),
+		"fix158: the VPX-only declaration names VPX and not folders", failures)
+	_expect(not fx158_vpx_body.contains(RoomSpecs.DECL_OPT_HEAD),
+		"fix158: both optionals set -> the optional block is omitted whole", failures)
+	var fx158_folders_body: String = str(RoomSpecs.declaration_spec({"required": ["folders"], "optional": ["wovp"]}).get("body", ""))
+	_expect(fx158_folders_body.contains(RoomSpecs.DECL_REQ_FOLDERS) and not fx158_folders_body.contains(RoomSpecs.DECL_REQ_VPX)
+		and fx158_folders_body.contains(RoomSpecs.DECL_OPT_WOVP) and not fx158_folders_body.contains(RoomSpecs.DECL_OPT_PINEMHI),
+		"fix158: the folders-only declaration names folders + the one unset optional, nothing else", failures)
+	var fx158_panel: Dictionary = RoomSpecs.setup_panel_spec({}, "")
+	_expect(str(fx158_panel.get("head_line", "")) == RoomSpecs.SETUP_PANEL_HEAD_LINE,
+		"fix158: the SETUP panel spec carries the head line verbatim", failures)
 
 	if failures.is_empty():
 		print("CORE TEST: PASS")
